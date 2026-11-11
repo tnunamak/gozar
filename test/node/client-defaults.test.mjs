@@ -20,9 +20,10 @@ test('optional profiles cannot weaken selected checks or change client reach', (
   assert.deepEqual(requirements, { clientReach: 'internet', httpsRequired: true, sse: true, streamableHttp: true, oauthDcr: true });
 });
 
-test('generic connection block prints the full MCP URL and authentication without a client profile', () => {
+test('generic connection block leaves authentication with the service and limits no-auth guidance to the demo', () => {
   const output = render({ snapshot: { phase: 'published-ready', published: 'https://service.example:8443' } }, []);
   assert.match(output, /^URL: https:\/\/service\.example:8443\/mcp$/m);
-  assert.match(output, /^Authentication: none \(Gozar adds no authentication;/m);
-  assert.match(output, /keep any authentication configured by your service/);
+  assert.match(output, /^Authentication: use your service's configured method\.$/m);
+  assert.match(output, /^For gozar demo-server only, select no authentication\.$/m);
+  assert.doesNotMatch(output, /^Authentication: none/m);
 });

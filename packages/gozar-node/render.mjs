@@ -53,7 +53,8 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
     if (endpoint) {
       const mcpUrl = `${endpoint}/mcp`;
       lines.push('Public route checks passed. Connect your MCP client.', 'Add to MCP client', `URL: ${mcpUrl}`,
-        'Authentication: none (Gozar adds no authentication; keep any authentication configured by your service).');
+        "Authentication: use your service's configured method.",
+        'For gozar demo-server only, select no authentication.');
       const template = selected?.clientProfile?.installLinkTemplate ?? selected?.profile?.installLinkTemplate;
       const link = installLink(template, mcpUrl);
       if (link) lines.push(`Install link: ${link}`);
