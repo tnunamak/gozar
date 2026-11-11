@@ -10,7 +10,7 @@ import { loadCore } from '../packages/gozar-node/core.mjs';
 import { Journal, atomicWrite } from '../packages/gozar-node/journal.mjs';
 import { EffectDriver } from '../packages/gozar-node/driver.mjs';
 import { Controller } from '../packages/gozar-node/controller.mjs';
-import { control, launch, serve, recoverStop } from '../packages/gozar-node/daemon.mjs';
+import { control, launch, serve, recoverStop, stopSession } from '../packages/gozar-node/daemon.mjs';
 import { render, renderDetection, exposeSnapshot } from '../packages/gozar-node/render.mjs';
 import { startDummy } from '../harness/dummy-server.mjs';
 
@@ -104,7 +104,7 @@ export async function main(argv = process.argv.slice(2)) {
     console.log(options.json ? JSON.stringify(view) : render(view, adapters, options));
   };
   if (['status', 'health', 'update-origin', 'stop'].includes(options.command)) {
-    try { print(await control(directory, { type: options.command, ...(options.command === 'update-origin' ? { origin: options.origin } : {}) }, 120_000)); }
+    try { print(options.command === 'stop' ? await stopSession(directory) : await control(directory, { type: options.command, ...(options.command === 'update-origin' ? { origin: options.origin } : {}) }, 120_000)); }
     catch (error) {
       if (options.command === 'stop') {
         try { print(await recoverStop(directory)); return; }

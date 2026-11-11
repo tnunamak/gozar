@@ -3,6 +3,11 @@
   "planVersion": 1,
   "definitionLocation": "*.definition.json#/definition",
   "automaticCatalog": "detect-only.json",
+  "sharedHooks": {
+    "implemented": ["private-file-reference", "private-file-materialization", "transport-origin-mapping"],
+    "remaining": ["private-config-materialization", "json-records", "transport-policy-inspection"],
+    "normalization": "Blocked definitions below retain their declared feature sets. Each must adopt the current embedded materialize/credential-reference schema and pass its own acceptance before admission. An implemented shared hook alone does not admit a definition."
+  },
   "normalizedOptIn": [
     "tailscale-funnel",
     "tailscale-private",
@@ -43,7 +48,7 @@
       "current-profile identity",
       "HTTPS/MagicDNS prerequisites",
       "actual route allocation ownership",
-      "continuous ownership receipt before cleanup; CLI cannot establish it"
+      "immutable foreground process identity or fresh exact route ownership continuity before cleanup"
     ],
     "tailscale-funnel": [
       "current Funnel permission",
@@ -105,5 +110,5 @@
     "remove/after/readback"
   ],
   "continuity": "Fresh host ownershipReceipt matching handleRef, continuityRef and sessionId is mandatory. Fixture authorities are synthetic test input only. CLI read/compare/off is not compare-and-swap.",
-  "probe": "Only a matching fresh probeReceipt can establish origin, TLS, instance nonce and required transport behavior. A nonlocal vantage additionally requires remote:true. Local HTTP 200 is insufficient."
+  "probe": "Only a matching fresh probeReceipt establishes origin, TLS, instance nonce and required transport behavior. Public accepts remote:true or the originally authorized public-relay class (remote:false, publicDns:true, pinned public IP). Tailnet and LAN require genuine remote:true intended-vantage proof. Local HTTP 200 is insufficient."
 }

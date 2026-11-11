@@ -9,6 +9,8 @@ pub const FEATURES: &[&str] = &[
     "owned-process",
     "interface-forwarder",
     "private-file-reference",
+    "private-file-materialization",
+    "transport-origin-mapping",
     "probe-assertions",
     "client-vantage-probe",
     "unused-port-selection",
@@ -122,8 +124,265 @@ fn dns(s: &str) -> bool {
                 && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
         })
 }
+fn only_keys(value: &Value, allowed: &[&str]) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| object.keys().all(|key| allowed.contains(&key.as_str())))
+}
+fn scoped_generation(receipt: &Value, state: &State, generation: u64) -> bool {
+    fresh(receipt, state)
+        && receipt.get("generation").and_then(Value::as_u64) == Some(generation)
+        && opaque(str_field(receipt, "authorityRef"))
+}
+pub fn validate_private_host(host: &Host) -> bool {
+    host.bindings
+        .values()
+        .all(|binding| match str_field(binding, "type") {
+            "credential-reference" => only_keys(
+                binding,
+                &[
+                    "type",
+                    "handleRef",
+                    "authorityRef",
+                    "sessionId",
+                    "generation",
+                    "observedAtMs",
+                    "expiresAtMs",
+                ],
+            ),
+            "session-private-path" => {
+                (binding.get("materialization").is_none_or(|receipt| {
+                    only_keys(receipt, &["credentialRefs"])
+                        && receipt["credentialRefs"].as_object().is_some_and(|refs| {
+                            refs.len() <= 16
+                                && refs
+                                    .values()
+                                    .all(|handle| handle.as_str().is_some_and(opaque))
+                        })
+                })) && only_keys(
+                    binding,
+                    &[
+                        "type",
+                        "handleRef",
+                        "authorityRef",
+                        "sessionId",
+                        "generation",
+                        "observedAtMs",
+                        "expiresAtMs",
+                        "mode",
+                        "parentMode",
+                        "materialization",
+                    ],
+                )
+            }
+            _ => true,
+        })
+}
+fn endpoint(value: &Value, upstream: bool) -> bool {
+    only_keys(
+        value,
+        if upstream {
+            &["scheme", "hostname", "port"]
+        } else {
+            &["scheme", "hostname", "port", "endpointName"]
+        },
+    ) && (["https", "tls", "tcp"].contains(&str_field(value, "scheme"))
+        || upstream && str_field(value, "scheme") == "http")
+}
+fn valid_endpoint(value: &Value, upstream: bool) -> bool {
+    endpoint(value, upstream)
+        && dns(str_field(value, "hostname"))
+        && typed("port", &value["port"])
+        && (upstream || opaque(str_field(value, "endpointName")))
+}
+fn mapping_value(rule: &Value) -> Option<Value> {
+    let endpoint = rule.get("endpoint")?;
+    let upstream = rule.get("upstream")?;
+    if !valid_endpoint(endpoint, false)
+        || !valid_endpoint(upstream, true)
+        || !opaque(str_field(rule, "policyRef"))
+    {
+        return None;
+    }
+    if let Some(http_origin) = rule.get("origin") {
+        let port = endpoint["port"].as_u64()?;
+        let expected = format!(
+            "https://{}{}",
+            str_field(endpoint, "hostname"),
+            if port == 443 {
+                String::new()
+            } else {
+                format!(":{port}")
+            }
+        );
+        if str_field(endpoint, "scheme") != "https"
+            || http_origin.as_str() != Some(expected.as_str())
+            || origin(&expected).as_deref() != Some(expected.as_str())
+        {
+            return None;
+        }
+    }
+    let mut result = json!({"endpoint":endpoint,"upstream":upstream,"policyRef":rule["policyRef"]});
+    if let Some(value) = rule.get("origin") {
+        result["origin"] = value.clone();
+    }
+    Some(result)
+}
+fn template_refs(value: &Value, refs: &[Value], depth: usize) -> bool {
+    if depth > 16 {
+        return false;
+    }
+    match value {
+        Value::Object(_) if str_field(value, "kind") == "credential-ref" => {
+            only_keys(value, &["kind", "binding"]) && refs.contains(&value["binding"])
+        }
+        Value::Object(object) => {
+            object.len() <= 64
+                && object
+                    .values()
+                    .all(|item| template_refs(item, refs, depth + 1))
+        }
+        Value::Array(array) => {
+            array.len() <= 64
+                && array
+                    .iter()
+                    .all(|item| template_refs(item, refs, depth + 1))
+        }
+        Value::String(text) => text.len() <= 8192,
+        _ => true,
+    }
+}
+fn template_uses(value: &Value, name: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            (str_field(value, "kind") == "credential-ref" && value.get("binding") == Some(name))
+                || object.values().any(|item| template_uses(item, name))
+        }
+        Value::Array(array) => array.iter().any(|item| template_uses(item, name)),
+        _ => false,
+    }
+}
+fn valid_materialize(spec: &Value) -> bool {
+    let Some(refs) = spec.get("credentialRefs").and_then(Value::as_array) else {
+        return false;
+    };
+    only_keys(spec, &["format", "template", "credentialRefs", "requires"])
+        && ["json", "text"].contains(&str_field(spec, "format"))
+        && spec.get("template").is_some_and(|template| {
+            template.to_string().len() <= 32768 && template_refs(template, refs, 0)
+        })
+        && (str_field(spec, "format") != "text"
+            || spec["template"].is_string()
+            || str_field(&spec["template"], "kind") == "credential-ref")
+        && !refs.is_empty()
+        && refs.len() <= 16
+        && refs
+            .iter()
+            .all(|name| name.as_str().is_some_and(opaque) && template_uses(&spec["template"], name))
+        && refs
+            .iter()
+            .enumerate()
+            .all(|(index, name)| !refs[..index].contains(name))
+        && spec
+            .get("requires")
+            .and_then(Value::as_array)
+            .is_some_and(|rules| {
+                !rules.is_empty()
+                    && rules.len() <= 32
+                    && rules.iter().all(|rule| {
+                        str_field(rule, "op") == "verified"
+                            && rule.get("value").is_some()
+                            && valid_assertion(rule, 0)
+                    })
+            })
+}
+fn mapping_plan_valid(a: &Adapter, e: &Execution) -> bool {
+    let mappings: Vec<Value> = e
+        .requires
+        .iter()
+        .filter(|rule| str_field(rule, "op") == "transport-mapping")
+        .filter_map(|rule| expand(rule, &e.bindings).ok())
+        .collect();
+    e.bindings
+        .values()
+        .filter(|binding| str_field(binding, "type") == "transport-endpoint")
+        .all(|binding| {
+            mappings
+                .iter()
+                .any(|mapping| mapping.get("endpoint") == binding.get("value"))
+        })
+        && mappings.iter().all(|rule| {
+            let Some(mapping) = mapping_value(rule) else {
+                return false;
+            };
+            let approved_ports: Vec<&Value> = e
+                .bindings
+                .values()
+                .filter(|binding| str_field(binding, "type") == "loopback-port")
+                .filter_map(|binding| binding.get("value"))
+                .collect();
+            if !approved_ports.is_empty()
+                && (str_field(&mapping["upstream"], "hostname") != "127.0.0.1"
+                    || !approved_ports.contains(&&mapping["upstream"]["port"]))
+            {
+                return false;
+            }
+            a.endpoint_template.as_ref().is_none_or(|template| {
+                expand(&json!(template), &e.bindings).ok().as_ref() == mapping.get("origin")
+            })
+        })
+}
+fn contains_transport_mapping(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            str_field(value, "op") == "transport-mapping"
+                || object.values().any(contains_transport_mapping)
+        }
+        Value::Array(values) => values.iter().any(contains_transport_mapping),
+        _ => false,
+    }
+}
+fn materializations_valid(a: &Adapter, e: &Execution, state: &State) -> bool {
+    a.bindings
+        .as_ref()
+        .and_then(Value::as_object)
+        .is_none_or(|specs| {
+            specs.iter().all(|(name, spec)| {
+                let Some(materialize) = spec.get("materialize") else {
+                    return true;
+                };
+                let Some(binding) = e.bindings.get(name) else {
+                    return false;
+                };
+                let Some(refs) = materialize["credentialRefs"].as_array() else {
+                    return false;
+                };
+                let expected: serde_json::Map<String, Value> = refs
+                    .iter()
+                    .filter_map(|name| {
+                        let name = name.as_str()?;
+                        let credential = e.bindings.get(name)?;
+                        if str_field(credential, "type") != "credential-reference" {
+                            return None;
+                        }
+                        Some((name.to_owned(), credential["handleRef"].clone()))
+                    })
+                    .collect();
+                let receipt = &binding["materialization"];
+                expected.len() == refs.len()
+                    && only_keys(receipt, &["credentialRefs"])
+                    && receipt["credentialRefs"] == Value::Object(expected)
+                    && materialize["requires"].as_array().is_some_and(|rules| {
+                        rules
+                            .iter()
+                            .all(|rule| assertion(rule, &Value::Null, e, state, &Value::Null, 0))
+                    })
+            })
+        })
+}
 fn typed(kind: &str, value: &Value) -> bool {
     match kind {
+        "transport-endpoint" => valid_endpoint(value, false),
         "bool" => value.is_boolean(),
         "port" | "loopback-port" | "unused-port" => {
             value.as_u64().is_some_and(|n| n > 0 && n <= 65535)
@@ -324,8 +583,27 @@ fn resolve_bindings(
             {
                 return Err("Binding authority missing, stale, or wrong type".into());
             }
+            if ["credential-reference", "transport-endpoint"].contains(&kind) {
+                if !scoped_generation(binding, state, e.generation)
+                    || (kind == "credential-reference"
+                        && (!opaque(str_field(binding, "handleRef"))
+                            || binding.get("value").is_some()))
+                    || (kind == "transport-endpoint" && !typed(kind, &binding["value"]))
+                {
+                    return Err("Scoped private/transport authority is invalid".into());
+                }
+                let mut saved = binding.clone();
+                saved["hostAuthority"] = binding["authorityRef"].clone();
+                e.valid_until_ms = e
+                    .valid_until_ms
+                    .min(binding["expiresAtMs"].as_u64().unwrap_or(0));
+                e.bindings.insert(name.clone(), saved);
+                continue;
+            }
             if kind == "session-private-path" {
-                if !opaque(str_field(binding, "handleRef"))
+                if (spec.get("materialize").is_some()
+                    && !scoped_generation(binding, state, e.generation))
+                    || !opaque(str_field(binding, "handleRef"))
                     || str_field(binding, "mode") != "0600"
                     || str_field(binding, "parentMode") != "0700"
                 {
@@ -364,6 +642,14 @@ fn resolve_bindings(
                 .is_some_and(|b| str_field(b, "authorityRef") == authority)
             {
                 binding["hostAuthority"] = json!(authority);
+                if let Some(generation) = state
+                    .host
+                    .bindings
+                    .get(name)
+                    .and_then(|receipt| receipt.get("generation"))
+                {
+                    binding["generation"] = generation.clone();
+                }
             }
             e.bindings.insert(name.clone(), binding);
         } else if all {
@@ -547,9 +833,21 @@ fn assertion(
             .get(str_field(&expanded, "fact"))
             .is_some_and(|r| {
                 fresh(r, state)
-                    && r.get("value") == Some(&Value::Bool(true))
+                    && r.get("value") == Some(expanded.get("value").unwrap_or(&Value::Bool(true)))
+                    && (expanded.get("value").is_none()
+                        || scoped_generation(r, state, e.generation))
                     && opaque(str_field(r, "authorityRef"))
             }),
+        "transport-mapping" => mapping_value(&expanded).is_some_and(|expected| {
+            state
+                .host
+                .facts
+                .get(str_field(&expanded, "fact"))
+                .is_some_and(|receipt| {
+                    scoped_generation(receipt, state, e.generation)
+                        && receipt.get("value") == Some(&expected)
+                })
+        }),
         "private-file" => e
             .bindings
             .get(str_field(&expanded, "binding"))
@@ -625,7 +923,17 @@ fn valid_assertion(rule: &Value, depth: usize) -> bool {
             if !rule.get("fact").is_some_and(Value::is_string) {
                 return false;
             }
-            &["op", "fact"]
+            &["op", "fact", "value"]
+        }
+        "transport-mapping" => {
+            if !rule.get("fact").is_some_and(Value::is_string)
+                || rule.get("endpoint").is_none()
+                || rule.get("upstream").is_none()
+                || rule.get("policyRef").is_none()
+            {
+                return false;
+            }
+            &["op", "fact", "endpoint", "upstream", "policyRef", "origin"]
         }
         "private-file" => &["op", "binding", "mode", "parentMode", "owner"],
         "port-unoccupied" => {
@@ -850,11 +1158,34 @@ fn admissible(a: &Adapter, state: &State) -> Result<(), String> {
                 "selected-interface-address",
                 "opaque-private-reference",
                 "session-private-path",
+                "credential-reference",
+                "transport-endpoint",
                 "reserved-unused-port",
             ]
             .contains(&str_field(spec, "type"))
             {
                 return Err("Unsupported typed binding".into());
+            }
+            let required = match str_field(spec, "type") {
+                "credential-reference" => Some("private-file-reference"),
+                "transport-endpoint" => Some("transport-origin-mapping"),
+                _ if spec.get("materialize").is_some() => Some("private-file-materialization"),
+                _ => None,
+            };
+            if required.is_some_and(|feature| {
+                !features.iter().any(|value| value.as_str() == Some(feature))
+            }) || (spec.get("materialize").is_some()
+                && (str_field(spec, "type") != "session-private-path"
+                    || !valid_materialize(&spec["materialize"])))
+                || (a.ownership == "external-owned"
+                    && str_field(spec, "type") == "transport-endpoint")
+                || (["credential-reference", "transport-endpoint"]
+                    .contains(&str_field(spec, "type"))
+                    && spec
+                        .as_object()
+                        .is_none_or(|object| object.keys().any(|key| key != "type")))
+            {
+                return Err("Private/transport binding requires its exact implemented feature and authority".into());
             }
             if spec.as_object().is_none_or(|o| {
                 o.keys().any(|k| {
@@ -866,6 +1197,7 @@ fn admissible(a: &Adapter, state: &State) -> Result<(), String> {
                         "trimTrailingDot",
                         "candidates",
                         "protectedPorts",
+                        "materialize",
                     ]
                     .contains(&k.as_str())
                 })
@@ -880,6 +1212,30 @@ fn admissible(a: &Adapter, state: &State) -> Result<(), String> {
         }
         if !["create", "remove"].contains(&operation.as_str()) || !valid_recipe(recipe, false) {
             return Err("Unsupported executable plan field or operation".into());
+        }
+        if contains_transport_mapping(&json!(recipe.fields))
+            && !features
+                .iter()
+                .any(|feature| feature.as_str() == Some("transport-origin-mapping"))
+        {
+            return Err("Transport mapping requires negotiated feature".into());
+        }
+        if recipe
+            .fields
+            .iter()
+            .any(|(key, value)| contains_transport_mapping(value) && key != "requires")
+            || recipe
+                .fields
+                .get("requires")
+                .and_then(Value::as_array)
+                .is_some_and(|rules| {
+                    rules.iter().any(|rule| {
+                        contains_transport_mapping(rule)
+                            && str_field(rule, "op") != "transport-mapping"
+                    })
+                })
+        {
+            return Err("Transport mapping must be a direct mutation prerequisite".into());
         }
         parse_steps(recipe, "before")?;
         parse_steps(recipe, "after")?;
@@ -896,6 +1252,11 @@ fn admissible(a: &Adapter, state: &State) -> Result<(), String> {
         return Err("External ownership permits validation only".into());
     }
     Ok(())
+}
+fn immutable_cleanup_binding(binding: &Value) -> bool {
+    ["credential-reference", "transport-endpoint"].contains(&str_field(binding, "type"))
+        || (str_field(binding, "type") == "session-private-path"
+            && binding.get("materialization").is_some())
 }
 fn make_execution(
     a: &Adapter,
@@ -924,6 +1285,10 @@ fn make_execution(
         .unwrap_or_default();
     if operation == "remove" {
         for (name, saved) in &bindings {
+            // Create credentials and mappings are not authority to stop an owned birth.
+            if recipe.kind == EffectKind::OwnedProcess || immutable_cleanup_binding(saved) {
+                continue;
+            }
             if let Some(authority) = saved.get("hostAuthority") {
                 let current = state
                     .host
@@ -1071,6 +1436,11 @@ fn drive(out: &mut Output, mut e: Execution) -> Result<(), String> {
         {
             return Err("Removal lacks exact owned ledger/continuity guard".into());
         }
+        if e.operation == "create"
+            && (!materializations_valid(&a, &e, &out.state) || !mapping_plan_valid(&a, &e))
+        {
+            return Err("Private materialization authority mismatch".into());
+        }
         let execute = prepare_recipe(&e)?;
         let record = json!({"operation":e.operation,"adapterId":e.adapter_id,"resourceId":e.resource_id,"sessionId":out.state.session_id,"generation":out.state.generation,"recipeRef":format!("{}/execute",e.operation),"execute":execute,"bindings":e.bindings,"baseline":e.facts,"ledger":e.ledger});
         let recipe = Recipe {
@@ -1110,6 +1480,19 @@ fn drive(out: &mut Output, mut e: Execution) -> Result<(), String> {
             cleanup(out);
             return Ok(());
         }
+        let mappings: Vec<Value> = e
+            .requires
+            .iter()
+            .filter(|rule| str_field(rule, "op") == "transport-mapping")
+            .filter_map(|rule| expand(rule, &e.bindings).ok())
+            .collect();
+        if !mappings.is_empty() && mappings.iter().any(|rule| rule.get("origin").is_none()) {
+            out.state.candidate = None;
+            out.state.published = None;
+            out.state.phase = "transport-ready".into();
+            event(out, "transport-endpoint-ready");
+            return Ok(());
+        }
         let candidate = e
             .candidate
             .or_else(|| {
@@ -1119,6 +1502,12 @@ fn drive(out: &mut Output, mut e: Execution) -> Result<(), String> {
                     .and_then(|s| s.as_str().and_then(origin))
             })
             .ok_or("No verified plan candidate origin")?;
+        if mappings
+            .iter()
+            .any(|rule| rule.get("origin").and_then(Value::as_str) != Some(candidate.as_str()))
+        {
+            return Err("Transport mapping does not authorize candidate origin".into());
+        }
         request_probe(out, &a, candidate)?;
         return Ok(());
     }
@@ -1661,7 +2050,26 @@ pub fn complete(out: &mut Output, p: &Pending, cmd: &Value) {
             {
                 return Err("Preflight authority changed before mutation".into());
             }
+            let adapter = out
+                .state
+                .adapters
+                .iter()
+                .find(|adapter| adapter.id == e.adapter_id)
+                .ok_or("Adapter unavailable")?;
+            admissible(adapter, &out.state)?;
+            if e.operation == "create"
+                && (!materializations_valid(adapter, &e, &out.state)
+                    || !mapping_plan_valid(adapter, &e))
+            {
+                return Err("Private materialization scope changed before mutation".into());
+            }
             for (name, saved) in &e.bindings {
+                if e.operation == "remove"
+                    && (e.recipe.kind == EffectKind::OwnedProcess
+                        || immutable_cleanup_binding(saved))
+                {
+                    continue;
+                }
                 if let Some(authority) = saved.get("hostAuthority") {
                     let current = out
                         .state
@@ -1673,6 +2081,11 @@ pub fn complete(out: &mut Output, p: &Pending, cmd: &Value) {
                         || current.get("value") != saved.get("value")
                         || current.get("handleRef") != saved.get("handleRef")
                         || current.get("authorityRef") != Some(authority)
+                        || (immutable_cleanup_binding(saved)
+                            && current.get("generation") != saved.get("generation"))
+                        || current.get("materialization") != saved.get("materialization")
+                        || current.get("mode") != saved.get("mode")
+                        || current.get("parentMode") != saved.get("parentMode")
                     {
                         return Err("Host binding identity changed before mutation".into());
                     }

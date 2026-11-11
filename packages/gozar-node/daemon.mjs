@@ -3,11 +3,14 @@ import { chmod, readFile, unlink, open, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { isDeepStrictEqual } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { atomicWrite, Journal, processIdentity } from './journal.mjs';
 import { Controller } from './controller.mjs';
 import { PublicRelayVerifier } from './public-relay.mjs';
 import { ProbeDirectoryExecutor } from './probe-directory.mjs';
-import { prepareHost } from './host.mjs';
+import { prepareHost, LOCAL_PLAN_FEATURES } from './host.mjs';
+import { loadCatalog } from './catalog.mjs';
 import { createGate } from './gate.mjs';
 import { loadCore } from './core.mjs';
 
@@ -32,6 +35,32 @@ export async function control(directory, command, timeoutMs = 15_000) {
     socket.on('error', error => finish(error));
     socket.on('end', () => { if (!settled) finish(new Error('Controller closed without a result')); });
   });
+}
+
+// A controller keeps the implementation it loaded at startup. Retire a stopped,
+// authenticated controller before reconciling its journal with the current code.
+export async function stopSession(directory) {
+  let identity;
+  try { identity = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  let reply;
+  try { reply = await control(directory, { type: 'stop' }, 120_000); }
+  catch { return recoverStop(directory); }
+  if (reply.snapshot?.phase !== 'cleanup-pending') return reply;
+  const journal = new Journal(directory); await journal.load();
+  const current = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8'));
+  if (!identity?.startIdentity || current.pid !== identity.pid || current.startIdentity !== identity.startIdentity || current.nonce !== identity.nonce ||
+      !journal.value.state?.stopRequested || journal.value.state.sessionId !== reply.snapshot.sessionId) throw new Error('Controller changed during stop; inspect the recorded session and retry stop');
+  if (await processIdentity(identity.pid) === identity.startIdentity) {
+    try { process.kill(identity.pid, 'SIGTERM'); }
+    catch (error) { if (error.code !== 'ESRCH') throw error; }
+    const deadline = Date.now() + 10_000;
+    while (await processIdentity(identity.pid) === identity.startIdentity) {
+      if (Date.now() >= deadline) throw new Error('Stopped controller has not exited; inspect the recorded controller identity and retry stop');
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+  return { ...await recoverStop(directory), controllerHandover: true };
 }
 
 export async function launch(directory, configuration, executable) {
@@ -216,6 +245,17 @@ export function publicReply(output, directory) {
     ...(output.localCleanupFailures ? { localCleanupFailures: output.localCleanupFailures } : {}) };
 }
 
+export function recoveryAdapters(saved, installed) {
+  return saved.map(record => {
+    const { endpointLifetime: ignored, ...adapter } = record;
+    const current = installed.find(item => item.id === adapter.id);
+    if (adapter.planVersion === 1 && adapter.ownership === 'owned' && current?.ownership === 'owned' && current.admission?.state === 'admitted' &&
+        current.endpointLifetime === 'owned-process' && isDeepStrictEqual(adapter.recipes, current.recipes) &&
+        isDeepStrictEqual(adapter.bindings, current.bindings) && isDeepStrictEqual(adapter.admission, current.admission)) return { ...adapter, endpointLifetime: current.endpointLifetime };
+    return adapter;
+  });
+}
+
 // Recover only local handles recorded by a dead controller. Never replay a create or remote deletion.
 export async function recoverStop(directory) {
   try {
@@ -226,10 +266,13 @@ export async function recoverStop(directory) {
   if (!journal.value.state) throw new Error('No recorded session to stop');
   const step = await loadCore();
   const state = journal.value.state;
-  const controller = new Controller({ step, journal, adapters: state.adapters, requirements: state.requirements,
+  const installed = await loadCatalog(fileURLToPath(new URL('../../', import.meta.url)), { operational: true });
+  const adapters = recoveryAdapters(state.adapters, installed);
+  const controller = new Controller({ step, journal, adapters, requirements: state.requirements,
     targetPort: journal.value.targetPort, sessionId: state.sessionId });
   controller.state = state;
   controller.driver.recoveryOnly = true;
+  controller.driver.host.features = [...new Set([...LOCAL_PLAN_FEATURES, ...(state.host?.features ?? []).filter(feature => ['probe-assertions', 'client-vantage-probe'].includes(feature))])];
   controller.driver.authorize(state.selected);
   const result = await controller.shutdown();
   return publicReply(result, directory);

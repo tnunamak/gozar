@@ -1,5 +1,10 @@
 import { isIP } from 'node:net';
 import { safeOrigin } from './catalog.mjs';
+import { isDeepStrictEqual } from 'node:util';
+import { expandPlan } from './bindings.mjs';
+import { scopedReceipt, privateMaterializationScope } from './materialization.mjs';
+import { transportEndpoint, assertTransportMapping } from './transport.mjs';
+export { expandPlan } from './bindings.mjs';
 
 const metadata = new Set(['id', 'sessionId', 'generation', 'operation', 'adapterId', 'resourceId', 'recipeRef', 'stepId', 'stage', 'bindings', 'bindingRefs', 'ownership']);
 const planFields = new Set(['before', 'after', 'requires', 'ledger', 'parser', 'captures', 'assert']);
@@ -9,6 +14,7 @@ const integerPort = value => Number.isSafeInteger(value) && value > 0 && value <
 
 export function validateBinding(type, value, targetPort) {
   switch (type) {
+    case 'transport-endpoint': return transportEndpoint(value);
     case 'bool': return typeof value === 'boolean';
     case 'port': case 'unused-port': return integerPort(value);
     case 'loopback-port': return integerPort(value) && value === targetPort;
@@ -30,21 +36,6 @@ export function validateBinding(type, value, targetPort) {
   }
 }
 
-export function expandPlan(value, bindings) {
-  if (typeof value === 'string') {
-    const exact = /^\{([^{}]+)\}$/.exec(value);
-    if (exact && bindings[exact[1]]) return bindings[exact[1]].value ?? bindings[exact[1]].handleRef;
-    return value.replace(/\{([^{}]+)\}/g, (token, name) => {
-      const binding = bindings[name];
-      if (!binding) throw new Error(`Unbound plan field: ${name}`);
-      if (binding.type === 'session-private-path') return token;
-      return String(binding.value ?? binding.handleRef);
-    });
-  }
-  if (Array.isArray(value)) return value.map(item => expandPlan(item, bindings));
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, expandPlan(item, bindings)]));
-  return value;
-}
 
 export function recipeAt(adapter, recipeRef) {
   if (typeof recipeRef !== 'string') throw new Error('Operational effect requires recipeRef');
@@ -77,17 +68,43 @@ export function admitPlanEffect(effect, { adapters, sessionId, targetPort, featu
     if (resource?.sessionId === sessionId && resource.bindings?.[name] && JSON.stringify(resource.bindings[name]) === JSON.stringify(binding)) continue;
     const hostBinding = host.bindings?.[name];
     if (hostBinding) {
-      if (['sessionId', 'observedAtMs', 'expiresAtMs', 'mode', 'parentMode'].some(key => Object.hasOwn(binding, key) && binding[key] !== hostBinding[key])) throw new Error('Binding receipt differs from host authority');
+      if (['sessionId', 'generation', 'observedAtMs', 'expiresAtMs', 'mode', 'parentMode'].some(key => Object.hasOwn(binding, key) && binding[key] !== hostBinding[key])) throw new Error('Binding receipt differs from host authority');
       if (hostBinding.authorityRef !== binding.authorityRef || hostBinding.sessionId !== sessionId || hostBinding.observedAtMs > nowMs || hostBinding.expiresAtMs <= nowMs ||
-          (hostBinding.type === 'session-private-path' ? hostBinding.handleRef !== binding.handleRef : JSON.stringify(hostBinding.value) !== JSON.stringify(binding.value))) throw new Error('Host binding authority is stale or mismatched');
+          (['session-private-path', 'credential-reference'].includes(hostBinding.type) ? hostBinding.handleRef !== binding.handleRef : !isDeepStrictEqual(hostBinding.value, binding.value))) throw new Error('Host binding authority is stale or mismatched');
     } else {
       if (binding.authorityRef !== `plan:${effect.generation}:${name}` || !(Object.hasOwn(spec, 'value') || (spec.source && spec.pointer))) throw new Error('Binding lacks host authority or a declared captured source');
       if (Object.hasOwn(spec, 'value') && JSON.stringify(binding.value) !== JSON.stringify(spec.value)) throw new Error('Literal binding changed');
     }
     if (spec.type === 'unused-port' && (!spec.candidates?.includes(binding.value) || spec.protectedPorts?.includes(binding.value))) throw new Error('Listener binding is outside the explicit unprotected candidates');
-    if (binding.type === 'session-private-path') {
+    if (binding.hostAuthority !== undefined && binding.hostAuthority !== binding.authorityRef) throw new Error('Binding host authority mismatch');
+    const scope = { sessionId, generation: effect.generation, nowMs, hostBindings: host.bindings };
+    if (['credential-reference', 'transport-endpoint'].includes(binding.type) || spec.materialize) {
+      if (!scopedReceipt(hostBinding, scope) || !scopedReceipt(binding, scope)) throw new Error('Binding lacks exact generation authority');
+    }
+    if (binding.type === 'credential-reference') {
+      if (!opaque(binding.handleRef) || Object.keys(binding).some(key => !['type', 'handleRef', 'sessionId', 'generation', 'authorityRef', 'hostAuthority', 'observedAtMs', 'expiresAtMs'].includes(key))) throw new Error('Credential binding must contain only scoped opaque authority');
+    } else if (binding.type === 'session-private-path') {
       if (!hostBinding || binding.mode !== '0600' || binding.parentMode !== '0700' || !opaque(binding.handleRef)) throw new Error('Private binding lacks exact session authority');
+      if (Object.keys(binding).some(key => !['type', 'handleRef', 'sessionId', 'generation', 'authorityRef', 'observedAtMs', 'expiresAtMs', 'mode', 'parentMode', 'materialization', 'hostAuthority'].includes(key))) throw new Error('Private binding contains undeclared material');
+      if (spec.materialize) {
+        const declaration = privateMaterializationScope(spec, bindings, host.facts ?? {}, scope);
+        const file = owned[binding.handleRef];
+        if (!file?.materialized || file.sessionId !== sessionId || file.generation !== effect.generation || file.adapterId !== adapter.id || file.bindingName !== name || file.declarationHash !== declaration.declarationHash) throw new Error('Private artifact does not match its exact materialization declaration');
+        if (!isDeepStrictEqual(binding.materialization, declaration.materialization) || !isDeepStrictEqual(hostBinding.materialization, binding.materialization)) throw new Error('Private materialization reference authority mismatch');
+      }
     } else if (!validateBinding(binding.type, binding.value, targetPort)) throw new Error('Binding value does not match its approved type or target');
+  }
+  if (located.operation === 'create' && located.stage === 'execute') {
+    for (const rule of located.recipe.requires ?? []) {
+      if (rule.op === 'transport-mapping') {
+        const mapping = assertTransportMapping(rule, host, bindings, { sessionId, generation: effect.generation, nowMs });
+        if (mapping.upstream.hostname !== '127.0.0.1' || mapping.upstream.port !== targetPort) throw new Error('Transport mapping upstream differs from the approved loopback target');
+      }
+      if (rule.op === 'verified' && Object.hasOwn(rule, 'value')) {
+        const fact = host.facts?.[rule.fact];
+        if (!scopedReceipt(fact, { sessionId, generation: effect.generation, nowMs }) || !isDeepStrictEqual(fact.value, expandPlan(rule.value, bindings))) throw new Error('Exact scoped fact authority mismatch');
+      }
+    }
   }
   const recipe = Object.fromEntries(Object.entries(located.recipe).filter(([key]) => !planFields.has(key) && key !== 'process'));
   const process = located.recipe.process;

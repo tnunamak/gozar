@@ -2,6 +2,7 @@ import { mkdir, open, lstat, unlink, rmdir } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { processIdentity } from './journal.mjs';
 
 // Credential values cross only this private materialization boundary, never core JSON or argv.
 export class PrivateFiles {
@@ -25,7 +26,7 @@ export class PrivateFiles {
     }
     return value;
   }
-  async create({ format = 'text', template = '', credentialRefs = [] } = {}) {
+  async create({ format = 'text', template = '', credentialRefs = [], materialized = false, generation, declarationHash, adapterId, bindingName } = {}) {
     if (!this.root) throw new Error('Private files require an owned persistent session; detection is read-only');
     if (!['text', 'json'].includes(format) || !Array.isArray(credentialRefs) || credentialRefs.some(ref => typeof ref !== 'string')) throw new Error('Invalid private file declaration');
     await mkdir(this.root, { mode: 0o700 }).catch(error => { if (error.code !== 'EEXIST') throw error; });
@@ -38,17 +39,19 @@ export class PrivateFiles {
     const id = randomUUID();
     const path = join(this.root, id);
     const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-    let resource;
+    let resource, recorded = false;
     try {
-      await file.writeFile(content); await file.sync();
       const stat = await file.stat();
-      resource = { id, kind: 'private-file', sessionId: this.sessionId, nonce: randomUUID(), basename: id, device: stat.dev, inode: stat.ino };
+      resource = { id, kind: 'private-file', sessionId: this.sessionId, nonce: randomUUID(), basename: id, device: stat.dev, inode: stat.ino,
+        ...(materialized ? { materialized: true, generation, declarationHash, adapterId, bindingName } : {}) };
+      // Commit the exact empty file identity before writing any credential bytes.
+      await this.journal.own(resource); recorded = true;
+      await file.writeFile(content); await file.sync();
     } catch (error) {
-      await unlink(path).catch(() => {});
+      await unlink(path);
+      if (recorded) await this.journal.removed(id);
       throw error;
     } finally { await file.close(); }
-    try { await this.journal.own(resource); }
-    catch (error) { await unlink(path); throw error; }
     this.handles.set(id, path);
     return { fileHandle: id };
   }
@@ -56,6 +59,8 @@ export class PrivateFiles {
     if (!this.root) throw new Error('Private file broker unavailable for read-only detection');
     const resource = this.journal.value.owned[handle];
     if (!resource || resource.kind !== 'private-file' || resource.sessionId !== this.sessionId || resource.basename !== resource.id || !/^[0-9a-f-]{36}$/.test(resource.basename) || !resource.nonce) throw new Error('Private file handle outside session scope');
+    const parent = await lstat(this.root);
+    if (!parent.isDirectory() || parent.isSymbolicLink() || parent.uid !== process.getuid() || (parent.mode & 0o777) !== 0o700) throw new Error('Private directory ownership or mode mismatch');
     const path = join(this.root, resource.basename);
     const stat = await lstat(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.dev !== resource.device || stat.ino !== resource.inode ||
@@ -63,6 +68,13 @@ export class PrivateFiles {
     return path;
   }
   async remove(handle) {
+    const pending = this.journal.value.owned[handle]?.pendingDispatch;
+    if (pending && !Object.values(this.journal.value.owned).some(resource => resource.kind === 'process' && resource.artifacts?.includes(handle) &&
+        resource.dispatchEffectId === pending.effectId && resource.sessionId === pending.sessionId && resource.generation === pending.generation)) throw new Error('Private artifact dispatch outcome is unknown; retain its file and reconcile the owned process');
+    for (const resource of Object.values(this.journal.value.owned)) {
+      if (resource.kind !== 'process' || !resource.artifacts?.includes(handle)) continue;
+      if (!resource.startIdentity || await processIdentity(resource.pid) === resource.startIdentity) throw new Error('Private artifact owner is still running or its exit is unproven');
+    }
     let path;
     try { path = await this.path(handle); }
     catch (error) { if (error.code === 'ENOENT') { await this.journal.removed(handle); this.handles.delete(handle); return; } throw error; }

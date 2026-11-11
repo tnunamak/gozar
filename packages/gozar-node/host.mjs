@@ -5,9 +5,9 @@ import { safeOrigin } from './catalog.mjs';
 
 // Feature names describe implemented boundaries. Remote execution is an injected trusted capability.
 export const LOCAL_PLAN_FEATURES = ['recipe-sequence', 'typed-bindings', 'predicate-parser', 'owned-resource-ledger',
-  'owned-process', 'interface-forwarder', 'private-file-reference', 'unused-port-selection'];
+  'owned-process', 'interface-forwarder', 'private-file-reference', 'private-file-materialization', 'transport-origin-mapping', 'unused-port-selection'];
 
-export async function prepareHost(driver, adapter, { origin, gate, probeExecutor, authorities = {} } = {}) {
+export async function prepareHost(driver, adapter, { origin, gate, probeExecutor, authorities = {}, generation = 1, resolveCredential } = {}) {
   const nowMs = driver.nowMs(), expiresAtMs = nowMs + 900_000;
   const host = { nowMs, features: [...LOCAL_PLAN_FEATURES], bindings: {}, facts: {}, probe: null };
   if (gate) {
@@ -15,7 +15,8 @@ export async function prepareHost(driver, adapter, { origin, gate, probeExecutor
     host.probe = { nonceRef: gate.nonceRef, verifierRef: gate.verifierRef, expiresAtMs, ...(probeExecutor instanceof PublicRelayVerifier ? { allowPublicRelay:true } : {}) };
   }
   if (probeExecutor) host.features.push('client-vantage-probe');
-  const receipt = value => ({ value, authorityRef: randomUUID(), sessionId: driver.sessionId, observedAtMs: nowMs, expiresAtMs });
+  const materializing = Object.values(adapter.bindings ?? {}).some(spec => spec.materialize);
+  const receipt = value => ({ value, ...(materializing ? { generation } : {}), authorityRef: randomUUID(), sessionId: driver.sessionId, observedAtMs: nowMs, expiresAtMs });
   for (const [name, spec] of Object.entries(adapter.bindings ?? {})) {
     if (Object.hasOwn(spec, 'value') || (spec.source && spec.pointer)) continue;
     let value;
@@ -27,7 +28,7 @@ export async function prepareHost(driver, adapter, { origin, gate, probeExecutor
     } else if (spec.type === 'selected-interface-address' && driver.bindAddresses.length === 1) {
       const selected = driver.bindAddresses[0];
       if (Object.values(networkInterfaces()).flat().some(address => address.address === selected && !address.internal)) value = selected;
-    } else if (spec.type === 'session-private-path') {
+    } else if (spec.type === 'session-private-path' && !spec.materialize) {
       const { fileHandle } = await driver.privateFiles.create();
       host.bindings[name] = { ...receipt(undefined), type: spec.type, handleRef: fileHandle, mode: '0600', parentMode: '0700' };
       delete host.bindings[name].value;
@@ -45,6 +46,11 @@ export async function prepareHost(driver, adapter, { origin, gate, probeExecutor
   for (const [name, binding] of Object.entries(supplied.bindings ?? {})) {
     if (binding.sessionId === driver.sessionId && binding.observedAtMs <= nowMs && binding.expiresAtMs > nowMs && binding.authorityRef && adapter.bindings?.[name]?.type === binding.type) host.bindings[name] = structuredClone(binding);
   }
-  driver.host = host; driver.publicRelay = probeExecutor instanceof PublicRelayVerifier; driver.gate = gate; driver.probeExecutor = probeExecutor;
+  driver.host = host;
+  if (resolveCredential) driver.privateFiles.resolveCredential = resolveCredential;
+  for (const [name, spec] of Object.entries(adapter.bindings ?? {})) {
+    if (spec.materialize) await driver.materializePrivateFile(adapter.id, name, { generation });
+  }
+  driver.publicRelay = probeExecutor instanceof PublicRelayVerifier; driver.gate = gate; driver.probeExecutor = probeExecutor;
   return host;
 }

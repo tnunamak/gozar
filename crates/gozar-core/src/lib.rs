@@ -636,6 +636,9 @@ pub fn transition(input: &str) -> Result<Output, String> {
         }
     }
     if let Some(host) = input.host {
+        if !operational::validate_private_host(&host) {
+            return Err("Private bindings accept opaque handles only".into());
+        }
         if host.now_ms < out.state.host.now_ms {
             return Err("host clock moved backwards".into());
         }

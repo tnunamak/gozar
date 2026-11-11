@@ -17,6 +17,7 @@ scripts/build-wasm.sh
 nice -n 19 ionice -c 3 node crates/gozar-core/tests/golden.cjs
 nice -n 19 ionice -c 3 node crates/gozar-core/tests/public-relay-golden.mjs
 nice -n 19 ionice -c 3 node crates/gozar-core/tests/operational-golden.mjs
+nice -n 19 ionice -c 3 node crates/gozar-core/tests/shared-hooks-golden.mjs
 ```
 
 Native golden tests use `GOZAR_NATIVE` when set; otherwise they resolve `debug/gozar-core-json` under `CARGO_TARGET_DIR` or the repository’s `target` directory. The build script also honors `CARGO_TARGET_DIR`.
@@ -31,4 +32,8 @@ Plans serialize bounded before steps, prerequisite checks, a durable exact inten
 
 Probe readiness requires a fresh exact nonce, verifier, origin, network vantage and requested protocol receipt. Nonlocal reach requires a remote verifier receipt, or an explicitly authorized public-relay receipt with a pinned public DNS address for public vantage. Local execution remains `remote:false`; LAN and tailnet still require remote proof. Expiry and health failures revoke publication; external-owned health/rotation never emits provider create/remove. This core does not implement the external verifier service.
 
-Private config/file materialization, JSON-record streams and transport-origin remapping remain unsupported features, so plans that need them remain blocked. Synthetic receipts prove interpreter behavior, not live ownership, provider parity or actual outside reach. The host owns real process birth identity, private-file permissions, continuity proof, provider concurrency controls and disk durability. Uncertain creates retain their request and cannot be retried blindly.
+Private-file materialization is a host preparation hook: a binding declares `materialize:{format,template,credentialRefs,requires}` and accepts only an opaque session/generation-scoped file receipt linked to exact credential handles. The host records private-file ownership intent durably before writing. Resolver bytes stay outside core input, effects and journals. The core verifies exact credential scope before intent and before spawn. Existing private-file references keep their original contract. Owned-process cleanup uses original ledger bindings and fresh immutable birth/continuity inspection; it does not need renewed creation credentials or materialization receipts. Explicit provider identity and absence readbacks still apply.
+
+`transport-endpoint` bindings preserve HTTPS, TLS and TCP as distinct structured values. A `transport-mapping` guard requires an exact fresh session/generation-scoped endpoint, upstream and policy receipt. Only the exact HTTPS endpoint can authorize an HTTP candidate; TLS/TCP remain `transport-ready` without an HTTP candidate or probe.
+
+Private configuration materialization, JSON-record streams and provider policy inspection remain unsupported features, so provider plans that need them remain blocked. These shared hooks do not change provider admission. Synthetic receipts prove interpreter behavior, not live ownership, provider parity or actual outside reach. The host owns real process birth identity, private-file permissions, continuity proof, provider concurrency controls and disk durability. Uncertain creates retain their request and cannot be retried blindly.

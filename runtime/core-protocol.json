@@ -153,7 +153,7 @@
     "snapshot": {
       "sessionId": "opaque",
       "generation": 1,
-      "phase": "idle|detecting|planned|preflight|persisting|starting|validating|candidate-ready|published-ready|degraded|stopping|cleanup-pending|stopped|failed",
+      "phase": "idle|detecting|planned|preflight|persisting|starting|validating|transport-ready|candidate-ready|published-ready|degraded|stopping|cleanup-pending|stopped|failed",
       "candidate": "origin or null",
       "published": "origin or null",
       "recommendations": [],
@@ -181,9 +181,7 @@
     "operational": "unknown features, operations, executable fields, binding guards and assertions block entire normalized plan before any effect",
     "unsupported": [
       "private-config-materialization",
-      "private-file-materialization",
       "json-records",
-      "transport-origin-mapping",
       "transport-policy-inspection"
     ]
   },
@@ -199,7 +197,9 @@
       "private-file-reference",
       "probe-assertions",
       "client-vantage-probe",
-      "unused-port-selection"
+      "unused-port-selection",
+      "private-file-materialization",
+      "transport-origin-mapping"
     ],
     "host": {
       "nowMs": "monotonic caller-supplied milliseconds",
@@ -207,7 +207,7 @@
         "all required plan features"
       ],
       "bindings": "scoped typed receipts, no secrets/paths",
-      "facts": "name -> {value:true,authorityRef,sessionId,observedAtMs,expiresAtMs}",
+      "facts": "name -> {value:JSON,authorityRef,sessionId,generation?,observedAtMs,expiresAtMs}; generation required for exact-value verified and transport-mapping assertions",
       "probe": "{nonceRef,verifierRef,expiresAtMs,allowPublicRelay?:boolean}; nonce must be fresh per probe. allowPublicRelay opts into public-relay network path only.",
       "cleanupAbsent": "resourceId -> {sessionId,handleRef,continuityRef,processGone:true,providerAbsent:true,observedAtMs,expiresAtMs}; trusted fresh proof that original owned process and its provider mapping are already absent. reconcile-absent requires stopRequested and exact ledger identity, retires only that resource/removal, emits no effects, and preserves uncertain creates and other debt."
     },
@@ -264,6 +264,42 @@
       },
       "unchanged": "All nonce, verifier, exact origin, time, TLS, instance and requested protocol checks still apply. Tailnet/LAN require existing remote:true proof; this alternative never satisfies them.",
       "addressPolicy": "Conservative public unicast only. Reject loopback, private, link-local, CGNAT100.64/10, documentation, benchmark, multicast/reserved, IPv4-mapped and special IPv6 transition ranges. No DNS or socket IO occurs in core."
+    },
+    "privateMaterialization": {
+      "bindingSpec": {
+        "type": "session-private-path",
+        "materialize": {
+          "format": "json|text",
+          "template": "public reference-only template; credentials use {kind:\"credential-ref\",binding:<credential binding name>}",
+          "credentialRefs": [
+            "credential binding name"
+          ],
+          "requires": [
+            "{op:\"verified\",fact,value:<exact public scope identity>}"
+          ]
+        }
+      },
+      "credentialBinding": "{type:\"credential-reference\",handleRef,authorityRef,sessionId,generation,observedAtMs,expiresAtMs}; opaque lookup only, never value/path/bytes",
+      "fileReceipt": "{type:\"session-private-path\",handleRef,authorityRef,sessionId,generation,observedAtMs,expiresAtMs,mode:\"0600\",parentMode:\"0700\",materialization:{credentialRefs:{bindingName:handleRef}}}",
+      "hostOrder": "Before start generation N, durably record opaque private-file ownership intent for N; resolve only credential handles into the private file; return only its scoped receipt. Core verifies exact materialization scope before durable process intent and rechecks before spawn. Owned-process removal uses original immutable ledger bindings and fresh birth/continuity inspection; expired or unavailable creation credentials do not prevent exact owned cleanup. Paths and rendered bytes never enter core input/output/journal. Node cleans only original handles after confirmed owned process exit.",
+      "bounds": "At most 16 unique credentials, 32 exact-value prerequisites, 32768 template JSON bytes, 16 template nesting levels; JSON arrays/objects at most 64 entries. Text templates are a string or one credential-ref node.",
+      "legacy": "Existing private-file-reference handles remain supported; materialization adds generation and exact credential scope. private-config-materialization remains unsupported."
+    },
+    "transportMapping": {
+      "binding": "{type:\"transport-endpoint\"}; host receipt {type,value:{scheme:\"https|tls|tcp\",hostname,port,endpointName},authorityRef,sessionId,generation,observedAtMs,expiresAtMs}",
+      "assertion": "Direct create.requires entry {op:\"transport-mapping\",fact,endpoint:<expanded typed endpoint>,upstream:{scheme:\"http|https|tls|tcp\",hostname,port},policyRef,origin?:<canonical HTTPS origin>}; nested mapping assertions are rejected, and every transport-endpoint binding must have an exact matching guard",
+      "receipt": "host.facts[fact] has exact value {endpoint,upstream,policyRef,origin?} plus fresh session/generation/authority scope; booleans do not satisfy it",
+      "publication": "origin is permitted only for an https endpoint and its exact canonical hostname/port. Declared endpointTemplate must match origin. Missing origin yields transport-ready with no HTTP candidate or probe; tls/tcp never become HTTP origins. HTTPS still requires existing nonce/TLS/protocol proof and approval.",
+      "remainingDependencies": [
+        "json-records",
+        "transport-policy-inspection",
+        "private-config-materialization"
+      ],
+      "providerAdmission": "Hooks do not admit existing blocked provider plans or claim live acceptance."
+    },
+    "controllerHandover": {
+      "stop": "Authenticated stop must durably fence the recorded session before the exact controller PID/start identity is gracefully retired. Reconciliation waits for that birth identity to disappear. Changed identities are preserved; no forced kill or create replay occurs.",
+      "endpointLifetime": "Trusted installed adapter data may declare endpointLifetime:owned-process. For legacy recovery, create/remove recipes, binding specs and admission must exactly match the saved adapter. Fresh process absence proves only that ephemeral allocation is gone when remove has no before/after/prerequisite guards; persistent mappings still require their declared readbacks. Driver resource handle, continuity, details and bindings must match the core ledger. Reservations and DNS are outside this declaration."
     }
   }
 }

@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "definition": {
+    "endpointLifetime": "owned-process",
     "id": "localhost-run",
     "label": "localhost.run trial",
     "audience": "public",

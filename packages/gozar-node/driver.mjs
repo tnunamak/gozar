@@ -14,6 +14,7 @@ import { performance } from 'node:perf_hooks';
 import { isPublicIp } from './public-relay.mjs';
 import { safeOrigin } from './catalog.mjs';
 import { loadCore } from './core.mjs';
+import { materializePrivateBinding, privateMaterializationScope } from './materialization.mjs';
 import { attributable, processIdentity } from './journal.mjs';
 
 const mutates = effect => ['create', 'remove'].includes(effect.operation);
@@ -61,7 +62,25 @@ export class EffectDriver {
     this.stopped = false;
     this.issued = new Set();
   }
+  async materializePrivateFile(adapterId, bindingName, { generation } = {}) {
+    const adapter = this.adapters.find(item => item.id === adapterId);
+    if (adapter?.planVersion !== 1 || adapter.admission?.state !== 'admitted' ||
+        !adapter.admission.requiredFeatures.every(feature => this.host.features.includes(feature)) || !this.host.features.includes('private-file-materialization')) throw new Error('Private materialization feature admission failed');
+    const bindings = { ...this.host.bindings };
+    for (const [name, spec] of Object.entries(adapter.bindings ?? {})) {
+      if (Object.hasOwn(spec, 'value')) bindings[name] = { type: spec.type, value: spec.value, authorityRef: `plan:${generation}:${name}` };
+    }
+    const receipt = await materializePrivateBinding({ spec: adapter.bindings?.[bindingName], bindings, facts: this.host.facts ?? {},
+      sessionId: this.sessionId, generation, nowMs: this.nowMs(), files: this.privateFiles, adapterId, bindingName });
+    if (receipt.expiresAtMs <= this.nowMs()) {
+      await this.privateFiles.remove(receipt.handleRef);
+      throw new Error('Private materialization authority expired while resolving');
+    }
+    this.host.bindings[bindingName] = receipt;
+    return receipt;
+  }
   processOutput(effect, resource, stream, chunk) {
+    if (resource?.privateMaterialized) return;
     if (!resource || (!this.observeProcessOutput && !this.onProcessOutput)) return;
     const output = chunk.subarray(Math.max(0,chunk.length-8192)).toString('utf8');
     const event = { sequence:++this.outputSequence, sessionId:this.sessionId, generation:effect.generation,
@@ -271,26 +290,55 @@ export class EffectDriver {
     const timeoutMs = bounded(effect.timeoutMs, 5_000, 120_000);
     const limit = bounded(effect.maxOutputBytes, 16_384, 1_048_576);
     const longRunning = effect.longRunning === true || effect.persistent === true;
+    const privateMaterialized = [...artifacts].some(handle => this.journal.value.owned[handle]?.materialized);
+    for (const handle of artifacts) {
+      const file = this.journal.value.owned[handle];
+      if (!file?.materialized) continue;
+      const adapter = this.adapters.find(item => item.id === effect.adapterId), spec = adapter?.bindings?.[file.bindingName];
+      if (!effect.recipeRef || effect.bindings?.[file.bindingName]?.handleRef !== handle || file.adapterId !== effect.adapterId || file.generation !== effect.generation) throw new Error('Private artifact is outside its exact dispatch scope');
+      const declaration = privateMaterializationScope(spec, effect.bindings, this.host.facts ?? {}, { sessionId: this.sessionId, generation: effect.generation, nowMs: this.nowMs(), hostBindings: this.host.bindings });
+      if (declaration.declarationHash !== file.declarationHash) throw new Error('Private artifact declaration changed before dispatch');
+    }
+    if (privateMaterialized && !longRunning) throw new Error('Materialized credentials require an owned long-running process');
+    if (privateMaterialized) {
+      for (const handle of artifacts) {
+        const file = this.journal.value.owned[handle];
+        if (file?.materialized) file.pendingDispatch = { effectId: effect.id, sessionId: this.sessionId, generation: effect.generation };
+      }
+      await this.journal.save();
+    }
     const processDetails = longRunning ? this.ledgerDetails(effect) : undefined;
     const child = spawn(effect.program, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'],
       env: { PATH: process.env.PATH, LANG: 'C.UTF-8' }, detached: false });
     let resource;
     if (longRunning) {
-      await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+      try { await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); }
+      catch (error) {
+        if (!child.pid && privateMaterialized) {
+          for (const handle of artifacts) if (this.journal.value.owned[handle]?.pendingDispatch?.effectId === effect.id) delete this.journal.value.owned[handle].pendingDispatch;
+          await this.journal.save();
+        }
+        throw error;
+      }
       const id = randomUUID();
       resource = { id, kind: 'process', pid: child.pid, startIdentity: await processIdentity(child.pid),
-        nonce: randomUUID(), artifacts: [...artifacts], continuityRef: randomUUID(), bindings: effect.bindings ?? {}, details: processDetails, baseline: this.intentRecords.get(this.receiptKey(effect))?.baseline ?? {}, sessionId: this.sessionId, adapterId: this.selectedAdapter, generation: effect.generation };
+        nonce: randomUUID(), artifacts: [...artifacts], ...(privateMaterialized ? { privateMaterialized: true, dispatchEffectId: effect.id } : {}), continuityRef: randomUUID(), bindings: effect.bindings ?? {}, details: processDetails, baseline: this.intentRecords.get(this.receiptKey(effect))?.baseline ?? {}, sessionId: this.sessionId, adapterId: this.selectedAdapter, generation: effect.generation };
       if (!resource.startIdentity) { child.kill('SIGTERM'); throw new Error('Cannot establish process ownership'); }
       if (effect.lifetimeMs) {
         const lifetime = setTimeout(() => { if (!this.stopped) this.onExit({ resourceId: id, reason: 'lifetime-expired' }); }, bounded(effect.lifetimeMs, 900000, 86400000));
         lifetime.unref(); child.once('exit', () => clearTimeout(lifetime));
       }
       this.children.set(id, child);
-      try { await this.journal.own(resource); }
-      catch (error) { child.kill('SIGTERM'); throw error; }
+      try {
+        await this.journal.own(resource);
+        if (privateMaterialized) {
+          for (const handle of artifacts) if (this.journal.value.owned[handle]?.pendingDispatch?.effectId === effect.id) delete this.journal.value.owned[handle].pendingDispatch;
+          await this.journal.save();
+        }
+      } catch (error) { child.kill('SIGTERM'); throw error; }
     }
     return new Promise((resolve, reject) => {
-      let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), settled = false, idle;
+      let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), receivedBytes = 0, settled = false, idle;
       const finish = (error, exitCode = null) => {
         if (settled) return;
         settled = true; clearTimeout(deadline); clearTimeout(idle);
@@ -302,8 +350,11 @@ export class EffectDriver {
       const collect = stream => chunk => {
         this.processOutput(effect,resource,stream,chunk);
         if (settled) return;
-        if (stdout.length + stderr.length + chunk.length > limit) return finish(new Error('Process output limit exceeded'));
-        if (stream === 'stdout') stdout = Buffer.concat([stdout, chunk]); else stderr = Buffer.concat([stderr, chunk]);
+        receivedBytes += chunk.length;
+        if (receivedBytes > limit) return finish(new Error('Process output limit exceeded'));
+        if (!privateMaterialized) {
+          if (stream === 'stdout') stdout = Buffer.concat([stdout, chunk]); else stderr = Buffer.concat([stderr, chunk]);
+        }
         // The host only bounds collection. Core parses the collected bytes and decides readiness.
         if (longRunning && !settled) { clearTimeout(idle); idle = setTimeout(() => finish(null), bounded(effect.collectMs, 2000, 10000)); }
       };
@@ -329,6 +380,20 @@ export class EffectDriver {
     if (resource?.sessionId !== this.sessionId || resource.kind !== 'process' || !resource.startIdentity || !resource.continuityRef ||
         await processIdentity(resource.pid) === resource.startIdentity) throw new Error('Recorded process is still running or its birth identity is unavailable');
     const adapter = this.adapters.find(item => item.id === resource.adapterId), remove = adapter?.recipes?.remove;
+    if (this.journal.value.state) {
+      const ledger = this.journal.value.state.resources?.find(item => item.id === resource.id)?.ledger;
+      if (!ledger || ledger.handleRef !== resource.id || ledger.continuityRef !== resource.continuityRef ||
+          !isDeepStrictEqual(ledger.bindings, resource.bindings) || !isDeepStrictEqual(ledger.details, resource.details)) throw new Error('Recorded process differs from the durable ownership ledger; inspect the session before retrying stop');
+    }
+    const processLifetime = adapter?.endpointLifetime === 'owned-process' && adapter.recipes.create?.kind === 'spawn' &&
+      adapter.recipes.create.process?.mode === 'owned-long-running' && remove?.kind === 'owned-process' &&
+      Array.isArray(remove.before) && !remove.before.length && Array.isArray(remove.after) && !remove.after.length &&
+      Array.isArray(remove.requires) && !remove.requires.length;
+    if (adapter?.planVersion === 1 && adapter.admission?.state === 'admitted' && processLifetime) {
+      if (await processIdentity(resource.pid) === resource.startIdentity || this.nowMs() >= observedAtMs + 5000) throw new Error('Owned endpoint absence changed or expired; retry stop');
+      return { sessionId: this.sessionId, handleRef: resource.id, continuityRef: resource.continuityRef,
+        processGone: true, providerAbsent: true, observedAtMs, expiresAtMs: observedAtMs + 5000 };
+    }
     if (adapter?.planVersion !== 1 || adapter.admission?.state !== 'admitted' || remove?.kind !== 'owned-process' ||
         !remove.before?.length || !remove.after?.length) throw new Error('No admitted identity and absence readbacks are available for this owned process');
     if ((remove.requires ?? []).some(rule => rule.op !== 'owned-ledger-match' || rule.source !== 'ownership' || rule.pointer !== '/route' ||
