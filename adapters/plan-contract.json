@@ -1,0 +1,109 @@
+{
+  "protocol": "gozar-plan/1",
+  "planVersion": 1,
+  "definitionLocation": "*.definition.json#/definition",
+  "automaticCatalog": "detect-only.json",
+  "normalizedOptIn": [
+    "tailscale-funnel",
+    "tailscale-private",
+    "localhost-run",
+    "lan",
+    "own-address"
+  ],
+  "blocked": {
+    "ngrok-https-edge": [
+      "private-config-materialization",
+      "json-records",
+      "transport-origin-mapping"
+    ],
+    "ngrok-tls-passthrough": [
+      "private-config-materialization",
+      "json-records",
+      "transport-origin-mapping",
+      "transport-policy-inspection"
+    ],
+    "ngrok-tcp-passthrough": [
+      "private-config-materialization",
+      "json-records",
+      "transport-origin-mapping",
+      "transport-policy-inspection"
+    ],
+    "cloudflare-named": [
+      "private-file-materialization"
+    ]
+  },
+  "hostAuthorityRequired": {
+    "allOperationalPlans": [
+      "monotonic nowMs",
+      "supported core/host feature intersection",
+      "fresh scoped typed bindings",
+      "matching nonce verifier and intended network vantage"
+    ],
+    "tailscale": [
+      "current-profile identity",
+      "HTTPS/MagicDNS prerequisites",
+      "actual route allocation ownership",
+      "continuous ownership receipt before cleanup; CLI cannot establish it"
+    ],
+    "tailscale-funnel": [
+      "current Funnel permission",
+      "current port 8443 permission"
+    ],
+    "localhost-run": [
+      "session-private known_hosts reference with 0600/0700 modes",
+      "immutable owned process identity",
+      "15-minute lifetime enforcement"
+    ],
+    "lan": [
+      "exact selected interface still present",
+      "scoped firewall approval",
+      "client-proven local name/mDNS or explicitly checked client-reachable IP",
+      "owned interface forwarder",
+      "genuine LAN peer vantage"
+    ],
+    "own-address": [
+      "explicit trusted credential-free HTTPS origin",
+      "genuine public TLS/instance/transport probe"
+    ]
+  },
+  "captures": {
+    "status": [
+      "dnsName",
+      "nodeId"
+    ],
+    "config": [
+      "occupiedPorts"
+    ],
+    "readback": [
+      "route.https",
+      "route.proxy",
+      "route.funnel"
+    ],
+    "rawPortMaps": [
+      "/TCP",
+      "/Web",
+      "/AllowFunnel",
+      "/Foreground/*/TCP",
+      "/Foreground/*/Web",
+      "/Foreground/*/AllowFunnel"
+    ],
+    "neverRetain": [
+      "raw provider output",
+      "AuthURL",
+      "credential contents",
+      "unlisted raw fields"
+    ]
+  },
+  "exactStageReferences": [
+    "create/before/status",
+    "create/before/config",
+    "create/execute",
+    "create/after/readback",
+    "remove/before/identity",
+    "remove/before/live",
+    "remove/execute",
+    "remove/after/readback"
+  ],
+  "continuity": "Fresh host ownershipReceipt matching handleRef, continuityRef and sessionId is mandatory. Fixture authorities are synthetic test input only. CLI read/compare/off is not compare-and-swap.",
+  "probe": "Only a matching fresh probeReceipt can establish origin, TLS, instance nonce and required transport behavior. A nonlocal vantage additionally requires remote:true. Local HTTP 200 is insufficient."
+}

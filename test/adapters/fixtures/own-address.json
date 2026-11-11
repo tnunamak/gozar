@@ -1,0 +1,327 @@
+{
+  "provenance": "Authored, sanitized, source-shaped fixture. No CLI/provider invocation and no actual host/account state.",
+  "vantage": "fixture only; not operational evidence",
+  "adapterIds": [
+    "own-address"
+  ],
+  "endpoint": "https://origin.example.com",
+  "cases": [
+    {
+      "id": "existing-origin-validated",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"tlsTrusted\": true, \"hostnameMatches\": true, \"instanceNonceMatches\": true, \"vantage\": \"public\", \"sse\": {\"incremental\": true, \"frames\": 2}, \"status\": 200}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/tlsTrusted",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/hostnameMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceNonceMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/vantage",
+            "value": "public"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/sse/incremental",
+            "value": true
+          }
+        ]
+      },
+      "expected": true
+    },
+    {
+      "id": "http-200-wrong-instance",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"tlsTrusted\": true, \"hostnameMatches\": true, \"instanceNonceMatches\": false, \"vantage\": \"public\", \"sse\": {\"incremental\": true, \"frames\": 2}, \"status\": 200}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/tlsTrusted",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/hostnameMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceNonceMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/vantage",
+            "value": "public"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/sse/incremental",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "untrusted-certificate",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"tlsTrusted\": false, \"hostnameMatches\": true, \"instanceNonceMatches\": true, \"vantage\": \"public\", \"sse\": {\"incremental\": true, \"frames\": 2}, \"status\": 200}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/tlsTrusted",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/hostnameMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceNonceMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/vantage",
+            "value": "public"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/sse/incremental",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "wrong-hostname",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"tlsTrusted\": true, \"hostnameMatches\": false, \"instanceNonceMatches\": true, \"vantage\": \"public\", \"sse\": {\"incremental\": true, \"frames\": 2}, \"status\": 200}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/tlsTrusted",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/hostnameMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceNonceMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/vantage",
+            "value": "public"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/sse/incremental",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "buffered-sse",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"tlsTrusted\": true, \"hostnameMatches\": true, \"instanceNonceMatches\": true, \"vantage\": \"public\", \"sse\": {\"incremental\": false, \"frames\": 2}, \"status\": 200}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/tlsTrusted",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/hostnameMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceNonceMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/vantage",
+            "value": "public"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/sse/incremental",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "local-only-observation",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"tlsTrusted\": true, \"hostnameMatches\": true, \"instanceNonceMatches\": true, \"vantage\": \"local\", \"sse\": {\"incremental\": true, \"frames\": 2}, \"status\": 200}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/tlsTrusted",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/hostnameMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceNonceMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/vantage",
+            "value": "public"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/sse/incremental",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "missing-nonce",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"tlsTrusted\": true, \"hostnameMatches\": true, \"instanceNonceMatches\": null, \"vantage\": \"public\", \"sse\": {\"incremental\": true, \"frames\": 2}, \"status\": 200}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/tlsTrusted",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/hostnameMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceNonceMatches",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/vantage",
+            "value": "public"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/sse/incremental",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    }
+  ],
+  "createEffects": [],
+  "removeEffects": []
+}

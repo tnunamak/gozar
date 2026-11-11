@@ -1,0 +1,806 @@
+{
+  "provenance": "Authored, sanitized, source-shaped fixture. No CLI/provider invocation and no actual host/account state.",
+  "vantage": "fixture only; not operational evidence",
+  "adapterIds": [
+    "tailscale-funnel",
+    "tailscale-private"
+  ],
+  "command": [
+    "tailscale",
+    "status",
+    "--json",
+    "--peers=false"
+  ],
+  "cases": [
+    {
+      "id": "running-is-login-evidence-only",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"BackendState\": \"Running\", \"CurrentTailnet\": {\"MagicDNSEnabled\": true}, \"Self\": {\"DNSName\": \"device.example-tailnet.ts.net.\", \"ID\": \"fixture-node\", \"CapMap\": {\"funnel\": []}}, \"CertDomains\": [\"device.example-tailnet.ts.net\"]}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "equals",
+        "source": "stdout",
+        "pointer": "/BackendState",
+        "value": "Running"
+      },
+      "expected": true,
+      "doesNotProve": [
+        "Funnel permission",
+        "free port",
+        "SSE"
+      ]
+    },
+    {
+      "id": "zero-exit-needs-login",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"BackendState\": \"NeedsLogin\", \"AuthURL\": \"https://login.tailscale.com/\"}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "equals",
+        "source": "stdout",
+        "pointer": "/BackendState",
+        "value": "Running"
+      },
+      "expected": false
+    },
+    {
+      "id": "machine-auth-required",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"BackendState\": \"NeedsMachineAuth\"}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "equals",
+        "source": "stdout",
+        "pointer": "/BackendState",
+        "value": "Running"
+      },
+      "expected": false
+    },
+    {
+      "id": "daemon-starting",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"BackendState\": \"Starting\"}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "equals",
+        "source": "stdout",
+        "pointer": "/BackendState",
+        "value": "Running"
+      },
+      "expected": false
+    },
+    {
+      "id": "unknown-backend-field",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"Version\": \"fixture\"}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "equals",
+        "source": "stdout",
+        "pointer": "/BackendState",
+        "value": "Running"
+      },
+      "expected": false
+    },
+    {
+      "id": "malformed-status",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"BackendState\":",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "equals",
+        "source": "stdout",
+        "pointer": "/BackendState",
+        "value": "Running"
+      },
+      "expected": false
+    },
+    {
+      "id": "truncated-valid-prefix",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"BackendState\": \"Running\", \"CurrentTailnet\": {\"MagicDNSEnabled\": true}, \"Self\": {\"DNSName\": \"device.example-tailnet.ts.net.\", \"ID\": \"fixture-node\", \"CapMap\": {\"funnel\": []}}, \"CertDomains\": [\"device.example-tailnet.ts.net\"]}",
+        "stderr": "",
+        "truncated": true
+      },
+      "predicate": {
+        "op": "equals",
+        "source": "stdout",
+        "pointer": "/BackendState",
+        "value": "Running"
+      },
+      "expected": false
+    },
+    {
+      "id": "daemon-unavailable",
+      "completion": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "failed to connect to local tailscaled",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "equals",
+        "source": "stdout",
+        "pointer": "/BackendState",
+        "value": "Running"
+      },
+      "expected": false
+    },
+    {
+      "id": "cli-missing",
+      "completion": {
+        "exitCode": null,
+        "stdout": "",
+        "stderr": "",
+        "truncated": false,
+        "spawnError": "ENOENT"
+      },
+      "predicate": {
+        "op": "equals",
+        "source": "stdout",
+        "pointer": "/BackendState",
+        "value": "Running"
+      },
+      "expected": false
+    },
+    {
+      "id": "existing-443-and-10000-preserved-8443-free",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"TCP\": {\"443\": {\"HTTPS\": true}, \"10000\": {\"HTTPS\": true}}, \"Web\": {\"device.example-tailnet.ts.net:443\": {\"Handlers\": {\"/\": {\"Proxy\": \"http://127.0.0.1:6100\"}}}, \"device.example-tailnet.ts.net:10000\": {\"Handlers\": {\"/\": {\"Proxy\": \"http://127.0.0.1:6200\"}}}}, \"AllowFunnel\": {\"device.example-tailnet.ts.net:10000\": true}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "all",
+            "rules": [
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/TCP/8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Web/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/AllowFunnel/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/TCP/8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/Web/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/AllowFunnel/device.example-tailnet.ts.net:8443"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expected": true
+    },
+    {
+      "id": "8443-background-tcp-busy",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"TCP\": {\"8443\": {\"HTTPS\": true}}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "all",
+            "rules": [
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/TCP/8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Web/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/AllowFunnel/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/TCP/8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/Web/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/AllowFunnel/device.example-tailnet.ts.net:8443"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "8443-background-web-busy",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"Web\": {\"device.example-tailnet.ts.net:8443\": {\"Handlers\": {\"/admin\": {\"Proxy\": \"http://127.0.0.1:7000\"}}}}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "all",
+            "rules": [
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/TCP/8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Web/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/AllowFunnel/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/TCP/8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/Web/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/AllowFunnel/device.example-tailnet.ts.net:8443"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "8443-foreground-busy",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"Foreground\": {\"other-session\": {\"TCP\": {\"8443\": {\"HTTPS\": true}}}}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "all",
+            "rules": [
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/TCP/8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Web/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/AllowFunnel/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/TCP/8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/Web/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/AllowFunnel/device.example-tailnet.ts.net:8443"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "8443-funnel-bit-alone-blocks",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"AllowFunnel\": {\"device.example-tailnet.ts.net:8443\": true}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "all",
+            "rules": [
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/TCP/8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Web/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/AllowFunnel/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/TCP/8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/Web/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/AllowFunnel/device.example-tailnet.ts.net:8443"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "malformed-config-not-free",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "all",
+            "rules": [
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/TCP/8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Web/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/AllowFunnel/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/TCP/8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/Web/device.example-tailnet.ts.net:8443"
+                }
+              },
+              {
+                "op": "not",
+                "rule": {
+                  "op": "exists",
+                  "pointer": "/Foreground/*/AllowFunnel/device.example-tailnet.ts.net:8443"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "policy-permits-selected-port",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"backend\": \"Running\", \"httpsEnabled\": true, \"funnelPermitted\": true, \"permittedPorts\": [443, 8443]}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/backend",
+            "value": "Running"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/httpsEnabled",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/funnelPermitted",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "pointer": "/permittedPorts/*",
+            "value": 8443
+          }
+        ]
+      },
+      "expected": true
+    },
+    {
+      "id": "policy-denied",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"backend\": \"Running\", \"httpsEnabled\": true, \"funnelPermitted\": false, \"permittedPorts\": [8443]}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/backend",
+            "value": "Running"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/httpsEnabled",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/funnelPermitted",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "pointer": "/permittedPorts/*",
+            "value": 8443
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "permission-unknown",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"backend\": \"Running\", \"httpsEnabled\": true, \"permittedPorts\": [8443]}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/backend",
+            "value": "Running"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/httpsEnabled",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/funnelPermitted",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "pointer": "/permittedPorts/*",
+            "value": 8443
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "port-not-permitted",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"backend\": \"Running\", \"httpsEnabled\": true, \"funnelPermitted\": true, \"permittedPorts\": [443, 10000]}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/backend",
+            "value": "Running"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/httpsEnabled",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/funnelPermitted",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "pointer": "/permittedPorts/*",
+            "value": 8443
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "private-9444-candidate-with-preexisting-9443-8444",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"TCP\": {\"443\": {\"HTTPS\": true}, \"10000\": {\"HTTPS\": true}, \"9443\": {\"HTTPS\": true}, \"8444\": {\"HTTPS\": true}}, \"Web\": {\"fixture.example-tailnet.ts.net:9443\": {\"Handlers\": {\"/\": {\"Proxy\": \"http://127.0.0.1:6100\"}}}}, \"AllowFunnel\": {\"fixture.example-tailnet.ts.net:10000\": true}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "items": [
+          {
+            "op": "not",
+            "predicate": {
+              "op": "exists",
+              "pointer": "/TCP/9444"
+            }
+          },
+          {
+            "op": "not",
+            "predicate": {
+              "op": "exists",
+              "pointer": "/Foreground/*/TCP/9444"
+            }
+          }
+        ]
+      },
+      "expected": true
+    },
+    {
+      "id": "private-9444-occupied",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"TCP\": {\"443\": {\"HTTPS\": true}, \"10000\": {\"HTTPS\": true}, \"9443\": {\"HTTPS\": true}, \"8444\": {\"HTTPS\": true}}, \"Web\": {\"fixture.example-tailnet.ts.net:9443\": {\"Handlers\": {\"/\": {\"Proxy\": \"http://127.0.0.1:6100\"}}}}, \"AllowFunnel\": {\"fixture.example-tailnet.ts.net:10000\": true}, \"Foreground\": {\"administrator\": {\"TCP\": {\"9444\": {\"HTTPS\": true}}}}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "items": [
+          {
+            "op": "not",
+            "predicate": {
+              "op": "exists",
+              "pointer": "/TCP/9444"
+            }
+          },
+          {
+            "op": "not",
+            "predicate": {
+              "op": "exists",
+              "pointer": "/Foreground/*/TCP/9444"
+            }
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "private-9445-candidate-with-preexisting-9443-8444",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"TCP\": {\"443\": {\"HTTPS\": true}, \"10000\": {\"HTTPS\": true}, \"9443\": {\"HTTPS\": true}, \"8444\": {\"HTTPS\": true}}, \"Web\": {\"fixture.example-tailnet.ts.net:9443\": {\"Handlers\": {\"/\": {\"Proxy\": \"http://127.0.0.1:6100\"}}}}, \"AllowFunnel\": {\"fixture.example-tailnet.ts.net:10000\": true}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "items": [
+          {
+            "op": "not",
+            "predicate": {
+              "op": "exists",
+              "pointer": "/TCP/9445"
+            }
+          },
+          {
+            "op": "not",
+            "predicate": {
+              "op": "exists",
+              "pointer": "/Foreground/*/TCP/9445"
+            }
+          }
+        ]
+      },
+      "expected": true
+    },
+    {
+      "id": "private-9445-occupied",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"TCP\": {\"443\": {\"HTTPS\": true}, \"10000\": {\"HTTPS\": true}, \"9443\": {\"HTTPS\": true}, \"8444\": {\"HTTPS\": true}}, \"Web\": {\"fixture.example-tailnet.ts.net:9443\": {\"Handlers\": {\"/\": {\"Proxy\": \"http://127.0.0.1:6100\"}}}}, \"AllowFunnel\": {\"fixture.example-tailnet.ts.net:10000\": true}, \"Foreground\": {\"administrator\": {\"TCP\": {\"9445\": {\"HTTPS\": true}}}}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "items": [
+          {
+            "op": "not",
+            "predicate": {
+              "op": "exists",
+              "pointer": "/TCP/9445"
+            }
+          },
+          {
+            "op": "not",
+            "predicate": {
+              "op": "exists",
+              "pointer": "/Foreground/*/TCP/9445"
+            }
+          }
+        ]
+      },
+      "expected": false
+    }
+  ]
+}

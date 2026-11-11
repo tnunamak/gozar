@@ -1,0 +1,280 @@
+{
+  "provenance": "Authored, sanitized, source-shaped fixture. No CLI/provider invocation and no actual host/account state.",
+  "vantage": "fixture only; not operational evidence",
+  "adapterIds": [
+    "cloudflare-named"
+  ],
+  "cases": [
+    {
+      "id": "named-connector-correct-instance",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"namedTunnel\": true, \"connectorRegistered\": true, \"instanceProbePassed\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/namedTunnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/connectorRegistered",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": true
+    },
+    {
+      "id": "registered-but-remote-route-wrong",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"namedTunnel\": true, \"connectorRegistered\": true, \"instanceProbePassed\": false}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/namedTunnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/connectorRegistered",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "quick-tunnel-is-not-named",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"namedTunnel\": false, \"connectorRegistered\": true, \"instanceProbePassed\": true, \"origin\": \"https://fixture.trycloudflare.com\"}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/namedTunnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/connectorRegistered",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "zero-exit-existing-cert-not-login",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"exitCode\": 0, \"existingCertificate\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/namedTunnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/connectorRegistered",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "list-empty-not-token-invalid",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "[]",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/namedTunnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/connectorRegistered",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "list-permission-denied",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"inventoryError\": \"permission denied\"}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/namedTunnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/connectorRegistered",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "invalid-token",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "Provided Tunnel token is not valid.",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/namedTunnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/connectorRegistered",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "truncated-list",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "[{\"id\":",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/namedTunnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/connectorRegistered",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    }
+  ],
+  "cleanupPreserves": [
+    "existing named tunnel",
+    "DNS record",
+    "account certificate",
+    "other connectors"
+  ],
+  "operationalParity": "detection-only"
+}

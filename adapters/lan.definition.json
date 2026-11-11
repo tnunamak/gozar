@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 1,
+  "definition": {
+    "id": "lan",
+    "label": "Local network",
+    "audience": "lan",
+    "ownership": "owned",
+    "reason": "An owned interface forwarder exposes only the selected loopback service to the local network.",
+    "capabilities": {
+      "https": false,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Current capability requires a successful probe from the intended client network.",
+      "Local network reach does not imply internet reach; firewall, routing and client DNS remain prerequisites."
+    ],
+    "capabilityRecords": [
+      {
+        "when": "default owned HTTP forwarder",
+        "capabilities": {
+          "https": false
+        },
+        "reasons": [
+          "HTTP is explicit; loopback binding is never advertised as LAN."
+        ]
+      },
+      {
+        "when": "separately configured client-trusted TLS listener and hostname probe succeed",
+        "capabilities": {
+          "https": true
+        }
+      },
+      {
+        "when": "LAN-vantage nonce / stream probes succeed",
+        "capabilities": {
+          "sse": true,
+          "streamableHttp": true,
+          "oauthDcr": true
+        }
+      }
+    ],
+    "actions": [
+      {
+        "id": "interface",
+        "label": "Choose a local network interface",
+        "reason": "A loopback listener cannot serve other devices."
+      },
+      {
+        "id": "firewall",
+        "label": "Allow this listener through your firewall",
+        "reason": "Network exposure needs a deliberate scoped firewall decision; no automatic global rule."
+      },
+      {
+        "id": "local-name",
+        "label": "Choose a client-reachable name or IP",
+        "reason": "Use local DNS/mDNS only when proven from the client; an explicit checked interface IP also works."
+      },
+      {
+        "id": "lan-tls",
+        "label": "Configure a trusted certificate if HTTPS is required",
+        "reason": "Self-signed certificates are not automatically trusted."
+      }
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "interfaces",
+        "timeoutMs": 5000,
+        "maxOutputBytes": 16384,
+        "parser": {
+          "kind": "json-document",
+          "predicate": {
+            "op": "all",
+            "rules": [
+              {
+                "op": "exists",
+                "pointer": "/interfaces/*/*/address"
+              },
+              {
+                "op": "equals",
+                "pointer": "/interfaces/*/*/internal",
+                "value": false
+              }
+            ]
+          }
+        }
+      },
+      "create": {
+        "kind": "local-forwarder",
+        "bindAddress": "{interfaceAddress}",
+        "port": "{ownedPort}",
+        "targetHost": "127.0.0.1",
+        "targetPort": "{gatePort}",
+        "timeoutMs": 5000,
+        "maxOutputBytes": 16384,
+        "parser": {
+          "kind": "json",
+          "pointer": "/origin"
+        },
+        "before": [],
+        "requires": [
+          {
+            "op": "verified",
+            "fact": "selected-interface-still-present"
+          },
+          {
+            "op": "verified",
+            "fact": "firewall-user-approved"
+          },
+          {
+            "op": "verified",
+            "fact": "client-reachable-lan-address"
+          }
+        ],
+        "after": [],
+        "ledger": {
+          "bindAddress": "{interfaceAddress}",
+          "targetHost": "127.0.0.1",
+          "targetPort": "{gatePort}",
+          "scheme": "http"
+        }
+      },
+      "remove": {
+        "kind": "local-forwarder",
+        "timeoutMs": 5000,
+        "maxOutputBytes": 16384,
+        "parser": {
+          "kind": "exit-code"
+        },
+        "before": [],
+        "requires": [],
+        "after": []
+      }
+    },
+    "admission": {
+      "state": "admitted",
+      "requiredFeatures": [
+        "recipe-sequence",
+        "typed-bindings",
+        "predicate-parser",
+        "owned-resource-ledger",
+        "probe-assertions",
+        "client-vantage-probe",
+        "interface-forwarder"
+      ],
+      "reason": "Normalized opt-in plan; host-selected exact interface, scoped firewall and client-reachable address receipts plus genuine LAN peer proof required."
+    },
+    "validation": {
+      "tls": "client-trusted certificate and exact hostname when HTTPS",
+      "instanceNonce": "must equal private instance challenge",
+      "sse": "timed incremental event delivery when required",
+      "vantage": "lan",
+      "publish": "exact-origin approval only after all required probes"
+    },
+    "lifecycle": {
+      "persistIntentBeforeMutation": true,
+      "completionScope": [
+        "effectId",
+        "sessionId",
+        "generation"
+      ],
+      "rawOutput": "transient bounded; never persist",
+      "stop": "withdraw before cleanup; reconcile uncertain effects",
+      "globalCleanup": false,
+      "networkVantage": "LAN candidate remains validation-pending until genuine remote LAN peer receipt; name/mDNS or explicit reachable IP is a client choice, never inferred from host OS name."
+    },
+    "bindings": {
+      "interfaceAddress": {
+        "type": "selected-interface-address"
+      },
+      "gatePort": {
+        "type": "loopback-port"
+      },
+      "ownedPort": {
+        "type": "reserved-unused-port",
+        "value": 0
+      }
+    },
+    "planVersion": 1,
+    "detection": {
+      "exclude": [
+        "loopback",
+        "unspecified",
+        "multicast",
+        "link-local-without-scope"
+      ],
+      "authority": "Fresh exact interface binding and current-interface receipt; raw inventory alone does not prove client reach."
+    }
+  }
+}

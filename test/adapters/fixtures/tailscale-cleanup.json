@@ -1,0 +1,738 @@
+{
+  "provenance": "Authored, sanitized, source-shaped fixture. No CLI/provider invocation and no actual host/account state.",
+  "vantage": "fixture only; not operational evidence",
+  "adapterIds": [
+    "tailscale-funnel",
+    "tailscale-private"
+  ],
+  "allowedRemoveArgs": [
+    "funnel",
+    "--bg",
+    "--yes",
+    "--https=8443",
+    "--set-path=/",
+    "off"
+  ],
+  "baseline": {
+    "TCP": {
+      "443": {
+        "HTTPS": true
+      },
+      "10000": {
+        "HTTPS": true
+      }
+    },
+    "Web": {
+      "device.example-tailnet.ts.net:443": {
+        "Handlers": {
+          "/": {
+            "Proxy": "http://127.0.0.1:6100"
+          }
+        }
+      },
+      "device.example-tailnet.ts.net:10000": {
+        "Handlers": {
+          "/": {
+            "Proxy": "http://127.0.0.1:6200"
+          }
+        }
+      }
+    },
+    "AllowFunnel": {
+      "device.example-tailnet.ts.net:10000": true
+    }
+  },
+  "cases": [
+    {
+      "id": "exact-owned-mapping",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/profileId",
+            "value": "fixture-profile"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/nodeId",
+            "value": "fixture-node"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/port",
+            "value": 8443
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/mount",
+            "value": "/"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/proxy",
+            "value": "http://127.0.0.1:53123"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/funnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ledgerOwned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/extraHandlers",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/continuityCertain",
+            "value": true
+          }
+        ]
+      },
+      "expected": true
+    },
+    {
+      "id": "administrator-target-edit",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:7000\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/profileId",
+            "value": "fixture-profile"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/nodeId",
+            "value": "fixture-node"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/port",
+            "value": 8443
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/mount",
+            "value": "/"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/proxy",
+            "value": "http://127.0.0.1:53123"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/funnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ledgerOwned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/extraHandlers",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/continuityCertain",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "administrator-visibility-edit",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": false}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/profileId",
+            "value": "fixture-profile"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/nodeId",
+            "value": "fixture-node"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/port",
+            "value": 8443
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/mount",
+            "value": "/"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/proxy",
+            "value": "http://127.0.0.1:53123"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/funnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ledgerOwned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/extraHandlers",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/continuityCertain",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "profile-changed",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"live\": {\"profileId\": \"another-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/profileId",
+            "value": "fixture-profile"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/nodeId",
+            "value": "fixture-node"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/port",
+            "value": 8443
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/mount",
+            "value": "/"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/proxy",
+            "value": "http://127.0.0.1:53123"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/funnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ledgerOwned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/extraHandlers",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/continuityCertain",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "node-changed",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"another-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/profileId",
+            "value": "fixture-profile"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/nodeId",
+            "value": "fixture-node"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/port",
+            "value": 8443
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/mount",
+            "value": "/"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/proxy",
+            "value": "http://127.0.0.1:53123"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/funnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ledgerOwned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/extraHandlers",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/continuityCertain",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "mount-changed",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/administrator\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/profileId",
+            "value": "fixture-profile"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/nodeId",
+            "value": "fixture-node"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/port",
+            "value": 8443
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/mount",
+            "value": "/"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/proxy",
+            "value": "http://127.0.0.1:53123"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/funnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ledgerOwned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/extraHandlers",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/continuityCertain",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "missing-ledger",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": false, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/profileId",
+            "value": "fixture-profile"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/nodeId",
+            "value": "fixture-node"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/port",
+            "value": 8443
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/mount",
+            "value": "/"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/proxy",
+            "value": "http://127.0.0.1:53123"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/funnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ledgerOwned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/extraHandlers",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/continuityCertain",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "new-administrator-handler",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": true, \"continuityCertain\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/profileId",
+            "value": "fixture-profile"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/nodeId",
+            "value": "fixture-node"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/port",
+            "value": 8443
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/mount",
+            "value": "/"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/proxy",
+            "value": "http://127.0.0.1:53123"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/funnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ledgerOwned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/extraHandlers",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/continuityCertain",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "identical-external-recreation-uncertain",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": false}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/profileId",
+            "value": "fixture-profile"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/nodeId",
+            "value": "fixture-node"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/port",
+            "value": 8443
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/mount",
+            "value": "/"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/proxy",
+            "value": "http://127.0.0.1:53123"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/funnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ledgerOwned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/extraHandlers",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/continuityCertain",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "already-absent",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"live\": null, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/profileId",
+            "value": "fixture-profile"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/nodeId",
+            "value": "fixture-node"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/port",
+            "value": 8443
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/mount",
+            "value": "/"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/proxy",
+            "value": "http://127.0.0.1:53123"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/live/funnel",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ledgerOwned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/extraHandlers",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/continuityCertain",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    }
+  ],
+  "falseOutcome": "Do not execute off; preserve current config. Already absent may reconcile as removed only after profile/ledger check."
+}

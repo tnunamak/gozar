@@ -1,0 +1,512 @@
+{
+  "provenance": "Authored, sanitized, source-shaped fixture. No CLI/provider invocation and no actual host/account state.",
+  "vantage": "fixture only; not operational evidence",
+  "adapterIds": [
+    "ngrok-https-edge",
+    "ngrok-tls-passthrough",
+    "ngrok-tcp-passthrough"
+  ],
+  "cases": [
+    {
+      "id": "https-edge-exact-mode",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"status\": {\"online\": true}, \"endpoint\": {\"owned\": true, \"url\": \"https://fixture.example.com\"}, \"modePreserved\": true, \"instanceProbePassed\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/status/online",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/endpoint/owned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/modePreserved",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": true,
+      "mode": "https-edge",
+      "privacy": "provider-readable"
+    },
+    {
+      "id": "https-edge-silent-fallback",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"status\": {\"online\": true}, \"endpoint\": {\"owned\": true, \"url\": \"https://fixture.example.com\"}, \"modePreserved\": false, \"instanceProbePassed\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/status/online",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/endpoint/owned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/modePreserved",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false,
+      "mode": "https-edge"
+    },
+    {
+      "id": "tls-passthrough-exact-mode",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"status\": {\"online\": true}, \"endpoint\": {\"owned\": true, \"url\": \"tls://fixture.example.com\"}, \"modePreserved\": true, \"instanceProbePassed\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/status/online",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/endpoint/owned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/modePreserved",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": true,
+      "mode": "tls-passthrough",
+      "privacy": "upstream-TLS"
+    },
+    {
+      "id": "tls-passthrough-silent-fallback",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"status\": {\"online\": true}, \"endpoint\": {\"owned\": true, \"url\": \"tls://fixture.example.com\"}, \"modePreserved\": false, \"instanceProbePassed\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/status/online",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/endpoint/owned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/modePreserved",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false,
+      "mode": "tls-passthrough"
+    },
+    {
+      "id": "tcp-passthrough-exact-mode",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"status\": {\"online\": true}, \"endpoint\": {\"owned\": true, \"url\": \"tcp://fixture.example.com:12345\"}, \"modePreserved\": true, \"instanceProbePassed\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/status/online",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/endpoint/owned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/modePreserved",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": true,
+      "mode": "tcp-passthrough",
+      "privacy": "application-dependent"
+    },
+    {
+      "id": "tcp-passthrough-silent-fallback",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"status\": {\"online\": true}, \"endpoint\": {\"owned\": true, \"url\": \"tcp://fixture.example.com:12345\"}, \"modePreserved\": false, \"instanceProbePassed\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/status/online",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/endpoint/owned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/modePreserved",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false,
+      "mode": "tcp-passthrough"
+    },
+    {
+      "id": "signed-out",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"status\": {\"online\": false}, \"error\": \"authentication failed\"}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/status/online",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/endpoint/owned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/modePreserved",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "syntax-check-not-login",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"configValid\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/status/online",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/endpoint/owned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/modePreserved",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "unknown-account-entitlement",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"status\": {\"online\": true}, \"accountEntitlement\": null}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/status/online",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/endpoint/owned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/modePreserved",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "online-no-owned-endpoint",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"status\": {\"online\": true}, \"endpoint\": {\"owned\": false}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/status/online",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/endpoint/owned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/modePreserved",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "wrong-instance",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"status\": {\"online\": true}, \"endpoint\": {\"owned\": true}, \"modePreserved\": true, \"instanceProbePassed\": false}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/status/online",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/endpoint/owned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/modePreserved",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "truncated-status",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"status\":",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/status/online",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/endpoint/owned",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/modePreserved",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/instanceProbePassed",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    }
+  ],
+  "configInvariants": [
+    {
+      "id": "tls-absent-termination-is-passthrough",
+      "config": {
+        "url": "tls://fixture.example.com",
+        "upstream": {
+          "url": "tcp://127.0.0.1:53123"
+        }
+      },
+      "absent": [
+        "traffic_policy.terminate-tls",
+        "agent_tls_termination"
+      ],
+      "expect": "upstream TLS bytes; probe required"
+    },
+    {
+      "id": "tcp-address-not-domain",
+      "config": {
+        "url": "tcp://0.tcp.example.com:12345"
+      },
+      "expect": "retain assigned port; no automatic HTTPS claim"
+    }
+  ],
+  "operationalParity": "detection-only"
+}

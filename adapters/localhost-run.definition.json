@@ -1,0 +1,209 @@
+{
+  "schemaVersion": 1,
+  "definition": {
+    "id": "localhost-run",
+    "label": "localhost.run trial",
+    "audience": "public",
+    "ownership": "owned",
+    "reason": "Short-lived public trial; the relay terminates TLS and can read payloads.",
+    "capabilities": {
+      "https": null,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Current capability requires a successful probe from the intended client network.",
+      "Trial uptime and URL lifetime are not guaranteed.",
+      "Trust-on-first-use applies only to isolated known_hosts; changed key fails closed.",
+      "The trial accepts single-label HTTPS origins under lhr.life and validates their instance identity and timed streaming."
+    ],
+    "capabilityRecords": [
+      {
+        "when": "validated relay origin + TLS/nonce probe",
+        "capabilities": {
+          "https": true
+        }
+      },
+      {
+        "when": "timed stream/client probes pass",
+        "capabilities": {
+          "sse": true,
+          "streamableHttp": true,
+          "oauthDcr": true
+        }
+      }
+    ],
+    "actions": [
+      {
+        "id": "ssh-install",
+        "label": "Install OpenSSH",
+        "reason": "OpenSSH client is absent."
+      },
+      {
+        "id": "trial-consent",
+        "label": "Start a 15-minute trial",
+        "reason": "The relay sees plaintext; URL expiry or rotation requires a new connection."
+      }
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "spawn",
+        "program": "ssh",
+        "args": [
+          "-V"
+        ],
+        "timeoutMs": 5000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "contains",
+          "stream": "combined",
+          "value": "OpenSSH"
+        }
+      },
+      "create": {
+        "kind": "spawn",
+        "program": "ssh",
+        "args": [
+          "-F",
+          "/dev/null",
+          "-T",
+          "-o",
+          "BatchMode=yes",
+          "-o",
+          "ExitOnForwardFailure=yes",
+          "-o",
+          "ConnectTimeout=10",
+          "-o",
+          "ServerAliveInterval=15",
+          "-o",
+          "ServerAliveCountMax=2",
+          "-o",
+          "StrictHostKeyChecking=accept-new",
+          "-o",
+          "UserKnownHostsFile={privateKnownHostsPath}",
+          "-o",
+          "GlobalKnownHostsFile=/dev/null",
+          "-o",
+          "IdentityAgent=none",
+          "-o",
+          "IdentityFile=none",
+          "-o",
+          "ForwardAgent=no",
+          "-o",
+          "IdentitiesOnly=yes",
+          "-o",
+          "PasswordAuthentication=no",
+          "-o",
+          "KbdInteractiveAuthentication=no",
+          "-o",
+          "PermitLocalCommand=no",
+          "-R",
+          "80:127.0.0.1:{gatePort}",
+          "nokey@localhost.run"
+        ],
+        "timeoutMs": 30000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "url",
+          "prefix": "https://",
+          "constraints": {
+            "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+            "exactOriginToken": true,
+            "stripAnsi": true,
+            "rejectMultipleDistinct": true
+          }
+        },
+        "before": [],
+        "requires": [
+          {
+            "op": "private-file",
+            "binding": "privateKnownHostsPath",
+            "mode": "0600",
+            "parentMode": "0700"
+          }
+        ],
+        "process": {
+          "mode": "owned-long-running",
+          "stdin": "closed",
+          "lifetimeMs": 900000
+        },
+        "after": [],
+        "ledger": {
+          "service": "trial",
+          "durationMs": 900000
+        }
+      },
+      "remove": {
+        "kind": "owned-process",
+        "signal": "SIGTERM",
+        "graceMs": 2000,
+        "thenSignal": "SIGKILL",
+        "confirmExit": true,
+        "timeoutMs": 5000,
+        "maxOutputBytes": 16384,
+        "parser": {
+          "kind": "exit-code"
+        },
+        "before": [],
+        "requires": [],
+        "after": []
+      }
+    },
+    "admission": {
+      "state": "admitted",
+      "requiredFeatures": [
+        "recipe-sequence",
+        "typed-bindings",
+        "predicate-parser",
+        "owned-resource-ledger",
+        "probe-assertions",
+        "client-vantage-probe",
+        "owned-process",
+        "private-file-reference"
+      ],
+      "reason": "Normalized opt-in plan; existing session-private known_hosts handle, process identity and remote probe authority required."
+    },
+    "validation": {
+      "tls": "client-trusted certificate and exact hostname when HTTPS",
+      "instanceNonce": "must equal private instance challenge",
+      "sse": "timed incremental event delivery when required",
+      "vantage": "public",
+      "publish": "exact-origin approval only after all required probes"
+    },
+    "lifecycle": {
+      "persistIntentBeforeMutation": true,
+      "completionScope": [
+        "effectId",
+        "sessionId",
+        "generation"
+      ],
+      "rawOutput": "transient bounded; never persist",
+      "stop": "withdraw before cleanup; reconcile uncertain effects",
+      "globalCleanup": false,
+      "durationMs": 900000,
+      "artifactCleanup": "Only after confirmed owned process exit; handle identity checked by driver."
+    },
+    "bindings": {
+      "gatePort": {
+        "type": "loopback-port"
+      },
+      "privateKnownHostsPath": {
+        "type": "session-private-path"
+      }
+    },
+    "planVersion": 1,
+    "clientProfile": {
+      "id": "initial-streaming",
+      "clientRequirements": {
+        "httpsRequired": true,
+        "sse": true
+      }
+    },
+    "displayName": "localhost.run trial",
+    "drop": "1a",
+    "copy": {
+      "consent": "Start a 15-minute public HTTPS trial. The relay terminates TLS and can read payloads. HTTPS, instance identity and timed SSE must pass before publication."
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "definitions": [
+    "tailscale-funnel.definition.json",
+    "tailscale-private.definition.json",
+    "localhost-run.definition.json",
+    "lan.definition.json",
+    "own-address.definition.json",
+    "ngrok-https-edge.definition.json",
+    "ngrok-tls-passthrough.definition.json",
+    "ngrok-tcp-passthrough.definition.json",
+    "cloudflare-named.definition.json"
+  ],
+  "runtimeProjection": "detect-only.json",
+  "definitionKey": "definition",
+  "warning": "Definitions are complete data plans, not admitted executable runtime records. Core/driver must negotiate and enforce admission.requiredFeatures first.",
+  "requiredCompletion": {
+    "type": "effect-result",
+    "effectId": "session:1:1",
+    "sessionId": "session",
+    "generation": 1,
+    "ok": true,
+    "result": {
+      "durable": true
+    }
+  },
+  "fixtureProvenance": "Authored sanitized source-shaped cases; never captured from live credentials or provider mutations.",
+  "planProtocol": "../crates/gozar-core/PLAN-PROTOCOL.md",
+  "planVersion": 1,
+  "normalizedDefinitions": [
+    "tailscale-funnel.definition.json",
+    "tailscale-private.definition.json",
+    "localhost-run.definition.json",
+    "lan.definition.json",
+    "own-address.definition.json",
+    "ngrok-https-edge.definition.json",
+    "ngrok-tls-passthrough.definition.json",
+    "ngrok-tcp-passthrough.definition.json",
+    "cloudflare-named.definition.json"
+  ],
+  "wrapperAdmission": "Normalized definitions stay wrapped; plan admission is only an opt-in declaration, never host feature/authority evidence.",
+  "activeDrop1a": [
+    "localhost-run",
+    "tailscale-funnel"
+  ],
+  "operationalCatalog": [
+    "localhost-run.definition.json",
+    "tailscale-funnel.definition.json"
+  ],
+  "nextDrop": [
+    "tailscale-private",
+    "lan",
+    "own-address",
+    "ngrok-https-edge",
+    "ngrok-tls-passthrough",
+    "ngrok-tcp-passthrough",
+    "cloudflare-named"
+  ],
+  "drop1aRequirements": {
+    "clientReach": "internet",
+    "httpsRequired": true,
+    "sse": true
+  }
+}

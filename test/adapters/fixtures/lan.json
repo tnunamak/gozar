@@ -1,0 +1,497 @@
+{
+  "provenance": "Authored, sanitized, source-shaped fixture. No CLI/provider invocation and no actual host/account state.",
+  "vantage": "fixture only; not operational evidence",
+  "adapterIds": [
+    "lan"
+  ],
+  "cases": [
+    {
+      "id": "owned-interface-forwarder-http",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"interface\": {\"address\": \"192.0.2.20\", \"loopback\": false}, \"ownedForwarder\": {\"listening\": true, \"scheme\": \"http\", \"target\": \"http://127.0.0.1:53123\"}, \"firewallApproved\": true, \"nameResolvesFromClient\": true, \"probe\": {\"vantage\": \"lan\", \"instanceNonceMatches\": true}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/interface/loopback",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ownedForwarder/listening",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/firewallApproved",
+            "value": true
+          },
+          {
+            "op": "not",
+            "predicate": {
+              "op": "all",
+              "items": [
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/nameResolvesFromClient",
+                    "value": true
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/clientReachableIpChecked",
+                    "value": true
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/vantage",
+            "value": "lan"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/instanceNonceMatches",
+            "value": true
+          }
+        ]
+      },
+      "expected": true
+    },
+    {
+      "id": "loopback-is-not-lan",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"interface\": {\"address\": \"127.0.0.1\", \"loopback\": true}, \"ownedForwarder\": {\"listening\": true, \"scheme\": \"http\", \"target\": \"http://127.0.0.1:53123\"}, \"firewallApproved\": true, \"nameResolvesFromClient\": true, \"probe\": {\"vantage\": \"lan\", \"instanceNonceMatches\": true}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/interface/loopback",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ownedForwarder/listening",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/firewallApproved",
+            "value": true
+          },
+          {
+            "op": "not",
+            "predicate": {
+              "op": "all",
+              "items": [
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/nameResolvesFromClient",
+                    "value": true
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/clientReachableIpChecked",
+                    "value": true
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/vantage",
+            "value": "lan"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/instanceNonceMatches",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "firewall-blocked",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"interface\": {\"address\": \"192.0.2.20\", \"loopback\": false}, \"ownedForwarder\": {\"listening\": true, \"scheme\": \"http\", \"target\": \"http://127.0.0.1:53123\"}, \"firewallApproved\": false, \"nameResolvesFromClient\": true, \"probe\": {\"vantage\": \"lan\", \"instanceNonceMatches\": true}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/interface/loopback",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ownedForwarder/listening",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/firewallApproved",
+            "value": true
+          },
+          {
+            "op": "not",
+            "predicate": {
+              "op": "all",
+              "items": [
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/nameResolvesFromClient",
+                    "value": true
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/clientReachableIpChecked",
+                    "value": true
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/vantage",
+            "value": "lan"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/instanceNonceMatches",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "client-dns-unknown",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"interface\": {\"address\": \"192.0.2.20\", \"loopback\": false}, \"ownedForwarder\": {\"listening\": true, \"scheme\": \"http\", \"target\": \"http://127.0.0.1:53123\"}, \"firewallApproved\": true, \"nameResolvesFromClient\": null, \"probe\": {\"vantage\": \"lan\", \"instanceNonceMatches\": true}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/interface/loopback",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ownedForwarder/listening",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/firewallApproved",
+            "value": true
+          },
+          {
+            "op": "not",
+            "predicate": {
+              "op": "all",
+              "items": [
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/nameResolvesFromClient",
+                    "value": true
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/clientReachableIpChecked",
+                    "value": true
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/vantage",
+            "value": "lan"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/instanceNonceMatches",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "loopback-probe-insufficient",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"interface\": {\"address\": \"192.0.2.20\", \"loopback\": false}, \"ownedForwarder\": {\"listening\": true, \"scheme\": \"http\", \"target\": \"http://127.0.0.1:53123\"}, \"firewallApproved\": true, \"nameResolvesFromClient\": true, \"probe\": {\"vantage\": \"local\", \"instanceNonceMatches\": true}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/interface/loopback",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ownedForwarder/listening",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/firewallApproved",
+            "value": true
+          },
+          {
+            "op": "not",
+            "predicate": {
+              "op": "all",
+              "items": [
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/nameResolvesFromClient",
+                    "value": true
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/clientReachableIpChecked",
+                    "value": true
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/vantage",
+            "value": "lan"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/instanceNonceMatches",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "different-instance",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"interface\": {\"address\": \"192.0.2.20\", \"loopback\": false}, \"ownedForwarder\": {\"listening\": true, \"scheme\": \"http\", \"target\": \"http://127.0.0.1:53123\"}, \"firewallApproved\": true, \"nameResolvesFromClient\": true, \"probe\": {\"vantage\": \"lan\", \"instanceNonceMatches\": false}}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/interface/loopback",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ownedForwarder/listening",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/firewallApproved",
+            "value": true
+          },
+          {
+            "op": "not",
+            "predicate": {
+              "op": "all",
+              "items": [
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/nameResolvesFromClient",
+                    "value": true
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/clientReachableIpChecked",
+                    "value": true
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/vantage",
+            "value": "lan"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/instanceNonceMatches",
+            "value": true
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "explicit-ip-client-proven-without-dns",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"interface\": {\"address\": \"192.0.2.20\", \"loopback\": false}, \"ownedForwarder\": {\"listening\": true, \"scheme\": \"http\", \"target\": \"http://127.0.0.1:53123\"}, \"firewallApproved\": true, \"nameResolvesFromClient\": false, \"probe\": {\"vantage\": \"lan\", \"instanceNonceMatches\": true}, \"clientReachableIpChecked\": true}",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "all",
+        "rules": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/interface/loopback",
+            "value": false
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/ownedForwarder/listening",
+            "value": true
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/firewallApproved",
+            "value": true
+          },
+          {
+            "op": "not",
+            "predicate": {
+              "op": "all",
+              "items": [
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/nameResolvesFromClient",
+                    "value": true
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "equals",
+                    "pointer": "/clientReachableIpChecked",
+                    "value": true
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/vantage",
+            "value": "lan"
+          },
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/probe/instanceNonceMatches",
+            "value": true
+          }
+        ]
+      },
+      "expected": true
+    }
+  ],
+  "httpCapability": {
+    "https": false,
+    "internetReach": false
+  },
+  "httpsRequires": "client-trusted certificate for selected name or IP SAN; separate owned TLS listener"
+}

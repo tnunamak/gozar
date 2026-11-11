@@ -1,0 +1,34 @@
+{
+  "provenance": "Synthetic status fixture using the documented CLI JSON shape and example identifiers.",
+  "cliVersion": "1.104.6",
+  "status": {
+    "BackendState": "Running",
+    "Self": {
+      "ID": "fixture-node",
+      "DNSName": "device.example-tailnet.ts.net.",
+      "CapMap": {
+        "funnel": null,
+        "https": null,
+        "https://tailscale.com/cap/funnel-ports?ports=443,8443,10000": null
+      }
+    },
+    "CurrentTailnet": {
+      "StableID": "fixture-tailnet",
+      "MagicDNSSuffix": "example-tailnet.ts.net",
+      "MagicDNSEnabled": true
+    },
+    "CertDomains": [
+      "device.example-tailnet.ts.net"
+    ]
+  },
+  "occupiedPorts": [
+    443,
+    8444,
+    9443,
+    10000
+  ],
+  "public8443Unoccupied": true,
+  "nativeProfileIdExposed": false,
+  "adoptExisting10000": false,
+  "providerMutationPerformed": false
+}

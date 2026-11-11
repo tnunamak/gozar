@@ -1,0 +1,281 @@
+{
+  "schemaVersion": 1,
+  "definition": {
+    "id": "ngrok-https-edge",
+    "label": "ngrok HTTPS edge termination",
+    "audience": "public",
+    "ownership": "owned",
+    "reason": "Existing account and an isolated CLI agent; exact transport is preserved without silent fallback.",
+    "capabilities": {
+      "https": null,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Current capability requires a successful probe from the intended client network.",
+      "Detection identifies the CLI; operational endpoint setup is a separate adapter capability.",
+      "Existing endpoint listing, online agent and HTTP 200 are separate from client readiness."
+    ],
+    "capabilityRecords": [
+      {
+        "when": "owned endpoint + exact transport + public TLS/nonce probe",
+        "capabilities": {
+          "https": true
+        },
+        "reasons": [
+          "HTTPS requires a verified hostname, client-trusted certificate and intended instance; endpoint allocation alone is insufficient."
+        ]
+      },
+      {
+        "when": "independent stream/client probes succeed",
+        "capabilities": {
+          "sse": true,
+          "streamableHttp": true,
+          "oauthDcr": true
+        }
+      }
+    ],
+    "actions": [
+      {
+        "id": "install",
+        "label": "Install the tested ngrok CLI",
+        "reason": "CLI version and config schema must be compatible.",
+        "url": "https://ngrok.com/download"
+      },
+      {
+        "id": "auth",
+        "label": "Provide an account credential through private storage",
+        "reason": "No token in JSON, argv, output or global config."
+      },
+      {
+        "id": "entitlement",
+        "label": "Verify this transport and address are available",
+        "reason": "Raw TLS may require a paid account; TCP verification and reservations are distinct.",
+        "url": "https://dashboard.ngrok.com/"
+      }
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "spawn",
+        "program": "ngrok",
+        "args": [
+          "version"
+        ],
+        "timeoutMs": 5000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "contains",
+          "stream": "combined",
+          "value": "ngrok version"
+        }
+      },
+      "create": {
+        "kind": "spawn",
+        "program": "ngrok",
+        "args": [
+          "start",
+          "--config",
+          "{privateConfigPath}",
+          "--log",
+          "stdout",
+          "--log-format",
+          "json",
+          "{ownedEndpointName}"
+        ],
+        "timeoutMs": 30000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "json-records",
+          "pointer": "/url",
+          "expectedScheme": "https"
+        },
+        "requires": [
+          {
+            "op": "private-file",
+            "binding": "privateConfigPath",
+            "mode": "0600",
+            "parentMode": "0700"
+          },
+          {
+            "op": "verified",
+            "fact": "isolated-loopback-agent-api"
+          },
+          {
+            "op": "verified",
+            "fact": "account-mode-entitlement"
+          },
+          {
+            "op": "verified",
+            "fact": "exact-configured-endpoint-mode"
+          },
+          {
+            "op": "verified",
+            "fact": "owned-endpoint-api-schema-and-exact-match"
+          }
+        ],
+        "process": {
+          "mode": "owned-long-running",
+          "stdin": "closed",
+          "lifetimeMs": 86400000
+        },
+        "after": [],
+        "before": [],
+        "ledger": {
+          "mode": "https",
+          "endpointName": "{ownedEndpointName}",
+          "apiPort": "{agentApiPort}"
+        }
+      },
+      "remove": {
+        "kind": "owned-process",
+        "signal": "SIGTERM",
+        "graceMs": 2000,
+        "thenSignal": "SIGKILL",
+        "confirmExit": true,
+        "timeoutMs": 5000,
+        "maxOutputBytes": 16384,
+        "parser": {
+          "kind": "exit-code"
+        },
+        "before": [],
+        "requires": [],
+        "after": []
+      }
+    },
+    "admission": {
+      "state": "blocked",
+      "requiredFeatures": [
+        "recipe-sequence",
+        "typed-bindings",
+        "predicate-parser",
+        "owned-resource-ledger",
+        "probe-assertions",
+        "client-vantage-probe",
+        "owned-process",
+        "private-file-reference",
+        "private-config-materialization",
+        "json-records",
+        "transport-origin-mapping"
+      ],
+      "reason": "Private config materialization, JSON event parsing and transport proof are unsupported; normalized plan must deny before mutation."
+    },
+    "validation": {
+      "tls": "client-trusted certificate and exact hostname when HTTPS",
+      "instanceNonce": "must equal private instance challenge",
+      "sse": "timed incremental event delivery when required",
+      "vantage": "public",
+      "publish": "exact-origin approval only after all required probes"
+    },
+    "lifecycle": {
+      "persistIntentBeforeMutation": true,
+      "completionScope": [
+        "effectId",
+        "sessionId",
+        "generation"
+      ],
+      "rawOutput": "transient bounded; never persist",
+      "stop": "withdraw before cleanup; reconcile uncertain effects",
+      "globalCleanup": false,
+      "maximumOwnedProcessLeaseMs": 86400000,
+      "leaseExpiry": "withdraw and stop owned connector; never silently rotate or renew identity"
+    },
+    "detection": {
+      "steps": [
+        {
+          "id": "version",
+          "recipe": {
+            "kind": "spawn",
+            "program": "ngrok",
+            "args": [
+              "version"
+            ],
+            "timeoutMs": 5000,
+            "maxOutputBytes": 65536,
+            "parser": {
+              "kind": "contains",
+              "stream": "combined",
+              "value": "ngrok version"
+            }
+          }
+        },
+        {
+          "id": "config",
+          "recipe": {
+            "kind": "spawn",
+            "program": "ngrok",
+            "args": [
+              "config",
+              "check",
+              "--config",
+              "{privateConfigPath}"
+            ],
+            "timeoutMs": 5000,
+            "maxOutputBytes": 65536,
+            "parser": {
+              "kind": "exit-code"
+            }
+          }
+        }
+      ],
+      "login": "Config syntax success is not account authentication. Protected credential-reference presence is local evidence only; agent status and endpoint/account acceptance remain unknown until scoped start.",
+      "config": "Only explicit private config; never inspect/print global credential file contents.",
+      "stateValues": [
+        "cli-missing",
+        "cli-present-auth-unknown",
+        "private-credential-reference-missing",
+        "config-invalid",
+        "account-rejected",
+        "account-verified-by-owned-agent"
+      ]
+    },
+    "transport": {
+      "publicScheme": "https",
+      "termination": "provider edge",
+      "providerCanReadPayload": true,
+      "upstreamScheme": "http",
+      "silentFallback": false,
+      "reservedAddressType": "domain",
+      "publicPort": 443,
+      "originMapping": "direct HTTPS origin",
+      "upstreamApplicationProtocol": "HTTP"
+    },
+    "privateConfigTemplate": {
+      "version": "3",
+      "agent": {
+        "authtoken": {
+          "kind": "credential-ref",
+          "handleRef": "host-private:ngrok-auth"
+        },
+        "web_addr": "127.0.0.1:{agentApiPort}"
+      },
+      "endpoints": [
+        {
+          "name": "{ownedEndpointName}",
+          "url": "https://{reservedAddress}",
+          "upstream": {
+            "url": "{loopbackTarget}"
+          }
+        }
+      ]
+    },
+    "bindings": {
+      "privateConfigPath": {
+        "type": "session-private-path"
+      },
+      "agentApiPort": {
+        "type": "port"
+      },
+      "ownedEndpointName": {
+        "type": "literal"
+      },
+      "reservedAddress": {
+        "type": "dns-name"
+      },
+      "loopbackTarget": {
+        "type": "loopback-http-origin"
+      }
+    },
+    "planVersion": 1
+  }
+}

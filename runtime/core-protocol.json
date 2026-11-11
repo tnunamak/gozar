@@ -1,0 +1,267 @@
+{
+  "version": "0.2",
+  "entrypoint": "step(inputJson:string):string",
+  "wasmModule": "packages/gozar-core/generated/gozar_core.js",
+  "nativeRunner": "gozar-core-json (JSON lines stdin/stdout)",
+  "input": {
+    "state": "optional previous opaque state",
+    "command": {
+      "type": "detect|recommend|start|effect-result|stop|reconcile|status|approve-origin|health|update-origin",
+      "sessionId": "optional on first input; caller supplies unique id",
+      "adapterId": "start selection",
+      "consent": true
+    },
+    "adapters": "optional array of adapter records; pass on initial detect/recommend/start",
+    "requirements": {
+      "clientReach": "internet|tailnet|lan|this-device|unknown",
+      "httpsRequired": true,
+      "sse": false,
+      "streamableHttp": false,
+      "oauthDcr": false
+    },
+    "host": "trusted operational host context (see operationalPlan.host)"
+  },
+  "adapterRecord": {
+    "id": "opaque",
+    "audience": "public|tailnet|lan|local",
+    "ownership": "owned|external-owned",
+    "capabilities": {
+      "https": true,
+      "sse": true,
+      "streamableHttp": true,
+      "oauthDcr": false
+    },
+    "endpoint": "optional pre-existing origin",
+    "unknowns": [],
+    "recipes": {
+      "detect": {
+        "kind": "spawn",
+        "program": "ssh",
+        "args": [
+          "-V"
+        ],
+        "timeoutMs": 5000,
+        "maxOutputBytes": 16384,
+        "parser": {
+          "kind": "contains",
+          "value": "OpenSSH",
+          "stream": "combined"
+        }
+      },
+      "create": "effect recipe; parser URL extracts candidate",
+      "remove": "effect recipe, {resourceId} argv substitution"
+    }
+  },
+  "recipeKinds": [
+    "spawn",
+    "read-file",
+    "http-probe",
+    "interfaces",
+    "local-forwarder",
+    "persist",
+    "timer",
+    "owned-process"
+  ],
+  "parsers": [
+    {
+      "kind": "contains",
+      "value": "literal",
+      "stream": "stdout|stderr|combined"
+    },
+    {
+      "kind": "url",
+      "prefix": "optional required URL prefix"
+    },
+    {
+      "kind": "json",
+      "pointer": "/origin"
+    },
+    {
+      "kind": "exit-code"
+    },
+    {
+      "kind": "json-document",
+      "predicate": {
+        "op": "all",
+        "items": [
+          {
+            "op": "equals",
+            "source": "stdout",
+            "pointer": "/BackendState",
+            "value": "Running"
+          },
+          {
+            "op": "exists",
+            "pointer": "/nodes/*/id"
+          },
+          {
+            "op": "not",
+            "predicate": {
+              "op": "exists",
+              "pointer": "/denied"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "effect": {
+    "id": "session:generation:sequence",
+    "sessionId": "opaque",
+    "generation": 1,
+    "kind": "recipe kind",
+    "operation": "detect|create|remove|probe|persist",
+    "program": "spawn only",
+    "args": [],
+    "timeoutMs": 5000,
+    "maxOutputBytes": 16384,
+    "adapterId": "opaque adapter identity",
+    "resourceId": "optional exact owned resource handle for removal"
+  },
+  "completion": {
+    "type": "effect-result",
+    "effectId": "effect.id",
+    "sessionId": "effect.sessionId",
+    "generation": "effect.generation",
+    "ok": true,
+    "result": {
+      "exitCode": 0,
+      "stdout": "bounded transient output",
+      "stderr": "bounded transient output",
+      "origin": "optional",
+      "resourceId": "optional opaque owned handle",
+      "status": 200,
+      "vantage": "public|tailnet|lan|local",
+      "durable": "true only after actual durable persist",
+      "streaming": "required true when requirements.sse",
+      "streamableHttp": "required true when requirements.streamableHttp",
+      "oauthDcr": "required true when requirements.oauthDcr",
+      "notApplied": "false/absent on failed create retains uncertainty; true confirms no side effect"
+    }
+  },
+  "durability": "persist completion ok:true plus result.durable:true is required before dependent create/remove. persist effect record is a write-ahead intent; host must persist returned state as well.",
+  "approval": {
+    "type": "approve-origin",
+    "generation": 1,
+    "origin": "exact probed candidate"
+  },
+  "output": {
+    "state": "opaque serializable deterministic state",
+    "events": [],
+    "effects": [],
+    "snapshot": {
+      "sessionId": "opaque",
+      "generation": 1,
+      "phase": "idle|detecting|planned|preflight|persisting|starting|validating|candidate-ready|published-ready|degraded|stopping|cleanup-pending|stopped|failed",
+      "candidate": "origin or null",
+      "published": "origin or null",
+      "recommendations": [],
+      "resources": [],
+      "limitations": []
+    },
+    "action": "optional generic action"
+  },
+  "security": "Host admits trusted recipes and validates effects independently. Never supply credentials as literal recipe fields. Raw completion output is transient and never retained. Only credential-free http(s) origins are accepted. IDs are opaque. External-owned records are validate-only. Unknown capability is ineligible when required.",
+  "predicateGrammar": {
+    "all": "{op:\"all\",items:[predicate,...]} (rules/predicates aliases supported)",
+    "equals": "{op:\"equals\",pointer:\"/path\",value:JSON,source?:\"stdout\"}",
+    "exists": "{op:\"exists\",pointer:\"/path\"}",
+    "not": "{op:\"not\",predicate:predicate} (rule alias supported)",
+    "paths": "JSON pointer ~0/~1 escaping, numeric array indices, * array/object values wildcard; missing/unknown operators fail closed",
+    "json": "bare json pointer extraction never proves detection; add predicate for detection. json-document requires predicate. json extraction parses stdout, or direct result when stdout absent."
+  },
+  "urlConstraints": {
+    "hostnamePattern": "optional bounded Rust regex matched against extracted hostname",
+    "exactOriginToken": true,
+    "rejectMultipleDistinct": "always true; zero or multiple distinct matching origins fail"
+  },
+  "featureGates": {
+    "legacy": "existing non-planVersion1 recipes keep initial conservative gates",
+    "operational": "unknown features, operations, executable fields, binding guards and assertions block entire normalized plan before any effect",
+    "unsupported": [
+      "private-config-materialization",
+      "private-file-materialization",
+      "json-records",
+      "transport-origin-mapping",
+      "transport-policy-inspection"
+    ]
+  },
+  "operationalPlan": {
+    "version": 1,
+    "requiredFeatures": [
+      "recipe-sequence",
+      "typed-bindings",
+      "predicate-parser",
+      "owned-resource-ledger",
+      "owned-process",
+      "interface-forwarder",
+      "private-file-reference",
+      "probe-assertions",
+      "client-vantage-probe",
+      "unused-port-selection"
+    ],
+    "host": {
+      "nowMs": "monotonic caller-supplied milliseconds",
+      "features": [
+        "all required plan features"
+      ],
+      "bindings": "scoped typed receipts, no secrets/paths",
+      "facts": "name -> {value:true,authorityRef,sessionId,observedAtMs,expiresAtMs}",
+      "probe": "{nonceRef,verifierRef,expiresAtMs,allowPublicRelay?:boolean}; nonce must be fresh per probe. allowPublicRelay opts into public-relay network path only."
+    },
+    "effectMetadata": {
+      "operation": "observe before/after, create/remove execute/persist, probe, health",
+      "recipeRef": "create|remove/before|after/stepId or create|remove/execute; remove/ownership intrinsic local-handle inspector; probe and health/expiry intrinsic",
+      "stepId": "exact ordered observation id; execute, intent, ownership, probe, expiry reserved by core",
+      "stage": "before|persist|execute|after|probe|health",
+      "bindings": "validated typed binding records; private handle placeholders retained",
+      "bindingRefs": "name -> authorityRef"
+    },
+    "observationReceipt": {
+      "result.observation": {
+        "sessionId": "same session",
+        "authorityRef": "trusted observer ref",
+        "observedAtMs": "at/after plan start, <=nowMs",
+        "expiresAtMs": ">nowMs through durable ack"
+      }
+    },
+    "localHandleInspection": {
+      "effect": "kind:owned-process|local-forwarder,operation:observe,recipeRef:remove/ownership,stage:before,stepId:ownership,action:inspect,resourceId,ownership:ledger",
+      "result": "{details:exact ledger.details, observation:scoped fresh receipt, ownershipReceipt:{handleRef,continuityRef,sessionId,observedAtMs,expiresAtMs,continuous:true}}"
+    },
+    "health": {
+      "adapterFields": "none; all planVersion1 adapters use core generic health/rotation",
+      "commands": [
+        "health",
+        "update-origin"
+      ],
+      "health": "advances generation, withdraws old publication, requests fresh exact-origin probe; requires new host.probe nonce",
+      "update-origin": "external-owned only; trusted scoped host.bindings.externalOrigin receipt; advances generation, invalidates all old probes/acks, fresh exact-origin approval required",
+      "timer": "successful probe emits asynchronous timer recipeRef health/expiry; schedule then return candidate-ready, deliver completion when elapsed; failure/expiry withdraws readiness and returns external-owner fix action",
+      "probeReceipt": "nonceRef,verifierRef,origin,vantage,observedAtMs,expiresAtMs,tls,instanceMatched,sse,streamableHttp,oauthDcr; remote:true remains valid for nonlocal. Public-only alternative: remote:false,networkPath:public-relay,publicDns:true,resolvedIp:public-unicast IP, with trusted request host.probe.allowPublicRelay:true. Exact identity/protocol/time checks remain required.",
+      "expiryOnEveryInput": "The core revokes an expired accepted proof before processing any next command, including approve-origin; callers must advance trusted host.nowMs."
+    },
+    "bounds": {
+      "before": 16,
+      "after": 16,
+      "bindings": 32,
+      "capturesPerStep": 32,
+      "assertions": 64,
+      "probeNoncesPerSession": 128
+    },
+    "cleanup": "always original resource ledger.bindings; host-derived saved binding values and authority still current/fresh; source-derived node/port not reselected. Route guard requires fresh retained ownership receipt and exact live record. Local handles get intrinsic inspect before durable remove.",
+    "jsonNumbers": "Persisted deadlines use exact JSON-safe integers; no u64::MAX sentinel crosses the JS boundary.",
+    "publicRelay": {
+      "authority": "Trusted host.probe.allowPublicRelay:true is captured in the emitted probe challenge; a completion cannot opt itself in.",
+      "receipt": {
+        "networkPath": "public-relay",
+        "remote": false,
+        "publicDns": true,
+        "resolvedIp": "actual pinned public DNS-resolved public-unicast address",
+        "vantage": "public"
+      },
+      "unchanged": "All nonce, verifier, exact origin, time, TLS, instance and requested protocol checks still apply. Tailnet/LAN require existing remote:true proof; this alternative never satisfies them.",
+      "addressPolicy": "Conservative public unicast only. Reject loopback, private, link-local, CGNAT100.64/10, documentation, benchmark, multicast/reserved, IPv4-mapped and special IPv6 transition ranges. No DNS or socket IO occurs in core."
+    }
+  }
+}

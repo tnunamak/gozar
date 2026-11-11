@@ -1,0 +1,714 @@
+{
+  "schemaVersion": 1,
+  "definition": {
+    "id": "tailscale-funnel",
+    "label": "Tailscale Funnel",
+    "audience": "public",
+    "ownership": "owned",
+    "reason": "Dedicated unused HTTPS listener; existing shared routes stay under their owners.",
+    "capabilities": {
+      "https": null,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Public HTTPS and timed SSE require genuine intended-vantage instance proof before publication.",
+      "This exact current capability-port key is source-shaped from installed 1.104.6; unknown policy formats deny safely.",
+      "Foreground CLI watcher cleanup is owned by immutable process identity; any leftover or administrator-created mapping remains cleanup debt.",
+      "Some clients reject :8443; client compatibility is not implied by local status."
+    ],
+    "capabilityRecords": [
+      {
+        "when": "current prerequisites + readback + client-vantage TLS/nonce probe succeed",
+        "capabilities": {
+          "https": true
+        },
+        "reasons": [
+          "TLS terminates in local tailscaled; no application key export."
+        ]
+      },
+      {
+        "when": "timed SSE / HTTP / OAuth probes succeed separately",
+        "capabilities": {
+          "sse": true,
+          "streamableHttp": true,
+          "oauthDcr": true
+        }
+      }
+    ],
+    "actions": [
+      {
+        "id": "install",
+        "label": "Install Tailscale",
+        "reason": "CLI is absent.",
+        "url": "https://tailscale.com/download"
+      },
+      {
+        "id": "login",
+        "label": "Connect Tailscale",
+        "reason": "The daemon is not in Running state.",
+        "command": [
+          "tailscale",
+          "up"
+        ],
+        "interactive": true
+      },
+      {
+        "id": "https",
+        "label": "Enable tailnet HTTPS and MagicDNS",
+        "reason": "Requires deliberate administrator action; certificate names enter public logs.",
+        "url": "https://login.tailscale.com/admin/dns"
+      },
+      {
+        "id": "funnel-policy",
+        "label": "Ask the tailnet administrator to allow Funnel",
+        "reason": "Current node policy and port allowance must permit :8443.",
+        "url": "https://login.tailscale.com/admin/acls"
+      }
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "spawn",
+        "program": "tailscale",
+        "args": [
+          "status",
+          "--json",
+          "--peers=false"
+        ],
+        "timeoutMs": 5000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "json-document",
+          "predicate": {
+            "op": "equals",
+            "pointer": "/BackendState",
+            "value": "Running"
+          }
+        }
+      },
+      "create": {
+        "kind": "spawn",
+        "program": "tailscale",
+        "args": [
+          "funnel",
+          "--yes",
+          "--https={port}",
+          "--set-path={mount}",
+          "{loopbackTarget}"
+        ],
+        "timeoutMs": 20000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "exit-code"
+        },
+        "before": [
+          {
+            "id": "status",
+            "recipe": {
+              "kind": "spawn",
+              "program": "tailscale",
+              "args": [
+                "status",
+                "--json",
+                "--peers=false"
+              ],
+              "timeoutMs": 5000,
+              "maxOutputBytes": 65536,
+              "parser": {
+                "kind": "json-document",
+                "predicate": {
+                  "op": "exists",
+                  "pointer": ""
+                }
+              }
+            },
+            "captures": {
+              "dnsName": {
+                "type": "dns-name",
+                "pointer": "/Self/DNSName",
+                "trimTrailingDot": true
+              },
+              "nodeId": {
+                "type": "opaque-ref",
+                "pointer": "/Self/ID"
+              },
+              "tailnetId": {
+                "type": "opaque-ref",
+                "pointer": "/CurrentTailnet/StableID"
+              },
+              "tailnetSuffix": {
+                "type": "dns-name",
+                "pointer": "/CurrentTailnet/MagicDNSSuffix"
+              }
+            },
+            "assert": {
+              "op": "all",
+              "items": [
+                {
+                  "op": "equals",
+                  "pointer": "/BackendState",
+                  "value": "Running"
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/CurrentTailnet/MagicDNSEnabled",
+                  "value": true
+                },
+                {
+                  "op": "exists",
+                  "pointer": "/Self/CapMap/funnel"
+                },
+                {
+                  "op": "exists",
+                  "pointer": "/Self/CapMap/https"
+                },
+                {
+                  "op": "exists",
+                  "pointer": "/Self/CapMap/https:~1~1tailscale.com~1cap~1funnel-ports?ports=443,8443,10000"
+                }
+              ]
+            }
+          },
+          {
+            "id": "permission",
+            "recipe": {
+              "kind": "spawn",
+              "program": "tailscale",
+              "args": [
+                "status",
+                "--json",
+                "--peers=false"
+              ],
+              "timeoutMs": 5000,
+              "maxOutputBytes": 65536,
+              "parser": {
+                "kind": "json-document",
+                "predicate": {
+                  "op": "exists",
+                  "pointer": ""
+                }
+              }
+            },
+            "captures": {},
+            "assert": {
+              "op": "all",
+              "items": [
+                {
+                  "op": "all",
+                  "items": [
+                    {
+                      "op": "equals",
+                      "pointer": "/BackendState",
+                      "value": "Running"
+                    },
+                    {
+                      "op": "equals",
+                      "pointer": "/CurrentTailnet/MagicDNSEnabled",
+                      "value": true
+                    },
+                    {
+                      "op": "exists",
+                      "pointer": "/Self/CapMap/funnel"
+                    },
+                    {
+                      "op": "exists",
+                      "pointer": "/Self/CapMap/https"
+                    },
+                    {
+                      "op": "exists",
+                      "pointer": "/Self/CapMap/https:~1~1tailscale.com~1cap~1funnel-ports?ports=443,8443,10000"
+                    }
+                  ]
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/Self/ID",
+                  "value": "{nodeId}"
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/CurrentTailnet/StableID",
+                  "value": "{tailnetId}"
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/CurrentTailnet/MagicDNSSuffix",
+                  "value": "{tailnetSuffix}"
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/CertDomains/*",
+                  "value": "{dnsName}"
+                }
+              ]
+            }
+          },
+          {
+            "id": "config",
+            "recipe": {
+              "kind": "spawn",
+              "program": "tailscale",
+              "args": [
+                "serve",
+                "status",
+                "--json"
+              ],
+              "timeoutMs": 5000,
+              "maxOutputBytes": 65536,
+              "parser": {
+                "kind": "json-document",
+                "predicate": {
+                  "op": "exists",
+                  "pointer": ""
+                }
+              }
+            },
+            "captures": {
+              "occupiedPorts": {
+                "type": "port-set",
+                "paths": [
+                  "/TCP",
+                  "/Web",
+                  "/AllowFunnel",
+                  "/Foreground/*/TCP",
+                  "/Foreground/*/Web",
+                  "/Foreground/*/AllowFunnel"
+                ]
+              }
+            }
+          }
+        ],
+        "requires": [
+          {
+            "op": "port-unoccupied",
+            "source": "config",
+            "pointer": "/occupiedPorts",
+            "port": "{port}"
+          }
+        ],
+        "after": [
+          {
+            "id": "readback",
+            "recipe": {
+              "kind": "spawn",
+              "program": "tailscale",
+              "args": [
+                "serve",
+                "status",
+                "--json"
+              ],
+              "timeoutMs": 5000,
+              "maxOutputBytes": 65536,
+              "parser": {
+                "kind": "json-document",
+                "predicate": {
+                  "op": "exists",
+                  "pointer": ""
+                }
+              }
+            },
+            "captures": {
+              "route": {
+                "type": "record",
+                "pointer": "",
+                "fields": {
+                  "https": {
+                    "type": "bool",
+                    "pointer": "/Foreground/*/TCP/{port}/HTTPS"
+                  },
+                  "proxy": {
+                    "type": "origin",
+                    "pointer": "/Foreground/*/Web/{dnsName}:{port}/Handlers/~1/Proxy"
+                  },
+                  "funnel": {
+                    "type": "bool",
+                    "pointer": "/Foreground/*/AllowFunnel/{dnsName}:{port}",
+                    "optional": false
+                  }
+                }
+              }
+            },
+            "assert": {
+              "op": "all",
+              "items": [
+                {
+                  "op": "equals",
+                  "pointer": "/Foreground/*/TCP/{port}",
+                  "value": {
+                    "HTTPS": true
+                  }
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/Foreground/*/Web/{dnsName}:{port}",
+                  "value": {
+                    "Handlers": {
+                      "/": {
+                        "Proxy": "{loopbackTarget}"
+                      }
+                    }
+                  }
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/Foreground/*/AllowFunnel/{dnsName}:{port}",
+                  "value": true
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "exists",
+                    "pointer": "/TCP/{port}"
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "exists",
+                    "pointer": "/Web/{dnsName}:{port}"
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "exists",
+                    "pointer": "/AllowFunnel/{dnsName}:{port}"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "ledger": {
+          "https": true,
+          "proxy": "{loopbackTarget}",
+          "funnel": true
+        },
+        "process": {
+          "mode": "owned-long-running",
+          "stdin": "closed",
+          "lifetimeMs": 86400000,
+          "collectMs": 2000
+        }
+      },
+      "remove": {
+        "kind": "owned-process",
+        "signal": "SIGTERM",
+        "graceMs": 2000,
+        "thenSignal": "SIGKILL",
+        "confirmExit": true,
+        "timeoutMs": 10000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "exit-code"
+        },
+        "before": [
+          {
+            "id": "identity",
+            "recipe": {
+              "kind": "spawn",
+              "program": "tailscale",
+              "args": [
+                "status",
+                "--json",
+                "--peers=false"
+              ],
+              "timeoutMs": 5000,
+              "maxOutputBytes": 65536,
+              "parser": {
+                "kind": "json-document",
+                "predicate": {
+                  "op": "exists",
+                  "pointer": ""
+                }
+              }
+            },
+            "captures": {},
+            "assert": {
+              "op": "all",
+              "items": [
+                {
+                  "op": "equals",
+                  "pointer": "/BackendState",
+                  "value": "Running"
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/Self/ID",
+                  "value": "{nodeId}"
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/CurrentTailnet/StableID",
+                  "value": "{tailnetId}"
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/CurrentTailnet/MagicDNSSuffix",
+                  "value": "{tailnetSuffix}"
+                }
+              ]
+            }
+          }
+        ],
+        "requires": [],
+        "after": [
+          {
+            "id": "readback",
+            "recipe": {
+              "kind": "spawn",
+              "program": "tailscale",
+              "args": [
+                "serve",
+                "status",
+                "--json"
+              ],
+              "timeoutMs": 5000,
+              "maxOutputBytes": 65536,
+              "parser": {
+                "kind": "json-document",
+                "predicate": {
+                  "op": "exists",
+                  "pointer": ""
+                }
+              }
+            },
+            "captures": {
+              "route": {
+                "type": "record",
+                "pointer": "/Web/{dnsName}:{port}",
+                "fields": {},
+                "optional": true
+              }
+            },
+            "assert": {
+              "op": "all",
+              "items": [
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "exists",
+                    "pointer": "/TCP/{port}"
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "exists",
+                    "pointer": "/Web/{dnsName}:{port}"
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "exists",
+                    "pointer": "/AllowFunnel/{dnsName}:{port}"
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "exists",
+                    "pointer": "/Foreground/*/TCP/{port}"
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "exists",
+                    "pointer": "/Foreground/*/Web/{dnsName}:{port}"
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "exists",
+                    "pointer": "/Foreground/*/AllowFunnel/{dnsName}:{port}"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "admission": {
+      "state": "admitted",
+      "requiredFeatures": [
+        "recipe-sequence",
+        "typed-bindings",
+        "predicate-parser",
+        "owned-resource-ledger",
+        "owned-process",
+        "probe-assertions",
+        "client-vantage-probe"
+      ],
+      "reason": "Normalized opt-in plan only; both core and host feature intersection and fresh authorities must pass. Wrapper is not auto-admitted."
+    },
+    "validation": {
+      "tls": "client-trusted certificate and exact hostname when HTTPS",
+      "instanceNonce": "must equal private instance challenge",
+      "sse": "timed incremental event delivery when required",
+      "vantage": "public",
+      "publish": "exact-origin approval only after all required probes"
+    },
+    "lifecycle": {
+      "persistIntentBeforeMutation": true,
+      "completionScope": [
+        "effectId",
+        "sessionId",
+        "generation"
+      ],
+      "rawOutput": "transient bounded; never persist",
+      "stop": "withdraw before cleanup; reconcile uncertain effects",
+      "globalCleanup": false,
+      "ownershipFields": [
+        "nodeId",
+        "tailnetId",
+        "tailnetSuffix",
+        "dnsName",
+        "port",
+        "mount",
+        "loopbackTarget"
+      ],
+      "ledgerDetails": {
+        "https": true,
+        "proxy": "{loopbackTarget}",
+        "funnel": true
+      },
+      "identitySemantics": "Current node plus current tailnet StableID and DNS suffix fingerprint; not a native Tailscale profile ID.",
+      "cleanup": "Stop only immutable owned foreground process; watcher releases its own session; confirm exact port absent. Any remaining mapping is cleanup debt, never global reset/off."
+    },
+    "detection": {
+      "steps": [
+        {
+          "id": "status",
+          "recipe": {
+            "kind": "spawn",
+            "program": "tailscale",
+            "args": [
+              "status",
+              "--json",
+              "--peers=false"
+            ],
+            "timeoutMs": 5000,
+            "maxOutputBytes": 65536,
+            "parser": {
+              "kind": "json-document",
+              "predicate": {
+                "op": "equals",
+                "pointer": "/BackendState",
+                "value": "Running"
+              }
+            }
+          }
+        },
+        {
+          "id": "config",
+          "recipe": {
+            "kind": "spawn",
+            "program": "tailscale",
+            "args": [
+              "serve",
+              "status",
+              "--json"
+            ],
+            "timeoutMs": 5000,
+            "maxOutputBytes": 65536,
+            "parser": {
+              "kind": "json-document",
+              "predicate": {
+                "op": "exists",
+                "pointer": ""
+              }
+            }
+          }
+        }
+      ],
+      "installed": "spawn success distinguishes CLI presence only",
+      "login": {
+        "predicate": {
+          "op": "equals",
+          "source": "stdout",
+          "pointer": "/BackendState",
+          "value": "Running"
+        },
+        "otherwise": "NeedsLogin, NeedsMachineAuth, daemon unavailable, and malformed output are distinct"
+      },
+      "permission": "Raw Running + MagicDNSEnabled + HTTPS/Funnel capability-key presence + exact observed allowed-port policy key; cert domain must match captured DNS name.",
+      "neverProbeByMutation": true
+    },
+    "bindings": {
+      "port": {
+        "type": "port",
+        "value": 8443
+      },
+      "mount": {
+        "type": "mount",
+        "value": "/"
+      },
+      "loopbackTarget": {
+        "type": "loopback-http-origin"
+      },
+      "dnsName": {
+        "type": "dns-name",
+        "source": "status",
+        "pointer": "/dnsName"
+      },
+      "nodeId": {
+        "type": "opaque-private-reference",
+        "source": "status",
+        "pointer": "/nodeId"
+      },
+      "tailnetId": {
+        "type": "opaque-private-reference",
+        "source": "status",
+        "pointer": "/tailnetId"
+      },
+      "tailnetSuffix": {
+        "type": "dns-name",
+        "source": "status",
+        "pointer": "/tailnetSuffix"
+      }
+    },
+    "endpointTemplate": "https://{dnsName}:{port}",
+    "safety": {
+      "protectedPorts": [
+        443,
+        10000,
+        8444,
+        9443
+      ],
+      "selectedPort": 8443,
+      "fallbackPort": null,
+      "dedicatedPortRequired": true,
+      "restoreWholeConfig": false,
+      "nativeOwnerMarker": false,
+      "identicalExternalRecreation": "cannot distinguish without exclusive ownership; stop and reconcile if ownership continuity is uncertain",
+      "busy": "stop without mutation",
+      "funnelVisibility": "host:port-wide; never add public visibility to a shared listener",
+      "rootMountRequiresDedicatedUnusedPort": true,
+      "candidatePorts": [
+        8443
+      ],
+      "preserveAnyOccupiedPort": true,
+      "continuity": "Fresh driver ownershipReceipt required; CLI values and ETag are not continuity or compare-and-swap proof.",
+      "cleanupStrategy": "owned foreground watcher process; no Serve/Funnel off/reset",
+      "identity": "node/tailnet fingerprint, never fabricated profileId"
+    },
+    "planVersion": 1,
+    "drop": "1a",
+    "clientProfile": {
+      "id": "initial-streaming",
+      "clientRequirements": {
+        "httpsRequired": true,
+        "sse": true
+      }
+    },
+    "displayName": "Tailscale Funnel",
+    "copy": {
+      "consent": "Start an owned foreground HTTPS Funnel on unused port 8443 only. Existing listeners remain untouched. HTTPS, instance identity and timed SSE must pass before publication."
+    }
+  }
+}

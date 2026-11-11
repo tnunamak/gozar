@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "definition": {
+    "id": "own-address",
+    "label": "Your own HTTPS address",
+    "audience": "public",
+    "ownership": "external-owned",
+    "reason": "Validate an existing owner-managed origin; no route is created or deleted.",
+    "capabilities": {
+      "https": null,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Current capability requires a successful probe from the intended client network.",
+      "A successful HTTP response alone does not prove the correct application or external reach."
+    ],
+    "capabilityRecords": [
+      {
+        "when": "public TLS/instance probe succeeds",
+        "capabilities": {
+          "https": true
+        }
+      },
+      {
+        "when": "each requested transport probe succeeds",
+        "capabilities": {
+          "sse": true,
+          "streamableHttp": true,
+          "oauthDcr": true
+        }
+      }
+    ],
+    "actions": [
+      {
+        "id": "configure-origin",
+        "label": "Point your reverse proxy at this instance",
+        "reason": "The route and certificate remain under your ownership."
+      },
+      {
+        "id": "validate-origin",
+        "label": "Check the exact address",
+        "reason": "TLS, instance identity and streaming must match before publication."
+      }
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "http-probe",
+        "url": "{externalOrigin}",
+        "timeoutMs": 10000,
+        "maxOutputBytes": 16384,
+        "parser": {
+          "kind": "json-document",
+          "predicate": {
+            "op": "exists",
+            "pointer": ""
+          }
+        }
+      }
+    },
+    "admission": {
+      "state": "admitted",
+      "requiredFeatures": [
+        "typed-bindings",
+        "probe-assertions",
+        "client-vantage-probe"
+      ],
+      "reason": "Normalized validate-only plan; trusted explicit origin and genuine public probe receipt required."
+    },
+    "validation": {
+      "tls": "client-trusted certificate and exact hostname when HTTPS",
+      "instanceNonce": "must equal private instance challenge",
+      "sse": "timed incremental event delivery when required",
+      "vantage": "public",
+      "publish": "exact-origin approval only after all required probes"
+    },
+    "lifecycle": {
+      "persistIntentBeforeMutation": false,
+      "completionScope": [
+        "effectId",
+        "sessionId",
+        "generation"
+      ],
+      "rawOutput": "transient bounded; never persist",
+      "stop": "withdraw local publication only; never mutate external route",
+      "globalCleanup": false
+    },
+    "endpoint": null,
+    "bindings": {
+      "externalOrigin": {
+        "type": "credential-free-https-origin"
+      }
+    },
+    "planVersion": 1,
+    "endpointTemplate": "{externalOrigin}"
+  }
+}

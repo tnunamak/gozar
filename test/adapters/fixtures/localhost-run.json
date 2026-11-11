@@ -1,0 +1,210 @@
+{
+  "provenance": "Authored, sanitized, source-shaped fixture. No CLI/provider invocation and no actual host/account state.",
+  "vantage": "fixture only; not operational evidence",
+  "adapterIds": [
+    "localhost-run"
+  ],
+  "cases": [
+    {
+      "id": "valid-session-url",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "your tunnel: https://fixture-trial.lhr.life",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": true
+    },
+    {
+      "id": "banner-is-not-endpoint",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "https://admin.localhost.run https://localhost.run/docs",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": false
+    },
+    {
+      "id": "lookalike-host",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "https://fixture-trial.lhr.life.attacker.example",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": false
+    },
+    {
+      "id": "userinfo",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "https://user@fixture-trial.lhr.life",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": false
+    },
+    {
+      "id": "query-url",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "https://fixture-trial.lhr.life?token=redacted",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": false
+    },
+    {
+      "id": "two-origins-rotation",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "https://fixture-one.lhr.life https://fixture-two.lhr.life",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": false
+    },
+    {
+      "id": "ansi-fragmented-reassembled",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "\u001b[32mhttps://fixture-trial.lhr.life\u001b[0m",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": true
+    },
+    {
+      "id": "remote-forward-denied",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "Error: remote port forwarding failed",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": false
+    },
+    {
+      "id": "host-key-changed",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "REMOTE HOST IDENTIFICATION HAS CHANGED",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": false
+    }
+  ],
+  "lifecycleCases": [
+    {
+      "id": "stop-owned-child",
+      "input": {
+        "resourceId": "fixture-owned-process",
+        "birthIdentity": "fixture-birth"
+      },
+      "expect": [
+        "SIGTERM owned child",
+        "confirm exit",
+        "remove own directory"
+      ]
+    },
+    {
+      "id": "pid-reused",
+      "input": {
+        "resourceId": "fixture-owned-process",
+        "birthIdentity": "changed"
+      },
+      "expect": [
+        "do not signal",
+        "cleanup-pending"
+      ]
+    },
+    {
+      "id": "trial-expired",
+      "input": {
+        "elapsedMs": 900000
+      },
+      "expect": [
+        "withdraw",
+        "stop owned child"
+      ]
+    },
+    {
+      "id": "stale-create-completion",
+      "input": {
+        "effectId": "fixture:1:3",
+        "sessionId": "fixture",
+        "generation": 1,
+        "currentGeneration": 2
+      },
+      "expect": [
+        "do not publish",
+        "retain owned resource for cleanup"
+      ]
+    }
+  ]
+}

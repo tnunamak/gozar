@@ -1,0 +1,14 @@
+{
+  "name": "gozar-workspace",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "gozar": "bin/gozar.mjs"
+  },
+  "scripts": {
+    "test:node": "node --test --test-concurrency=1 test/node/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

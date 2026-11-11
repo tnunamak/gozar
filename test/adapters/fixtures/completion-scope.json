@@ -1,0 +1,47 @@
+{
+  "provenance": "Authored, sanitized, source-shaped fixture. No CLI/provider invocation and no actual host/account state.",
+  "vantage": "fixture only; not operational evidence",
+  "pending": {
+    "effectId": "fixture-session:4:2",
+    "sessionId": "fixture-session",
+    "generation": 4
+  },
+  "cases": [
+    {
+      "id": "exact",
+      "completion": {
+        "effectId": "fixture-session:4:2",
+        "sessionId": "fixture-session",
+        "generation": 4
+      },
+      "expected": true
+    },
+    {
+      "id": "wrong-session",
+      "completion": {
+        "effectId": "fixture-session:4:2",
+        "sessionId": "other",
+        "generation": 4
+      },
+      "expected": false
+    },
+    {
+      "id": "wrong-generation",
+      "completion": {
+        "effectId": "fixture-session:4:2",
+        "sessionId": "fixture-session",
+        "generation": 3
+      },
+      "expected": false
+    },
+    {
+      "id": "wrong-effect",
+      "completion": {
+        "effectId": "fixture-session:4:3",
+        "sessionId": "fixture-session",
+        "generation": 4
+      },
+      "expected": false
+    }
+  ]
+}

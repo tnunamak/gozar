@@ -1,0 +1,258 @@
+{
+  "schemaVersion": 1,
+  "definition": {
+    "id": "cloudflare-named",
+    "label": "Cloudflare named tunnel",
+    "audience": "public",
+    "ownership": "owned",
+    "reason": "Run a connector for an existing named tunnel and explicitly configured stable hostname; never substitute a Quick Tunnel.",
+    "capabilities": {
+      "https": null,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Current capability requires a successful probe from the intended client network.",
+      "Detection identifies the named-tunnel CLI; operational connector setup is a separate adapter capability.",
+      "No verified CLI DNS inventory/delete command in scoped source; DNS ownership is a prerequisite."
+    ],
+    "capabilityRecords": [
+      {
+        "when": "public hostname TLS/instance probe",
+        "capabilities": {
+          "https": true
+        }
+      },
+      {
+        "when": "separate timed stream and client probes",
+        "capabilities": {
+          "sse": true,
+          "streamableHttp": true,
+          "oauthDcr": true
+        }
+      }
+    ],
+    "actions": [
+      {
+        "id": "install",
+        "label": "Install cloudflared",
+        "reason": "Native connector CLI required.",
+        "url": "https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/"
+      },
+      {
+        "id": "account-login",
+        "label": "Authorize account inventory if needed",
+        "reason": "Optional account certificate login opens an interactive flow; not required for a token-scoped connector.",
+        "command": [
+          "cloudflared",
+          "tunnel",
+          "login"
+        ],
+        "interactive": true
+      },
+      {
+        "id": "named-setup",
+        "label": "Select an existing named tunnel and hostname route",
+        "reason": "DNS and tunnel creation/removal remain owner-managed; no automatic overwrite.",
+        "url": "https://dash.cloudflare.com/?to=/:account/tunnels"
+      },
+      {
+        "id": "route-origin",
+        "label": "Set this hostname route Service URL to the instance gate",
+        "reason": "Remote configuration can override local --url; verify instance identity."
+      }
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "spawn",
+        "program": "cloudflared",
+        "args": [
+          "--version"
+        ],
+        "timeoutMs": 5000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "contains",
+          "value": "cloudflared version",
+          "stream": "combined"
+        }
+      },
+      "create": {
+        "kind": "spawn",
+        "program": "cloudflared",
+        "args": [
+          "tunnel",
+          "--no-autoupdate",
+          "run",
+          "--token-file",
+          "{privateTokenFile}",
+          "--url",
+          "{loopbackTarget}"
+        ],
+        "timeoutMs": 30000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "contains",
+          "value": "Registered tunnel connection",
+          "stream": "combined"
+        },
+        "requires": [
+          {
+            "op": "private-file",
+            "binding": "privateTokenFile",
+            "mode": "0600",
+            "parentMode": "0700"
+          },
+          {
+            "op": "verified",
+            "fact": "named-tunnel-identity"
+          },
+          {
+            "op": "verified",
+            "fact": "hostname-already-routed"
+          }
+        ],
+        "process": {
+          "mode": "owned-long-running",
+          "stdin": "closed",
+          "lifetimeMs": 86400000
+        },
+        "after": [],
+        "before": [],
+        "ledger": {
+          "tunnelId": "{namedTunnelId}",
+          "hostname": "{hostname}"
+        }
+      },
+      "remove": {
+        "kind": "owned-process",
+        "signal": "SIGTERM",
+        "graceMs": 5000,
+        "thenSignal": "SIGKILL",
+        "confirmExit": true,
+        "timeoutMs": 10000,
+        "maxOutputBytes": 16384,
+        "parser": {
+          "kind": "exit-code"
+        },
+        "before": [],
+        "requires": [],
+        "after": []
+      }
+    },
+    "admission": {
+      "state": "blocked",
+      "requiredFeatures": [
+        "recipe-sequence",
+        "typed-bindings",
+        "predicate-parser",
+        "owned-resource-ledger",
+        "probe-assertions",
+        "client-vantage-probe",
+        "owned-process",
+        "private-file-reference",
+        "private-file-materialization"
+      ],
+      "reason": "Named existing tunnel only; private token materialization and genuine origin proof remain explicit gates."
+    },
+    "validation": {
+      "tls": "client-trusted certificate and exact hostname when HTTPS",
+      "instanceNonce": "must equal private instance challenge",
+      "sse": "timed incremental event delivery when required",
+      "vantage": "public",
+      "publish": "exact-origin approval only after all required probes"
+    },
+    "lifecycle": {
+      "persistIntentBeforeMutation": true,
+      "completionScope": [
+        "effectId",
+        "sessionId",
+        "generation"
+      ],
+      "rawOutput": "transient bounded; never persist",
+      "stop": "withdraw before cleanup; reconcile uncertain effects",
+      "globalCleanup": false,
+      "maximumOwnedProcessLeaseMs": 86400000,
+      "leaseExpiry": "withdraw and stop owned connector; never silently rotate or renew identity"
+    },
+    "detection": {
+      "steps": [
+        {
+          "id": "version",
+          "recipe": {
+            "kind": "spawn",
+            "program": "cloudflared",
+            "args": [
+              "--version"
+            ],
+            "timeoutMs": 5000,
+            "maxOutputBytes": 65536,
+            "parser": {
+              "kind": "contains",
+              "value": "cloudflared version",
+              "stream": "combined"
+            }
+          }
+        },
+        {
+          "id": "inventory",
+          "optional": true,
+          "networkReadOnly": true,
+          "recipe": {
+            "kind": "spawn",
+            "program": "cloudflared",
+            "args": [
+              "tunnel",
+              "list",
+              "--output",
+              "json"
+            ],
+            "timeoutMs": 10000,
+            "maxOutputBytes": 65536,
+            "parser": {
+              "kind": "json-document",
+              "predicate": {
+                "op": "exists",
+                "pointer": ""
+              }
+            }
+          }
+        }
+      ],
+      "login": "CLI version proves presence only. Listing proves account inventory access only, not token validity, DNS authority or route correctness. An existing certificate can make login exit zero without a new login.",
+      "tokenRun": "Tunnel-scoped private token reference may work without an account certificate; list failure does not imply token-run failure.",
+      "credentialMetadata": "Only explicit protected-reference metadata; never return certificate/token contents."
+    },
+    "bindings": {
+      "privateTokenFile": {
+        "type": "session-private-path"
+      },
+      "hostname": {
+        "type": "dns-name"
+      },
+      "loopbackTarget": {
+        "type": "loopback-http-origin"
+      },
+      "namedTunnelId": {
+        "type": "opaque-private-reference"
+      }
+    },
+    "endpointTemplate": "https://{hostname}",
+    "originBinding": {
+      "ownership": "external-owned",
+      "whereToSet": "Service URL of this hostname route in Cloudflare Networking > Tunnels > Routes",
+      "url": "https://dash.cloudflare.com/?to=/:account/tunnels",
+      "warning": "Remotely managed ingress can override --url; only the instance proof establishes the actual origin."
+    },
+    "transport": {
+      "publicScheme": "https",
+      "termination": "Cloudflare edge",
+      "providerCanReadPayload": true,
+      "quickTunnelFallback": false,
+      "dnsMutation": false,
+      "tunnelMutation": false
+    },
+    "planVersion": 1
+  }
+}

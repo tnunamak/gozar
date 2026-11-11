@@ -1,0 +1,322 @@
+[
+  {
+    "id": "tailscale-funnel",
+    "label": "Tailscale Funnel",
+    "reason": "Dedicated unused HTTPS listener; existing shared routes stay under their owners.",
+    "audience": "public",
+    "ownership": "owned",
+    "capabilities": {
+      "https": null,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Public HTTPS and timed SSE require genuine intended-vantage instance proof before publication.",
+      "This exact current capability-port key is source-shaped from installed 1.104.6; unknown policy formats deny safely.",
+      "Foreground CLI watcher cleanup is owned by immutable process identity; any leftover or administrator-created mapping remains cleanup debt.",
+      "Some clients reject :8443; client compatibility is not implied by local status.",
+      "Operational recipe is active only after core/host feature admission."
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "spawn",
+        "program": "tailscale",
+        "args": [
+          "status",
+          "--json",
+          "--peers=false"
+        ],
+        "timeoutMs": 5000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "json-document",
+          "predicate": {
+            "op": "equals",
+            "pointer": "/BackendState",
+            "value": "Running"
+          }
+        }
+      }
+    },
+    "drop": "1a",
+    "availability": "detectable; explicit prerequisite validation required"
+  },
+  {
+    "id": "tailscale-private",
+    "label": "Tailscale private Serve",
+    "reason": "Dedicated unused HTTPS listener; existing shared routes stay under their owners.",
+    "audience": "tailnet",
+    "ownership": "owned",
+    "capabilities": {
+      "https": null,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Current capability requires a successful probe from the intended client network.",
+      "Background CLI feature-enablement may prompt despite --yes; unmet prerequisites block create.",
+      "Current profile, HTTPS enablement and MagicDNS facts need real scoped host authority; no fixture receipt is operational evidence.",
+      "CLI read/compare/off has no adapter-level CAS; changed or unknown continuity remains cleanup debt.",
+      "Next drop: detection inventory only; create is not in the active catalog."
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "spawn",
+        "program": "tailscale",
+        "args": [
+          "status",
+          "--json",
+          "--peers=false"
+        ],
+        "timeoutMs": 5000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "json-document",
+          "predicate": {
+            "op": "equals",
+            "pointer": "/BackendState",
+            "value": "Running"
+          }
+        }
+      }
+    },
+    "drop": "next",
+    "availability": "next-drop"
+  },
+  {
+    "id": "localhost-run",
+    "label": "localhost.run trial",
+    "reason": "Short-lived public trial; the relay terminates TLS and can read payloads.",
+    "audience": "public",
+    "ownership": "owned",
+    "capabilities": {
+      "https": null,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Current capability requires a successful probe from the intended client network.",
+      "Trial uptime and URL lifetime are not guaranteed.",
+      "Trust-on-first-use applies only to isolated known_hosts; changed key fails closed.",
+      "The trial accepts single-label HTTPS origins under lhr.life and validates their instance identity and timed streaming.",
+      "Operational recipe is active only after core/host feature admission."
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "spawn",
+        "program": "ssh",
+        "args": [
+          "-V"
+        ],
+        "timeoutMs": 5000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "contains",
+          "stream": "combined",
+          "value": "OpenSSH"
+        }
+      }
+    },
+    "drop": "1a",
+    "availability": "detectable; explicit prerequisite validation required"
+  },
+  {
+    "id": "ngrok-https-edge",
+    "label": "ngrok HTTPS edge termination",
+    "reason": "Existing account and an isolated CLI agent; exact transport is preserved without silent fallback.",
+    "audience": "public",
+    "ownership": "owned",
+    "capabilities": {
+      "https": null,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Current capability requires a successful probe from the intended client network.",
+      "Detection identifies the CLI; operational endpoint setup is a separate adapter capability.",
+      "Existing endpoint listing, online agent and HTTP 200 are separate from client readiness.",
+      "Next drop: detection inventory only; create is not in the active catalog."
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "spawn",
+        "program": "ngrok",
+        "args": [
+          "version"
+        ],
+        "timeoutMs": 5000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "contains",
+          "stream": "combined",
+          "value": "ngrok version"
+        }
+      }
+    },
+    "drop": "next",
+    "availability": "next-drop",
+    "authentication": "unknown until scoped credential/account evidence; CLI version alone is not login"
+  },
+  {
+    "id": "ngrok-tls-passthrough",
+    "label": "ngrok TLS passthrough",
+    "reason": "Existing account and an isolated CLI agent; exact transport is preserved without silent fallback.",
+    "audience": "public",
+    "ownership": "owned",
+    "capabilities": {
+      "https": null,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Current capability requires a successful probe from the intended client network.",
+      "Detection identifies the CLI; operational endpoint setup is a separate adapter capability.",
+      "Existing endpoint listing, online agent and HTTP 200 are separate from client readiness.",
+      "Next drop: detection inventory only; create is not in the active catalog."
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "spawn",
+        "program": "ngrok",
+        "args": [
+          "version"
+        ],
+        "timeoutMs": 5000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "contains",
+          "stream": "combined",
+          "value": "ngrok version"
+        }
+      }
+    },
+    "drop": "next",
+    "availability": "next-drop",
+    "authentication": "unknown until scoped credential/account evidence; CLI version alone is not login"
+  },
+  {
+    "id": "ngrok-tcp-passthrough",
+    "label": "ngrok TCP passthrough",
+    "reason": "Existing account and an isolated CLI agent; exact transport is preserved without silent fallback.",
+    "audience": "public",
+    "ownership": "owned",
+    "capabilities": {
+      "https": null,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Current capability requires a successful probe from the intended client network.",
+      "Detection identifies the CLI; operational endpoint setup is a separate adapter capability.",
+      "Existing endpoint listing, online agent and HTTP 200 are separate from client readiness.",
+      "Next drop: detection inventory only; create is not in the active catalog."
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "spawn",
+        "program": "ngrok",
+        "args": [
+          "version"
+        ],
+        "timeoutMs": 5000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "contains",
+          "stream": "combined",
+          "value": "ngrok version"
+        }
+      }
+    },
+    "drop": "next",
+    "availability": "next-drop",
+    "authentication": "unknown until scoped credential/account evidence; CLI version alone is not login"
+  },
+  {
+    "id": "cloudflare-named",
+    "label": "Cloudflare named tunnel",
+    "reason": "Run a connector for an existing named tunnel and explicitly configured stable hostname; never substitute a Quick Tunnel.",
+    "audience": "public",
+    "ownership": "owned",
+    "capabilities": {
+      "https": null,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Current capability requires a successful probe from the intended client network.",
+      "Detection identifies the named-tunnel CLI; operational connector setup is a separate adapter capability.",
+      "No verified CLI DNS inventory/delete command in scoped source; DNS ownership is a prerequisite.",
+      "Next drop: detection inventory only; create is not in the active catalog."
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "spawn",
+        "program": "cloudflared",
+        "args": [
+          "--version"
+        ],
+        "timeoutMs": 5000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "contains",
+          "value": "cloudflared version",
+          "stream": "combined"
+        }
+      }
+    },
+    "drop": "next",
+    "availability": "next-drop",
+    "authentication": "unknown until scoped credential/account evidence; CLI version alone is not login"
+  },
+  {
+    "id": "lan",
+    "label": "Local network",
+    "reason": "An owned interface forwarder exposes only the selected loopback service to the local network.",
+    "audience": "lan",
+    "ownership": "owned",
+    "capabilities": {
+      "https": false,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Current capability requires a successful probe from the intended client network.",
+      "Local network reach does not imply internet reach; firewall, routing and client DNS remain prerequisites.",
+      "Next drop: detection inventory only; create is not in the active catalog."
+    ],
+    "recipes": {},
+    "drop": "next",
+    "availability": "next-drop",
+    "setup": "owned interface forwarder and client-vantage proof required; next drop"
+  },
+  {
+    "id": "own-address",
+    "label": "Your own HTTPS address",
+    "reason": "Validate an existing owner-managed origin; no route is created or deleted.",
+    "audience": "public",
+    "ownership": "external-owned",
+    "capabilities": {
+      "https": null,
+      "sse": null,
+      "streamableHttp": null,
+      "oauthDcr": null
+    },
+    "unknowns": [
+      "Current capability requires a successful probe from the intended client network.",
+      "A successful HTTP response alone does not prove the correct application or external reach.",
+      "Next drop: detection inventory only; create is not in the active catalog."
+    ],
+    "recipes": {},
+    "drop": "next",
+    "availability": "next-drop",
+    "setup": "explicit owner origin required; next drop"
+  }
+]

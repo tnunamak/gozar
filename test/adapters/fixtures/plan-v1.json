@@ -1,0 +1,238 @@
+{
+  "provenance": "Synthetic trusted-host fixture for deterministic interpreter tests ONLY. No production authority, real private handle, peer, route or provider mutation. Positive traces prove interpreter handling, never actual ownership continuity or network reach.",
+  "sessionId": "plan-fixture",
+  "host": {
+    "nowMs": 1000,
+    "features": [
+      "recipe-sequence",
+      "typed-bindings",
+      "predicate-parser",
+      "owned-resource-ledger",
+      "owned-process",
+      "interface-forwarder",
+      "private-file-reference",
+      "probe-assertions",
+      "client-vantage-probe",
+      "unused-port-selection"
+    ],
+    "bindings": {
+      "profileId": {
+        "value": "fixture-profile",
+        "authorityRef": "fixture-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000,
+        "type": "opaque-private-reference"
+      },
+      "loopbackTarget": {
+        "value": "http://127.0.0.1:53123",
+        "authorityRef": "fixture-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000,
+        "type": "loopback-http-origin"
+      },
+      "gatePort": {
+        "value": 53123,
+        "authorityRef": "fixture-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000,
+        "type": "loopback-port"
+      },
+      "interfaceAddress": {
+        "value": "192.0.2.20",
+        "authorityRef": "fixture-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000,
+        "type": "selected-interface-address"
+      },
+      "externalOrigin": {
+        "value": "https://origin.example.com",
+        "authorityRef": "fixture-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000,
+        "type": "credential-free-https-origin"
+      },
+      "privateKnownHostsPath": {
+        "type": "session-private-path",
+        "handleRef": "fixture-known-hosts",
+        "authorityRef": "fixture-private-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000,
+        "mode": "0600",
+        "parentMode": "0700"
+      }
+    },
+    "facts": {
+      "current-profile": {
+        "value": true,
+        "authorityRef": "fixture-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000
+      },
+      "https-enabled": {
+        "value": true,
+        "authorityRef": "fixture-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000
+      },
+      "magic-dns": {
+        "value": true,
+        "authorityRef": "fixture-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000
+      },
+      "funnel-permitted": {
+        "value": true,
+        "authorityRef": "fixture-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000
+      },
+      "funnel-port-8443-permitted": {
+        "value": true,
+        "authorityRef": "fixture-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000
+      },
+      "selected-interface-still-present": {
+        "value": true,
+        "authorityRef": "fixture-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000
+      },
+      "firewall-user-approved": {
+        "value": true,
+        "authorityRef": "fixture-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000
+      },
+      "client-reachable-lan-address": {
+        "value": true,
+        "authorityRef": "fixture-authority",
+        "sessionId": "plan-fixture",
+        "observedAtMs": 1000,
+        "expiresAtMs": 100000
+      }
+    },
+    "probe": {
+      "nonceRef": "fixture-nonce-ref",
+      "verifierRef": "fixture-verifier-ref",
+      "expiresAtMs": 100000
+    }
+  },
+  "rawStatus": {
+    "BackendState": "Running",
+    "Self": {
+      "ID": "fixture-node",
+      "DNSName": "fixture.example-tailnet.ts.net.",
+      "CapMap": {
+        "funnel": null,
+        "https": null,
+        "https://tailscale.com/cap/funnel-ports?ports=443,8443,10000": null
+      }
+    },
+    "CurrentTailnet": {
+      "MagicDNSEnabled": true,
+      "StableID": "fixture-tailnet",
+      "MagicDNSSuffix": "example-tailnet.ts.net"
+    },
+    "AuthURL": "must-not-survive-capture",
+    "CertDomains": [
+      "fixture.example-tailnet.ts.net"
+    ]
+  },
+  "baselineConfig": {
+    "TCP": {
+      "443": {
+        "HTTPS": true
+      },
+      "10000": {
+        "HTTPS": true
+      },
+      "9443": {
+        "HTTPS": true
+      },
+      "8444": {
+        "HTTPS": true
+      }
+    },
+    "Web": {
+      "fixture.example-tailnet.ts.net:443": {
+        "Handlers": {
+          "/": {
+            "Proxy": "http://127.0.0.1:6100"
+          }
+        }
+      },
+      "fixture.example-tailnet.ts.net:9443": {
+        "Handlers": {
+          "/": {
+            "Proxy": "http://127.0.0.1:6200"
+          }
+        }
+      }
+    },
+    "AllowFunnel": {
+      "fixture.example-tailnet.ts.net:10000": true
+    },
+    "Foreground": {
+      "administrator": {
+        "TCP": {
+          "9000": {
+            "TCPForward": "127.0.0.1:6300"
+          }
+        }
+      }
+    }
+  },
+  "modes": {
+    "tailscale-funnel": {
+      "ownershipKind": "process",
+      "selectedPort": 8443,
+      "origin": "https://fixture.example-tailnet.ts.net:8443",
+      "configPlacement": "foreground"
+    },
+    "tailscale-private": {
+      "ownershipKind": "route",
+      "selectedPort": 9444,
+      "origin": "https://fixture.example-tailnet.ts.net:9444"
+    },
+    "localhost-run": {
+      "ownershipKind": "process",
+      "stdout": "Forwarding https://fixture-trial.lhr.life",
+      "origin": "https://fixture-trial.lhr.life"
+    },
+    "lan": {
+      "ownershipKind": "forwarder",
+      "origin": "http://192.0.2.20:53124"
+    },
+    "own-address": {
+      "ownershipKind": null,
+      "origin": "https://origin.example.com"
+    }
+  },
+  "denials": [
+    "missing core/host feature",
+    "expired binding",
+    "wrong session binding",
+    "unknown raw listener key",
+    "occupied candidates",
+    "administrator handler edit",
+    "changed profile/node",
+    "missing continuity receipt",
+    "wrong probe verifier",
+    "local self-labeled as remote",
+    "late allocation after stop"
+  ]
+}
