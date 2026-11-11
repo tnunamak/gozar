@@ -51,9 +51,11 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
     let endpoint;
     try { endpoint = safeOrigin(snapshot.published); } catch { endpoint = null; }
     if (endpoint) {
-      lines.push('Public route checks passed. Connect your MCP client.', 'Add to MCP client', `URL: ${endpoint}`);
+      const mcpUrl = `${endpoint}/mcp`;
+      lines.push('Public route checks passed. Connect your MCP client.', 'Add to MCP client', `URL: ${mcpUrl}`,
+        'Authentication: none (Gozar adds no authentication; keep any authentication configured by your service).');
       const template = selected?.clientProfile?.installLinkTemplate ?? selected?.profile?.installLinkTemplate;
-      const link = installLink(template, endpoint);
+      const link = installLink(template, mcpUrl);
       if (link) lines.push(`Install link: ${link}`);
     }
   } else if (snapshot.candidate && snapshot.phase === 'candidate-ready') {

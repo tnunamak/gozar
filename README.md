@@ -25,7 +25,7 @@ In one terminal, start the demo MCP server:
 gozar demo-server
 ```
 
-In another terminal, run `gozar expose --port 18765`, choose where the client runs and approve the recommended route. Paste the printed URL into your MCP client and call `echo` with `{"echo":"hello"}`. The demo serves Streamable HTTP and SSE at both the root URL and `/mcp`.
+In another terminal, run `gozar expose --port 18765`, choose where the client runs and approve the recommended route. Paste the printed `/mcp` URL into your MCP client, select **no authentication** for this demo and call `echo` with `{"echo":"hello"}`. The demo serves Streamable HTTP and SSE at both the root URL and `/mcp`.
 
 Use `gozar status` to inspect the current route and `gozar stop` to remove the exposure. Stop the demo server with Ctrl+C.
 
@@ -40,7 +40,9 @@ gozar status
 gozar stop
 ```
 
-`expose` asks where the client runs, recommends an eligible route and requests approval for the exact local target. Choose a route explicitly with `--adapter localhost-run` or `--adapter tailscale-funnel`. `--json` returns machine-readable states and actions. `--yes` records consent for the selected route and target.
+`expose` asks where the client runs, recommends an eligible route and requests approval for the exact local target. HTTPS and streaming checks are selected automatically for the current public routes. Choose a route explicitly with `--adapter localhost-run` or `--adapter tailscale-funnel`. `--json` returns machine-readable states and actions. `--yes` records consent for the selected route and target.
+
+Gozar adds no application authentication. Keep the authentication required by your own service; transport checks do not authorize callers.
 
 Before publication, Gozar resolves the public hostname through DNS over HTTPS, pins a public IP, validates the original TLS hostname, checks a fresh instance nonce and measures incremental SSE delivery. The receipt identifies this as a public relay path with `remote:false`; it describes the network path traversed from the host.
 

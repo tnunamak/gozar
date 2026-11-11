@@ -52,6 +52,16 @@ async function ask(question) {
   try { return (await prompt.question(question)).trim(); } finally { prompt.close(); }
 }
 
+export function clientRequirements(options, defaults = {}, profile = {}) {
+  return {
+    clientReach: options.clientReach,
+    httpsRequired: options.clientReach === 'internet' || options.transport === 'https' || defaults.httpsRequired === true || profile.httpsRequired === true,
+    sse: options.sse === true || defaults.sse === true || profile.sse === true,
+    streamableHttp: options['streamable-http'] === true || defaults.streamableHttp === true || profile.streamableHttp === true,
+    oauthDcr: options['oauth-dcr'] === true || defaults.oauthDcr === true || profile.oauthDcr === true,
+  };
+}
+
 export async function main(argv = process.argv.slice(2)) {
   if (argv[0] === '--daemon') {
     const directory = argv[1];
@@ -130,7 +140,8 @@ export async function main(argv = process.argv.slice(2)) {
     console.log(`Local name candidate: ${options.localName ?? `${hostname().split('.')[0]}.local`} (check DNS/mDNS from your client).`);
     console.log('Choose an exact interface IP with --bind-address IP, or configure a client-reachable local name. HTTP stays HTTP; client-trusted TLS needs a separate configured listener.');
   }
-  const requirements = { clientReach: options.clientReach, httpsRequired: options.clientReach === 'internet', sse: Boolean(options.sse), streamableHttp: Boolean(options['streamable-http']), oauthDcr: Boolean(options['oauth-dcr']) };
+  const defaults = options.command === 'expose' ? await loadDropRequirements(root) : {};
+  const requirements = clientRequirements(options, defaults);
   if (options.transport) {
     // The current core protocol only models HTTP(S); never silently reinterpret passthrough as HTTPS.
     if (!['http', 'https'].includes(options.transport)) throw new Error('Selected transport needs an admitted core transport contract; no substitution is available.');
@@ -153,12 +164,10 @@ export async function main(argv = process.argv.slice(2)) {
   const selected = adapters.find(adapter => adapter.id === selectedId);
   if (!selected) throw new Error('Selected route is not in the admitted catalog');
   if (selected.ownership !== 'external-owned' && !selected.recipes?.create) throw new Error(`${selected.copy?.fix ?? selected.fix ?? 'This route has detection data only; no admitted create recipe is available.'}`);
-  const dropRequirements = activeIds.includes(selectedId) ? await loadDropRequirements(root) : {};
-  Object.assign(requirements, dropRequirements, { clientReach: options.clientReach, httpsRequired: requirements.httpsRequired || dropRequirements.httpsRequired === true, sse: requirements.sse || dropRequirements.sse === true, streamableHttp: requirements.streamableHttp || dropRequirements.streamableHttp === true, oauthDcr: requirements.oauthDcr || dropRequirements.oauthDcr === true });
   const clientProfile = options.clientProfileId ? selected.clientProfiles?.find(profile => profile.id === options.clientProfileId) : selected.clientProfile ?? selected.profile;
   if (options.clientProfileId && !clientProfile) throw new Error('Client profile is not in this route catalog record');
   const profileRequirements = clientProfile?.clientRequirements;
-  if (profileRequirements) Object.assign(requirements, profileRequirements, { clientReach: options.clientReach, httpsRequired: options.clientReach === 'internet' || profileRequirements.httpsRequired === true, sse: requirements.sse || profileRequirements.sse === true, streamableHttp: requirements.streamableHttp || profileRequirements.streamableHttp === true, oauthDcr: requirements.oauthDcr || profileRequirements.oauthDcr === true });
+  if (profileRequirements) Object.assign(requirements, clientRequirements(options, requirements, profileRequirements));
   if (!options.json) console.log(`Target: http://127.0.0.1:${options.port}`);
   if (!options.json && selected.copy?.consent) console.log(selected.copy.consent);
   if (!options.yes) {
