@@ -94,11 +94,11 @@ For each piece, `scope_paths` in [slices.md](slices.md) and the dispatch rules b
 
 **Owned existing paths:** The shared runtime files reserved by R3 above. Only the integrator edits these files; leaf proposals and modules merge through this owner.
 
-**New outputs:** `crates/gozar-core/src/json_records.rs`; `crates/gozar-core/tests/json_records.rs`; `packages/gozar-node/output-projection.mjs`; `test/integration/transport-policy.test.mjs`; `runtime/platform-port.schema.json`.
+**New outputs:** `crates/gozar-core/src/json_records.rs`; `crates/gozar-core/tests/json_records.rs`; `packages/gozar-node/output-projection.mjs`; `test/integration/output-projection.test.mjs`; `test/integration/transport-policy.test.mjs`; `runtime/platform-port.schema.json`; `packages/gozar-node/platform-contract.mjs`; `test/integration/platform-port.test.mjs`; `docs/contracts/platform-port.md`; `packages/gozar-node/candidate-events.mjs`; `test/node/candidate-events.test.mjs`; `docs/contracts/candidate-events.md`.
 
 **Interface/dependencies:** R3a is the base. Define bounded exact endpoint-record parsing (scheme, hostname, port and endpoint name, rejecting multiple distinct candidates), safe projection for credential-bearing process/API output, scoped policy/upstream evidence, the generic process/file/IPC platform port consumed by R12/R13, and required intent constraints for permitted public ports, address continuity, lifetime and TLS termination. Unknown required constraints must produce an unsupported action, never be silently ignored. Normalize old private-config declarations to the embedded materialization contract; do not add a second credential engine. The materialized child currently suppresses raw output, so an adapter cannot rely on its log parser until this projection/readback seam lands.
 
-**Acceptance:** Actual core/driver tests reject wrong endpoints, malformed or excessive JSON records, output containing credentials, stale policy/target receipts and absent features before mutation. Positive and negative native/WASM traces agree. OS modules receive exact birth-identity, durable state and scoped termination contracts. Promote each adapter only after its live acceptance. R3b alone wires module imports, schemas, feature lists and catalog admission.
+**Acceptance:** Actual core/driver tests reject wrong endpoints, malformed or excessive JSON records, output containing credentials, stale policy/target receipts and absent features before mutation. Positive and negative native/WASM traces agree. OS modules receive exact birth-identity, durable state and scoped termination contracts. Promote each adapter only after its live acceptance. R3b alone wires module imports, schemas, feature lists and catalog admission. The JSON-record parser, output projection, platform contract and candidate-event modules are separate build assignments with disjoint new files; they change no existing shared runtime files. Candidate events can request a fenced stop on rotation/exit/lease expiry, but cannot silently replace an origin or extend its lease.
 
 **Expect it to work because:** The current exact receipt and durable-intent boundaries already isolate these checks; parser/projection tests can exercise finite records without opening real tunnels.
 
@@ -178,7 +178,7 @@ For each piece, `scope_paths` in [slices.md](slices.md) and the dispatch rules b
 
 **Coverage:** R05–R06, R11, R15, R19; J01–J03, J10–J13, J17–J20.
 
-**Output paths:** new `packages/gozar-auth/policy.mjs`; new `packages/gozar-auth/guard.mjs`; new `test/auth/auth-boundary.test.mjs`; new `test/e2e/public-auth-boundary.test.mjs`.
+**Output paths:** new `packages/gozar-access/policy.mjs`; new `packages/gozar-access/guard.mjs`; new `test/access/access-boundary.test.mjs`; new `test/e2e/public-access-boundary.test.mjs`.
 
 **Dependencies:** R0 confirms the policy boundary; R3a provides scoped private handles; R5 defines the application exposure policy; R3 wires publication; R1 and the existing status/stop views display non-secret state. Synthetic demo may be explicitly public; private workloads remain blocked until their existing host/application auth is preserved.
 
