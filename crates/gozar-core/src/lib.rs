@@ -590,6 +590,9 @@ fn cleanup(out: &mut Output) {
             );
         }
     }
+    stop_phase(out);
+}
+fn stop_phase(out: &mut Output) {
     if out.state.stop_requested {
         out.state.phase = if out
             .state
@@ -788,6 +791,7 @@ pub fn transition(input: &str) -> Result<Output, String> {
             cleanup(&mut out);
         }
         "reconcile" => cleanup(&mut out),
+        "reconcile-absent" => operational::reconcile_absent(&mut out, &cmd),
         "health" => operational::health(&mut out, false),
         "update-origin" => operational::health(&mut out, true),
         "approve-origin" => {

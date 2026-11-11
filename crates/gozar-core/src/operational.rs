@@ -26,6 +26,8 @@ pub struct Host {
     pub facts: BTreeMap<String, Value>,
     #[serde(default)]
     pub probe: Option<Value>,
+    #[serde(default)]
+    pub cleanup_absent: BTreeMap<String, Value>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1268,6 +1270,72 @@ pub fn cancel_readonly(out: &mut Output) {
     }) {
         out.state.execution = None;
     }
+}
+pub fn reconcile_absent(out: &mut Output, cmd: &Value) {
+    let id = str_field(cmd, "resourceId");
+    let valid = out.state.resources.iter().any(|resource| {
+        let Some(ledger) = resource.ledger.as_ref() else {
+            return false;
+        };
+        let Some(receipt) = out.state.host.cleanup_absent.get(id) else {
+            return false;
+        };
+        out.state.stop_requested
+            && resource.id == id
+            && resource.ownership == "owned"
+            && resource.cleanup != "removed"
+            && ledger.kind == "process"
+            && ledger.handle_ref == id
+            && !ledger.continuity_ref.is_empty()
+            && receipt.as_object().is_some_and(|fields| {
+                fields.keys().all(|key| {
+                    [
+                        "sessionId",
+                        "handleRef",
+                        "continuityRef",
+                        "processGone",
+                        "providerAbsent",
+                        "observedAtMs",
+                        "expiresAtMs",
+                    ]
+                    .contains(&key.as_str())
+                })
+            })
+            && fresh(receipt, &out.state)
+            && receipt.get("handleRef").and_then(Value::as_str) == Some(ledger.handle_ref.as_str())
+            && receipt.get("continuityRef").and_then(Value::as_str)
+                == Some(ledger.continuity_ref.as_str())
+            && receipt.get("processGone") == Some(&Value::Bool(true))
+            && receipt.get("providerAbsent") == Some(&Value::Bool(true))
+    });
+    if !valid {
+        event(out, "cleanup-absence-unproven");
+        return;
+    }
+    for resource in &mut out.state.resources {
+        if resource.id == id {
+            resource.cleanup = "removed".into();
+        }
+    }
+    // A known absent allocation cannot finish an uncertain create or another removal.
+    out.state.pending.retain(|_, pending| {
+        !(pending.resource_id.as_deref() == Some(id)
+            && (pending.effect.operation == "remove"
+                || (pending.effect.operation == "observe"
+                    && pending
+                        .effect
+                        .fields
+                        .get("recipeRef")
+                        .and_then(Value::as_str)
+                        .is_some_and(|reference| reference.starts_with("remove/")))))
+    });
+    if out.state.execution.as_ref().is_some_and(|execution| {
+        execution.operation == "remove" && execution.resource_id.as_deref() == Some(id)
+    }) {
+        out.state.execution = None;
+    }
+    event(out, "cleanup-absence-reconciled");
+    stop_phase(out);
 }
 pub fn begin_cleanup(out: &mut Output, r: &Resource) {
     if out.state.execution.is_some()

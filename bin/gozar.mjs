@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { isIP } from 'node:net';
 import { homedir, hostname, networkInterfaces } from 'node:os';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { loadCatalog, loadDefinition, loadActiveDrop, loadDropRequirements, safeOrigin } from '../packages/gozar-node/catalog.mjs';
 import { loadCore } from '../packages/gozar-node/core.mjs';
@@ -12,6 +12,7 @@ import { EffectDriver } from '../packages/gozar-node/driver.mjs';
 import { Controller } from '../packages/gozar-node/controller.mjs';
 import { control, launch, serve, recoverStop } from '../packages/gozar-node/daemon.mjs';
 import { render, renderDetection, exposeSnapshot } from '../packages/gozar-node/render.mjs';
+import { startDummy } from '../harness/dummy-server.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const reaches = ['internet', 'tailnet', 'lan', 'this-device', 'unknown'];
@@ -26,9 +27,9 @@ export function parseArgs(argv) {
       options[{ '--port': 'port', '--client-reach': 'clientReach', '--origin': 'origin', '--adapter': 'adapterId', '--bind-address': 'bindAddress', '--firewall-ack': 'firewallAck', '--client-profile': 'clientProfileId', '--transport': 'transport', '--local-name': 'localName', '--probe-directory': 'probeDirectory', '--probe-request': 'probeRequest', '--probe-receipt': 'probeReceipt', '--probe-executor-id': 'probeExecutorId', '--probe-wait-ms': 'probeWaitMs' }[flag]] = value;
     } else throw new Error(`Unknown option: ${flag}`);
   }
-  if (!['expose', 'detect', 'status', 'health', 'update-origin', 'stop', 'help', '--help'].includes(options.command)) throw new Error('Use expose, detect, status or stop');
+  if (!['expose', 'detect', 'status', 'health', 'update-origin', 'stop', 'demo-server', 'help', '--help'].includes(options.command)) throw new Error('Use expose, detect, status, stop or demo-server');
   if (options.port !== undefined) {
-    if (!/^\d+$/.test(options.port) || Number(options.port) < 1 || Number(options.port) > 65535) throw new Error('--port must be 1..65535');
+    if (!/^\d+$/.test(options.port) || Number(options.port) < (options.command === 'demo-server' ? 0 : 1) || Number(options.port) > 65535) throw new Error('--port must be 1..65535');
     options.port = Number(options.port);
   }
   if (!reaches.includes(options.clientReach)) throw new Error(`--client-reach must be ${reaches.join('|')}`);
@@ -59,8 +60,18 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   const options = parseArgs(argv);
+  if (options.command === 'demo-server') {
+    const server = await startDummy({ port: options.port ?? 18765, toolName: 'echo' });
+    const stop = async () => {
+      process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
+      await server.close();
+    };
+    process.once('SIGINT', stop); process.once('SIGTERM', stop);
+    console.log(`Echo MCP server listening on port ${server.port}: ${server.origin}`);
+    return;
+  }
   if (['help', '--help'].includes(options.command)) {
-    console.log('Gozar\n  node bin/gozar.mjs expose --port N [--client-reach internet|tailnet|lan|this-device|unknown] [--origin URL]\n  node bin/gozar.mjs detect --port N\n  node bin/gozar.mjs status [--port N]\n  node bin/gozar.mjs stop [--port N]\n\n--yes approves only the displayed selected route and exact loopback target.\n--adapter ID selects a catalog route. --json returns machine-readable status.\n--alternatives expands the route alternatives. No route is installed automatically.\n--probe-directory PATH selects the private challenge/receipt channel for the trusted outside verifier.\n--sse --streamable-http --oauth-dcr require those protocol checks; no inferred success.\n--operational opts into only the operational plans listed in the adapter manifest.\nLAN: --bind-address IP --firewall-ack IP records your exact-interface firewall approval.\n--transport http|https|tls|tcp and --client-profile ID select catalog data; unsupported modes remain blocked.');
+    console.log('Gozar\n  gozar demo-server [--port N]\n  gozar expose --port N [--client-reach internet|tailnet|lan|this-device|unknown] [--origin URL]\n  gozar detect --port N\n  gozar status [--port N]\n  gozar stop [--port N]\n\n--yes approves only the displayed selected route and exact loopback target.\n--adapter ID selects a catalog route. --json returns machine-readable status.\n--alternatives expands the route alternatives. No route is installed automatically.\n--probe-directory PATH selects the private challenge/receipt channel for the trusted outside verifier.\n--sse --streamable-http --oauth-dcr require those protocol checks; no inferred success.\n--operational opts into only the operational plans listed in the adapter manifest.\nLAN: --bind-address IP --firewall-ack IP records your exact-interface firewall approval.\n--transport http|https|tls|tcp and --client-profile ID select catalog data; unsupported modes remain blocked.');
     return;
   }
   const home = process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
@@ -102,7 +113,7 @@ export async function main(argv = process.argv.slice(2)) {
     const question = 'Where does the app that will use this run?';
     if (!process.stdin.isTTY) {
       if (options.json) console.log(JSON.stringify({ action: { kind: 'choose', title: question, choices: reaches.slice(0, 4) } }));
-      else console.log(`${question}\n${reaches.slice(0, 4).join(' | ')}\nRun again with --client-reach <choice>.`);
+      else console.log(`${question}\n${reaches.slice(0, 4).join(' | ')}\nFor an internet client, run: gozar expose --port ${options.port} --client-reach internet`);
       process.exitCode = 2; return;
     }
     options.clientReach = await ask(`${question}\n${reaches.slice(0, 4).join(' | ')}\n> `);
@@ -160,6 +171,6 @@ export async function main(argv = process.argv.slice(2)) {
   print(reply);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && await realpath(resolve(process.argv[1])).catch(() => null) === fileURLToPath(import.meta.url)) {
   main().catch(error => { console.error(`Gozar: ${error.message}`); process.exitCode = 1; });
 }

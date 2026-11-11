@@ -119,3 +119,27 @@ assert.equal(checked.output.snapshot.phase,'candidate-ready');
 const file=process.env.GOZAR_TRACE_PATH;
 if(file) await writeFile(file,JSON.stringify({scope:'synthetic trusted provider outcomes; no route or network effects dispatched',nativeWasmEqual:true,steps:trace.length,trace},null,2)+'\n');
 console.log(JSON.stringify({nativeWasmEqual:true,steps:trace.length,plans:contract.normalizedOptIn.length,operationalProviderEvidence:false}));
+
+// An absence receipt retires allocation debt without issuing a destructive effect.
+const absenceStart = trace.length;
+const processRecord = records.find(record => record.id === 'tailscale-funnel');
+const processReady = run(processRecord);
+const processStopped = transition({ state: processReady.output.state, host: processReady.host, command: { type: 'stop' } });
+const absentHost = clone(processReady.host);
+const absentResource = processStopped.state.resources[0];
+absentHost.cleanupAbsent = { [absentResource.id]: { sessionId: processStopped.state.sessionId, handleRef: absentResource.ledger.handleRef, continuityRef: absentResource.ledger.continuityRef, processGone: true, providerAbsent: true, observedAtMs: absentHost.nowMs, expiresAtMs: 100000 } };
+for (const patch of [{ sessionId: 'wrong-session' }, { handleRef: 'wrong-handle' }, { continuityRef: 'wrong-continuity' }, { processGone: false }, { providerAbsent: false }, { observedAtMs: 100001 }, { expiresAtMs: 0 }, { unknown: true }]) {
+  const host = clone(absentHost);
+  Object.assign(host.cleanupAbsent[absentResource.id], patch);
+  const denied = transition({ state: processStopped.state, host, command: { type: 'reconcile-absent', resourceId: absentResource.id } });
+  assert.deepEqual(denied.state.resources, processStopped.state.resources);
+  assert.deepEqual(denied.state.pending, processStopped.state.pending);
+  assert.deepEqual(denied.effects, []);
+}
+const absenceCleared = transition({ state: processStopped.state, host: absentHost, command: { type: 'reconcile-absent', resourceId: absentResource.id } });
+assert.equal(absenceCleared.snapshot.phase, 'stopped');
+assert.equal(absenceCleared.state.resources[0].cleanup, 'removed');
+assert.deepEqual(absenceCleared.effects, []);
+const absenceRestarted = transition({ state: absenceCleared.state, host: absentHost, command: { type: 'start', adapterId: processRecord.id, consent: true } });
+assert.ok(absenceRestarted.effects[0].recipeRef.startsWith('create/'));
+console.log(JSON.stringify({ absenceReconciliation: true, nativeWasmEqual: true, steps: trace.length - absenceStart, rejectedReceipts: 8, providerCommandsExecuted: 0 }));

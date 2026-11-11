@@ -473,3 +473,115 @@ fn public_relay_permission_is_bound_to_issued_probe_and_never_satisfies_private_
         );
     }
 }
+
+fn absent_cleanup_fixture() -> (Value, Value) {
+    let f = fixture();
+    let a = definition("public");
+    let ready = until(
+        begin(&a, &f["host"]),
+        &a,
+        &f["host"],
+        &f["baselineConfig"],
+        "health",
+    );
+    let stopped = run(json!({"state":ready["state"],"host":f["host"],"command":{"type":"stop"}}));
+    let mut host = f["host"].clone();
+    let resource = &stopped["state"]["resources"][0];
+    host["cleanupAbsent"] = json!({"fixture-resource":{"sessionId":"plan-fixture","handleRef":resource["ledger"]["handleRef"],"continuityRef":resource["ledger"]["continuityRef"],"processGone":true,"providerAbsent":true,"observedAtMs":host["nowMs"],"expiresAtMs":100000}});
+    (stopped, host)
+}
+#[test]
+fn stopped_absent_process_retires_only_proven_allocation_and_can_restart() {
+    let (stopped, host) = absent_cleanup_fixture();
+    assert_eq!(stopped["snapshot"]["phase"], "cleanup-pending");
+    let cleared = run(
+        json!({"state":stopped["state"],"host":host,"command":{"type":"reconcile-absent","resourceId":"fixture-resource"}}),
+    );
+    assert_eq!(cleared["snapshot"]["phase"], "stopped");
+    assert_eq!(cleared["state"]["resources"][0]["cleanup"], "removed");
+    assert!(cleared["effects"].as_array().unwrap().is_empty());
+    assert!(cleared["state"]["pending"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|pending| pending["effect"]["operation"] == "health"));
+    assert!(cleared["state"].get("execution").is_none());
+    let restarted = run(
+        json!({"state":cleared["state"],"host":host,"command":{"type":"start","adapterId":"tailscale-funnel","consent":true}}),
+    );
+    assert!(restarted["effects"][0]["recipeRef"]
+        .as_str()
+        .unwrap()
+        .starts_with("create/"));
+}
+#[test]
+fn absent_process_cleanup_rejects_unproven_scope_and_live_or_unknown_resources() {
+    let (stopped, host) = absent_cleanup_fixture();
+    for patch in [
+        json!({"sessionId":"other"}),
+        json!({"handleRef":"other"}),
+        json!({"continuityRef":"other"}),
+        json!({"processGone":false}),
+        json!({"providerAbsent":false}),
+        json!({"observedAtMs":100001}),
+        json!({"expiresAtMs":0}),
+        json!({"unknown":true}),
+    ] {
+        let mut h = host.clone();
+        h["cleanupAbsent"]["fixture-resource"]
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        let denied = run(
+            json!({"state":stopped["state"],"host":h,"command":{"type":"reconcile-absent","resourceId":"fixture-resource"}}),
+        );
+        assert_eq!(denied["state"]["resources"], stopped["state"]["resources"]);
+        assert_eq!(denied["state"]["pending"], stopped["state"]["pending"]);
+        assert!(denied["effects"].as_array().unwrap().is_empty());
+    }
+    for (key, value) in [("stopRequested", json!(false)), ("resources", json!([]))] {
+        let mut state = stopped["state"].clone();
+        state[key] = value;
+        let denied = run(
+            json!({"state":state,"host":host,"command":{"type":"reconcile-absent","resourceId":"fixture-resource"}}),
+        );
+        assert_eq!(denied["state"]["resources"], state["resources"]);
+    }
+    let mut state = stopped["state"].clone();
+    state["resources"][0]["ledger"]["kind"] = json!("route");
+    let denied = run(
+        json!({"state":state,"host":host,"command":{"type":"reconcile-absent","resourceId":"fixture-resource"}}),
+    );
+    assert_eq!(denied["state"]["resources"][0]["cleanup"], "pending");
+}
+#[test]
+fn absent_cleanup_preserves_uncertain_creates_and_other_resource_debt() {
+    let (mut stopped, host) = absent_cleanup_fixture();
+    let pending = stopped["state"]["pending"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    let mut uncertain = pending.clone();
+    uncertain["effect"]["operation"] = json!("create");
+    stopped["state"]["pending"]["uncertain-create"] = uncertain;
+    let mut other = stopped["state"]["resources"][0].clone();
+    other["id"] = json!("other-resource");
+    stopped["state"]["resources"]
+        .as_array_mut()
+        .unwrap()
+        .push(other);
+    let cleared = run(
+        json!({"state":stopped["state"],"host":host,"command":{"type":"reconcile-absent","resourceId":"fixture-resource"}}),
+    );
+    assert_eq!(cleared["state"]["resources"][0]["cleanup"], "removed");
+    assert_eq!(cleared["state"]["resources"][1]["cleanup"], "pending");
+    assert_eq!(
+        cleared["state"]["pending"]["uncertain-create"],
+        stopped["state"]["pending"]["uncertain-create"]
+    );
+    assert_eq!(cleared["snapshot"]["phase"], "stopping");
+    assert!(cleared["effects"].as_array().unwrap().is_empty());
+}

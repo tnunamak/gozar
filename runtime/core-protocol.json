@@ -6,9 +6,10 @@
   "input": {
     "state": "optional previous opaque state",
     "command": {
-      "type": "detect|recommend|start|effect-result|stop|reconcile|status|approve-origin|health|update-origin",
+      "type": "detect|recommend|start|effect-result|stop|reconcile|reconcile-absent|status|approve-origin|health|update-origin",
       "sessionId": "optional on first input; caller supplies unique id",
       "adapterId": "start selection",
+      "resourceId": "reconcile-absent selects one stopped owned process allocation",
       "consent": true
     },
     "adapters": "optional array of adapter records; pass on initial detect/recommend/start",
@@ -207,7 +208,8 @@
       ],
       "bindings": "scoped typed receipts, no secrets/paths",
       "facts": "name -> {value:true,authorityRef,sessionId,observedAtMs,expiresAtMs}",
-      "probe": "{nonceRef,verifierRef,expiresAtMs,allowPublicRelay?:boolean}; nonce must be fresh per probe. allowPublicRelay opts into public-relay network path only."
+      "probe": "{nonceRef,verifierRef,expiresAtMs,allowPublicRelay?:boolean}; nonce must be fresh per probe. allowPublicRelay opts into public-relay network path only.",
+      "cleanupAbsent": "resourceId -> {sessionId,handleRef,continuityRef,processGone:true,providerAbsent:true,observedAtMs,expiresAtMs}; trusted fresh proof that original owned process and its provider mapping are already absent. reconcile-absent requires stopRequested and exact ledger identity, retires only that resource/removal, emits no effects, and preserves uncertain creates and other debt."
     },
     "effectMetadata": {
       "operation": "observe before/after, create/remove execute/persist, probe, health",

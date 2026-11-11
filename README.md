@@ -12,19 +12,32 @@ Use Node 22+, a Rust toolchain, OpenSSH and the pinned wasm-bindgen CLI. Funnel 
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.105 --locked
 bash scripts/build-wasm.sh
+npm link
 ```
 
 The generated WASM bindings stay in `packages/gozar-core/generated/`. `CARGO_TARGET_DIR` and `WASM_BINDGEN` can select existing build tools and caches.
+
+## Try the echo server
+
+In one terminal, start the demo MCP server:
+
+```sh
+gozar demo-server
+```
+
+In another terminal, run `gozar expose --port 18765`, choose where the client runs and approve the recommended route. Paste the printed URL into your MCP client and call `echo` with `{"echo":"hello"}`. The demo serves Streamable HTTP and SSE at both the root URL and `/mcp`.
+
+Use `gozar status` to inspect the current route and `gozar stop` to remove the exposure. Stop the demo server with Ctrl+C.
 
 ## Expose a service
 
 Start your service on a loopback port, then run:
 
 ```sh
-node bin/gozar.mjs detect --port 3000
-node bin/gozar.mjs expose --port 3000
-node bin/gozar.mjs status --port 3000
-node bin/gozar.mjs stop --port 3000
+gozar detect --port 3000
+gozar expose --port 3000
+gozar status
+gozar stop
 ```
 
 `expose` asks where the client runs, recommends an eligible route and requests approval for the exact local target. Choose a route explicitly with `--adapter localhost-run` or `--adapter tailscale-funnel`. `--json` returns machine-readable states and actions. `--yes` records consent for the selected route and target.

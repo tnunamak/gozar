@@ -82,6 +82,21 @@ export class Controller {
     // Completion of a cancelled create may have introduced cleanup debt.
     await this.command({ type: 'reconcile' });
     const failures = await this.driver.closeLocal();
+    if (this.last.snapshot.phase !== 'stopped') {
+      for (const resource of Object.values(this.journal.value.owned)) {
+        if (resource.kind !== 'process' || resource.sessionId !== this.sessionId ||
+            !this.state.resources.some(item => item.id === resource.id && item.ownership === 'owned' && item.cleanup !== 'removed')) continue;
+        try {
+          const receipt = await this.driver.proveProcessAbsent(resource);
+          this.driver.host.cleanupAbsent = { [resource.id]: receipt };
+          await this.apply({ type: 'reconcile-absent', resourceId: resource.id });
+          if (this.state.resources.find(item => item.id === resource.id)?.cleanup !== 'removed') throw new Error('Core did not accept the fresh resource absence proof');
+        } catch (error) {
+          this.hostLimitations.add(error.message);
+          failures.push({ resourceId: resource.id, detail: error.message });
+        } finally { delete this.driver.host.cleanupAbsent; }
+      }
+    }
     return { ...this.present(), localCleanupFailures: failures };
   }
 }

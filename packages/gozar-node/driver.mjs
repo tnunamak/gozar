@@ -13,6 +13,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import { isPublicIp } from './public-relay.mjs';
 import { safeOrigin } from './catalog.mjs';
+import { loadCore } from './core.mjs';
 import { attributable, processIdentity } from './journal.mjs';
 
 const mutates = effect => ['create', 'remove'].includes(effect.operation);
@@ -323,11 +324,51 @@ export class EffectDriver {
     if (!isDeepStrictEqual(expected, actual)) throw new Error('Declared ownership ledger differs from actual local resource');
     return actual;
   }
+  async proveProcessAbsent(resource) {
+    const observedAtMs = this.nowMs();
+    if (resource?.sessionId !== this.sessionId || resource.kind !== 'process' || !resource.startIdentity || !resource.continuityRef ||
+        await processIdentity(resource.pid) === resource.startIdentity) throw new Error('Recorded process is still running or its birth identity is unavailable');
+    const adapter = this.adapters.find(item => item.id === resource.adapterId), remove = adapter?.recipes?.remove;
+    if (adapter?.planVersion !== 1 || adapter.admission?.state !== 'admitted' || remove?.kind !== 'owned-process' ||
+        !remove.before?.length || !remove.after?.length) throw new Error('No admitted identity and absence readbacks are available for this owned process');
+    if ((remove.requires ?? []).some(rule => rule.op !== 'owned-ledger-match' || rule.source !== 'ownership' || rule.pointer !== '/route' ||
+        Object.keys(rule).some(key => !['op', 'source', 'pointer'].includes(key)))) throw new Error('Unsupported removal prerequisite; absence cannot be proved');
+    const step = await loadCore();
+    const predicate = (rule, doc) => {
+      const parser = { kind: 'json-document', predicate: rule };
+      const initial = step({ command: { type: 'detect', sessionId: 'absence-readback' }, adapters: [{ id: 'readback', audience: 'local', ownership: 'external-owned',
+        recipes: { detect: { kind: 'spawn', program: 'readback', args: [], parser } } }], requirements: { clientReach: 'this-device' } });
+      const effect = initial.effects[0];
+      if (!effect) throw new Error('Core did not admit the readback predicate');
+      const parsed = step({ state: initial.state, command: { type: 'effect-result', effectId: effect.id, sessionId: effect.sessionId,
+        generation: effect.generation, ok: true, result: { stdout: JSON.stringify(doc), exitCode: 0 } } });
+      return parsed.snapshot.observations.readback === 'present';
+    };
+    for (const [stage, observations] of [['identity', remove.before], ['absence', remove.after]]) {
+      for (const observation of observations) {
+        const recipe = observation.recipe;
+        if (recipe?.kind !== 'spawn' || !observation.assert || recipe.parser?.kind !== 'json-document' ||
+            Object.keys(recipe).some(key => !['kind', 'program', 'args', 'timeoutMs', 'maxOutputBytes', 'parser'].includes(key)) ||
+            Object.keys(observation).some(key => !['id', 'recipe', 'assert', 'captures'].includes(key))) throw new Error(`Unsupported ${stage} readback; inspect the admitted removal plan`);
+        const expanded = expandPlan(recipe, resource.bindings ?? {});
+        const result = await this.runProcess(expanded);
+        if (result.exitCode !== 0) throw new Error(`${stage} readback failed; confirm the provider is available and retry stop`);
+        const doc = JSON.parse(result.stdout);
+        if (!doc || typeof doc !== 'object' || Array.isArray(doc) || !predicate(expanded.parser.predicate, doc) ||
+            !predicate(expandPlan(observation.assert, resource.bindings ?? {}), doc)) throw new Error(stage === 'absence' ? `Recorded process is gone; listener ${resource.bindings?.port?.value ?? '(recorded port)'} may still be configured. Inspect the current mapping or stop its owning session, then retry stop.` : 'Identity readback did not match the recorded resource; inspect the current provider identity before retrying stop');
+      }
+    }
+    if (await processIdentity(resource.pid) === resource.startIdentity) throw new Error('Recorded process is still running; absence cannot be proved');
+    if (this.nowMs() >= observedAtMs + 5000) throw new Error('Absence readbacks expired; retry stop for a fresh check');
+    return { sessionId: this.sessionId, handleRef: resource.id, continuityRef: resource.continuityRef,
+      processGone: true, providerAbsent: true, observedAtMs, expiresAtMs: observedAtMs + 5000 };
+  }
   async continuity(id) {
     const resource = this.journal.value.owned[id];
     if (!resource || resource.sessionId !== this.sessionId || !resource.continuityRef) return null;
-    if (resource.retired && ['process', 'local-forwarder'].includes(resource.kind)) {
-      const stillGone = resource.kind === 'process' ? await processIdentity(resource.pid) !== resource.startIdentity : !this.forwarders.has(id);
+    if (resource.retired && resource.kind === 'process') return null;
+    if (resource.retired && resource.kind === 'local-forwarder') {
+      const stillGone = !this.forwarders.has(id);
       if (!stillGone) return null;
       const nowMs = this.nowMs(); return { handleRef: id, continuityRef: resource.continuityRef, sessionId: this.sessionId, observedAtMs: nowMs, expiresAtMs: nowMs + 5000, continuous: true };
     }

@@ -12,6 +12,12 @@ export function installLink(template, endpoint) {
 export function render(reply, adapters, { alternatives = false, port } = {}) {
   const snapshot = reply.snapshot;
   if (!snapshot) return 'Status unknown. Run status to recheck the controller.';
+  if (snapshot.phase === 'stopped') {
+    const lines = ['Gozar · stopped', 'Exposure stopped.'];
+    for (const failure of reply.localCleanupFailures ?? []) lines.push(`Cleanup needs attention: ${typeof failure === 'string' ? failure : JSON.stringify(failure)}`);
+    if (reply.journalPath) lines.push(`Local state: ${reply.journalPath}`);
+    return lines.join('\n');
+  }
   const recommendations = snapshot.recommendations ?? [];
   const first = recommendations[0];
   const id = typeof first === 'string' ? first : first?.adapterId ?? first?.id;
@@ -29,7 +35,7 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
     else lines.push(`${recommendations.length - 1} alternatives · use --alternatives`);
   }
   const plan = snapshot.plans?.find(plan => plan.adapterId === (snapshot.adapterId ?? id));
-  if (snapshot.phase !== 'published-ready' && plan?.eligibility === 'needs-validation') lines.push('Validation required before this route can be used.');
+  if (snapshot.phase !== 'published-ready' && plan?.eligibility === 'needs-validation') lines.push(snapshot.phase === 'planned' ? 'HTTPS and streaming checks run automatically after approval.' : 'Validation required before this route can be used.');
   const prerequisite = snapshot.phase === 'published-ready' || snapshot.observations?.[snapshot.adapterId ?? id] === 'present' ? undefined : plan?.preconditionActions?.[0];
   if (prerequisite) lines.push(`${prerequisite.label}: ${prerequisite.reason}`);
   const observations = snapshot.observations ?? {};
@@ -55,15 +61,15 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
   }
   const catalogUnknowns = new Set(adapters.flatMap(adapter => adapter.unknowns ?? []));
   const selectedUnknowns = new Set(selected?.unknowns ?? []);
-  const limitations = (snapshot.limitations ?? []).filter(limitation => alternatives || !catalogUnknowns.has(limitation) || (snapshot.phase !== 'published-ready' && selectedUnknowns.has(limitation)));
+  const limitations = (snapshot.limitations ?? []).filter(limitation => alternatives || !catalogUnknowns.has(limitation) || (!['planned', 'published-ready'].includes(snapshot.phase) && selectedUnknowns.has(limitation)));
   for (const limitation of alternatives ? limitations : limitations.slice(0, 2)) lines.push(limitation);
   if (!alternatives && limitations.length > 2) lines.push(`${limitations.length - 2} more route limitations · use --alternatives`);
   if (reply.action?.kind === 'external') lines.push(reply.action.instruction);
   if (reply.gateTarget) lines.push(`Proxy target for this instance: ${reply.gateTarget}`);
   if (reply.journalPath) lines.push(`Local state: ${reply.journalPath}`);
   if (snapshot.phase === 'cleanup-pending' || snapshot.phase === 'stopping') {
-    lines.push('Route removal is not confirmed.', `Retry: node bin/gozar.mjs stop --port ${port}`);
-  } else if (snapshot.phase !== 'stopped') lines.push(`Status: node bin/gozar.mjs status --port ${port}`, `Stop: node bin/gozar.mjs stop --port ${port}`);
+    lines.push('Route removal is not confirmed.', `Retry: gozar stop --port ${port}`);
+  } else if (!['planned', 'stopped'].includes(snapshot.phase)) lines.push('Status: gozar status', 'Stop: gozar stop');
   return lines.join('\n');
 }
 

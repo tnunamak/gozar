@@ -10,6 +10,16 @@ node harness/run.mjs --inspect
 
 The suite covers the real WASM, Controller/EffectDriver, local HTTP/TLS, MCP tool calls, timed SSE, controlled child processes and loopback forwarders. Synthetic core completions and receipt validators use fixtures.
 
+## Echo demo server
+
+Start a local MCP server with one `echo` tool:
+
+```sh
+node harness/dummy-server.mjs --port 18765
+```
+
+The server prints its port and URL once. Use that URL or append `/mcp` in a Streamable HTTP client. Call `echo` with `{"echo":"hello"}`. Both paths support MCP requests and SSE; opening the root URL in a browser shows the instance identity. Press Ctrl+C to stop.
+
 ## Public relay checks
 
 The default public relay gate resolves DNS through a pinned public resolver, connects HTTPS to the resolved public IP and validates the original hostname. It checks the fresh instance nonce and incremental SSE delivery. Private, loopback, CGNAT, reserved and special-use addresses fail closed.

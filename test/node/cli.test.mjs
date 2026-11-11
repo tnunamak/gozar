@@ -46,7 +46,7 @@ test('one screen folds alternatives, prints local state/recovery and validates i
   assert.equal(installLink('javascript:alert({url})', 'https://one.example'), null);
   assert.equal(installLink('https://password@client.example/{url}', 'https://one.example'), null);
   const pending = render({ snapshot: { phase: 'cleanup-pending' } }, [], { port: 3000 });
-  assert.match(pending, /Retry: node bin\/gozar.mjs stop --port 3000/);
+  assert.match(pending, /Retry: gozar stop --port 3000/);
 });
 
 test('private daemon exposes fake loopback target, status works across invocations, stop owns exact mapping', async t => {
@@ -177,7 +177,7 @@ test('expose filters next-drop plans and never calls installed active modes abse
   assert.equal(view.observations.next, undefined);
   const output = render({ snapshot: view }, [{ id: 'ready', label: 'Ready CLI' }, { id: 'unknown' }], { port: 3000 });
   assert.doesNotMatch(output, /Install ready|CLI is absent|Sign in|Install next/);
-  assert.match(output, /Validation required/);
+  assert.match(output, /checks run automatically after approval/);
   assert.match(output, /capability remains unknown/);
   assert.equal(snapshot.plans[1].preconditionActions.length, 2);
 });
