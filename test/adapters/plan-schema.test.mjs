@@ -71,11 +71,14 @@ test('Tailscale readback checks whole raw records before whitelist capture', () 
     const record = records.find(record => record.id === id);
     const readback = record.recipes.create.after[0];
     const rules = readback.assert.items;
-    const prefix = id === 'tailscale-funnel' ? '/Foreground/*' : '';
+    const prefix = '/Foreground/*';
     assert.ok(rules.some(rule => rule.op === 'equals' && rule.pointer === `${prefix}/TCP/{port}` && Object.keys(rule.value).length === 1));
     assert.deepEqual(rules.find(rule => rule.op === 'equals' && rule.pointer === `${prefix}/Web/{dnsName}:{port}`).value, { Handlers: { '/': { Proxy: '{loopbackTarget}' } } });
     assert.deepEqual(Object.keys(readback.captures.route.fields).sort(), ['funnel', 'https', 'proxy']);
-    if (id === 'tailscale-funnel') assert.equal(record.recipes.remove.kind, 'owned-process');
-    else assert.ok(record.recipes.remove.requires.some(rule => rule.op === 'owned-ledger-match' && rule.source === 'live' && rule.pointer === '/route'));
+    assert.deepEqual(readback.captures.selectedListener, { type: 'record', pointer: '/Foreground/*/TCP/{port}', fields: {} });
+    assert.deepEqual(readback.captures.selectedWeb, { type: 'record', pointer: '/Foreground/*/Web/{dnsName}:{port}', fields: {} });
+    assert.equal(record.recipes.remove.kind, 'owned-process');
+    assert.ok(!record.recipes.create.args.includes('--bg'));
+    assert.equal(record.bindings.profileId, undefined);
   }
 });

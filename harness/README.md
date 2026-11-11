@@ -35,9 +35,28 @@ Live commands create a route through the CLI and stop it after the checks. Run o
 ```sh
 node harness/drop1a.mjs --route localhost-run --proof-class public-relay --report ./localhost-run-report.json
 node harness/drop1a.mjs --route tailscale-funnel --proof-class public-relay --report ./funnel-report.json
+node harness/drop1a.mjs --route own-address --independent-ingress --proof-class public-relay --report ./own-address-report.json
 ```
 
-The harness checks publication, the accepted receipt, pinned-path MCP/SSE, status and stop. Cleanup checks the owned resource ledger and process identities, preserves unrelated routes, and checks that an unrelated child survives stop. A lock prevents overlapping trials. Funnel uses port 8443 only after checking that it is free.
+The harness checks publication, the accepted receipt, pinned-path MCP/SSE, status and stop. Cleanup checks the owned resource ledger and process identities, preserves unrelated routes, and checks that an unrelated child survives stop. Every live entry point shares an exclusive lock. Each run takes a fresh full Tailscale baseline under that lock and compares it after cleanup, including failure paths. Funnel uses only unused 8443. Private Serve uses the first unused port from 9444 and 9445; existing configuration is never reset or restored wholesale.
+
+The own-address check creates a disposable ingress independently of Gozar using the trial recipe. Gozar receives only its HTTPS origin. After `expose` returns the explicit external action, the harness acts as the ingress owner: it points the fixture at the exact gate target and calls `health`. For a real owner-managed address, **you must configure your existing reverse proxy to that printed target, then run `gozar health --port N`**. Validation and stop must preserve the independent process, target, known-hosts file and origin. After stop, the fixture owner reconnects its service and verifies another pinned MCP call and stream before removing its own fixture. No account or DNS provisioning occurs.
+
+To record the actual first-run terminal journey with the standalone echo demo, run:
+
+```sh
+node harness/cli-walk.mjs --work-directory "$PRIVATE_AUDIT/no-flag-walk"
+```
+
+This invokes exactly `node bin/gozar.mjs expose --port N` in a terminal, answers `internet` and `yes` only when prompted, and records the raw transcript, pinned public proof, status, stop and baseline comparison. It does not select a provider through flags.
+
+## Genuine private and LAN peers
+
+The same live harness accepts `tailscale-private` and `lan` with `--proof-class remote-executor`, `--executor-id ID`, a retained `--work-directory`, and `--cli-options FILE`. The JSON options file must select that run's exact `private-probes` directory with `--probe-directory` and the trusted executor identity with `--probe-executor-id`. LAN additionally needs `--bind-address IP --firewall-ack IP`; this is an explicit scoped approval, never a firewall mutation. LAN uses HTTP; HTTPS-required clients remain blocked.
+
+On `outside-challenge-ready`, execute the sanitized `outside-probe.mjs` on the actual appropriate peer. The coordinator must authenticate the machine, its tailnet/LAN membership and actual execution provenance, wrap the real observations with its job identity and measured receipt, then use `sign-outside-receipt.mjs` locally. Local requests, namespaces and requests to the host's interface IP are not remote peer evidence. Public and tailnet observations require trusted TLS. Only explicit LAN HTTP requirements permit a receipt with `tls:false`.
+
+Without an appropriate peer, leave private and LAN live gates blocked. The minimal next action is to identify a reachable machine on the intended network and arrange trusted execution there. Public-relay proofs cannot substitute for either gate.
 
 Temporary files use `GOZAR_TEST_TMPDIR`, or `~/.cache/gozar/tests` by default. Use `--work-directory PATH` to retain run artifacts. Reports include raw CLI arguments and results; keep them private if they contain information about your environment.
 

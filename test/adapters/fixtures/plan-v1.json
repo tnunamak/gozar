@@ -16,14 +16,6 @@
       "unused-port-selection"
     ],
     "bindings": {
-      "profileId": {
-        "value": "fixture-profile",
-        "authorityRef": "fixture-authority",
-        "sessionId": "plan-fixture",
-        "observedAtMs": 1000,
-        "expiresAtMs": 100000,
-        "type": "opaque-private-reference"
-      },
       "loopbackTarget": {
         "value": "http://127.0.0.1:53123",
         "authorityRef": "fixture-authority",
@@ -68,61 +60,29 @@
       }
     },
     "facts": {
-      "current-profile": {
-        "value": true,
-        "authorityRef": "fixture-authority",
-        "sessionId": "plan-fixture",
-        "observedAtMs": 1000,
-        "expiresAtMs": 100000
-      },
-      "https-enabled": {
-        "value": true,
-        "authorityRef": "fixture-authority",
-        "sessionId": "plan-fixture",
-        "observedAtMs": 1000,
-        "expiresAtMs": 100000
-      },
-      "magic-dns": {
-        "value": true,
-        "authorityRef": "fixture-authority",
-        "sessionId": "plan-fixture",
-        "observedAtMs": 1000,
-        "expiresAtMs": 100000
-      },
-      "funnel-permitted": {
-        "value": true,
-        "authorityRef": "fixture-authority",
-        "sessionId": "plan-fixture",
-        "observedAtMs": 1000,
-        "expiresAtMs": 100000
-      },
-      "funnel-port-8443-permitted": {
-        "value": true,
-        "authorityRef": "fixture-authority",
-        "sessionId": "plan-fixture",
-        "observedAtMs": 1000,
-        "expiresAtMs": 100000
-      },
       "selected-interface-still-present": {
-        "value": true,
+        "value": {
+          "address": "192.0.2.20"
+        },
         "authorityRef": "fixture-authority",
         "sessionId": "plan-fixture",
         "observedAtMs": 1000,
-        "expiresAtMs": 100000
+        "expiresAtMs": 100000,
+        "generation": 1
       },
       "firewall-user-approved": {
-        "value": true,
+        "value": {
+          "bindAddress": "192.0.2.20",
+          "port": 0,
+          "targetHost": "127.0.0.1",
+          "targetPort": 53123,
+          "scheme": "http"
+        },
         "authorityRef": "fixture-authority",
         "sessionId": "plan-fixture",
         "observedAtMs": 1000,
-        "expiresAtMs": 100000
-      },
-      "client-reachable-lan-address": {
-        "value": true,
-        "authorityRef": "fixture-authority",
-        "sessionId": "plan-fixture",
-        "observedAtMs": 1000,
-        "expiresAtMs": 100000
+        "expiresAtMs": 100000,
+        "generation": 1
       }
     },
     "probe": {
@@ -204,9 +164,10 @@
       "configPlacement": "foreground"
     },
     "tailscale-private": {
-      "ownershipKind": "route",
+      "ownershipKind": "process",
       "selectedPort": 9444,
-      "origin": "https://fixture.example-tailnet.ts.net:9444"
+      "origin": "https://fixture.example-tailnet.ts.net:9444",
+      "configPlacement": "foreground"
     },
     "localhost-run": {
       "ownershipKind": "process",
@@ -229,7 +190,7 @@
     "unknown raw listener key",
     "occupied candidates",
     "administrator handler edit",
-    "changed profile/node",
+    "changed node/tailnet",
     "missing continuity receipt",
     "wrong probe verifier",
     "local self-labeled as remote",

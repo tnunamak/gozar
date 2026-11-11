@@ -14,7 +14,8 @@
     },
     "unknowns": [
       "Current capability requires a successful probe from the intended client network.",
-      "Local network reach does not imply internet reach; firewall, routing and client DNS remain prerequisites."
+      "Local network reach does not imply internet reach; firewall, routing and client DNS remain prerequisites.",
+      "This plan supplies HTTP only. HTTPS-required clients are denied; separately established trusted TLS needs a separately admitted listener plan."
     ],
     "capabilityRecords": [
       {
@@ -25,12 +26,6 @@
         "reasons": [
           "HTTP is explicit; loopback binding is never advertised as LAN."
         ]
-      },
-      {
-        "when": "separately configured client-trusted TLS listener and hostname probe succeed",
-        "capabilities": {
-          "https": true
-        }
       },
       {
         "when": "LAN-vantage nonce / stream probes succeed",
@@ -102,15 +97,21 @@
         "requires": [
           {
             "op": "verified",
-            "fact": "selected-interface-still-present"
+            "fact": "selected-interface-still-present",
+            "value": {
+              "address": "{interfaceAddress}"
+            }
           },
           {
             "op": "verified",
-            "fact": "firewall-user-approved"
-          },
-          {
-            "op": "verified",
-            "fact": "client-reachable-lan-address"
+            "fact": "firewall-user-approved",
+            "value": {
+              "bindAddress": "{interfaceAddress}",
+              "port": 0,
+              "targetHost": "127.0.0.1",
+              "targetPort": "{gatePort}",
+              "scheme": "http"
+            }
           }
         ],
         "after": [],
@@ -118,7 +119,8 @@
           "bindAddress": "{interfaceAddress}",
           "targetHost": "127.0.0.1",
           "targetPort": "{gatePort}",
-          "scheme": "http"
+          "scheme": "http",
+          "requestedPort": "{ownedPort}"
         }
       },
       "remove": {
@@ -144,7 +146,7 @@
         "client-vantage-probe",
         "interface-forwarder"
       ],
-      "reason": "Normalized opt-in plan; host-selected exact interface, scoped firewall and client-reachable address receipts plus genuine LAN peer proof required."
+      "reason": "Normalized HTTP plan; fresh exact selected-interface and scoped firewall approval permit allocation. Client reachability is established only after creation by a genuine remote LAN probe."
     },
     "validation": {
       "tls": "client-trusted certificate and exact hostname when HTTPS",
@@ -186,6 +188,11 @@
         "link-local-without-scope"
       ],
       "authority": "Fresh exact interface binding and current-interface receipt; raw inventory alone does not prove client reach."
+    },
+    "drop": "1",
+    "displayName": "Local network (HTTP)",
+    "copy": {
+      "consent": "Expose this loopback service on the selected interface through an owned HTTP forwarder. Approve the exact firewall scope and prove the address from the intended LAN client."
     }
   }
 }

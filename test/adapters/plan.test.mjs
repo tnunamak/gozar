@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import * as core from '../../packages/gozar-core/generated/gozar_core.js';
 
@@ -43,6 +44,15 @@ function readback(record, effect, baseline) {
   view.Web[`${hostname}:${port}`] = { Handlers: { '/': { Proxy: effect.bindings.loopbackTarget.value } } };
   if (record.audience === 'public') view.AllowFunnel[`${hostname}:${port}`] = true;
   return raw;
+}
+function addMissingLeavesDuplicate(raw, effect, duplicate) {
+  if (effect.stage !== 'after') return;
+  const port = String(effect.bindings.port.value);
+  const hostPort = `${effect.bindings.dnsName.value}:${port}`;
+  raw.Foreground['foreign-missing-leaves'] = {
+    ...(duplicate !== 'web-missing-Proxy' ? { TCP: { [port]: { TCPForward: '127.0.0.1:7000' } } } : {}),
+    ...(duplicate !== 'listener-missing-HTTPS' ? { Web: { [hostPort]: { Handlers: { '/other': { Text: 'foreign handler' } } } } } : {})
+  };
 }
 function receipt(effect, host, overrides = {}) {
   return { handleRef: 'fixture-resource', continuityRef: 'fixture-continuity', sessionId: fixture.sessionId, observedAtMs: host.nowMs, expiresAtMs: 100000, continuous: true, ...overrides };
@@ -256,15 +266,17 @@ for (const id of ['localhost-run', 'lan']) {
   });
 }
 
-test('route cleanup uses original selected port and exact live record', () => {
+test('private cleanup stops only the owned child using original selected port', () => {
   const record = records.find(record => record.id === 'tailscale-private');
   const ready = run(record);
   const stopping = transition({ state: ready.output.state, host: ready.host, command: { type: 'stop' } });
   const done = drain(record, stopping, ready.host, ready.baseline);
   const execute = done.effects.find(effect => effect.stage === 'execute');
   assert.ok(execute);
-  assert.ok(execute.args.includes('--https=9444'));
-  assert.ok(execute.args.includes('--set-path=/'));
+  assert.equal(execute.kind, 'owned-process');
+  assert.equal(execute.bindings.port.value, 9444);
+  assert.equal(execute.args, undefined);
+  assert.ok(done.effects.some(effect => effect.recipeRef === 'remove/ownership'));
   assert.equal(done.output.snapshot.phase, 'stopped');
 });
 
@@ -299,7 +311,7 @@ test('Tailscale raw extra listener field is not hidden by whitelist capture', ()
 });
 
 for (const editHost of [host => { host.bindings.loopbackTarget.expiresAtMs = 999; }, host => { host.bindings.loopbackTarget.sessionId = 'other-session'; }]) {
-  test(`stale or wrong-session profile binding denies before mutation ${editHost.toString()}`, () => {
+  test(`stale or wrong-session loopback binding denies before mutation ${editHost.toString()}`, () => {
     const record = records.find(record => record.id === 'tailscale-funnel');
     const { output, effects } = run(record, { editHost });
     assert.ok(effects.every(effect => effect.stage === 'before'));
@@ -328,5 +340,207 @@ for (const patch of [{ observedAtMs: 0 }, { expiresAtMs: 999 }]) {
     const { output, effects } = run(record, { observationPatch: patch });
     assert.ok(effects.every(effect => effect.stage === 'before'));
     assert.notEqual(output.snapshot.phase, 'candidate-ready');
+  });
+}
+
+for (const [name, editHost] of [
+  ['missing firewall approval', host => { delete host.facts['firewall-user-approved']; }],
+  ['unscoped boolean firewall approval', host => { host.facts['firewall-user-approved'].value = true; }],
+  ['different interface', host => { host.facts['selected-interface-still-present'].value.address = '192.0.2.21'; }],
+  ['different firewall target', host => { host.facts['firewall-user-approved'].value.targetPort++; }],
+  ['wrong fact generation', host => { host.facts['firewall-user-approved'].generation = 2; }]
+]) {
+  test(`LAN exact authority denies before allocation: ${name}`, () => {
+    const { output, effects } = run(records.find(record => record.id === 'lan'), { editHost });
+    assert.equal(output.snapshot.published, null);
+    assert.ok(effects.every(effect => effect.stage === 'before'));
+  });
+}
+
+test('LAN HTTP plan denies required HTTPS before any effect', () => {
+  const record = records.find(record => record.id === 'lan');
+  const output = transition({ adapters: [record], host: clone(fixture.host), command: { type: 'start', sessionId: fixture.sessionId, adapterId: record.id, consent: true }, requirements: { clientReach: 'lan', httpsRequired: true } });
+  assert.deepEqual(output.effects, []);
+  assert.equal(output.snapshot.published, null);
+});
+
+for (const [name, editObservation] of [
+  ['HTTPS capability absent', (raw, effect) => { if (effect.stepId === 'status') delete raw.Self.CapMap.https; }],
+  ['MagicDNS disabled', (raw, effect) => { if (effect.stepId === 'status') raw.CurrentTailnet.MagicDNSEnabled = false; }],
+  ['certificate domain mismatches', (raw, effect) => { if (effect.stepId === 'permission') raw.CertDomains = ['unrelated.example.com']; }],
+  ['tailnet changes during permission check', (raw, effect) => { if (effect.stepId === 'permission') raw.CurrentTailnet.StableID = 'different-tailnet'; }],
+  ['public visibility on private listener', (raw, effect) => { if (effect.stage === 'after') raw.Foreground['owned-fixture'].AllowFunnel[`${effect.bindings.dnsName.value}:${effect.bindings.port.value}`] = true; }],
+  ['extra handler on private listener', (raw, effect) => { if (effect.stage === 'after') raw.Foreground['owned-fixture'].Web[`${effect.bindings.dnsName.value}:${effect.bindings.port.value}`].Handlers['/other'] = { Proxy: 'http://127.0.0.1:7000' }; }],
+  ['persistent duplicate on private listener', (raw, effect) => { if (effect.stage === 'after') raw.TCP[String(effect.bindings.port.value)] = { HTTPS: true }; }]
+]) {
+  test(`private Serve rejects ${name}`, () => {
+    const { output, effects } = run(records.find(record => record.id === 'tailscale-private'), { editObservation });
+    assert.notEqual(output.snapshot.phase, 'candidate-ready');
+    assert.equal(output.snapshot.published, null);
+    if (effects.some(effect => effect.stage === 'execute')) assert.ok(output.snapshot.resources.length > 0);
+    else assert.ok(effects.every(effect => effect.stage === 'before'));
+  });
+}
+
+test('private Serve requires no public capability or fabricated profile fact', () => {
+  const { output } = run(records.find(record => record.id === 'tailscale-private'), {
+    editHost: host => { host.facts = {}; },
+    editObservation: (raw, effect) => { if (['status', 'permission'].includes(effect.stepId)) { delete raw.Self.CapMap.funnel; delete raw.Self.CapMap['https://tailscale.com/cap/funnel-ports?ports=443,8443,10000']; } }
+  });
+  assert.equal(output.snapshot.phase, 'candidate-ready');
+});
+
+for (const id of ['tailscale-private', 'lan']) {
+  for (const probePatch of [{ remote: false }, { vantage: 'public' }, { tls: false, instanceMatched: false }, ...(id === 'tailscale-private' ? [{ tls: false }] : [])]) {
+    test(`${id} denies invalid intended-client probe ${JSON.stringify(probePatch)}`, () => {
+      const { output } = run(records.find(record => record.id === id), { probePatch });
+      assert.notEqual(output.snapshot.phase, 'candidate-ready');
+      assert.equal(output.snapshot.published, null);
+    });
+  }
+}
+
+for (const value of ['http://origin.example.com', 'https://user:password@origin.example.com', 'https://origin.example.com/other']) {
+  test(`own-address denies non-origin or non-HTTPS binding ${value}`, () => {
+    const { output, effects } = run(records.find(record => record.id === 'own-address'), { editHost: host => { host.bindings.externalOrigin.value = value; } });
+    assert.deepEqual(effects, []);
+    assert.equal(output.snapshot.published, null);
+  });
+}
+
+for (const [flag, receiptFlag] of [['sse', 'sse'], ['streamableHttp', 'streamableHttp'], ['oauthDcr', 'oauthDcr']]) {
+  test(`own-address requires actual ${flag} proof when requested`, () => {
+    const record = records.find(record => record.id === 'own-address');
+    const host = clone(fixture.host);
+    const output = transition({ adapters: [record], host, command: { type: 'start', sessionId: fixture.sessionId, adapterId: record.id, consent: true }, requirements: { clientReach: 'internet', httpsRequired: true, [flag]: true } });
+    const done = drain(record, output, host, fixture.baselineConfig, { probePatch: { [receiptFlag]: false } });
+    assert.notEqual(done.output.snapshot.phase, 'candidate-ready');
+    assert.equal(done.output.snapshot.published, null);
+    assert.ok(done.effects.every(effect => !['create', 'remove'].includes(effect.operation)));
+  });
+}
+
+test('own-address stop withdraws publication without external route authority', () => {
+  const ready = run(records.find(record => record.id === 'own-address'));
+  const stopped = transition({ state: ready.output.state, host: ready.host, command: { type: 'stop' } });
+  assert.deepEqual(stopped.effects, []);
+  assert.equal(stopped.snapshot.published, null);
+  assert.equal(stopped.snapshot.phase, 'stopped');
+  assert.deepEqual(stopped.snapshot.resources, []);
+});
+
+
+test('capture actual generated-WASM first-five and denial traces with artifact identity', async () => {
+  const summarize = ({ output, effects }) => ({
+    phase: output.snapshot.phase,
+    candidate: output.snapshot.candidate,
+    published: output.snapshot.published,
+    resources: output.snapshot.resources.map(resource => ({ kind: resource.kind, cleanup: resource.cleanup })),
+    action: output.action ?? null,
+    effects: effects.map(effect => ({ kind: effect.kind, operation: effect.operation, stage: effect.stage, recipeRef: effect.recipeRef, selectedPort: effect.bindings?.port?.value ?? null }))
+  });
+  const traces = [];
+  for (const id of contract.normalizedOptIn) {
+    const record = records.find(record => record.id === id);
+    const result = run(record);
+    assert.equal(result.output.snapshot.phase, 'candidate-ready');
+    traces.push({ case: `positive:${id}`, ...summarize(result) });
+  }
+  const cases = [
+    ['private-occupied-candidates', 'tailscale-private', { editBaseline: raw => { raw.TCP['9444'] = {}; raw.TCP['9445'] = {}; } }],
+    ['private-public-visibility-readback', 'tailscale-private', { editObservation: (raw, effect) => { if (effect.stage === 'after') raw.Foreground['owned-fixture'].AllowFunnel[`${effect.bindings.dnsName.value}:${effect.bindings.port.value}`] = true; } }],
+    ['LAN-unscoped-firewall', 'lan', { editHost: host => { host.facts['firewall-user-approved'].value = true; } }],
+    ['LAN-local-is-not-peer', 'lan', { probePatch: { remote: false } }],
+    ['own-address-instance-mismatch', 'own-address', { probePatch: { instanceMatched: false } }]
+  ];
+  for (const [name, id, options] of cases) {
+    const result = run(records.find(record => record.id === id), options);
+    assert.notEqual(result.output.snapshot.phase, 'candidate-ready');
+    traces.push({ case: name, ...summarize(result) });
+  }
+  for (const id of ['tailscale-private', 'tailscale-funnel']) {
+    for (const duplicate of ['listener-missing-HTTPS', 'web-missing-Proxy', 'both-missing-leaves']) {
+      const result = run(records.find(record => record.id === id), { editObservation: (raw, effect) => addMissingLeavesDuplicate(raw, effect, duplicate) });
+      assert.notEqual(result.output.snapshot.phase, 'candidate-ready');
+      assert.equal(result.output.snapshot.published, null);
+      traces.push({ case: `${id}:${duplicate}`, ...summarize(result) });
+      if (duplicate === 'both-missing-leaves') {
+        const foreignBaseline = clone(result.baseline);
+        const original = result.effects.find(effect => effect.stage === 'execute');
+        addMissingLeavesDuplicate(foreignBaseline, { ...original, stage: 'after' }, duplicate);
+        const stopping = transition({ state: result.output.state, host: result.host, command: { type: 'stop' } });
+        const cleanup = drain(records.find(record => record.id === id), stopping, result.host, foreignBaseline);
+        assert.equal(cleanup.output.snapshot.phase, 'cleanup-pending');
+        traces.push({ case: `${id}:missing-leaves-foreign-mapping-cleanup`, ...summarize(cleanup) });
+      }
+
+    }
+  }
+  const record = records.find(record => record.id === 'tailscale-private');
+  const ready = run(record);
+  const stopping = transition({ state: ready.output.state, host: ready.host, command: { type: 'stop' } });
+  const denied = drain(record, stopping, ready.host, ready.baseline, { continuityPatch: { continuous: false } });
+  assert.ok(denied.output.snapshot.resources.some(resource => resource.cleanup !== 'removed'));
+  traces.push({ case: 'private-broken-ownership-continuity', ...summarize(denied) });
+  if (process.env.GOZAR_ADAPTER_TRACE_OUTPUT) {
+    const wasm = await readFile(new URL('packages/gozar-core/generated/gozar_core_bg.wasm', root));
+    const bindings = await readFile(new URL('packages/gozar-core/generated/gozar_core.js', root));
+    const plans = Object.fromEntries(await Promise.all(contract.normalizedOptIn.map(async id => [id, createHash('sha256').update(await readFile(new URL(`adapters/${id}.definition.json`, root))).digest('hex')])));
+    const evidence = {
+      provenance: 'Actual generated-WASM step outputs using synthetic trusted-driver completions. No OS effects dispatched; no live ownership, TLS, DNS, remote vantage or provider evidence.',
+      command: 'nice -n 19 ionice -c3 node --test --test-concurrency=2 test/adapters/plan.test.mjs',
+      exports: Object.keys(core).sort(),
+      wasmSha256: createHash('sha256').update(wasm).digest('hex'),
+      bindingsSha256: createHash('sha256').update(bindings).digest('hex'),
+      planSha256: plans,
+      traces
+    };
+    await writeFile(process.env.GOZAR_ADAPTER_TRACE_OUTPUT, `${JSON.stringify(evidence, null, 2)}\n`);
+  }
+});
+
+test('own-address declares explicit host proxy-target setup without core mutation recipes', () => {
+  const record = records.find(record => record.id === 'own-address');
+  assert.deepEqual(record.setup, { requiresProxyTarget: true });
+  assert.equal(record.recipes.create, undefined);
+  assert.equal(record.recipes.remove, undefined);
+});
+
+for (const id of ['tailscale-private', 'tailscale-funnel']) {
+  for (const duplicate of ['listener-missing-HTTPS', 'web-missing-Proxy', 'both-missing-leaves']) {
+    test(`${id} readback denies duplicate whole records with ${duplicate}`, () => {
+      const { output } = run(records.find(record => record.id === id), {
+        editObservation: (raw, effect) => addMissingLeavesDuplicate(raw, effect, duplicate)
+      });
+      assert.notEqual(output.snapshot.phase, 'candidate-ready', 'existential whole-record predicates and leaf captures must not accept a second selected record');
+      assert.equal(output.snapshot.published, null);
+      assert.ok(output.snapshot.resources.length > 0, 'failed readback retains the owned child as cleanup debt');
+    });
+  }
+}
+
+for (const id of ['tailscale-private', 'tailscale-funnel']) {
+  test(`${id} missing-leaves cleanup stops original child and retains foreign mapping debt`, () => {
+    const record = records.find(record => record.id === id);
+    const options = { editObservation: (raw, effect) => addMissingLeavesDuplicate(raw, effect, 'both-missing-leaves') };
+    const denied = run(record, options);
+    assert.equal(denied.output.snapshot.phase, 'cleanup-pending');
+    const foreignBaseline = clone(denied.baseline);
+    const original = denied.effects.find(effect => effect.stage === 'execute');
+    addMissingLeavesDuplicate(foreignBaseline, { ...original, stage: 'after' }, 'both-missing-leaves');
+    const foreign = clone(foreignBaseline.Foreground['foreign-missing-leaves']);
+    const stopping = transition({ state: denied.output.state, host: denied.host, command: { type: 'stop' } });
+    const cleanup = drain(record, stopping, denied.host, foreignBaseline);
+    const removals = cleanup.effects.filter(effect => effect.operation === 'remove' && effect.stage === 'execute');
+    assert.equal(removals.length, 1);
+    assert.equal(removals[0].kind, 'owned-process');
+    assert.equal(removals[0].resourceId, 'fixture-resource');
+    assert.equal(removals[0].args, undefined, 'cleanup has no provider mutation command');
+    assert.ok(cleanup.effects.some(effect => effect.recipeRef === 'remove/ownership'));
+    assert.ok(cleanup.effects.some(effect => effect.recipeRef === 'remove/after/readback'));
+    assert.equal(cleanup.output.snapshot.phase, 'cleanup-pending');
+    assert.equal(cleanup.output.snapshot.published, null);
+    assert.ok(cleanup.output.snapshot.resources.some(resource => resource.cleanup !== 'removed'));
+    assert.deepEqual(foreignBaseline.Foreground['foreign-missing-leaves'], foreign);
   });
 }

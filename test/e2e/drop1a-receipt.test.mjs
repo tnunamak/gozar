@@ -20,4 +20,12 @@ test('Drop1a receipt requires exact actual gate challenge, tool result, timed de
   bad(value => { value.observations.gate.events[1].receivedAt = value.observations.gate.events[0].receivedAt; });
   bad(value => { value.observations.service.toolCall = false; });
   bad(value => { value.observations.service.toolResult.echo = 'wrong-echo'; });
+  // Synthetic LAN evidence is HTTP only; it cannot relax public or tailnet TLS.
+  const lanRequest = { ...request, origin: 'http://192.0.2.10:12345', vantage: 'lan', requirements: { httpsRequired: false } };
+  const lan = structuredClone(envelope);
+  lan.probeReceipt.origin = lan.observations.origin = lan.observations.service.origin = lanRequest.origin;
+  lan.probeReceipt.vantage = 'lan'; lan.probeReceipt.tls = lan.observations.service.tls = false;
+  validateDrop1aReceipt(lan, lanRequest, context);
+  for (const vantage of ['public', 'tailnet']) assert.throws(() => validateDrop1aReceipt(lan, { ...lanRequest, vantage }, context), /LAN/);
+  assert.throws(() => validateDrop1aReceipt(lan, { ...lanRequest, requirements: {} }, context), /LAN/);
 });

@@ -55,11 +55,11 @@
       "oauthDcr": null
     },
     "unknowns": [
-      "Current capability requires a successful probe from the intended client network.",
-      "Background CLI feature-enablement may prompt despite --yes; unmet prerequisites block create.",
-      "Current profile, HTTPS enablement and MagicDNS facts need real scoped host authority; no fixture receipt is operational evidence.",
-      "CLI read/compare/off has no adapter-level CAS; changed or unknown continuity remains cleanup debt.",
-      "Next drop: detection inventory only; create is not in the active catalog."
+      "Tailnet HTTPS and requested protocols require genuine remote tailnet instance proof before publication.",
+      "HTTPS capability and CertDomains permit provisioning; they do not prove an issued or client-trusted certificate.",
+      "Feature setup can prompt despite --yes; closed stdin and bounded startup fail safely when prerequisites are unmet.",
+      "Foreground watcher cleanup uses immutable process identity. Remaining or administrator-created mappings remain cleanup debt.",
+      "Operational recipe is active only after core/host feature admission."
     ],
     "recipes": {
       "detect": {
@@ -82,8 +82,8 @@
         }
       }
     },
-    "drop": "next",
-    "availability": "next-drop"
+    "drop": "1",
+    "availability": "detectable; explicit prerequisite validation required"
   },
   {
     "id": "localhost-run",
@@ -290,12 +290,13 @@
     "unknowns": [
       "Current capability requires a successful probe from the intended client network.",
       "Local network reach does not imply internet reach; firewall, routing and client DNS remain prerequisites.",
-      "Next drop: detection inventory only; create is not in the active catalog."
+      "This plan supplies HTTP only. HTTPS-required clients are denied; separately established trusted TLS needs a separately admitted listener plan.",
+      "Operational recipe is active only after core/host feature admission."
     ],
     "recipes": {},
-    "drop": "next",
-    "availability": "next-drop",
-    "setup": "owned interface forwarder and client-vantage proof required; next drop"
+    "drop": "1",
+    "availability": "detectable; explicit prerequisite validation required",
+    "setup": "owned HTTP interface forwarder and post-create remote LAN-vantage proof required"
   },
   {
     "id": "own-address",
@@ -312,11 +313,11 @@
     "unknowns": [
       "Current capability requires a successful probe from the intended client network.",
       "A successful HTTP response alone does not prove the correct application or external reach.",
-      "Next drop: detection inventory only; create is not in the active catalog."
+      "Operational recipe is active only after core/host feature admission."
     ],
     "recipes": {},
-    "drop": "next",
-    "availability": "next-drop",
-    "setup": "explicit owner origin required; next drop"
+    "drop": "1",
+    "availability": "detectable; explicit prerequisite validation required",
+    "setup": "explicit owner origin and proxy target setup required before validation"
   }
 ]

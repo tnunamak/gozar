@@ -91,7 +91,7 @@ test('Funnel and Serve never target protected ports or use global cleanup', () =
     else { assert.deepEqual(definition.bindings.port.candidates, expectedPorts); assert.deepEqual(definition.bindings.port.protectedPorts, [443, 10000]); }
     for (const operation of ['create', 'remove']) {
       const recipe = definition.recipes[operation];
-      if (id === 'tailscale-funnel' && operation === 'remove') { assert.equal(recipe.kind, 'owned-process'); continue; }
+      if (operation === 'remove') { assert.equal(recipe.kind, 'owned-process'); continue; }
       assert.ok(recipe.args.includes('--https={port}'));
       assert.ok(recipe.args.includes('--set-path={mount}'));
       assert.ok(recipe.before.length && recipe.requires.length && recipe.after.length);

@@ -40,7 +40,7 @@ test('one screen folds alternatives, prints local state/recovery and validates i
   assert.match(output, /Recommended: Example — Exact route/);
   assert.match(output, /1 alternatives · use --alternatives/);
   assert.match(output, /URL: https:\/\/one.example/);
-  assert.match(output, /Public route checks passed\. Connect your MCP client\./);
+  assert.match(output, /Route checks passed\. Connect your MCP client\./);
   assert.match(output, /Install link: https:\/\/client.example/);
   assert.match(output, /Local state: \/private\/session.json/);
   assert.equal(installLink('javascript:alert({url})', 'https://one.example'), null);

@@ -7,10 +7,12 @@ export function validateDrop1aReceipt(envelope, request, { serviceNonce, toolEch
   assert.equal(envelope.executorId, executorId);
   assert.ok(typeof envelope.jobId === 'string' && envelope.jobId.length > 0, 'trusted external job identity required');
   const receipt = envelope.probeReceipt, observed = envelope.observations;
+  const requireTls = new URL(request.origin).protocol === 'https:';
+  assert.ok(requireTls || (new URL(request.origin).protocol === 'http:' && request.vantage === 'lan' && request.requirements?.httpsRequired === false), 'HTTP receipt requires explicit LAN scope');
   assert.equal(receipt?.origin, request.origin);
   assert.equal(receipt.nonceRef, request.authorization.nonceRef); assert.equal(receipt.verifierRef, request.authorization.verifierRef);
   assert.equal(receipt.vantage, request.vantage); assert.equal(receipt.remote, true);
-  assert.equal(receipt.tls, true); assert.equal(receipt.instanceMatched, true); assert.equal(receipt.sse, true); assert.equal(receipt.streamableHttp, true);
+  assert.equal(receipt.tls, requireTls); assert.equal(receipt.instanceMatched, true); assert.equal(receipt.sse, true); assert.equal(receipt.streamableHttp, true);
   assert.ok(receipt.observedAtMs >= observed.finishedAt && receipt.observedAtMs <= nowMs + 5000);
   assert.ok(receipt.expiresAtMs > nowMs && receipt.expiresAtMs <= request.authorization.expiresAtMs);
   assert.equal(observed.origin, request.origin);
@@ -22,7 +24,7 @@ export function validateDrop1aReceipt(envelope, request, { serviceNonce, toolEch
     assert.ok(event.receivedAt >= observed.startedAt && event.receivedAt <= observed.finishedAt);
     if (i) assert.ok(event.receivedAt - observed.gate.events[i - 1].receivedAt >= 80, 'gate SSE buffered');
   }
-  validateReceipt(observed.service, { origin: request.origin, nonce: serviceNonce, issuedAt: observed.startedAt, vantage: 'local', toolEcho });
+  validateReceipt(observed.service, { origin: request.origin, nonce: serviceNonce, issuedAt: observed.startedAt, vantage: 'local', toolEcho, requireTls });
   assert.ok(observed.service.finishedAt <= observed.finishedAt);
   return receipt;
 }

@@ -41,16 +41,19 @@
   "wrapperAdmission": "Normalized definitions stay wrapped; plan admission is only an opt-in declaration, never host feature/authority evidence.",
   "activeDrop1a": [
     "localhost-run",
-    "tailscale-funnel"
+    "tailscale-funnel",
+    "tailscale-private",
+    "lan",
+    "own-address"
   ],
   "operationalCatalog": [
     "localhost-run.definition.json",
-    "tailscale-funnel.definition.json"
+    "tailscale-funnel.definition.json",
+    "tailscale-private.definition.json",
+    "lan.definition.json",
+    "own-address.definition.json"
   ],
   "nextDrop": [
-    "tailscale-private",
-    "lan",
-    "own-address",
     "ngrok-https-edge",
     "ngrok-tls-passthrough",
     "ngrok-tcp-passthrough",
@@ -60,5 +63,6 @@
     "clientReach": "internet",
     "httpsRequired": true,
     "sse": true
-  }
+  },
+  "operationalAcceptance": "Manifest inclusion admits test/integration selection only; live intended-vantage and ownership evidence are still required per route."
 }

@@ -327,6 +327,16 @@
                     "optional": false
                   }
                 }
+              },
+              "selectedListener": {
+                "type": "record",
+                "pointer": "/Foreground/*/TCP/{port}",
+                "fields": {}
+              },
+              "selectedWeb": {
+                "type": "record",
+                "pointer": "/Foreground/*/Web/{dnsName}:{port}",
+                "fields": {}
               }
             },
             "assert": {

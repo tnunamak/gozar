@@ -121,7 +121,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   }
   if (Object.keys(journal.value.owned).length) throw new Error('Cleanup remains pending; stop the recorded session before restarting');
   let controller;
-  if (!probeExecutor && config.probeDirectory) probeExecutor = new ProbeDirectoryExecutor(config.probeDirectory, { executorRef: config.probeExecutorId, requestPath: config.probeRequest, receiptPath: config.probeReceipt });
+  if (!probeExecutor && config.probeDirectory) probeExecutor = new ProbeDirectoryExecutor(config.probeDirectory, { vantages: ['public', 'tailnet', 'lan'], executorRef: config.probeExecutorId, requestPath: config.probeRequest, receiptPath: config.probeReceipt });
   if (!probeExecutor) probeExecutor = new PublicRelayVerifier();
   const selectedAdapter = config.adapters.find(adapter => adapter.id === config.adapterId);
   const operational = config.operational === true || selectedAdapter?.planVersion === 1;
@@ -131,6 +131,9 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   controller.driver.observeProcessOutput = config.observeProcessOutput === true;
   controller.driver.onProcessOutput = processOutputObserver;
   if (operational) await prepareHost(controller.driver, selectedAdapter, { origin: config.origin, gate, probeExecutor, authorities: hostAuthorities });
+  let setupPending = Boolean(gate && selectedAdapter?.setup?.requiresProxyTarget);
+  const present = output => ({ ...output, ...(selectedAdapter?.clientProfile ? { connectionProfile: selectedAdapter.clientProfile } : {}),
+    ...(setupPending && !controller.state?.stopRequested ? { action: { kind: 'external', instruction: `Point the existing origin ${config.origin} at ${gate.target}, then run gozar health --port ${config.targetPort}.`, target: gate.target, recheckCommand: 'health' } } : {}) });
   const nonce = randomUUID();
   const identity = { pid: process.pid, startIdentity: await processIdentity(process.pid), nonce };
   // Only remove a stale socket after proving the prior daemon identity is gone.
@@ -142,6 +145,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   let closing = false;
   let initializedDone = false;
   let initializedResolve;
+  let armMonitor = () => {};
   const initialized = new Promise(resolve => { initializedResolve = resolve; });
   const server = net.createServer(socket => {
     let input = '', dispatched = false;
@@ -167,6 +171,13 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
           output = await controller.shutdown();
           if (output.snapshot.phase === 'stopped' && !output.localCleanupFailures.length) closing = true;
         } else {
+          if (setupPending && command.type === 'health') {
+            setupPending = false;
+            output = await controller.command({ type: 'start', adapterId: config.adapterId, consent: config.consent === true });
+            if (config.approveOrigin && output.snapshot.phase === 'candidate-ready') output = await controller.approve();
+            armMonitor();
+            socket.end(`${JSON.stringify(publicReply(present(output), directory))}\n`); return;
+          }
           if (command.type === 'update-origin') {
             if (selectedAdapter?.ownership !== 'external-owned') throw new Error('Origin updates require an external-owned route');
             const origin = (await import('./catalog.mjs')).safeOrigin(command.origin);
@@ -174,13 +185,15 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
             const nowMs = controller.driver.nowMs();
             controller.driver.host.bindings.externalOrigin = { type: 'credential-free-https-origin', value: origin, authorityRef: randomUUID(),
               sessionId: controller.sessionId, observedAtMs: nowMs, expiresAtMs: nowMs + 900000 };
+            config.origin = origin;
+            if (setupPending) { socket.end(`${JSON.stringify(publicReply(present(controller.present()), directory))}\n`); return; }
           }
           const fresh = controller.driver.acceptedProbeReceipt?.expiresAtMs > controller.driver.nowMs() && controller.driver.proofGeneration === controller.state?.generation;
           const health = initializedDone && operational && ['status', 'health'].includes(command.type) && !command.initial && (command.type === 'health' || !fresh) && controller.state?.selected && !controller.state?.stopRequested;
           output = await controller.command(health ? { type: 'health' } : command);
           if (config.approveOrigin && output.snapshot.phase === 'candidate-ready') output = await controller.approve();
         }
-        socket.end(`${JSON.stringify(publicReply(output, directory))}\n`);
+        socket.end(`${JSON.stringify(publicReply(present(output), directory))}\n`);
         if (closing) server.close();
       } catch (error) { socket.end(`${JSON.stringify({ error: error.message })}\n`); }
     });
@@ -205,10 +218,11 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   };
   process.once('SIGTERM', terminate); process.once('SIGINT', terminate);
   try {
-    await controller.command({ type: 'detect' });
+    // An owner-managed proxy cannot point at the new gate until its target is visible.
+    if (!setupPending) await controller.command({ type: 'detect' });
     const planned = await controller.command({ type: 'recommend' });
     const selected = config.adapterId ?? planned.snapshot.recommendations[0];
-    if (selected && config.consent) {
+    if (selected && config.consent && !setupPending) {
       await controller.command({ type: 'start', adapterId: selected, consent: true });
       // CLI approval is explicit and exact; never turn an unvalidated candidate into a published URL.
       if (config.approveOrigin === true) await controller.approve();
@@ -219,7 +233,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
     throw error;
   } finally { initializedDone = true; initializedResolve(); }
   if (operational) {
-    const armMonitor = () => {
+    armMonitor = () => {
       if (closing || controller.state?.stopRequested || !controller.state?.selected) return;
       const expires = controller.driver.proofExpiries.get(controller.state.generation);
       const delay = expires ? Math.max(250, Math.min(30000, expires - controller.driver.nowMs() - 1000)) : 10000;
@@ -242,6 +256,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
 
 export function publicReply(output, directory) {
   return { snapshot: { ...output.snapshot, adapterId: output.state?.selected ?? output.snapshot?.adapterId }, ...(output.action ? { action: output.action } : {}), ...(output.gateTarget ? { gateTarget: output.gateTarget } : {}), ...(output.validation ? { validation: output.validation } : {}), journalPath: join(directory, 'session.json'),
+    ...(output.connectionProfile ? { connectionProfile: output.connectionProfile } : {}),
     ...(output.localCleanupFailures ? { localCleanupFailures: output.localCleanupFailures } : {}) };
 }
 

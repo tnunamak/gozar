@@ -23,6 +23,13 @@ test('stopped CLI reports the result without catalog setup or recommendations', 
   assert.doesNotMatch(text, /Recommended|Validation|Catalog/);
 });
 
+test('cleanup failure prints the exact retry scope and expected success', () => {
+  const output = render({ snapshot: { phase: 'stopped' }, localCleanupFailures: [{ detail: 'Fixture cleanup failed' }], journalPath: '/private/fixture/session.json' }, [], { port: 3000 });
+  assert.match(output, /Retry: gozar stop --port 3000/);
+  assert.match(output, /Success: Exposure stopped, with no remaining cleanup failures/);
+  assert.match(output, /Local state: \/private\/fixture\/session.json/);
+});
+
 test('noninteractive no-flag expose asks one question and gives an exact next command', () => {
   const result = spawnSync(process.execPath, [fileURLToPath(new URL('../../bin/gozar.mjs', import.meta.url)), 'expose', '--port', '18765'], { encoding: 'utf8' });
   assert.equal(result.status, 2);

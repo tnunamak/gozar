@@ -1,0 +1,865 @@
+{
+  "provenance": "Actual generated-WASM step outputs using synthetic trusted-driver completions. No OS effects dispatched; no live ownership, TLS, DNS, remote vantage or provider evidence.",
+  "command": "nice -n 19 ionice -c3 node --test --test-concurrency=2 test/adapters/plan.test.mjs",
+  "exports": [
+    "__wasm",
+    "default",
+    "module.exports",
+    "step"
+  ],
+  "wasmSha256": "55c4d7d89d1bc8b126417c6c1f7dbb420cd81be074fbb9a7b76d2c5f0c7e76f9",
+  "bindingsSha256": "e9c58a7c7dc673db4ece766402c78d9c393c98579d91aa6a797b13dc43cf201e",
+  "planSha256": {
+    "tailscale-funnel": "cf508b5df9a4bb0e30b24f1abe1319bb8af0f1418e1da2e375dad6df8237320f",
+    "tailscale-private": "a00e4ba5b65ff5456b8d5e3dab3941ce0434163aff73a932f1e61f1f0a89029d",
+    "localhost-run": "300f447d5850bcfd4db8ab87a1fa3969fcf1e357471b0b8a63ee816794aa59fd",
+    "lan": "31a2a595c8122176e91f755e8deec2092fd8b1c0456add5758ea63f8b18ec435",
+    "own-address": "d7b98e0ef776d78941bedc202531d7e82bf910af622675c2bf3263dca909ef48"
+  },
+  "traces": [
+    {
+      "case": "positive:tailscale-funnel",
+      "phase": "candidate-ready",
+      "candidate": "https://fixture.example-tailnet.ts.net:8443",
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "active"
+        }
+      ],
+      "action": {
+        "generation": 1,
+        "kind": "confirm-origin",
+        "origin": "https://fixture.example-tailnet.ts.net:8443"
+      },
+      "effects": [
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/status",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/permission",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/config",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "persist",
+          "operation": "create",
+          "stage": "persist",
+          "recipeRef": "create/execute",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "create",
+          "stage": "execute",
+          "recipeRef": "create/execute",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "after",
+          "recipeRef": "create/after/readback",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "http-probe",
+          "operation": "probe",
+          "stage": "probe",
+          "recipeRef": "probe",
+          "selectedPort": null
+        }
+      ]
+    },
+    {
+      "case": "positive:tailscale-private",
+      "phase": "candidate-ready",
+      "candidate": "https://fixture.example-tailnet.ts.net:9444",
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "active"
+        }
+      ],
+      "action": {
+        "generation": 1,
+        "kind": "confirm-origin",
+        "origin": "https://fixture.example-tailnet.ts.net:9444"
+      },
+      "effects": [
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/status",
+          "selectedPort": null
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/permission",
+          "selectedPort": null
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/config",
+          "selectedPort": null
+        },
+        {
+          "kind": "persist",
+          "operation": "create",
+          "stage": "persist",
+          "recipeRef": "create/execute",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "spawn",
+          "operation": "create",
+          "stage": "execute",
+          "recipeRef": "create/execute",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "after",
+          "recipeRef": "create/after/readback",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "http-probe",
+          "operation": "probe",
+          "stage": "probe",
+          "recipeRef": "probe",
+          "selectedPort": null
+        }
+      ]
+    },
+    {
+      "case": "positive:localhost-run",
+      "phase": "candidate-ready",
+      "candidate": "https://fixture-trial.lhr.life",
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "active"
+        }
+      ],
+      "action": {
+        "generation": 1,
+        "kind": "confirm-origin",
+        "origin": "https://fixture-trial.lhr.life"
+      },
+      "effects": [
+        {
+          "kind": "persist",
+          "operation": "create",
+          "stage": "persist",
+          "recipeRef": "create/execute",
+          "selectedPort": null
+        },
+        {
+          "kind": "spawn",
+          "operation": "create",
+          "stage": "execute",
+          "recipeRef": "create/execute",
+          "selectedPort": null
+        },
+        {
+          "kind": "http-probe",
+          "operation": "probe",
+          "stage": "probe",
+          "recipeRef": "probe",
+          "selectedPort": null
+        }
+      ]
+    },
+    {
+      "case": "positive:lan",
+      "phase": "candidate-ready",
+      "candidate": "http://192.0.2.20:53124",
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "active"
+        }
+      ],
+      "action": {
+        "generation": 1,
+        "kind": "confirm-origin",
+        "origin": "http://192.0.2.20:53124"
+      },
+      "effects": [
+        {
+          "kind": "persist",
+          "operation": "create",
+          "stage": "persist",
+          "recipeRef": "create/execute",
+          "selectedPort": null
+        },
+        {
+          "kind": "local-forwarder",
+          "operation": "create",
+          "stage": "execute",
+          "recipeRef": "create/execute",
+          "selectedPort": null
+        },
+        {
+          "kind": "http-probe",
+          "operation": "probe",
+          "stage": "probe",
+          "recipeRef": "probe",
+          "selectedPort": null
+        }
+      ]
+    },
+    {
+      "case": "positive:own-address",
+      "phase": "candidate-ready",
+      "candidate": "https://origin.example.com",
+      "published": null,
+      "resources": [],
+      "action": {
+        "generation": 1,
+        "kind": "confirm-origin",
+        "origin": "https://origin.example.com"
+      },
+      "effects": [
+        {
+          "kind": "http-probe",
+          "operation": "probe",
+          "stage": "probe",
+          "recipeRef": "probe",
+          "selectedPort": null
+        }
+      ]
+    },
+    {
+      "case": "private-occupied-candidates",
+      "phase": "failed",
+      "candidate": null,
+      "published": null,
+      "resources": [],
+      "action": null,
+      "effects": [
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/status",
+          "selectedPort": null
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/permission",
+          "selectedPort": null
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/config",
+          "selectedPort": null
+        }
+      ]
+    },
+    {
+      "case": "private-public-visibility-readback",
+      "phase": "cleanup-pending",
+      "candidate": null,
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "pending"
+        }
+      ],
+      "action": null,
+      "effects": [
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/status",
+          "selectedPort": null
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/permission",
+          "selectedPort": null
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/config",
+          "selectedPort": null
+        },
+        {
+          "kind": "persist",
+          "operation": "create",
+          "stage": "persist",
+          "recipeRef": "create/execute",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "spawn",
+          "operation": "create",
+          "stage": "execute",
+          "recipeRef": "create/execute",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "after",
+          "recipeRef": "create/after/readback",
+          "selectedPort": 9444
+        }
+      ]
+    },
+    {
+      "case": "LAN-unscoped-firewall",
+      "phase": "failed",
+      "candidate": null,
+      "published": null,
+      "resources": [],
+      "action": null,
+      "effects": []
+    },
+    {
+      "case": "LAN-local-is-not-peer",
+      "phase": "degraded",
+      "candidate": "http://192.0.2.20:53124",
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "active"
+        }
+      ],
+      "action": {
+        "instruction": "The current address could not be verified. Check the owner-managed route and supply a fresh health receipt.",
+        "kind": "external",
+        "recheckCommand": "health"
+      },
+      "effects": [
+        {
+          "kind": "persist",
+          "operation": "create",
+          "stage": "persist",
+          "recipeRef": "create/execute",
+          "selectedPort": null
+        },
+        {
+          "kind": "local-forwarder",
+          "operation": "create",
+          "stage": "execute",
+          "recipeRef": "create/execute",
+          "selectedPort": null
+        },
+        {
+          "kind": "http-probe",
+          "operation": "probe",
+          "stage": "probe",
+          "recipeRef": "probe",
+          "selectedPort": null
+        }
+      ]
+    },
+    {
+      "case": "own-address-instance-mismatch",
+      "phase": "degraded",
+      "candidate": "https://origin.example.com",
+      "published": null,
+      "resources": [],
+      "action": {
+        "instruction": "The current address could not be verified. Check the owner-managed route and supply a fresh health receipt.",
+        "kind": "external",
+        "recheckCommand": "health"
+      },
+      "effects": [
+        {
+          "kind": "http-probe",
+          "operation": "probe",
+          "stage": "probe",
+          "recipeRef": "probe",
+          "selectedPort": null
+        }
+      ]
+    },
+    {
+      "case": "tailscale-private:listener-missing-HTTPS",
+      "phase": "cleanup-pending",
+      "candidate": null,
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "pending"
+        }
+      ],
+      "action": null,
+      "effects": [
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/status",
+          "selectedPort": null
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/permission",
+          "selectedPort": null
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/config",
+          "selectedPort": null
+        },
+        {
+          "kind": "persist",
+          "operation": "create",
+          "stage": "persist",
+          "recipeRef": "create/execute",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "spawn",
+          "operation": "create",
+          "stage": "execute",
+          "recipeRef": "create/execute",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "after",
+          "recipeRef": "create/after/readback",
+          "selectedPort": 9444
+        }
+      ]
+    },
+    {
+      "case": "tailscale-private:web-missing-Proxy",
+      "phase": "cleanup-pending",
+      "candidate": null,
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "pending"
+        }
+      ],
+      "action": null,
+      "effects": [
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/status",
+          "selectedPort": null
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/permission",
+          "selectedPort": null
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/config",
+          "selectedPort": null
+        },
+        {
+          "kind": "persist",
+          "operation": "create",
+          "stage": "persist",
+          "recipeRef": "create/execute",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "spawn",
+          "operation": "create",
+          "stage": "execute",
+          "recipeRef": "create/execute",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "after",
+          "recipeRef": "create/after/readback",
+          "selectedPort": 9444
+        }
+      ]
+    },
+    {
+      "case": "tailscale-private:both-missing-leaves",
+      "phase": "cleanup-pending",
+      "candidate": null,
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "pending"
+        }
+      ],
+      "action": null,
+      "effects": [
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/status",
+          "selectedPort": null
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/permission",
+          "selectedPort": null
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/config",
+          "selectedPort": null
+        },
+        {
+          "kind": "persist",
+          "operation": "create",
+          "stage": "persist",
+          "recipeRef": "create/execute",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "spawn",
+          "operation": "create",
+          "stage": "execute",
+          "recipeRef": "create/execute",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "after",
+          "recipeRef": "create/after/readback",
+          "selectedPort": 9444
+        }
+      ]
+    },
+    {
+      "case": "tailscale-private:missing-leaves-foreign-mapping-cleanup",
+      "phase": "cleanup-pending",
+      "candidate": null,
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "pending"
+        }
+      ],
+      "action": null,
+      "effects": [
+        {
+          "kind": "owned-process",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "remove/ownership",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "remove/before/identity",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "persist",
+          "operation": "remove",
+          "stage": "persist",
+          "recipeRef": "remove/execute",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "owned-process",
+          "operation": "remove",
+          "stage": "execute",
+          "recipeRef": "remove/execute",
+          "selectedPort": 9444
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "after",
+          "recipeRef": "remove/after/readback",
+          "selectedPort": 9444
+        }
+      ]
+    },
+    {
+      "case": "tailscale-funnel:listener-missing-HTTPS",
+      "phase": "cleanup-pending",
+      "candidate": null,
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "pending"
+        }
+      ],
+      "action": null,
+      "effects": [
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/status",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/permission",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/config",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "persist",
+          "operation": "create",
+          "stage": "persist",
+          "recipeRef": "create/execute",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "create",
+          "stage": "execute",
+          "recipeRef": "create/execute",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "after",
+          "recipeRef": "create/after/readback",
+          "selectedPort": 8443
+        }
+      ]
+    },
+    {
+      "case": "tailscale-funnel:web-missing-Proxy",
+      "phase": "cleanup-pending",
+      "candidate": null,
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "pending"
+        }
+      ],
+      "action": null,
+      "effects": [
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/status",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/permission",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/config",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "persist",
+          "operation": "create",
+          "stage": "persist",
+          "recipeRef": "create/execute",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "create",
+          "stage": "execute",
+          "recipeRef": "create/execute",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "after",
+          "recipeRef": "create/after/readback",
+          "selectedPort": 8443
+        }
+      ]
+    },
+    {
+      "case": "tailscale-funnel:both-missing-leaves",
+      "phase": "cleanup-pending",
+      "candidate": null,
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "pending"
+        }
+      ],
+      "action": null,
+      "effects": [
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/status",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/permission",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "create/before/config",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "persist",
+          "operation": "create",
+          "stage": "persist",
+          "recipeRef": "create/execute",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "create",
+          "stage": "execute",
+          "recipeRef": "create/execute",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "after",
+          "recipeRef": "create/after/readback",
+          "selectedPort": 8443
+        }
+      ]
+    },
+    {
+      "case": "tailscale-funnel:missing-leaves-foreign-mapping-cleanup",
+      "phase": "cleanup-pending",
+      "candidate": null,
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "pending"
+        }
+      ],
+      "action": null,
+      "effects": [
+        {
+          "kind": "owned-process",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "remove/ownership",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "remove/before/identity",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "persist",
+          "operation": "remove",
+          "stage": "persist",
+          "recipeRef": "remove/execute",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "owned-process",
+          "operation": "remove",
+          "stage": "execute",
+          "recipeRef": "remove/execute",
+          "selectedPort": 8443
+        },
+        {
+          "kind": "spawn",
+          "operation": "observe",
+          "stage": "after",
+          "recipeRef": "remove/after/readback",
+          "selectedPort": 8443
+        }
+      ]
+    },
+    {
+      "case": "private-broken-ownership-continuity",
+      "phase": "cleanup-pending",
+      "candidate": null,
+      "published": null,
+      "resources": [
+        {
+          "cleanup": "pending"
+        }
+      ],
+      "action": null,
+      "effects": [
+        {
+          "kind": "owned-process",
+          "operation": "observe",
+          "stage": "before",
+          "recipeRef": "remove/ownership",
+          "selectedPort": 9444
+        }
+      ]
+    }
+  ]
+}

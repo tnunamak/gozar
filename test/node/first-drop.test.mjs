@@ -10,7 +10,7 @@ import { createGate } from '../../packages/gozar-node/gate.mjs';
 import { fixture } from './helpers.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-for (const adapterId of ['localhost-run', 'tailscale-funnel']) {
+for (const adapterId of ['localhost-run', 'tailscale-funnel', 'tailscale-private']) {
   test(`actual ${adapterId} recipe admits and spawns with nonempty process intent ledger (isolated fake executable)`, async t => {
     const { driver, directory, journal } = await fixture(t, {});
     const adapter = structuredClone(await loadDefinition(root, adapterId));
@@ -27,7 +27,7 @@ for (const adapterId of ['localhost-run', 'tailscale-funnel']) {
     for (const [name, spec] of Object.entries(adapter.bindings)) {
       if (driver.host.bindings[name]) bindings[name] = driver.host.bindings[name];
       else {
-        const value = Object.hasOwn(spec, 'value') ? spec.value : captured[name];
+        const value = Object.hasOwn(spec, 'value') ? spec.value : spec.type === 'unused-port' ? spec.candidates[0] : captured[name];
         assert.notEqual(value, undefined, `fixture needs captured ${name}`);
         bindings[name] = { type: spec.type, value, authorityRef: `plan:1:${name}` };
       }

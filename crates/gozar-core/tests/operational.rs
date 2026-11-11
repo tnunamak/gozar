@@ -191,7 +191,7 @@ fn occupied_private_candidates_never_emit_intent() {
     assert_eq!(out["state"]["resources"], json!([]));
 }
 #[test]
-fn changed_profile_and_unknown_continuity_block_cleanup() {
+fn changed_identity_and_unknown_continuity_block_cleanup() {
     let f = fixture();
     let a = definition("private");
     let active = until(
@@ -201,17 +201,72 @@ fn changed_profile_and_unknown_continuity_block_cleanup() {
         &f["baselineConfig"],
         "health",
     );
-    let mut changed = f["host"].clone();
-    changed["bindings"]["profileId"]["value"] = json!("different-profile");
-    let stop = run(json!({"state":active["state"],"host":changed,"command":{"type":"stop"}}));
-    assert!(stop["effects"].as_array().unwrap().is_empty());
-    assert_eq!(stop["snapshot"]["phase"], "cleanup-pending");
     let stopped = run(json!({"state":active["state"],"host":f["host"],"command":{"type":"stop"}}));
-    let identity = response(&stopped, &a, &f["host"], &f["baselineConfig"]);
-    let live = ack(&stopped, identity, &f["host"]);
-    let mut r = response(&live, &a, &f["host"], &f["baselineConfig"]);
-    r["ownershipReceipt"]["continuous"] = json!(false);
-    assert_eq!(ack(&live, r, &f["host"])["effects"], json!([]));
+    assert_eq!(stopped["effects"][0]["recipeRef"], "remove/ownership");
+    let mut inspection = response(&stopped, &a, &f["host"], &f["baselineConfig"]);
+    inspection["ownershipReceipt"]["continuous"] = json!(false);
+    assert_eq!(ack(&stopped, inspection, &f["host"])["effects"], json!([]));
+
+    let inspection = response(&stopped, &a, &f["host"], &f["baselineConfig"]);
+    let identity = ack(&stopped, inspection, &f["host"]);
+    assert_eq!(
+        identity["effects"][0]["recipeRef"],
+        "remove/before/identity"
+    );
+    for pointer in [
+        "/Self/ID",
+        "/CurrentTailnet/StableID",
+        "/CurrentTailnet/MagicDNSSuffix",
+    ] {
+        let mut raw = f["rawStatus"].clone();
+        *raw.pointer_mut(pointer).unwrap() = json!("changed-identity.example");
+        let mut result = response(&identity, &a, &f["host"], &f["baselineConfig"]);
+        result["stdout"] = json!(raw.to_string());
+        let denied = ack(&identity, result, &f["host"]);
+        assert_eq!(denied["effects"], json!([]));
+        assert_eq!(denied["snapshot"]["phase"], "cleanup-pending");
+        assert!(denied["snapshot"]["published"].is_null());
+    }
+}
+
+#[test]
+fn whole_map_capture_rejects_conflicts_that_omit_captured_leaves() {
+    let f = fixture();
+    let mut a = definition("private");
+    // The existing record capture enforces cardinality before selecting fields.
+    // Guard whole maps as well as their HTTPS/proxy leaves.
+    a["recipes"]["create"]["after"][0]["captures"]["selectedListener"] =
+        json!({"type":"record","pointer":"/Foreground/*/TCP/{port}","fields":{}});
+    a["recipes"]["create"]["after"][0]["captures"]["selectedWeb"] =
+        json!({"type":"record","pointer":"/Foreground/*/Web/{dnsName}:{port}","fields":{}});
+    let readback = until(
+        begin(&a, &f["host"]),
+        &a,
+        &f["host"],
+        &f["baselineConfig"],
+        "after",
+    );
+    for conflict in ["tcp", "web", "both"] {
+        let mut result = response(&readback, &a, &f["host"], &f["baselineConfig"]);
+        let mut raw: Value = serde_json::from_str(result["stdout"].as_str().unwrap()).unwrap();
+        let bindings = &readback["effects"][0]["bindings"];
+        let port = bindings["port"]["value"].as_u64().unwrap().to_string();
+        let name = format!("{}:{port}", bindings["dnsName"]["value"].as_str().unwrap());
+        raw["Foreground"]["foreign"] = json!({"TCP":{},"Web":{},"AllowFunnel":{}});
+        if conflict != "web" {
+            raw["Foreground"]["foreign"]["TCP"][&port] = json!({"TCPForward":"127.0.0.1:65534"});
+        }
+        if conflict != "tcp" {
+            raw["Foreground"]["foreign"]["Web"][&name] =
+                json!({"Handlers":{"/foreign":{"Text":"foreign"}}});
+        }
+        result["stdout"] = json!(raw.to_string());
+        let denied = ack(&readback, result, &f["host"]);
+        assert_eq!(denied["effects"], json!([]));
+        assert_eq!(denied["snapshot"]["phase"], "cleanup-pending");
+        assert!(denied["snapshot"]["candidate"].is_null());
+        assert!(denied["snapshot"]["published"].is_null());
+    }
 }
 #[test]
 fn local_handle_remove_inspects_before_durable_intent() {

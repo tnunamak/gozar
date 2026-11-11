@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
-export async function probe({ origin, nonce, issuedAt = Date.now(), toolEcho = randomUUID(), request = fetch }) {
+export async function probe({ origin, nonce, issuedAt = Date.now(), toolEcho = randomUUID(), toolName = 'identity', request = fetch }) {
   // A caller label cannot move this fetch to another machine/network.
   const vantage = 'local', executorId = 'local-node';
   const url = new URL(origin);
@@ -28,8 +28,8 @@ export async function probe({ origin, nonce, issuedAt = Date.now(), toolEcho = r
     assert.equal(reply.jsonrpc, '2.0'); assert.equal(reply.id, id); assert.equal(reply.error, undefined); return reply.result;
   };
   const listed = await rpc(2, 'tools/list', {});
-  assert.ok(listed.tools.some(tool => tool.name === 'identity'));
-  const called = await rpc(3, 'tools/call', { name: 'identity', arguments: { echo: toolEcho } });
+  assert.ok(listed.tools.some(tool => tool.name === toolName));
+  const called = await rpc(3, 'tools/call', { name: toolName, arguments: { echo: toolEcho } });
   assert.notEqual(called.isError, true);
   const toolResult = JSON.parse(called.content.find(item => item.type === 'text').text);
   assert.deepEqual(toolResult, { nonce, echo: toolEcho }, 'actual MCP tool result must match the fresh instance and echo challenge');

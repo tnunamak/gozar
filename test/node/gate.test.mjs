@@ -82,3 +82,28 @@ test('trusted executor queue can exceed core five-second IO timeout while bounde
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.ok(Date.now() - started >= 5000);
 });
+
+test('trusted probe payload explicitly preserves LAN HTTP and HTTPS requirements without weakening TLS', async t => {
+  const gate = await createGate(1); t.after(() => gate.close());
+  const { driver } = await fixture(t, {}, { targetPort: gate.port, origin: gate.target });
+  await prepareHost(driver, { bindings: {} }, { gate });
+  const payloads = [];
+  driver.probeExecutor = { vantages: ['lan', 'public'], verify: async payload => {
+    payloads.push(payload);
+    throw new Error('Payload-only fixture has no remote evidence');
+  } };
+  const effect = { id: 'http-payload', sessionId: 'test', generation: 1, adapterId: 'fake', kind: 'http-probe', operation: 'probe',
+    recipeRef: 'probe', stepId: 'probe', stage: 'probe', probe: driver.host.probe, tls: false, url: gate.target, vantage: 'lan', sse: true };
+  await driver.execute(effect);
+  assert.deepEqual(payloads[0].requirements, { httpsRequired: false, sse: true, streamableHttp: false, oauthDcr: false });
+  driver.origin = 'https://fixture.invalid';
+  await driver.execute({ ...effect, id: 'https-payload', url: driver.origin, tls: true, vantage: 'public' });
+  assert.equal(payloads[1].requirements.httpsRequired, true);
+  // An HTTPS origin stays strict even if an effect omits its optional TLS flag.
+  await driver.execute({ ...effect, id: 'https-origin-payload', url: driver.origin, tls: undefined, vantage: 'public' });
+  assert.equal(payloads[2].requirements.httpsRequired, true);
+  driver.origin = gate.target;
+  const rejected = await driver.execute({ ...effect, id: 'no-http-downgrade', tls: true });
+  assert.equal(rejected.ok, false); assert.match(rejected.result.detail, /cannot use an HTTP origin/);
+  assert.equal(payloads.length, 3);
+});

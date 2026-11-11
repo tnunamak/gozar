@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import { probe } from './probe.mjs';
 
-export async function observeLive({ origin, authorization, challenge, serviceNonce, toolEcho }) {
-  assert.equal(new URL(origin).protocol, 'https:', 'Drop1a requires real HTTPS');
+export async function observeLive({ origin, vantage, requirements, authorization, challenge, serviceNonce, toolEcho }) {
+  const protocol = new URL(origin).protocol;
+  assert.ok(protocol === 'https:' || (protocol === 'http:' && vantage === 'lan' && requirements?.httpsRequired === false), 'HTTP is admitted only for explicit LAN requirements');
   assert.ok(authorization?.nonceRef && authorization.verifierRef && authorization.expiresAtMs > Date.now());
   assert.ok(challenge?.identityPath?.startsWith('/.gozar-') && challenge.streamPath?.startsWith('/.gozar-') && challenge.nonce);
   const startedAt = Date.now();

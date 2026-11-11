@@ -15,6 +15,7 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
   if (snapshot.phase === 'stopped') {
     const lines = ['Gozar · stopped', 'Exposure stopped.'];
     for (const failure of reply.localCleanupFailures ?? []) lines.push(`Cleanup needs attention: ${typeof failure === 'string' ? failure : JSON.stringify(failure)}`);
+    if (reply.localCleanupFailures?.length) lines.push(`Retry: gozar stop --port ${port}`, 'Success: Exposure stopped, with no remaining cleanup failures.');
     if (reply.journalPath) lines.push(`Local state: ${reply.journalPath}`);
     return lines.join('\n');
   }
@@ -24,7 +25,7 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
   const selected = adapters.find(adapter => adapter.id === (snapshot.adapterId ?? id));
   const lines = [`Gozar · ${snapshot.phase}`];
   if (selected) {
-    const reason = typeof first === 'object' ? first.reason : selected.copy?.reason ?? selected.reason;
+    const reason = id === selected.id && typeof first === 'object' ? first.reason : selected.copy?.reason ?? selected.reason;
     lines.push(`Recommended: ${selected.displayName ?? selected.label ?? selected.id}${reason ? ` — ${reason}` : ''}`);
   }
   if (recommendations.length > 1) {
@@ -35,7 +36,7 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
     else lines.push(`${recommendations.length - 1} alternatives · use --alternatives`);
   }
   const plan = snapshot.plans?.find(plan => plan.adapterId === (snapshot.adapterId ?? id));
-  if (snapshot.phase !== 'published-ready' && plan?.eligibility === 'needs-validation') lines.push(snapshot.phase === 'planned' ? 'HTTPS and streaming checks run automatically after approval.' : 'Validation required before this route can be used.');
+  if (snapshot.phase !== 'published-ready' && plan?.eligibility === 'needs-validation') lines.push(snapshot.phase === 'planned' ? 'Required transport and streaming checks run automatically after approval.' : 'Validation required before this route can be used.');
   const prerequisite = snapshot.phase === 'published-ready' || snapshot.observations?.[snapshot.adapterId ?? id] === 'present' ? undefined : plan?.preconditionActions?.[0];
   if (prerequisite) lines.push(`${prerequisite.label}: ${prerequisite.reason}`);
   const observations = snapshot.observations ?? {};
@@ -52,12 +53,16 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
     try { endpoint = safeOrigin(snapshot.published); } catch { endpoint = null; }
     if (endpoint) {
       const mcpUrl = `${endpoint}/mcp`;
-      lines.push('Public route checks passed. Connect your MCP client.', 'Add to MCP client', `URL: ${mcpUrl}`,
+      lines.push('Route checks passed. Connect your MCP client.', 'Add to MCP client', `URL: ${mcpUrl}`,
         "Authentication: use your service's configured method.",
         'For gozar demo-server only, select no authentication.');
-      const template = selected?.clientProfile?.installLinkTemplate ?? selected?.profile?.installLinkTemplate;
+      lines.push('Your client connection and tool call still need checking.',
+        'Keep this device and service awake. Route validation expires; sleep or network loss can interrupt access.');
+      if (selected?.planVersion === 1) lines.push('Instance proxy lifetime: up to 15 minutes. After expiry, run stop, then expose again.');
+      const template = reply.connectionProfile?.installLinkTemplate ?? selected?.clientProfile?.installLinkTemplate ?? selected?.profile?.installLinkTemplate;
       const link = installLink(template, mcpUrl);
       if (link) lines.push(`Install link: ${link}`);
+      lines.push(JSON.stringify({ mcpServers: { service: { url: mcpUrl } } }, null, 2));
     }
   } else if (snapshot.candidate && snapshot.phase === 'candidate-ready') {
     lines.push(`Candidate: ${snapshot.candidate}`, 'Origin approval pending. This URL has not been published.');
@@ -71,8 +76,13 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
   if (reply.gateTarget) lines.push(`Proxy target for this instance: ${reply.gateTarget}`);
   if (reply.journalPath) lines.push(`Local state: ${reply.journalPath}`);
   if (snapshot.phase === 'cleanup-pending' || snapshot.phase === 'stopping') {
-    lines.push('Route removal is not confirmed.', `Retry: gozar stop --port ${port}`);
-  } else if (!['planned', 'stopped'].includes(snapshot.phase)) lines.push('Status: gozar status', 'Stop: gozar stop');
+    lines.push('Route removal is not confirmed.', `Retry: gozar stop --port ${port}`, 'Success: Exposure stopped, with no remaining cleanup failures.');
+  } else if (!['planned', 'stopped'].includes(snapshot.phase)) {
+    const scope = port ? ` --port ${port}` : '';
+    lines.push(`Status: gozar status${scope}`, `Stop: gozar stop${scope}`);
+    if (snapshot.phase !== 'published-ready') lines.push(`Next: ${reply.nextAction?.command ?? `gozar health${scope}`}`, `Success: ${reply.nextAction?.expectedSuccess ?? 'route checks pass and a validated URL is printed.'}`);
+    else lines.push(`After sleep or network loss: gozar health${scope}; if the route cannot recover, stop it and run expose again.`);
+  }
   return lines.join('\n');
 }
 
@@ -81,8 +91,9 @@ export function renderDetection(reply, adapters, activeIds = []) {
   const lines = ['Gozar · detection (read-only)'];
   for (const adapter of adapters) {
     const state = observations[adapter.id] ?? 'unknown';
-    const next = adapter.drop === 'next' || adapter.availability === 'next-drop' || !activeIds.includes(adapter.id);
+    const next = !activeIds.includes(adapter.id);
     lines.push(`${adapter.displayName ?? adapter.label ?? adapter.id}: ${state === 'signed-out' ? 'blocked' : state}${next ? ' · NEXT DROP' : ' · validation required'}`);
+    lines.push('  Login: unknown unless verified by account-state evidence. Capability: unknown until required probes pass.');
     if (['unknown', 'blocked', 'signed-out'].includes(state)) {
       const fix = adapter.copy?.fix ?? adapter.fix;
       if (fix) lines.push(`  ${fix}`);

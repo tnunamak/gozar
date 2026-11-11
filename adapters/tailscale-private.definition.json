@@ -13,10 +13,10 @@
       "oauthDcr": null
     },
     "unknowns": [
-      "Current capability requires a successful probe from the intended client network.",
-      "Background CLI feature-enablement may prompt despite --yes; unmet prerequisites block create.",
-      "Current profile, HTTPS enablement and MagicDNS facts need real scoped host authority; no fixture receipt is operational evidence.",
-      "CLI read/compare/off has no adapter-level CAS; changed or unknown continuity remains cleanup debt."
+      "Tailnet HTTPS and requested protocols require genuine remote tailnet instance proof before publication.",
+      "HTTPS capability and CertDomains permit provisioning; they do not prove an issued or client-trusted certificate.",
+      "Feature setup can prompt despite --yes; closed stdin and bounded startup fail safely when prerequisites are unmet.",
+      "Foreground watcher cleanup uses immutable process identity. Remaining or administrator-created mappings remain cleanup debt."
     ],
     "capabilityRecords": [
       {
@@ -86,7 +86,6 @@
         "program": "tailscale",
         "args": [
           "serve",
-          "--bg",
           "--yes",
           "--https={port}",
           "--set-path={mount}",
@@ -127,12 +126,100 @@
               "nodeId": {
                 "type": "opaque-ref",
                 "pointer": "/Self/ID"
+              },
+              "tailnetId": {
+                "type": "opaque-ref",
+                "pointer": "/CurrentTailnet/StableID"
+              },
+              "tailnetSuffix": {
+                "type": "dns-name",
+                "pointer": "/CurrentTailnet/MagicDNSSuffix"
               }
             },
             "assert": {
-              "op": "equals",
-              "pointer": "/BackendState",
-              "value": "Running"
+              "op": "all",
+              "items": [
+                {
+                  "op": "equals",
+                  "pointer": "/BackendState",
+                  "value": "Running"
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/CurrentTailnet/MagicDNSEnabled",
+                  "value": true
+                },
+                {
+                  "op": "exists",
+                  "pointer": "/Self/CapMap/https"
+                }
+              ]
+            }
+          },
+          {
+            "id": "permission",
+            "recipe": {
+              "kind": "spawn",
+              "program": "tailscale",
+              "args": [
+                "status",
+                "--json",
+                "--peers=false"
+              ],
+              "timeoutMs": 5000,
+              "maxOutputBytes": 65536,
+              "parser": {
+                "kind": "json-document",
+                "predicate": {
+                  "op": "exists",
+                  "pointer": ""
+                }
+              }
+            },
+            "captures": {},
+            "assert": {
+              "op": "all",
+              "items": [
+                {
+                  "op": "all",
+                  "items": [
+                    {
+                      "op": "equals",
+                      "pointer": "/BackendState",
+                      "value": "Running"
+                    },
+                    {
+                      "op": "equals",
+                      "pointer": "/CurrentTailnet/MagicDNSEnabled",
+                      "value": true
+                    },
+                    {
+                      "op": "exists",
+                      "pointer": "/Self/CapMap/https"
+                    }
+                  ]
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/Self/ID",
+                  "value": "{nodeId}"
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/CurrentTailnet/StableID",
+                  "value": "{tailnetId}"
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/CurrentTailnet/MagicDNSSuffix",
+                  "value": "{tailnetSuffix}"
+                },
+                {
+                  "op": "equals",
+                  "pointer": "/CertDomains/*",
+                  "value": "{dnsName}"
+                }
+              ]
             }
           },
           {
@@ -176,18 +263,6 @@
             "source": "config",
             "pointer": "/occupiedPorts",
             "port": "{port}"
-          },
-          {
-            "op": "verified",
-            "fact": "current-profile"
-          },
-          {
-            "op": "verified",
-            "fact": "https-enabled"
-          },
-          {
-            "op": "verified",
-            "fact": "magic-dns"
           }
         ],
         "after": [
@@ -218,18 +293,28 @@
                 "fields": {
                   "https": {
                     "type": "bool",
-                    "pointer": "/TCP/{port}/HTTPS"
+                    "pointer": "/Foreground/*/TCP/{port}/HTTPS"
                   },
                   "proxy": {
                     "type": "origin",
-                    "pointer": "/Web/{dnsName}:{port}/Handlers/~1/Proxy"
+                    "pointer": "/Foreground/*/Web/{dnsName}:{port}/Handlers/~1/Proxy"
                   },
                   "funnel": {
                     "type": "bool",
-                    "pointer": "/AllowFunnel/{dnsName}:{port}",
+                    "pointer": "/Foreground/*/AllowFunnel/{dnsName}:{port}",
                     "optional": true
                   }
                 }
+              },
+              "selectedListener": {
+                "type": "record",
+                "pointer": "/Foreground/*/TCP/{port}",
+                "fields": {}
+              },
+              "selectedWeb": {
+                "type": "record",
+                "pointer": "/Foreground/*/Web/{dnsName}:{port}",
+                "fields": {}
               }
             },
             "assert": {
@@ -237,14 +322,14 @@
               "items": [
                 {
                   "op": "equals",
-                  "pointer": "/TCP/{port}",
+                  "pointer": "/Foreground/*/TCP/{port}",
                   "value": {
                     "HTTPS": true
                   }
                 },
                 {
                   "op": "equals",
-                  "pointer": "/Web/{dnsName}:{port}",
+                  "pointer": "/Foreground/*/Web/{dnsName}:{port}",
                   "value": {
                     "Handlers": {
                       "/": {
@@ -257,28 +342,28 @@
                   "op": "not",
                   "predicate": {
                     "op": "exists",
-                    "pointer": "/AllowFunnel/{dnsName}:{port}"
-                  }
-                },
-                {
-                  "op": "not",
-                  "predicate": {
-                    "op": "exists",
-                    "pointer": "/Foreground/*/TCP/{port}"
-                  }
-                },
-                {
-                  "op": "not",
-                  "predicate": {
-                    "op": "exists",
-                    "pointer": "/Foreground/*/Web/{dnsName}:{port}"
-                  }
-                },
-                {
-                  "op": "not",
-                  "predicate": {
-                    "op": "exists",
                     "pointer": "/Foreground/*/AllowFunnel/{dnsName}:{port}"
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "exists",
+                    "pointer": "/TCP/{port}"
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "exists",
+                    "pointer": "/Web/{dnsName}:{port}"
+                  }
+                },
+                {
+                  "op": "not",
+                  "predicate": {
+                    "op": "exists",
+                    "pointer": "/AllowFunnel/{dnsName}:{port}"
                   }
                 }
               ]
@@ -289,20 +374,21 @@
           "https": true,
           "proxy": "{loopbackTarget}",
           "funnel": null
+        },
+        "process": {
+          "mode": "owned-long-running",
+          "stdin": "closed",
+          "lifetimeMs": 86400000,
+          "collectMs": 2000
         }
       },
       "remove": {
-        "kind": "spawn",
-        "program": "tailscale",
-        "args": [
-          "serve",
-          "--bg",
-          "--yes",
-          "--https={port}",
-          "--set-path={mount}",
-          "off"
-        ],
-        "timeoutMs": 5000,
+        "kind": "owned-process",
+        "signal": "SIGTERM",
+        "graceMs": 2000,
+        "thenSignal": "SIGKILL",
+        "confirmExit": true,
+        "timeoutMs": 10000,
         "maxOutputBytes": 65536,
         "parser": {
           "kind": "exit-code"
@@ -328,12 +414,7 @@
                 }
               }
             },
-            "captures": {
-              "nodeId": {
-                "type": "opaque-ref",
-                "pointer": "/Self/ID"
-              }
-            },
+            "captures": {},
             "assert": {
               "op": "all",
               "items": [
@@ -346,115 +427,22 @@
                   "op": "equals",
                   "pointer": "/Self/ID",
                   "value": "{nodeId}"
-                }
-              ]
-            }
-          },
-          {
-            "id": "live",
-            "recipe": {
-              "kind": "spawn",
-              "program": "tailscale",
-              "args": [
-                "serve",
-                "status",
-                "--json"
-              ],
-              "timeoutMs": 5000,
-              "maxOutputBytes": 65536,
-              "parser": {
-                "kind": "json-document",
-                "predicate": {
-                  "op": "exists",
-                  "pointer": ""
-                }
-              }
-            },
-            "captures": {
-              "route": {
-                "type": "record",
-                "pointer": "",
-                "fields": {
-                  "https": {
-                    "type": "bool",
-                    "pointer": "/TCP/{port}/HTTPS"
-                  },
-                  "proxy": {
-                    "type": "origin",
-                    "pointer": "/Web/{dnsName}:{port}/Handlers/~1/Proxy"
-                  },
-                  "funnel": {
-                    "type": "bool",
-                    "pointer": "/AllowFunnel/{dnsName}:{port}",
-                    "optional": true
-                  }
-                }
-              }
-            },
-            "assert": {
-              "op": "all",
-              "items": [
-                {
-                  "op": "equals",
-                  "pointer": "/TCP/{port}",
-                  "value": {
-                    "HTTPS": true
-                  }
                 },
                 {
                   "op": "equals",
-                  "pointer": "/Web/{dnsName}:{port}",
-                  "value": {
-                    "Handlers": {
-                      "/": {
-                        "Proxy": "{loopbackTarget}"
-                      }
-                    }
-                  }
+                  "pointer": "/CurrentTailnet/StableID",
+                  "value": "{tailnetId}"
                 },
                 {
-                  "op": "not",
-                  "predicate": {
-                    "op": "exists",
-                    "pointer": "/AllowFunnel/{dnsName}:{port}"
-                  }
-                },
-                {
-                  "op": "not",
-                  "predicate": {
-                    "op": "exists",
-                    "pointer": "/Foreground/*/TCP/{port}"
-                  }
-                },
-                {
-                  "op": "not",
-                  "predicate": {
-                    "op": "exists",
-                    "pointer": "/Foreground/*/Web/{dnsName}:{port}"
-                  }
-                },
-                {
-                  "op": "not",
-                  "predicate": {
-                    "op": "exists",
-                    "pointer": "/Foreground/*/AllowFunnel/{dnsName}:{port}"
-                  }
+                  "op": "equals",
+                  "pointer": "/CurrentTailnet/MagicDNSSuffix",
+                  "value": "{tailnetSuffix}"
                 }
               ]
             }
           }
         ],
-        "requires": [
-          {
-            "op": "verified",
-            "fact": "current-profile"
-          },
-          {
-            "op": "owned-ledger-match",
-            "source": "live",
-            "pointer": "/route"
-          }
-        ],
+        "requires": [],
         "after": [
           {
             "id": "readback",
@@ -542,6 +530,7 @@
         "typed-bindings",
         "predicate-parser",
         "owned-resource-ledger",
+        "owned-process",
         "probe-assertions",
         "client-vantage-probe",
         "unused-port-selection"
@@ -566,8 +555,9 @@
       "stop": "withdraw before cleanup; reconcile uncertain effects",
       "globalCleanup": false,
       "ownershipFields": [
-        "profileId",
         "nodeId",
+        "tailnetId",
+        "tailnetSuffix",
         "dnsName",
         "port",
         "mount",
@@ -577,7 +567,9 @@
         "https": true,
         "proxy": "{loopbackTarget}",
         "funnel": null
-      }
+      },
+      "identitySemantics": "Current node plus current tailnet StableID and DNS suffix fingerprint; not a native Tailscale profile ID.",
+      "cleanup": "Stop only immutable owned foreground process; watcher releases its own session; confirm exact port absent. Any remaining mapping is cleanup debt, never global reset/off."
     },
     "detection": {
       "steps": [
@@ -635,7 +627,7 @@
         },
         "otherwise": "NeedsLogin, NeedsMachineAuth, daemon unavailable, and malformed output are distinct"
       },
-      "permission": "HTTPS/cert domain, MagicDNS, applicable capability keys and selected allowed port must be verified; missing keys mean unknown",
+      "permission": "Running, MagicDNSEnabled, source-backed HTTPS capability key and exact CertDomains membership permit setup; issued TLS and tailnet reach are established only by the probe.",
       "neverProbeByMutation": true
     },
     "bindings": {
@@ -669,32 +661,47 @@
         "source": "status",
         "pointer": "/nodeId"
       },
-      "profileId": {
-        "type": "opaque-private-reference"
+      "tailnetId": {
+        "type": "opaque-private-reference",
+        "source": "status",
+        "pointer": "/tailnetId"
+      },
+      "tailnetSuffix": {
+        "type": "dns-name",
+        "source": "status",
+        "pointer": "/tailnetSuffix"
       }
     },
     "endpointTemplate": "https://{dnsName}:{port}",
     "safety": {
       "protectedPorts": [
         443,
-        10000
+        10000,
+        8444,
+        9443
       ],
-      "selectedPort": null,
       "fallbackPort": null,
       "dedicatedPortRequired": true,
       "restoreWholeConfig": false,
       "nativeOwnerMarker": false,
       "identicalExternalRecreation": "cannot distinguish without exclusive ownership; stop and reconcile if ownership continuity is uncertain",
       "busy": "stop without mutation",
-      "funnelVisibility": "Port visibility is shared; never change a pre-existing public listener.",
+      "funnelVisibility": "host:port-wide; never enable public visibility; preserve every occupied listener",
       "rootMountRequiresDedicatedUnusedPort": true,
       "candidatePorts": [
         9444,
         9445
       ],
       "preserveAnyOccupiedPort": true,
-      "continuity": "Fresh driver ownershipReceipt required; CLI values and ETag are not continuity or compare-and-swap proof."
+      "continuity": "Fresh driver ownershipReceipt required; CLI values and ETag are not continuity or compare-and-swap proof.",
+      "cleanupStrategy": "owned foreground watcher process; no Serve/Funnel off/reset",
+      "identity": "node/tailnet fingerprint, never fabricated profileId"
     },
-    "planVersion": 1
+    "planVersion": 1,
+    "drop": "1",
+    "displayName": "Private tailnet HTTPS",
+    "copy": {
+      "consent": "Start an owned foreground private HTTPS listener on an unused 9444 or 9445 only. Existing listeners stay untouched. Verify TLS, instance identity and requested protocols from a tailnet client before publication."
+    }
   }
 }

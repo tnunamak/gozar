@@ -1,4 +1,4 @@
-import { isIP } from 'node:net';
+import { selectedInterfaceAddress } from './interfaces.mjs';
 import { safeOrigin } from './catalog.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { expandPlan } from './bindings.mjs';
@@ -23,7 +23,7 @@ export function validateBinding(type, value, targetPort) {
     case 'mount': return typeof value === 'string' && /^\/[A-Za-z0-9_/-]*$/.test(value) && !value.includes('..') && value.length <= 128;
     case 'opaque-ref': case 'opaque-private-reference': case 'resource-handle': return opaque(value);
     case 'literal': return typeof value === 'boolean' || (Number.isSafeInteger(value) && value >= 0) || (typeof value === 'string' && /^[A-Za-z0-9_.:/-]{1,512}$/.test(value));
-    case 'selected-interface-address': return Boolean(isIP(value)) && !['0.0.0.0', '::', '127.0.0.1', '::1'].includes(value);
+    case 'selected-interface-address': return selectedInterfaceAddress(value);
     case 'origin': case 'credential-free-https-origin': case 'loopback-http-origin':
       try {
         if (safeOrigin(value) !== value) return false;

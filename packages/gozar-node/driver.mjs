@@ -13,6 +13,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import { isPublicIp } from './public-relay.mjs';
 import { safeOrigin } from './catalog.mjs';
+import { selectedInterfaceAddress } from './interfaces.mjs';
 import { loadCore } from './core.mjs';
 import { materializePrivateBinding, privateMaterializationScope } from './materialization.mjs';
 import { attributable, processIdentity } from './journal.mjs';
@@ -516,6 +517,7 @@ export class EffectDriver {
     const authorization = effect.probe ?? this.host.probe;
     const nowMs = this.nowMs();
     const origin = safeOrigin(effect.url ?? effect.origin);
+    if (effect.tls === true && !origin.startsWith('https:')) throw new Error('HTTPS probe requirement cannot use an HTTP origin');
     if (!authorization || authorization.expiresAtMs <= nowMs || !this.gate || authorization.nonceRef !== this.host.probe?.nonceRef || authorization.verifierRef !== this.host.probe?.verifierRef || authorization.expiresAtMs !== this.host.probe?.expiresAtMs ||
         (effect.nonceRef && effect.nonceRef !== authorization.nonceRef) ||
         (effect.verifierRef && effect.verifierRef !== authorization.verifierRef)) throw new Error('Probe authorization missing, stale or mismatched');
@@ -526,7 +528,7 @@ export class EffectDriver {
       }
       let result;
       try { result = await Promise.race([this.probeExecutor.verify({ signal, origin, vantage, authorization: { ...authorization },
-        challenge: this.gate.challenge(), networkTimeoutMs: bounded(effect.timeoutMs, 5000, 120000), requirements: { sse: Boolean(effect.sse), streamableHttp: Boolean(effect.streamableHttp), oauthDcr: Boolean(effect.oauthDcr) } }), new Promise((resolve, reject) => {
+        challenge: this.gate.challenge(), networkTimeoutMs: bounded(effect.timeoutMs, 5000, 120000), requirements: { httpsRequired: effect.tls === true || origin.startsWith('https:'), sse: Boolean(effect.sse), streamableHttp: Boolean(effect.streamableHttp), oauthDcr: Boolean(effect.oauthDcr) } }), new Promise((resolve, reject) => {
         if (signal.aborted) reject(new Error('Probe cancelled'));
         else signal.addEventListener('abort', () => reject(new Error('Probe cancelled')), { once: true });
       })]); } catch (error) { throw Object.assign(new Error('Trusted outside validation pending or failed'), { code: error.code ?? 'needs-validation' }); }
@@ -576,7 +578,7 @@ export class EffectDriver {
     if (effect.targetPort !== undefined && effect.targetPort !== this.targetPort) throw new Error('Forward target is outside approved port');
     if (effect.targetHost && effect.targetHost !== '127.0.0.1') throw new Error('Forward target must be loopback');
     const host = effect.bindAddress ?? '127.0.0.1';
-    const exactInterface = Object.values(networkInterfaces()).flat().some(address => address?.address === host && address.internal === false);
+    const exactInterface = selectedInterfaceAddress(host) && Object.values(networkInterfaces()).flat().some(address => address?.address === host && address.internal === false);
     if (host !== '127.0.0.1' && (!exactInterface || !this.bindAddresses.includes(host) || !this.firewallApproved)) {
       throw new Error('Firewall prerequisite: approve the exact interface before starting the forwarder');
     }

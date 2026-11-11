@@ -5,14 +5,6 @@
     "tailscale-funnel",
     "tailscale-private"
   ],
-  "allowedRemoveArgs": [
-    "funnel",
-    "--bg",
-    "--yes",
-    "--https=8443",
-    "--set-path=/",
-    "off"
-  ],
   "baseline": {
     "TCP": {
       "443": {
@@ -47,7 +39,7 @@
       "id": "exact-owned-mapping",
       "completion": {
         "exitCode": 0,
-        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stdout": "{\"live\": {\"tailnetId\": \"fixture-tailnet\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
         "stderr": "",
         "truncated": false
       },
@@ -57,8 +49,8 @@
           {
             "op": "equals",
             "source": "stdout",
-            "pointer": "/live/profileId",
-            "value": "fixture-profile"
+            "pointer": "/live/tailnetId",
+            "value": "fixture-tailnet"
           },
           {
             "op": "equals",
@@ -116,7 +108,7 @@
       "id": "administrator-target-edit",
       "completion": {
         "exitCode": 0,
-        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:7000\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stdout": "{\"live\": {\"tailnetId\": \"fixture-tailnet\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:7000\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
         "stderr": "",
         "truncated": false
       },
@@ -126,8 +118,8 @@
           {
             "op": "equals",
             "source": "stdout",
-            "pointer": "/live/profileId",
-            "value": "fixture-profile"
+            "pointer": "/live/tailnetId",
+            "value": "fixture-tailnet"
           },
           {
             "op": "equals",
@@ -185,7 +177,7 @@
       "id": "administrator-visibility-edit",
       "completion": {
         "exitCode": 0,
-        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": false}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stdout": "{\"live\": {\"tailnetId\": \"fixture-tailnet\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": false}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
         "stderr": "",
         "truncated": false
       },
@@ -195,8 +187,8 @@
           {
             "op": "equals",
             "source": "stdout",
-            "pointer": "/live/profileId",
-            "value": "fixture-profile"
+            "pointer": "/live/tailnetId",
+            "value": "fixture-tailnet"
           },
           {
             "op": "equals",
@@ -251,10 +243,10 @@
       "expected": false
     },
     {
-      "id": "profile-changed",
+      "id": "tailnet-changed",
       "completion": {
         "exitCode": 0,
-        "stdout": "{\"live\": {\"profileId\": \"another-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stdout": "{\"live\": {\"tailnetId\": \"another-tailnet\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
         "stderr": "",
         "truncated": false
       },
@@ -264,8 +256,8 @@
           {
             "op": "equals",
             "source": "stdout",
-            "pointer": "/live/profileId",
-            "value": "fixture-profile"
+            "pointer": "/live/tailnetId",
+            "value": "fixture-tailnet"
           },
           {
             "op": "equals",
@@ -323,7 +315,7 @@
       "id": "node-changed",
       "completion": {
         "exitCode": 0,
-        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"another-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stdout": "{\"live\": {\"tailnetId\": \"fixture-tailnet\", \"nodeId\": \"another-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
         "stderr": "",
         "truncated": false
       },
@@ -333,8 +325,8 @@
           {
             "op": "equals",
             "source": "stdout",
-            "pointer": "/live/profileId",
-            "value": "fixture-profile"
+            "pointer": "/live/tailnetId",
+            "value": "fixture-tailnet"
           },
           {
             "op": "equals",
@@ -392,7 +384,7 @@
       "id": "mount-changed",
       "completion": {
         "exitCode": 0,
-        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/administrator\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stdout": "{\"live\": {\"tailnetId\": \"fixture-tailnet\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/administrator\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": true}",
         "stderr": "",
         "truncated": false
       },
@@ -402,8 +394,8 @@
           {
             "op": "equals",
             "source": "stdout",
-            "pointer": "/live/profileId",
-            "value": "fixture-profile"
+            "pointer": "/live/tailnetId",
+            "value": "fixture-tailnet"
           },
           {
             "op": "equals",
@@ -461,7 +453,7 @@
       "id": "missing-ledger",
       "completion": {
         "exitCode": 0,
-        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": false, \"extraHandlers\": false, \"continuityCertain\": true}",
+        "stdout": "{\"live\": {\"tailnetId\": \"fixture-tailnet\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": false, \"extraHandlers\": false, \"continuityCertain\": true}",
         "stderr": "",
         "truncated": false
       },
@@ -471,8 +463,8 @@
           {
             "op": "equals",
             "source": "stdout",
-            "pointer": "/live/profileId",
-            "value": "fixture-profile"
+            "pointer": "/live/tailnetId",
+            "value": "fixture-tailnet"
           },
           {
             "op": "equals",
@@ -530,7 +522,7 @@
       "id": "new-administrator-handler",
       "completion": {
         "exitCode": 0,
-        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": true, \"continuityCertain\": true}",
+        "stdout": "{\"live\": {\"tailnetId\": \"fixture-tailnet\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": true, \"continuityCertain\": true}",
         "stderr": "",
         "truncated": false
       },
@@ -540,8 +532,8 @@
           {
             "op": "equals",
             "source": "stdout",
-            "pointer": "/live/profileId",
-            "value": "fixture-profile"
+            "pointer": "/live/tailnetId",
+            "value": "fixture-tailnet"
           },
           {
             "op": "equals",
@@ -599,7 +591,7 @@
       "id": "identical-external-recreation-uncertain",
       "completion": {
         "exitCode": 0,
-        "stdout": "{\"live\": {\"profileId\": \"fixture-profile\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": false}",
+        "stdout": "{\"live\": {\"tailnetId\": \"fixture-tailnet\", \"nodeId\": \"fixture-node\", \"port\": 8443, \"mount\": \"/\", \"proxy\": \"http://127.0.0.1:53123\", \"funnel\": true}, \"ledgerOwned\": true, \"extraHandlers\": false, \"continuityCertain\": false}",
         "stderr": "",
         "truncated": false
       },
@@ -609,8 +601,8 @@
           {
             "op": "equals",
             "source": "stdout",
-            "pointer": "/live/profileId",
-            "value": "fixture-profile"
+            "pointer": "/live/tailnetId",
+            "value": "fixture-tailnet"
           },
           {
             "op": "equals",
@@ -678,8 +670,8 @@
           {
             "op": "equals",
             "source": "stdout",
-            "pointer": "/live/profileId",
-            "value": "fixture-profile"
+            "pointer": "/live/tailnetId",
+            "value": "fixture-tailnet"
           },
           {
             "op": "equals",
@@ -734,5 +726,12 @@
       "expected": false
     }
   ],
-  "falseOutcome": "Do not execute off; preserve current config. Already absent may reconcile as removed only after profile/ledger check."
+  "falseOutcome": "Preserve current configuration. Stop only the immutable owned child; reconcile absence only with exact ledger and process/provider absence proof.",
+  "cleanup": {
+    "kind": "owned-process",
+    "signal": "SIGTERM",
+    "thenSignal": "SIGKILL",
+    "confirmExit": true,
+    "providerMutation": false
+  }
 }

@@ -4,8 +4,16 @@
   "definitionLocation": "*.definition.json#/definition",
   "automaticCatalog": "detect-only.json",
   "sharedHooks": {
-    "implemented": ["private-file-reference", "private-file-materialization", "transport-origin-mapping"],
-    "remaining": ["private-config-materialization", "json-records", "transport-policy-inspection"],
+    "implemented": [
+      "private-file-reference",
+      "private-file-materialization",
+      "transport-origin-mapping"
+    ],
+    "remaining": [
+      "private-config-materialization",
+      "json-records",
+      "transport-policy-inspection"
+    ],
     "normalization": "Blocked definitions below retain their declared feature sets. Each must adopt the current embedded materialize/credential-reference schema and pass its own acceptance before admission. An implemented shared hook alone does not admit a definition."
   },
   "normalizedOptIn": [
@@ -45,10 +53,10 @@
       "matching nonce verifier and intended network vantage"
     ],
     "tailscale": [
-      "current-profile identity",
-      "HTTPS/MagicDNS prerequisites",
-      "actual route allocation ownership",
-      "immutable foreground process identity or fresh exact route ownership continuity before cleanup"
+      "current node/tailnet StableID and DNS suffix fingerprint (no native profile ID)",
+      "raw HTTPS/MagicDNS prerequisites; CertDomains is provisioning permission only",
+      "immutable owned foreground process birth identity and continuity before cleanup",
+      "exact selected listener readback and confirmed absence after owned-child exit"
     ],
     "tailscale-funnel": [
       "current Funnel permission",
@@ -74,12 +82,16 @@
   "captures": {
     "status": [
       "dnsName",
-      "nodeId"
+      "nodeId",
+      "tailnetId",
+      "tailnetSuffix"
     ],
     "config": [
       "occupiedPorts"
     ],
     "readback": [
+      "selectedListener",
+      "selectedWeb",
       "route.https",
       "route.proxy",
       "route.funnel"
@@ -101,14 +113,15 @@
   },
   "exactStageReferences": [
     "create/before/status",
+    "create/before/permission",
     "create/before/config",
     "create/execute",
     "create/after/readback",
     "remove/before/identity",
-    "remove/before/live",
+    "remove/ownership",
     "remove/execute",
     "remove/after/readback"
   ],
-  "continuity": "Fresh host ownershipReceipt matching handleRef, continuityRef and sessionId is mandatory. Fixture authorities are synthetic test input only. CLI read/compare/off is not compare-and-swap.",
+  "continuity": "Fresh ownershipReceipt binds handleRef, continuityRef and sessionId. Only the owned foreground child is stopped; no provider off/reset. Synthetic receipts never establish real ownership.",
   "probe": "Only a matching fresh probeReceipt establishes origin, TLS, instance nonce and required transport behavior. Public accepts remote:true or the originally authorized public-relay class (remote:false, publicDns:true, pinned public IP). Tailnet and LAN require genuine remote:true intended-vantage proof. Local HTTP 200 is insufficient."
 }

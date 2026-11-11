@@ -143,3 +143,28 @@ assert.deepEqual(absenceCleared.effects, []);
 const absenceRestarted = transition({ state: absenceCleared.state, host: absentHost, command: { type: 'start', adapterId: processRecord.id, consent: true } });
 assert.ok(absenceRestarted.effects[0].recipeRef.startsWith('create/'));
 console.log(JSON.stringify({ absenceReconciliation: true, nativeWasmEqual: true, steps: trace.length - absenceStart, rejectedReceipts: 8, providerCommandsExecuted: 0 }));
+
+// Whole-map cardinality catches conflicts that omit the captured HTTPS/proxy leaves.
+// This exercises existing record captures; it does not authorize a provider readback.
+const guarded = clone(records.find(record => record.audience === 'tailnet'));
+Object.assign(guarded.recipes.create.after[0].captures, {
+  selectedListener: { type: 'record', pointer: '/Foreground/*/TCP/{port}', fields: {} },
+  selectedWeb: { type: 'record', pointer: '/Foreground/*/Web/{dnsName}:{port}', fields: {} },
+});
+const conflictStart = trace.length;
+for (const conflict of ['tcp', 'web', 'both']) {
+  const denied = run(guarded, { editObservation(raw, effect) {
+    if (effect.recipeRef !== 'create/after/readback') return;
+    const port = effect.bindings.port.value;
+    const name = `${effect.bindings.dnsName.value}:${port}`;
+    raw.Foreground.foreign = { TCP: {}, Web: {}, AllowFunnel: {} };
+    if (conflict !== 'web') raw.Foreground.foreign.TCP[port] = { TCPForward: '127.0.0.1:65534' };
+    if (conflict !== 'tcp') raw.Foreground.foreign.Web[name] = { Handlers: { '/foreign': { Text: 'foreign' } } };
+  } });
+  assert.equal(denied.output.snapshot.phase, 'cleanup-pending');
+  assert.equal(denied.output.snapshot.candidate, null);
+  assert.equal(denied.output.snapshot.published, null);
+  assert.deepEqual(denied.output.effects, []);
+}
+if (file) await writeFile(file, JSON.stringify({ scope: 'synthetic trusted provider outcomes; no route or network effects dispatched', nativeWasmEqual: true, steps: trace.length, trace }, null, 2) + '\n');
+console.log(JSON.stringify({ wholeMapCardinality: true, nativeWasmEqual: true, steps: trace.length - conflictStart, rejectedConflicts: 3, providerCommandsExecuted: 0 }));
