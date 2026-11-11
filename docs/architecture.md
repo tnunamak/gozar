@@ -18,4 +18,18 @@ Stop withdraws publication before cleanup. Cleanup uses the original bindings an
 
 The automatic operational catalog enables localhost.run and Funnel. Other records supply detection inventory and extension plans. A whole-plan feature check precedes execution, so each host negotiates the effects it supports before admitting a plan.
 
+## Client requirements
+
+Client identity is optional host-supplied data. The core filters on `clientReach`, `httpsRequired`, `oauthDcr`, `sse` and `streamableHttp`.
+
+| Client reach | Eligible route audiences |
+|---|---|
+| `internet` | Public HTTPS |
+| `tailnet` | Tailnet and public HTTPS |
+| `lan` | LAN and public HTTPS |
+| `this-device` | Local, tailnet, LAN and public HTTPS |
+| `unknown` | Public HTTPS first, with a one-line client-network limit |
+
+A host passes requirements it already knows. Otherwise the CLI asks, “Where does the app that will use this run?”. An optional profile can supply requirements and an HTTPS `installLinkTemplate` containing `{url}`. The renderer encodes the endpoint into the template; profile names never choose code paths or relax proof requirements.
+
 The machine-readable contract is [core-protocol.json](../runtime/core-protocol.json). [PLAN-PROTOCOL.md](../crates/gozar-core/PLAN-PROTOCOL.md) describes ordered steps, typed captures and ownership records.

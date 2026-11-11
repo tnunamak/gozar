@@ -134,11 +134,11 @@ Every adapter is a `planVersion: 1` data plan. The Rust sans-IO core continues t
 
 - `adapters/client-profiles/manifest.json`
 - `adapters/client-profiles/mcp-client-profile.schema.json`
-- `adapters/client-profiles/profiles/claude-desktop.json`
-- `adapters/client-profiles/profiles/claude-ai.json`
-- `adapters/client-profiles/profiles/chatgpt-web.json`
-- `adapters/client-profiles/profiles/codex.json`
-- `adapters/client-profiles/profiles/cursor.json`
+- `adapters/client-profiles/profiles/local-desktop.json`
+- `adapters/client-profiles/profiles/remote-authenticated.json`
+- `adapters/client-profiles/profiles/remote-no-auth.json`
+- `adapters/client-profiles/profiles/tailnet-client.json`
+- `adapters/client-profiles/profiles/lan-client.json`
 - `test/adapters/client-profile-pack.test.mjs`
 
 **Interface satisfied:** Versioned data records for client transport and capability expectations. Each profile distinguishes supported configuration shape from observed reachability; adapter planVersion 1 remains the route contract and the shared JSON protocol remains unchanged. If a consumer needs a new negotiated capability, propose it to the integrator rather than extending the core here.
