@@ -1,54 +1,78 @@
 # Gozar
 
-Gozar exposes a local service through a provider chosen from a shared adapter catalog. A Rust sans-IO core makes the lifecycle decisions, while a small Node host executes typed process, file, network and timer effects. The same core compiles to native Rust and WebAssembly.
-
-The current Linux host supports **localhost.run trials** and **Tailscale Funnel on an unused port 8443**. Detection also inventories Tailscale private Serve, ngrok, Cloudflare named tunnels, LAN and owner-managed HTTPS addresses. These additional modes appear as `NEXT DROP` in the CLI.
-
-## Build
-
-Use Node 22+, a Rust toolchain, OpenSSH and the pinned wasm-bindgen CLI. Funnel also needs an installed, signed-in Tailscale client with HTTPS, MagicDNS and Funnel permission.
+Give a local MCP server an address your client can reach. Gozar detects available routes, recommends one, checks the connection, and removes only what it created.
 
 ```sh
+node bin/gozar.mjs expose --port 18765
+```
+
+It asks where the client runs, shows the recommended route and asks for approval. For an internet client, HTTPS and streaming checks run automatically. The output includes the full `/mcp` URL to paste into your client.
+
+## Build from source
+
+Use Linux, Node 22+, Rust and OpenSSH. Tailscale Funnel also needs a signed-in Tailscale client with MagicDNS, HTTPS and Funnel permission. The localhost.run trial needs no tunnel-provider account.
+
+```sh
+git clone https://github.com/tnunamak/gozar.git
+cd gozar
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.105 --locked
 bash scripts/build-wasm.sh
-npm link
 ```
 
-The generated WASM bindings stay in `packages/gozar-core/generated/`. `CARGO_TARGET_DIR` and `WASM_BINDGEN` can select existing build tools and caches.
+The build creates the WASM bindings used by the CLI. `WASM_BINDGEN` and `CARGO_TARGET_DIR` can select existing tools and build caches. Run `npm link` if you want to type `gozar` instead of `node bin/gozar.mjs`.
 
 ## Try the echo server
 
-In one terminal, start the demo MCP server:
+Start the demo in one terminal:
 
 ```sh
-gozar demo-server
+node bin/gozar.mjs demo-server --port 18765
 ```
 
-In another terminal, run `gozar expose --port 18765`, choose where the client runs and approve the recommended route. Paste the printed `/mcp` URL into your MCP client, select **no authentication** for this demo and call `echo` with `{"echo":"hello"}`. The demo serves Streamable HTTP and SSE at both the root URL and `/mcp`.
-
-Use `gozar status` to inspect the current route and `gozar stop` to remove the exposure. Stop the demo server with Ctrl+C.
-
-## Expose a service
-
-Start your service on a loopback port, then run:
+In another terminal:
 
 ```sh
-gozar detect --port 3000
-gozar expose --port 3000
-gozar status
-gozar stop
+node bin/gozar.mjs expose --port 18765
 ```
 
-`expose` asks where the client runs, recommends an eligible route and requests approval for the exact local target. HTTPS and streaming checks are selected automatically for the current public routes. Choose a route explicitly with `--adapter localhost-run` or `--adapter tailscale-funnel`. `--json` returns machine-readable states and actions. `--yes` records consent for the selected route and target.
+Choose `internet` for an internet-hosted MCP client, then approve the route. Add the printed `/mcp` URL to your client. For this demo, select **no authentication** and call `echo` with `{"echo":"hello"}`. The result includes your text and this server's instance nonce. The demo serves Streamable HTTP and SSE.
 
-Gozar adds no application authentication. Keep the authentication required by your own service; transport checks do not authorize callers.
+Inspect and stop the route:
 
-Before publication, Gozar resolves the public hostname through DNS over HTTPS, pins a public IP, validates the original TLS hostname, checks a fresh instance nonce and measures incremental SSE delivery. The receipt identifies this as a public relay path with `remote:false`; it describes the network path traversed from the host.
+```sh
+node bin/gozar.mjs status
+node bin/gozar.mjs stop
+```
 
-The current controller gate has a 15-minute lifetime. A localhost.run trial uses isolated SSH state; its relay terminates TLS and can read the forwarded traffic. Funnel uses a dedicated, freshly checked 8443 listener and an owned foreground process. Stop removes only resources recorded for that session and preserves existing listeners and configuration.
+Stop the demo server with Ctrl+C. For multiple services, add `--port N` to `status` and `stop` to select the exact session.
 
-## Verify
+## Choose a route
+
+```sh
+node bin/gozar.mjs detect --port 3000
+node bin/gozar.mjs expose --port 3000 --client-reach internet
+```
+
+Detection lists the catalog's modes and their current observations. Finding a command does not establish login state or permission. `--alternatives` expands the route list; `--adapter ID` selects one. `--json` returns states and actions for automation. `--yes` approves the selected route and exact local target.
+
+Public routes include the localhost.run trial and Tailscale Funnel on an unused `8443` listener. Funnel uses an owned foreground process and preserves existing listeners. The trial uses isolated SSH state; the relay terminates TLS and can read forwarded traffic.
+
+An owner-managed HTTPS address stays under its owner's control. Supply `--origin https://service.example`; Gozar prints the local proxy target. Point your existing proxy at it, then run `gozar health --port N` to validate the route. Stop closes Gozar's local proxy without deleting your ingress or DNS.
+
+Private tailnet and LAN routes require a trusted verifier on the intended client network before publication. LAN uses an explicitly selected interface and firewall approval; its HTTP route cannot satisfy an HTTPS requirement. Ngrok and named Cloudflare tunnels appear in detection for the next drop.
+
+## Connection and lifetime
+
+Gozar adds no application authentication. Keep the authentication your own service requires. A successful route check does not authorize callers or prove that your MCP client has connected.
+
+For public routes, Gozar resolves the hostname through public DNS, pins a public IP, checks the original TLS hostname and a fresh instance nonce, and measures streamed delivery. This proof crosses the provider's public relay from the host; it is recorded as `remote:false`.
+
+The current instance proxy lasts up to **15 minutes**. Keep the device and service awake. After sleep or network loss, run `gozar health --port N`. After expiry, stop the session and expose it again. A trial URL can change or expire earlier.
+
+## Develop
+
+A Rust core makes decisions without performing I/O. It compiles to native Rust and WASM; a Node host executes typed effects. Provider behavior lives in adapter data. See the [architecture](docs/architecture.md), [wire contract](runtime/core-protocol.json) and [adapter guide](adapters/INTEGRATION.md).
 
 ```sh
 cargo test -p gozar-core
@@ -59,6 +83,4 @@ node crates/gozar-core/tests/operational-golden.mjs
 node crates/gozar-core/tests/public-relay-golden.mjs
 ```
 
-The tests cover ordered observations, durable intent, exact ownership, cancellation, stale completions, guarded cleanup, public-IP pinning and streamed delivery. The [live harness](harness/README.md) creates a disposable MCP service, checks an actual tool call and SSE stream, then verifies cleanup against the full provider baseline.
-
-See the [architecture](docs/architecture.md), [wire contract](runtime/core-protocol.json) and [adapter authoring guide](adapters/INTEGRATION.md). Source is hosted at [github.com/tnunamak/gozar](https://github.com/tnunamak/gozar).
+The [live harness](harness/README.md) checks a real MCP tool call, streamed delivery and cleanup against the provider's original configuration.
