@@ -51,7 +51,12 @@ export function consentBinding(query: Query, canonicalHome: string, disclosureRe
  * runtime/adapter.schema.json. An entry that fails validation is a load error, never a skipped
  * adapter. Only built-in module paths are loadable.
  */
-export function loadAdapters(): Promise<Adapter[]>;
+export function loadAdapters(options?: {
+  /** Path to, or parsed object of, a manifest; default adapters/manifest.json. Tests pass a fixture. */
+  manifest?: string | { providers: { id: string; module: string; definition: string }[] };
+  /** Directory that holds `providers/`; default the package's adapters directory. */
+  root?: string;
+}): Promise<Adapter[]>;
 
 // --- durable-route.mjs ----------------------------------------------------------------------------
 

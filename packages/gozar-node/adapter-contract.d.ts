@@ -1,4 +1,4 @@
-// Gozar adapter boundary, version 1 (frozen in C0).
+// Gozar adapter boundary, version 1 (frozen in C0; amendment 1 adds context fields only).
 //
 // One adapter is one directory plus one `{id, module, definition}` entry in adapters/manifest.json
 // `providers`. Types only: no runtime behaviour is declared here. Opaque effect, readback and
@@ -81,8 +81,18 @@ export type SetupResult = { state: 'complete' | 'pending' | 'blocked'; nextActio
 /** Injected clock, read-only provider probe, challenge verifier and private configuration lookup. */
 export type ReadContext = {
   now: () => number;
+  /** Canonical Gozar state home of the calling app (amendment 1: the durable plan needs it). */
+  home: string;
+  /** Host platform as reported by the core; adapters never read process.platform themselves (amendment 1). */
+  platform: string;
+  /**
+   * Private configuration lookup, scoped to this adapter. It is the only path by which a secret
+   * (for example a provider auth token) reaches an adapter, and only during `create` or `setup`.
+   * The secret must never be placed in facts, plans, receipts, errors or output.
+   */
   configuration: (ref: string | null) => Promise<unknown>;
-  probe: (recipe: unknown) => Promise<unknown>;
+  /** Runs a read-only recipe through the engine; `ok` is the recipe parser's verdict (amendment 1). */
+  probe: (recipe: unknown) => Promise<{ ok: boolean; detail?: unknown }>;
   verifyChallenge: (origin: string, target: string) => Promise<Verification>;
 };
 
@@ -98,6 +108,8 @@ export type SetupContext = ReadContext & {
  * (`precondition_failed` when the provider revision moved; nothing is changed). Neither contains ownership logic.
  */
 export type AdmittedEffectContext = ReadContext & {
+  /** Route generation the effect is admitted for; receipts carry it (amendment 1). */
+  generation: number;
   assertGeneration: () => Promise<void>;
   executePlan: (plan: AdapterPlan) => Promise<Receipt>;
   compareAndRemove: (receipt: Receipt, observed: Observation) => Promise<Removal>;
