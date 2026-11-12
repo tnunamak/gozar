@@ -1,14 +1,32 @@
 {
-  "name": "gozar-workspace",
-  "private": true,
+  "name": "@tnunamak/gozar",
+  "version": "0.1.0",
+  "description": "Give a local MCP server an address its client can reach",
   "type": "module",
+  "exports": {
+    ".": "./packages/gozar-node/api.mjs",
+    "./service": "./packages/gozar-node/service.mjs",
+    "./bin/gozar.mjs": "./bin/gozar.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin/gozar.mjs",
+    "packages/gozar-node/*.mjs",
+    "packages/gozar-core/generated/",
+    "adapters/**/*.json",
+    "harness/dummy-server.mjs",
+    "docs/service-routes.md"
+  ],
+  "repository": { "type": "git", "url": "https://github.com/tnunamak/gozar.git" },
+  "publishConfig": { "access": "public" },
   "bin": {
     "gozar": "bin/gozar.mjs"
   },
   "scripts": {
+    "prepack": "node scripts/check-package.mjs",
     "test:node": "node --test --test-concurrency=1 test/node/*.test.mjs"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   }
 }

@@ -37,3 +37,9 @@ test('noninteractive no-flag expose asks one question and gives an exact next co
   assert.match(result.stdout, /gozar expose --port 18765 --client-reach internet/);
   assert.doesNotMatch(result.stdout, /<choice>|\[--|Unknown option/);
 });
+
+test('published route text reports the host lifetime', () => {
+  const text = render({ lifetimeMs: 1_500_000, snapshot: { phase: 'published-ready', adapterId: 'trial', published: 'https://trial.example' } }, [{ id: 'trial', planVersion: 1 }]);
+  assert.match(text, /up to 25 minutes/);
+  assert.doesNotMatch(text, /up to 15 minutes/);
+});

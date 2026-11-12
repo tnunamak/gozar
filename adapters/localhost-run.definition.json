@@ -43,7 +43,7 @@
       },
       {
         "id": "trial-consent",
-        "label": "Start a 15-minute trial",
+        "label": "Start a public trial",
         "reason": "The relay sees plaintext; URL expiry or rotation requires a new connection."
       }
     ],
@@ -204,7 +204,7 @@
     "displayName": "localhost.run trial",
     "drop": "1a",
     "copy": {
-      "consent": "Start a 15-minute public HTTPS trial. The relay terminates TLS and can read payloads. HTTPS, instance identity and timed SSE must pass before publication."
+      "consent": "Start a public HTTPS trial for the requested lifetime (15 minutes by default). The relay terminates TLS and can read payloads. HTTPS, instance identity and timed SSE must pass before publication."
     }
   }
 }

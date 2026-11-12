@@ -4,22 +4,18 @@ One interface for tunnel and route providers.
 
 Gozar is one standard interface over tunnel and route providers, from Tailscale to an address you own. It detects what's available, recommends a route by who must reach your service, sets it up with your approval, verifies it, and removes only what it created.
 
-For developers sharing local services and programs such as Dalan that need to arrange a reachable address for their users. Exposing an MCP server is one use case, not a requirement for using Gozar.
+For developers sharing local services and host applications that arrange reachable addresses for their users. Exposing an MCP server is one use case, not a requirement for using Gozar.
 
 ## Install
 
-Use Linux, Node 22+, Rust and OpenSSH. Build and link the CLI from this branch:
+Use Linux and Node 24 or newer:
 
 ```sh
-git clone --branch feat/service-route https://github.com/tnunamak/gozar.git
-cd gozar
-rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli --version 0.2.105 --locked
-bash scripts/build-wasm.sh
-npm link
+npm install @tnunamak/gozar
+npx gozar expose --port 3000 --client-reach internet
 ```
 
-Run `gozar` to print help, or use `node bin/gozar.mjs` without linking. Provider prerequisites still apply: localhost.run needs OpenSSH; Tailscale needs a signed-in client and the permissions for the selected route. Persistent service mutations also need `flock` from util-linux.
+The package contains the compiled WASM core and JavaScript bindings. Installation and execution do not need Rust or wasm-bindgen. Provider prerequisites still apply: localhost.run needs OpenSSH; Tailscale needs a signed-in client and permission for the route. Service registration and removal need `flock` from util-linux. Linux is the tested host platform.
 
 ## 30-second example
 
@@ -67,7 +63,7 @@ This records and verifies the existing route without adding a local proxy or an 
 
 ## Embed Gozar in a host
 
-Programs such as Dalan can invoke the CLI with `--json` to consume status and actions, then present choices and consent in their own interface. For example:
+Host applications can invoke the CLI with `--json` to consume status and actions, then present choices and consent in their own interface. For example:
 
 ```sh
 gozar detect --port 3000 --json
@@ -75,6 +71,22 @@ gozar expose --port 3000 --client-reach internet --json
 ```
 
 Handle requested inputs and approvals; JSON output does not grant permission to create a route. Only pass `--yes` after the user approves the selected route and exact local target. Keep application authentication in the host, and use `health` and `stop` for the session lifecycle. For a persistent service, see the [service-route JavaScript API](docs/service-routes.md).
+
+## JavaScript API
+
+```js
+import { expose, status, stop } from '@tnunamak/gozar';
+
+const route = await expose({ port: 18765, clientReach: 'internet', adapterId: 'localhost-run',
+  lifetimeMs: 1_500_000, yes: true });
+console.log(route.snapshot);
+await status({ port: 18765 });
+await stop({ port: 18765 });
+```
+
+These asynchronous functions run the packaged CLI with JSON output and return its reply. `yes: true` approves the selected route and exact loopback target; omission does not grant approval. `home` selects an isolated state directory. Failures reject with an Error whose `reply` contains the CLI JSON and whose `code` contains the process exit code. The functions accept the CLI's named fields in camel case (including `probeDirectory`, `probeWaitMs`, `streamableHttp` and `oauthDcr`).
+
+The root API also exports `addService`, `statusServices`, `removeService` and `createServiceVerifier`. These are available directly from `@tnunamak/gozar/service`; see [service routes](docs/service-routes.md). Hosts that need CLI control can resolve `@tnunamak/gozar/bin/gozar.mjs` without relying on a global installation.
 
 ## Try the echo server
 
@@ -122,11 +134,21 @@ Gozar adds no application authentication. Keep the authentication your own servi
 
 For public routes, Gozar resolves the hostname through public DNS, pins a public IP, checks the original TLS hostname and a fresh instance nonce, and measures streamed delivery. This proof crosses the provider's public relay from the host; it is recorded as `remote:false`.
 
-The current instance proxy lasts up to **15 minutes**. Keep the device and service awake. After sleep or network loss, run `gozar health --port N`. After expiry, stop the session and expose it again. A trial URL can change or expire earlier.
+The instance proxy defaults to **15 minutes**. Set `--lifetime-ms` to supply a different lifetime, for example `gozar expose --port 18765 --client-reach internet --lifetime-ms 1500000` for 25 minutes. The value must be an integer in `1..2147483647`. JSON expose/status replies include `lifetimeMs` and `expiresAtMs` (Unix milliseconds). Keep the device and service awake. After sleep or network loss, run `gozar health --port N`. After expiry, stop the session and expose it again. A provider can expire or change a trial URL earlier. Service routes have no Gozar lifetime or proxy.
 
 ## Contributing
 
-The [installation steps](#install) build the WASM bindings used by the CLI. `WASM_BINDGEN` and `CARGO_TARGET_DIR` can select existing tools and build caches.
+To build from source, install Rust and wasm-bindgen 0.2.105:
+
+```sh
+git clone https://github.com/tnunamak/gozar.git
+cd gozar
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.105 --locked
+bash scripts/build-wasm.sh
+```
+
+The build creates the WASM bindings used by the CLI. `WASM_BINDGEN` and `CARGO_TARGET_DIR` can select existing tools and build caches. Run `npm link` to use `gozar` without typing `node bin/gozar.mjs`.
 
 ### Develop
 

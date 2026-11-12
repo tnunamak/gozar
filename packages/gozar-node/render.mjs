@@ -58,7 +58,7 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
         'For gozar demo-server only, select no authentication.');
       lines.push('Your client connection and tool call still need checking.',
         'Keep this device and service awake. Route validation expires; sleep or network loss can interrupt access.');
-      if (selected?.planVersion === 1) lines.push('Instance proxy lifetime: up to 15 minutes. After expiry, run stop, then expose again.');
+      if (selected?.planVersion === 1) lines.push(`Instance proxy lifetime: up to ${(reply.lifetimeMs ?? 900_000) / 60_000} minutes. After expiry, run stop, then expose again.`);
       const template = reply.connectionProfile?.installLinkTemplate ?? selected?.clientProfile?.installLinkTemplate ?? selected?.profile?.installLinkTemplate;
       const link = installLink(template, mcpUrl);
       if (link) lines.push(`Install link: ${link}`);

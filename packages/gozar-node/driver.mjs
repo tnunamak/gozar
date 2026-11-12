@@ -326,7 +326,7 @@ export class EffectDriver {
         nonce: randomUUID(), artifacts: [...artifacts], ...(privateMaterialized ? { privateMaterialized: true, dispatchEffectId: effect.id } : {}), continuityRef: randomUUID(), bindings: effect.bindings ?? {}, details: processDetails, baseline: this.intentRecords.get(this.receiptKey(effect))?.baseline ?? {}, sessionId: this.sessionId, adapterId: this.selectedAdapter, generation: effect.generation };
       if (!resource.startIdentity) { child.kill('SIGTERM'); throw new Error('Cannot establish process ownership'); }
       if (effect.lifetimeMs) {
-        const lifetime = setTimeout(() => { if (!this.stopped) this.onExit({ resourceId: id, reason: 'lifetime-expired' }); }, bounded(effect.lifetimeMs, 900000, 86400000));
+        const lifetime = setTimeout(() => { if (!this.stopped) this.onExit({ resourceId: id, reason: 'lifetime-expired' }); }, (this.lifetimeMs ?? bounded(effect.lifetimeMs, 900000, 86400000)));
         lifetime.unref(); child.once('exit', () => clearTimeout(lifetime));
       }
       this.children.set(id, child);

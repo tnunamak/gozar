@@ -11,7 +11,7 @@ import { EffectDriver } from '../packages/gozar-node/driver.mjs';
 import { Controller } from '../packages/gozar-node/controller.mjs';
 import { control, launch, serve, recoverStop, stopSession } from '../packages/gozar-node/daemon.mjs';
 import { render, renderDetection, exposeSnapshot, installLink } from '../packages/gozar-node/render.mjs';
-import { startDummy } from '../harness/dummy-server.mjs';
+import { validateLifetimeMs } from '../packages/gozar-node/gate.mjs';
 import { selectedInterfaceAddress } from '../packages/gozar-node/interfaces.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -21,16 +21,20 @@ export function parseArgs(argv) {
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i];
     if (['--yes', '--json', '--alternatives', '--operational', '--sse', '--streamable-http', '--oauth-dcr', '--observe-process-output'].includes(flag)) options[flag.slice(2)] = true;
-    else if (['--port', '--client-reach', '--origin', '--adapter', '--bind-address', '--firewall-ack', '--client-profile', '--install-link-template', '--transport', '--local-name', '--probe-directory', '--probe-request', '--probe-receipt', '--probe-executor-id', '--probe-wait-ms'].includes(flag)) {
+    else if (['--port', '--client-reach', '--origin', '--adapter', '--bind-address', '--firewall-ack', '--client-profile', '--install-link-template', '--transport', '--local-name', '--probe-directory', '--probe-request', '--probe-receipt', '--probe-executor-id', '--probe-wait-ms', '--lifetime-ms'].includes(flag)) {
       const value = argv[++i];
       if (!value || value.startsWith('--')) throw new Error(`Missing value for ${flag}`);
-      options[{ '--port': 'port', '--client-reach': 'clientReach', '--origin': 'origin', '--adapter': 'adapterId', '--bind-address': 'bindAddress', '--firewall-ack': 'firewallAck', '--client-profile': 'clientProfileId', '--install-link-template': 'installLinkTemplate', '--transport': 'transport', '--local-name': 'localName', '--probe-directory': 'probeDirectory', '--probe-request': 'probeRequest', '--probe-receipt': 'probeReceipt', '--probe-executor-id': 'probeExecutorId', '--probe-wait-ms': 'probeWaitMs' }[flag]] = value;
+      options[{ '--port': 'port', '--client-reach': 'clientReach', '--origin': 'origin', '--adapter': 'adapterId', '--bind-address': 'bindAddress', '--firewall-ack': 'firewallAck', '--client-profile': 'clientProfileId', '--install-link-template': 'installLinkTemplate', '--transport': 'transport', '--local-name': 'localName', '--probe-directory': 'probeDirectory', '--probe-request': 'probeRequest', '--probe-receipt': 'probeReceipt', '--probe-executor-id': 'probeExecutorId', '--probe-wait-ms': 'probeWaitMs', '--lifetime-ms': 'lifetimeMs' }[flag]] = value;
     } else throw new Error(`Unknown option: ${flag}`);
   }
   if (!['expose', 'detect', 'status', 'health', 'update-origin', 'stop', 'demo-server', 'help', '--help'].includes(options.command)) throw new Error('Use expose, detect, status, stop or demo-server');
   if (options.port !== undefined) {
     if (!/^\d+$/.test(options.port) || Number(options.port) < (options.command === 'demo-server' ? 0 : 1) || Number(options.port) > 65535) throw new Error('--port must be 1..65535');
     options.port = Number(options.port);
+  }
+  if (options.lifetimeMs !== undefined) {
+    if (options.command !== 'expose' || !/^\d+$/.test(options.lifetimeMs)) throw new Error('--lifetime-ms is for expose and must be 1..2147483647');
+    options.lifetimeMs = validateLifetimeMs(Number(options.lifetimeMs));
   }
   if (!reaches.includes(options.clientReach)) throw new Error(`--client-reach must be ${reaches.join('|')}`);
   if (options.origin) options.origin = safeOrigin(options.origin);
@@ -77,6 +81,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   const options = parseArgs(argv);
   if (options.command === 'demo-server') {
+    const { startDummy } = await import('../harness/dummy-server.mjs');
     const server = await startDummy({ port: options.port ?? 18765, toolName: 'echo' });
     const stop = async () => {
       process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
@@ -88,7 +93,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (['help', '--help'].includes(options.command)) {
     console.log('Service routes (existing owner-managed ingress):\n  gozar service add --origin URL --target HOST:PORT [--verify-cmd COMMAND] --json\n  gozar service status [--origin URL] --json\n  gozar service remove --origin URL --json\n');
-    console.log('Gozar\n  gozar demo-server [--port N]\n  gozar expose --port N [--client-reach internet|tailnet|lan|this-device|unknown] [--origin URL]\n  gozar detect --port N\n  gozar status [--port N]\n  gozar health [--port N]\n  gozar update-origin --origin URL [--port N]\n  gozar stop [--port N]\n\n--yes approves only the displayed selected route and exact loopback target.\n--adapter ID selects a catalog route. --json returns machine-readable status.\n--install-link-template HTTPS_TEMPLATE supplies a client install link using {url}; only the link is printed.\n--alternatives expands the route alternatives. No route is installed automatically.\n--probe-directory PATH selects the private challenge/receipt channel for the trusted outside verifier.\n--sse --streamable-http --oauth-dcr require those protocol checks; no inferred success.\n--operational opts into only the operational plans listed in the adapter manifest.\nLAN: --bind-address IP --firewall-ack IP records your exact-interface firewall approval.\n--transport http|https|tls|tcp and --client-profile ID select catalog data; unsupported modes remain blocked.');
+    console.log('Gozar\n  gozar demo-server [--port N]\n  gozar expose --port N [--client-reach internet|tailnet|lan|this-device|unknown] [--origin URL] [--lifetime-ms N]\n  gozar detect --port N\n  gozar status [--port N]\n  gozar health [--port N]\n  gozar update-origin --origin URL [--port N]\n  gozar stop [--port N]\n\n--yes approves only the displayed selected route and exact loopback target.\n--adapter ID selects a catalog route. --json returns machine-readable status.\n--install-link-template HTTPS_TEMPLATE supplies a client install link using {url}; only the link is printed.\n--alternatives expands the route alternatives. No route is installed automatically.\n--probe-directory PATH selects the private challenge/receipt channel for the trusted outside verifier.\n--sse --streamable-http --oauth-dcr require those protocol checks; no inferred success.\n--operational opts into only the operational plans listed in the adapter manifest.\nLAN: --bind-address IP --firewall-ack IP records your exact-interface firewall approval.\n--transport http|https|tls|tcp and --client-profile ID select catalog data; unsupported modes remain blocked.');
     return;
   }
   const home = process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
@@ -217,7 +222,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (!['y', 'yes'].includes((await ask(`Expose http://127.0.0.1:${options.port} using ${selected.displayName ?? selected.label ?? selected.id}? [y/N] `)).toLowerCase())) return;
   }
   const reply = await launch(directory, { adapters, requirements, targetPort: options.port, adapterId: selectedId,
-    origin: options.origin, bindAddresses: options.bindAddress ? [options.bindAddress] : [], firewallApproved: Boolean(options.firewallAck), clientProfileId: options.clientProfileId, operational: selected.planVersion === 1, probeDirectory: options.probeRequest ? dirname(resolve(options.probeRequest)) : options.probeDirectory ?? process.env.GOZAR_PROBE_DIRECTORY, probeRequest: options.probeRequest && resolve(options.probeRequest), probeReceipt: options.probeReceipt && resolve(options.probeReceipt), probeExecutorId: options.probeExecutorId, probeWaitMs: options.probeWaitMs, observeProcessOutput: options['observe-process-output'] === true, consent: true, approveOrigin: true }, fileURLToPath(import.meta.url));
+    lifetimeMs: options.lifetimeMs, origin: options.origin, bindAddresses: options.bindAddress ? [options.bindAddress] : [], firewallApproved: Boolean(options.firewallAck), clientProfileId: options.clientProfileId, operational: selected.planVersion === 1, probeDirectory: options.probeRequest ? dirname(resolve(options.probeRequest)) : options.probeDirectory ?? process.env.GOZAR_PROBE_DIRECTORY, probeRequest: options.probeRequest && resolve(options.probeRequest), probeReceipt: options.probeReceipt && resolve(options.probeReceipt), probeExecutorId: options.probeExecutorId, probeWaitMs: options.probeWaitMs, observeProcessOutput: options['observe-process-output'] === true, consent: true, approveOrigin: true }, fileURLToPath(import.meta.url));
   await atomicWrite(join(home, 'last.json'), { port: options.port });
   print(reply);
   if (['failed', 'blocked', 'unknown', 'degraded', 'cleanup-pending'].includes(reply.snapshot?.phase)) process.exitCode = 1;

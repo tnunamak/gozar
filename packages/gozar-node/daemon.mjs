@@ -11,7 +11,7 @@ import { PublicRelayVerifier } from './public-relay.mjs';
 import { ProbeDirectoryExecutor } from './probe-directory.mjs';
 import { prepareHost, LOCAL_PLAN_FEATURES } from './host.mjs';
 import { loadCatalog } from './catalog.mjs';
-import { createGate } from './gate.mjs';
+import { createGate, validateLifetimeMs } from './gate.mjs';
 import { loadCore } from './core.mjs';
 
 export const socketPath = directory => join(directory, 'control.sock');
@@ -64,6 +64,7 @@ export async function stopSession(directory) {
 }
 
 export async function launch(directory, configuration, executable) {
+  if (configuration.lifetimeMs !== undefined) validateLifetimeMs(configuration.lifetimeMs);
   try { return await control(directory, { type: 'status' }, 1_000); }
   catch (error) { if (!['ENOENT', 'ECONNREFUSED'].includes(error.code) && !error.message.includes('not running')) throw error; }
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -103,6 +104,7 @@ export async function launch(directory, configuration, executable) {
 
 export async function serve(directory, { step: suppliedStep, probeExecutor, hostAuthorities, processOutputObserver } = {}) {
   const config = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
+  if (config.lifetimeMs !== undefined) validateLifetimeMs(config.lifetimeMs);
   const journal = new Journal(directory);
   await journal.load();
   // A crashed prior controller never restores readiness from disk. Only remove attributable local children.
@@ -125,14 +127,15 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   if (!probeExecutor) probeExecutor = new PublicRelayVerifier();
   const selectedAdapter = config.adapters.find(adapter => adapter.id === config.adapterId);
   const operational = config.operational === true || selectedAdapter?.planVersion === 1;
-  const gate = operational ? await createGate(config.targetPort, { onExpire: () => { controller?.command({ type: 'stop' }).catch(() => {}); } }) : null;
+  const gate = operational ? await createGate(config.targetPort, { lifetimeMs: config.lifetimeMs, onExpire: () => { controller?.command({ type: 'stop' }).catch(() => {}); } }) : null;
   controller = new Controller({ ...config, targetPort: gate?.port ?? config.targetPort, servicePort: config.targetPort, step, journal });
+  controller.driver.lifetimeMs = config.lifetimeMs;
   controller.driver.probeWaitMs = config.probeWaitMs;
   controller.driver.observeProcessOutput = config.observeProcessOutput === true;
   controller.driver.onProcessOutput = processOutputObserver;
   if (operational) await prepareHost(controller.driver, selectedAdapter, { origin: config.origin, gate, probeExecutor, authorities: hostAuthorities });
   let setupPending = Boolean(gate && selectedAdapter?.setup?.requiresProxyTarget);
-  const present = output => ({ ...output, ...(selectedAdapter?.clientProfile ? { connectionProfile: selectedAdapter.clientProfile } : {}),
+  const present = output => ({ ...output, ...(gate ? { lifetimeMs: gate.lifetimeMs, expiresAtMs: gate.expiresAtMs } : {}), ...(selectedAdapter?.clientProfile ? { connectionProfile: selectedAdapter.clientProfile } : {}),
     ...(setupPending && !controller.state?.stopRequested ? { action: { kind: 'external', instruction: `Point the existing origin ${config.origin} at ${gate.target}, then run gozar health --port ${config.targetPort}.`, target: gate.target, recheckCommand: 'health' } } : {}) });
   const nonce = randomUUID();
   const identity = { pid: process.pid, startIdentity: await processIdentity(process.pid), nonce };
@@ -255,7 +258,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
 }
 
 export function publicReply(output, directory) {
-  return { snapshot: { ...output.snapshot, adapterId: output.state?.selected ?? output.snapshot?.adapterId }, ...(output.action ? { action: output.action } : {}), ...(output.gateTarget ? { gateTarget: output.gateTarget } : {}), ...(output.validation ? { validation: output.validation } : {}), journalPath: join(directory, 'session.json'),
+  return { ...(output.lifetimeMs !== undefined ? { lifetimeMs: output.lifetimeMs, expiresAtMs: output.expiresAtMs } : {}), snapshot: { ...output.snapshot, adapterId: output.state?.selected ?? output.snapshot?.adapterId }, ...(output.action ? { action: output.action } : {}), ...(output.gateTarget ? { gateTarget: output.gateTarget } : {}), ...(output.validation ? { validation: output.validation } : {}), journalPath: join(directory, 'session.json'),
     ...(output.connectionProfile ? { connectionProfile: output.connectionProfile } : {}),
     ...(output.localCleanupFailures ? { localCleanupFailures: output.localCleanupFailures } : {}) };
 }
