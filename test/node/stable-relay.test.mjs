@@ -146,6 +146,20 @@ test('one installation identity admits one live stable relay route across ports'
   assert.equal(await processIdentity(relay.pid), null, 'the previous relay child exited before the stale lease was replaced');
   const recoveredJournal = new Journal(waiting.directory); await recoveredJournal.load();
   assert.deepEqual(recoveredJournal.value.owned, {});
+
+  await recoveredStart.terminate();
+  await until(async () => {
+    try { await lstat(join(third.directory, 'control.sock')); return false; }
+    catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+  });
+  // Model explicit crash cleanup leaving the old lease beside its stopped journal.
+  await atomicWrite(join(identities, `.active-route-${fingerprint}.json`), { version:1, leaseId:'stale-same-port',
+    keyFingerprint:fingerprint, pid:2147483647, startIdentity:'1', sessionId:recoveredStart.controller.sessionId,
+    sessionDirectory:third.directory, targetPort:18768 });
+  await atomicWrite(join(third.directory, 'control.json'), { pid:2147483647, startIdentity:'1', nonce:'dead' });
+  const restarted = await serve(third.directory, { probeExecutor:third.probeExecutor });
+  t.after(async () => { await restarted.terminate(); });
+  assert.equal(restarted.controller.state.published, first);
 });
 
 test('an unresolved stale owner keeps its key lease and reports the stop command', async t => {

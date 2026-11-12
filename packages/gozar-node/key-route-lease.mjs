@@ -2,7 +2,7 @@ import { constants } from 'node:fs';
 import { mkdir, open, readFile, unlink } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { atomicWrite, Journal, processIdentity } from './journal.mjs';
 import { cliCommand } from './cli-command.mjs';
 
@@ -127,5 +127,30 @@ export async function acquireInstallKeyLease({ home, keyFingerprint, sessionDire
         released = true;
       },
     };
+  });
+}
+
+// Retire a dead same-port owner before a new controller can replace its journal.
+export async function retireInstallKeyLease(home, sessionDirectory) {
+  let identity;
+  try { identity = await readFile(join(home, 'identities', 'ed25519'), 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  const keyFingerprint = createHash('sha256').update(identity).digest('hex');
+  const identitiesDirectory = join(home, 'identities');
+  const recordPath = leaseFile(identitiesDirectory, keyFingerprint);
+  await withLock(lockFile(identitiesDirectory, keyFingerprint), async () => {
+    const previous = await readLease(recordPath);
+    if (!previous) return;
+    if (!validLease(previous) || previous.keyFingerprint !== keyFingerprint)
+      throw new Error('Installation key lease is unreadable; inspect its recorded session before retrying');
+    if (resolve(previous.sessionDirectory) !== resolve(sessionDirectory)) return;
+    const stop = cliCommand('stop', previous.targetPort);
+    if (await processIdentity(previous.pid) === previous.startIdentity)
+      throw new Error(`The installation key is held by port ${previous.targetPort}. Stop it with ${stop}.`);
+    try { await recoverOwner({ ...previous, home }); }
+    catch (error) {
+      throw new Error(`The installation key is still held by port ${previous.targetPort}; cleanup is not confirmed. Run ${stop} and inspect that session.`, { cause:error });
+    }
+    await unlink(recordPath);
   });
 }

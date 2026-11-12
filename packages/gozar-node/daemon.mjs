@@ -1,7 +1,8 @@
 import net from 'node:net';
 import { cliCommand } from './cli-command.mjs';
 import { chmod, readFile, unlink, open, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { retireInstallKeyLease } from './key-route-lease.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
@@ -116,6 +117,8 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
     const prior = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8'));
     if (await processIdentity(prior.pid) === prior.startIdentity) throw new Error('Existing controller is still running');
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  await retireInstallKeyLease(dirname(directory), directory);
+  await journal.load();
   if (journal.value.state && journal.value.snapshot?.phase !== 'stopped') {
     const recovered = await recoverStop(directory);
     if (recovered.snapshot.phase !== 'stopped' || recovered.localCleanupFailures?.length) {
