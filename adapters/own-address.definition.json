@@ -2,6 +2,9 @@
   "schemaVersion": 1,
   "definition": {
     "id": "own-address",
+    "addressStability": "stable",
+    "durableLifetime": null,
+    "idleTimeoutMs": null,
     "label": "Your own HTTPS address",
     "audience": "public",
     "ownership": "external-owned",

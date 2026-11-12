@@ -702,6 +702,33 @@
     "displayName": "Private tailnet HTTPS",
     "copy": {
       "consent": "Start an owned foreground private HTTPS listener on an unused 9444 or 9445 only. Existing listeners stay untouched. Verify TLS, instance identity and requested protocols from a tailnet client before publication."
+    },
+    "addressStability": "stable",
+    "durableLifetime": "provider-persistent",
+    "idleTimeoutMs": null,
+    "providerResource": "tailscale-https-port",
+    "durableRecipe": {
+      "transport": "tailscale-localapi-serve-config",
+      "mode": "serve",
+      "candidatePorts": [
+        443,
+        8443,
+        10000
+      ],
+      "portsFromCapability": null,
+      "listener": {
+        "tcp": {
+          "HTTPS": true
+        },
+        "web": {
+          "Handlers": {
+            "/": {
+              "Proxy": "http://{target}"
+            }
+          }
+        },
+        "funnel": null
+      }
     }
   }
 }

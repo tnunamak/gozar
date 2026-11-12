@@ -253,6 +253,9 @@
       "dnsMutation": false,
       "tunnelMutation": false
     },
-    "planVersion": 1
+    "planVersion": 1,
+    "addressStability": "stable",
+    "durableLifetime": null,
+    "idleTimeoutMs": null
   }
 }

@@ -26,9 +26,9 @@ export async function trustedDirectory(path, create = false) {
   }
   const rootSticky = stat.uid === 0 && (stat.mode & 0o1000);
   if (!stat.isDirectory() || stat.isSymbolicLink())
-    throw new Error(`Unsafe service state path ${path}: use a real directory, not a symlink`);
+    throw Object.assign(new Error(`Unsafe service state path ${path}: use a real directory, not a symlink`), { code: 'unsafe_state_path' });
   if ((stat.uid !== 0 && stat.uid !== process.getuid()) || ((stat.mode & 0o022) && !rootSticky))
-    throw new Error(`Unsafe service state path ${path}: set owner to the invoking user or root and chmod go-w (only root-owned sticky directories may be writable)`);
+    throw Object.assign(new Error(`Unsafe service state path ${path}: set owner to the invoking user or root and chmod go-w (only root-owned sticky directories may be writable)`), { code: 'unsafe_state_path' });
 }
 // Resolve once, including the nearest existing ancestor of a missing home.
 // Never return to the requested alias after choosing its canonical location.
@@ -99,16 +99,17 @@ export async function readRecord(path) {
   } finally { await file.close(); }
 }
 // Run action while holding an exclusive kernel lock on a private lock file.
-export async function withExclusiveLock(path, action) {
+// Without waitSeconds a held lock fails at once as busy; with it, acquisition blocks up to that bound.
+export async function withExclusiveLock(path, action, { waitSeconds = 0 } = {}) {
   const lock = await checkedFile(path, constants.O_RDWR | constants.O_CREAT, 'lock');
   try {
     // flock's numeric-fd form locks the inherited open file description. The
     // parent keeps it open through action, so exit/reboot still releases it.
-    const holder = spawn('flock', ['--exclusive', '--nonblock', '3'],
+    const holder = spawn('flock', ['--exclusive', ...(waitSeconds > 0 ? ['--wait', String(waitSeconds)] : ['--nonblock']), '3'],
       { stdio: ['ignore', 'ignore', 'ignore', lock.fd] });
     await new Promise((ready, reject) => {
       holder.once('error', () => reject(new Error('Service mutation requires flock (util-linux)')));
-      holder.once('close', code => code === 0 ? ready() : reject(new Error('Service mutation busy or lock unavailable')));
+      holder.once('close', code => code === 0 ? ready() : reject(Object.assign(new Error('Service mutation busy or lock unavailable'), { code: 'busy' })));
     });
     return await action();
   } finally { await lock.close(); }

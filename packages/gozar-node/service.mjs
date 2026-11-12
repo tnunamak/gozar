@@ -1,9 +1,10 @@
 import { readdir, unlink, link, open } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import { atomicWrite } from './journal.mjs';
+import { statusRoutes, durableRouteAt } from './durable-route.mjs';
 import { noncePattern, trustedDirectory, canonicalHome, privateDirectory, readRecord, withExclusiveLock,
   canonicalAuthority, transcript, verification } from './service-state.mjs';
 
@@ -82,24 +83,31 @@ export async function addService({ origin, target, verifyCmd = null, home = defa
 }
 export async function statusServices({ origin, home = defaultHome() } = {}) {
   const normalized = origin === undefined ? null : originValue(origin);
-  let names;
+  // Resolve the home once; a missing home has no routes of either kind.
+  try { home = await canonicalHome(home); }
+  catch (error) { if (error.code === 'ENOENT') return { schemaVersion: 1, routes: [] }; throw error; }
+  let names = [];
   try {
-    home = await canonicalHome(home);
     await trustedDirectory(directory(home));
     await privateDirectory(directory(home));
     names = await readdir(directory(home));
   }
-  catch (error) { if (error.code === 'ENOENT') return { schemaVersion: 1, routes: [] }; throw error; }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
   const routes = [];
   for (const name of names.sort()) {
     if (!name.endsWith('.json') || (normalized && name !== filename(normalized))) continue;
     routes.push(await stored(join(directory(home), name), name));
   }
-  return { schemaVersion: 1, routes: await Promise.all(routes.map(present)) };
+  // One place to ask which long-lived routes exist: owner-managed and Gozar-owned durable routes.
+  const durable = (await statusRoutes({ home, canonical: true })).routes.filter(route => !normalized || route.origin === normalized);
+  return { schemaVersion: 1, routes: [...await Promise.all(routes.map(present)), ...durable] };
 }
 export async function removeService({ origin, home = defaultHome() }) {
   origin = originValue(origin);
   const removed = await mutate(home, origin, async dir => {
+    // A Gozar-owned record must never be deleted while its provider route stays live.
+    const owned = await durableRouteAt(dirname(dir), origin);
+    if (owned) throw Object.assign(new Error(`Route ${owned} is gozar-owned; remove it with releaseRoute({ routeId: '${owned}' }) or \`gozar stop --route ${owned}\``), { code: 'gozar_owned' });
     const name = filename(origin), path = join(dir, name);
     try { await stored(path, name); }
     catch (error) { if (error.code === 'ENOENT') return false; throw error; }
@@ -130,3 +138,5 @@ export function createServiceVerifier() {
     return true;
   };
 }
+
+export { ensureRoute, adoptRoute, releaseRoute, statusRoutes, confirmHandBack, cancelHandBack, durableConsentText } from './durable-route.mjs';

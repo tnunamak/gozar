@@ -719,6 +719,33 @@
     "displayName": "Tailscale Funnel",
     "copy": {
       "consent": "Start an owned foreground HTTPS Funnel on unused port 8443 only. Existing listeners remain untouched. HTTPS, instance identity and timed SSE must pass before publication."
+    },
+    "addressStability": "stable",
+    "durableLifetime": "provider-persistent",
+    "idleTimeoutMs": null,
+    "providerResource": "tailscale-https-port",
+    "durableRecipe": {
+      "transport": "tailscale-localapi-serve-config",
+      "mode": "funnel",
+      "candidatePorts": [
+        443,
+        8443,
+        10000
+      ],
+      "portsFromCapability": "funnel-ports",
+      "listener": {
+        "tcp": {
+          "HTTPS": true
+        },
+        "web": {
+          "Handlers": {
+            "/": {
+              "Proxy": "http://{target}"
+            }
+          }
+        },
+        "funnel": true
+      }
     }
   }
 }

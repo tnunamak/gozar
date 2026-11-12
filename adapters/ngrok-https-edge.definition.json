@@ -276,6 +276,9 @@
         "type": "loopback-http-origin"
       }
     },
-    "planVersion": 1
+    "planVersion": 1,
+    "addressStability": "stable",
+    "durableLifetime": "host-supervised",
+    "idleTimeoutMs": 300000
   }
 }

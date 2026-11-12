@@ -205,6 +205,9 @@
     "drop": "1a",
     "copy": {
       "consent": "Start a public HTTPS trial for the requested lifetime (15 minutes by default). The relay terminates TLS and can read payloads. HTTPS, instance identity and timed SSE must pass before publication."
-    }
+    },
+    "addressStability": "random",
+    "durableLifetime": null,
+    "idleTimeoutMs": null
   }
 }

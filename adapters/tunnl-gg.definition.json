@@ -225,6 +225,9 @@
     "copy": {
       "consent": "Start a public HTTPS trial. The relay terminates TLS and can read payloads. Quiet streams can close after two minutes."
     },
-    "originPolicy": "immutable"
+    "originPolicy": "immutable",
+    "addressStability": "random",
+    "durableLifetime": null,
+    "idleTimeoutMs": 121000
   }
 }

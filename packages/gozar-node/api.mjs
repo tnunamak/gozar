@@ -2,7 +2,8 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { validateLifetimeMs } from './gate.mjs';
 
-export { addService, statusServices, removeService, createServiceVerifier } from './service.mjs';
+export { addService, statusServices, removeService, createServiceVerifier,
+  ensureRoute, adoptRoute, releaseRoute, statusRoutes, confirmHandBack, cancelHandBack, durableConsentText } from './service.mjs';
 
 const cli = fileURLToPath(new URL('../../bin/gozar.mjs', import.meta.url));
 const fields = {

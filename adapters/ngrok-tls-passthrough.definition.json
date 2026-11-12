@@ -281,6 +281,9 @@
         "type": "literal"
       }
     },
-    "planVersion": 1
+    "planVersion": 1,
+    "addressStability": "unknown",
+    "durableLifetime": null,
+    "idleTimeoutMs": null
   }
 }

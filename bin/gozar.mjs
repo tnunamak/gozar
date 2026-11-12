@@ -29,12 +29,13 @@ export function parseArgs(argv) {
       options[{ '--port': 'port', '--client-reach': 'clientReach', '--origin': 'origin', '--adapter': 'adapterId', '--bind-address': 'bindAddress', '--firewall-ack': 'firewallAck', '--client-profile': 'clientProfileId', '--install-link-template': 'installLinkTemplate', '--transport': 'transport', '--local-name': 'localName', '--probe-directory': 'probeDirectory', '--probe-request': 'probeRequest', '--probe-receipt': 'probeReceipt', '--probe-executor-id': 'probeExecutorId', '--probe-wait-ms': 'probeWaitMs', '--route': 'route', '--lifetime-ms': 'lifetimeMs' }[flag]] = value;
     } else throw new Error(`Unknown option: ${flag}`);
   }
-  if (!['expose', 'detect', 'status', 'health', 'update-origin', 'stop', 'demo-server', 'help', '--help'].includes(options.command)) throw new Error('Use expose, detect, status, stop or demo-server');
+  if (!['expose', 'detect', 'status', 'health', 'update-origin', 'stop', 'allow', 'demo-server', 'help', '--help'].includes(options.command)) throw new Error('Use expose, detect, status, stop, allow or demo-server');
   if (options.port !== undefined) {
     if (!/^\d+$/.test(options.port) || Number(options.port) < (options.command === 'demo-server' ? 0 : 1) || Number(options.port) > 65535) throw new Error('--port must be 1..65535');
     options.port = Number(options.port);
   }
-  if (options.route !== undefined && (!['status', 'stop'].includes(options.command) || options.port !== undefined || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(options.route))) throw new Error('--route is for status and stop, takes a route ID and excludes --port');
+  if (options.route !== undefined && (!['status', 'stop', 'allow'].includes(options.command) || options.port !== undefined || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(options.route))) throw new Error('--route is for status, stop and allow, takes a route ID and excludes --port');
+  if (options.command === 'allow' && options.route === undefined) throw new Error('allow requires --route ID');
   if (options.lifetimeMs !== undefined) {
     if (options.command !== 'expose' || !/^\d+$/.test(options.lifetimeMs)) throw new Error('--lifetime-ms is for expose and must be 1..2147483647');
     options.lifetimeMs = validateLifetimeMs(Number(options.lifetimeMs));
@@ -73,8 +74,8 @@ export function clientRequirements(options, defaults = {}, profile = {}) {
 // Every session, service route and durable route in one home. Each entry is a fresh observation.
 async function inventory(home, routeId) {
   const { statusRoutes } = await import('../packages/gozar-node/durable-route.mjs');
-  const durableRoutes = (await statusRoutes({ routeId, home })).routes;
-  if (routeId !== undefined) return { schemaVersion: 1, durableRoutes };
+  const { routes: durableRoutes, stoppedRoutes } = await statusRoutes({ routeId, home });
+  if (routeId !== undefined) return { schemaVersion: 1, durableRoutes, stoppedRoutes };
   const { statusServices } = await import('../packages/gozar-node/service.mjs');
   const sessions = [];
   let names = [];
@@ -91,7 +92,8 @@ async function inventory(home, routeId) {
       sessions.push({ port, phase: Object.keys(journal.value.owned).length ? 'cleanup-pending' : 'not-running', origin: null });
     }
   }
-  return { schemaVersion: 1, sessions, serviceRoutes: (await statusServices({ home })).routes, durableRoutes };
+  const serviceRoutes = (await statusServices({ home })).routes.filter(route => route.ownership === 'external-owned');
+  return { schemaVersion: 1, sessions, serviceRoutes, durableRoutes, stoppedRoutes };
 }
 function renderInventory(reply) {
   const lines = [];
@@ -101,7 +103,10 @@ function renderInventory(reply) {
   }
   lines.push('Durable routes:', ...(reply.durableRoutes.length ? reply.durableRoutes.map(item =>
     `  ${item.routeId}  provider ${item.adapterId}  origin ${item.origin ?? '(none yet)'}  owner ${item.owner}  created ${item.createdAt}  state ${item.state}` +
-    (item.cleanupDebt ? `  cleanup debt: ${item.cleanupDebt.reason}` : '') + `\n    stop: gozar stop --route ${item.routeId}`) : ['  none']));
+    (item.cleanupDebt ? `  cleanup debt: ${item.cleanupDebt.reason}` : '') +
+    `\n    ${item.exposure}: ${item.forwards}` + (item.targetCheck ? `\n    target: ${item.targetCheck}` : '') +
+    (item.warning ? `\n    WARNING: ${item.warning}` : '') + `\n    stop: gozar stop --route ${item.routeId}`) : ['  none']));
+  if (reply.stoppedRoutes?.length) lines.push('Stopped by you (the app cannot re-create these):', ...reply.stoppedRoutes.map(item => `  ${item.routeId}  stopped ${item.stoppedAt}  allow again: ${item.allow}`));
   return lines.join('\n');
 }
 
@@ -131,7 +136,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (['help', '--help'].includes(options.command)) {
     console.log('Service routes (existing owner-managed ingress):\n  gozar service add --origin URL --target HOST:PORT [--verify-cmd COMMAND] --json\n  gozar service status [--origin URL] --json\n  gozar service remove --origin URL --json\n');
-    console.log('Gozar\n  gozar demo-server [--port N]\n  gozar expose --port N [--client-reach internet|tailnet|lan|this-device|unknown] [--origin URL] [--lifetime-ms N]\n  gozar detect --port N\n  gozar status [--port N | --route ID]\n  gozar health [--port N]\n  gozar update-origin --origin URL [--port N]\n  gozar stop [--port N | --route ID]\n\n--yes approves only the displayed selected route and exact loopback target.\n--adapter ID selects a catalog route. --json returns machine-readable status.\n--install-link-template HTTPS_TEMPLATE supplies a client install link using {url}; only the link is printed.\n--alternatives expands the route alternatives. No route is installed automatically.\n--probe-directory PATH selects the private challenge/receipt channel for the trusted outside verifier.\n--sse --streamable-http --oauth-dcr require those protocol checks; no inferred success.\n--operational opts into only the operational plans listed in the adapter manifest.\nLAN: --bind-address IP --firewall-ack IP records your exact-interface firewall approval.\n--transport http|https|tls|tcp and --client-profile ID select catalog data; unsupported modes remain blocked.');
+    console.log('Gozar\n  gozar demo-server [--port N]\n  gozar expose --port N [--client-reach internet|tailnet|lan|this-device|unknown] [--origin URL] [--lifetime-ms N]\n  gozar detect --port N\n  gozar status [--port N | --route ID]\n  gozar health [--port N]\n  gozar update-origin --origin URL [--port N]\n  gozar stop [--port N | --route ID]\n  gozar allow --route ID [--yes]\n\n--yes approves only the displayed selected route and exact loopback target.\n--adapter ID selects a catalog route. --json returns machine-readable status.\n--install-link-template HTTPS_TEMPLATE supplies a client install link using {url}; only the link is printed.\n--alternatives expands the route alternatives. No route is installed automatically.\n--probe-directory PATH selects the private challenge/receipt channel for the trusted outside verifier.\n--sse --streamable-http --oauth-dcr require those protocol checks; no inferred success.\n--operational opts into only the operational plans listed in the adapter manifest.\nLAN: --bind-address IP --firewall-ack IP records your exact-interface firewall approval.\n--transport http|https|tls|tcp and --client-profile ID select catalog data; unsupported modes remain blocked.');
     return;
   }
   const home = process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
@@ -144,14 +149,40 @@ export async function main(argv = process.argv.slice(2)) {
     if (!reply.removed || reply.cleanupDebt) process.exitCode = 1;
     return;
   }
-  if (options.command === 'status' && (options.route || options.port === undefined)) {
+  if (options.command === 'allow') {
+    const { allowRoute, durableConsentText, statusRoutes } = await import('../packages/gozar-node/durable-route.mjs');
+    const known = (await statusRoutes({ routeId: options.route, home })).routes[0];
+    const consent = durableConsentText({ routeId: options.route, origin: known?.origin ?? null, owner: known?.owner ?? 'the app that owns it' });
+    if (!options.json) console.log(consent);
+    if (!options.yes) {
+      if (!process.stdin.isTTY) throw new Error('Allowing a durable route again requires approval. Review the text above and run again with --yes.');
+      if (!['y', 'yes'].includes((await ask(`Allow the owner app to create route ${options.route} again? [y/N] `)).toLowerCase())) return;
+    }
+    const reply = await allowRoute({ routeId: options.route, home });
+    console.log(options.json ? JSON.stringify({ ...reply, consent }) : `Route ${options.route} may be created again by its owner app.`);
+    return;
+  }
+  if (options.command === 'status' && options.route) {
     const reply = await inventory(home, options.route);
     console.log(options.json ? JSON.stringify(reply) : renderInventory(reply));
     return;
   }
+  // Bare status keeps the last session's output, JSON shape and exit, and adds the inventory.
+  let withInventory = false;
   if (!options.port && ['status', 'health', 'update-origin', 'stop'].includes(options.command)) {
-    try { options.port = JSON.parse(await readFile(join(home, 'last.json'), 'utf8')).port; }
+    try { options.port = JSON.parse(await readFile(join(home, 'last.json'), 'utf8')).port; withInventory = options.command === 'status'; }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  if (options.command === 'status' && !options.port) {
+    const reply = await inventory(home);
+    console.log(options.json ? JSON.stringify(reply) : renderInventory(reply));
+    return;
+  }
+  // A session cannot take a listener a durable route holds: a read-only check before detection,
+  // then the reservation, with the selected adapter's provider ports, just before launch.
+  if (options.command === 'expose' && options.port) {
+    const { durableListenerHeld } = await import('../packages/gozar-node/durable-route.mjs');
+    if (await durableListenerHeld({ home, port: options.port })) throw new Error(`Another session or route already holds this listener (127.0.0.1:${options.port}); see gozar status`);
   }
   if (!options.port) throw new Error('Supply the exact local service port with --port N');
   if (options.command === 'update-origin' && !options.origin) throw new Error('update-origin requires --origin with the exact new HTTPS origin');
@@ -180,13 +211,15 @@ export async function main(argv = process.argv.slice(2)) {
         view.nextAction = { command: cliCommand('health', options.port), expectedSuccess: 'Route checks pass and a validated URL is printed.' };
       }
     }
-    console.log(options.json ? JSON.stringify(view) : render(view, adapters, options));
+    const extra = withInventory ? inventory(home) : null;
+    if (!extra) { console.log(options.json ? JSON.stringify(view) : render(view, adapters, options)); return; }
+    return extra.then(inv => console.log(options.json ? JSON.stringify({ ...view, inventory: inv }) : `${render(view, adapters, options)}\n\n${renderInventory(inv)}`));
   };
   if (['status', 'health', 'update-origin', 'stop'].includes(options.command)) {
-    try { print(options.command === 'stop' ? await stopSession(directory) : await control(directory, { type: options.command, ...(options.command === 'update-origin' ? { origin: options.origin } : {}) }, 120_000)); }
+    try { await print(options.command === 'stop' ? await stopSession(directory) : await control(directory, { type: options.command, ...(options.command === 'update-origin' ? { origin: options.origin } : {}) }, 120_000)); }
     catch (error) {
       if (options.command === 'stop') {
-        try { print(await recoverStop(directory)); return; }
+        try { await print(await recoverStop(directory)); return; }
         catch (recoveryError) { error = recoveryError; }
       }
       const journal = new Journal(directory); await journal.load();
@@ -194,7 +227,7 @@ export async function main(argv = process.argv.slice(2)) {
       const debt = Object.keys(journal.value.owned).length;
       const reply = { snapshot: { phase: debt ? 'cleanup-pending' : 'unknown', candidate: null, published: null, limitations: [
         `Controller unavailable: ${error.message}`, ...(debt ? ['Owned resources remain recorded; restart reconciliation is required.'] : [])] }, journalPath: journal.path };
-      print(reply); process.exitCode = 1;
+      await print(reply); process.exitCode = 1;
     }
     return;
   }
@@ -281,6 +314,10 @@ export async function main(argv = process.argv.slice(2)) {
     if (!process.stdin.isTTY) throw new Error('Exposure requires approval. Review the selected route and run again with --yes.');
     if (!['y', 'yes'].includes((await ask(`Expose http://127.0.0.1:${options.port} using ${selected.displayName ?? selected.label ?? selected.id}? [y/N] `)).toLowerCase())) return;
   }
+  const { reserveSession } = await import('../packages/gozar-node/durable-route.mjs');
+  const providerPort = selected.bindings?.port;
+  await reserveSession({ home, port: options.port, providerResource: selected.providerResource ?? null,
+    providerPorts: providerPort ? (providerPort.value !== undefined ? [providerPort.value] : providerPort.candidates ?? []) : [] });
   const reply = await launch(directory, { adapters, requirements, targetPort: options.port, adapterId: selectedId,
     lifetimeMs: options.lifetimeMs, origin: options.origin, bindAddresses: options.bindAddress ? [options.bindAddress] : [], firewallApproved: Boolean(options.firewallAck), clientProfileId: options.clientProfileId, operational: selected.planVersion === 1, probeDirectory: options.probeRequest ? dirname(resolve(options.probeRequest)) : options.probeDirectory ?? process.env.GOZAR_PROBE_DIRECTORY, probeRequest: options.probeRequest && resolve(options.probeRequest), probeReceipt: options.probeReceipt && resolve(options.probeReceipt), probeExecutorId: options.probeExecutorId, probeWaitMs: options.probeWaitMs, observeProcessOutput: options['observe-process-output'] === true, consent: true, approveOrigin: true }, fileURLToPath(import.meta.url));
   await atomicWrite(join(home, 'last.json'), { port: options.port });

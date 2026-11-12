@@ -123,3 +123,39 @@ export function admitPlanEffect(effect, { adapters, sessionId, targetPort, featu
   if (['before', 'after'].includes(located.stage) && (recipe.kind === 'owned-process' || recipe.kind === 'local-forwarder' || recipe.process?.mode === 'owned-long-running')) throw new Error('Observation step cannot allocate or stop a resource');
   return { adapter, recipe: located.recipe, bindings };
 }
+
+// Route-scoped admission for durable routes. A durable route has no session, so its authority
+// is the route record: route ID, record generation and `route:<routeId>:<generation>`. The
+// listener rule comes from the adapter's declared durableRecipe, never from inline code.
+const durableTransports = new Set(['tailscale-localapi-serve-config']);
+const loopbackTarget = value => typeof value === 'string' && /^127\.0\.0\.1:([0-9]{1,5})$/.test(value) && integerPort(Number(value.split(':')[1]));
+export const routeAuthority = (routeId, generation) => `route:${routeId}:${generation}`;
+
+// The durable capability of one adapter definition, or null if it cannot hold a stable origin.
+export function durableCapability(definition) {
+  const recipe = definition?.durableRecipe;
+  if (definition?.addressStability !== 'stable' || definition.durableLifetime !== 'provider-persistent' || !recipe ||
+      !durableTransports.has(recipe.transport) || !['funnel', 'serve'].includes(recipe.mode) ||
+      !Array.isArray(recipe.candidatePorts) || !recipe.candidatePorts.length || !recipe.candidatePorts.every(integerPort) || !recipe.listener) return null;
+  return { adapterId: definition.id, lifetime: definition.durableLifetime, idleTimeoutMs: definition.idleTimeoutMs ?? null,
+    providerResource: definition.providerResource, mode: recipe.mode, candidatePorts: [...recipe.candidatePorts],
+    portsFromCapability: recipe.portsFromCapability ?? null, recipe };
+}
+
+// Admit one durable listener effect against the adapter recipe and the route's own authority.
+// Returns the exact listener the host may write; anything else is refused before any mutation.
+export function admitRouteEffect(effect, { definition, routeId, generation }) {
+  const capability = durableCapability(definition);
+  if (!capability || effect.adapterId !== definition.id) throw new Error('Adapter is not admitted for durable routes');
+  if (effect.routeId !== routeId || effect.generation !== generation || !Number.isSafeInteger(generation) || generation < 1 ||
+      effect.authorityRef !== routeAuthority(routeId, generation)) throw new Error('Durable effect lacks exact route authority');
+  if (!['create', 'remove'].includes(effect.operation)) throw new Error('Unknown durable operation');
+  const { port, dnsName, target } = effect.bindings ?? {};
+  if (Object.keys(effect.bindings ?? {}).sort().join() !== 'dnsName,port,target') throw new Error('Durable binding scope is not exact');
+  if (port?.type !== 'port' || !capability.candidatePorts.includes(port.value)) throw new Error('Durable port is outside the declared candidates');
+  if (dnsName?.type !== 'dns-name' || !validateBinding('dns-name', dnsName.value)) throw new Error('Durable DNS name is invalid');
+  if (target?.type !== 'loopback-target' || !loopbackTarget(target.value)) throw new Error('Durable target must be 127.0.0.1:PORT');
+  const listener = expandPlan(capability.recipe.listener, { target });
+  if (!isDeepStrictEqual(effect.listener, listener)) throw new Error('Durable listener differs from the admitted recipe');
+  return { mode: capability.mode, port: port.value, dnsName: dnsName.value, hostPort: `${dnsName.value}:${port.value}`, listener };
+}
