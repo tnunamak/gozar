@@ -1,0 +1,56 @@
+{
+  "wraps": "../../own-address.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "own-address",
+    "label": "Your own HTTPS address",
+    "capabilities": {
+      "reach": "unknown",
+      "transport": "https",
+      "traffic": {
+        "tlsTermination": "unknown",
+        "providerCanReadPayload": null,
+        "readers": [
+          "the owner-managed proxy"
+        ],
+        "metadataVisibleTo": [
+          "unknown"
+        ],
+        "evidenceRef": "adapters/own-address.definition.json"
+      },
+      "address": {
+        "stability": "stable",
+        "scope": "the owner-managed origin",
+        "conditions": [
+          "the owner keeps the route and the certificate",
+          "a successful response alone does not prove the correct application or outside reach"
+        ]
+      },
+      "cost": {
+        "kind": "unknown",
+        "summary": "Pricing is not established by the cited sources",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": null,
+      "lifetimes": [
+        "session"
+      ],
+      "supervision": "controller",
+      "protocols": {
+        "sse": false,
+        "streamableHttp": false,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [
+      "session"
+    ],
+    "disclosure": {
+      "revision": "disc-6046ee9650c1",
+      "text": "Validate an existing owner-managed HTTPS origin against this instance. The address, route and certificate stay under the owner’s control; Gozar creates and deletes nothing.",
+      "links": []
+    }
+  }
+}

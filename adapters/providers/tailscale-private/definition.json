@@ -1,0 +1,59 @@
+{
+  "wraps": "../../tailscale-private.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "tailscale-private",
+    "label": "Tailscale private Serve",
+    "capabilities": {
+      "reach": "tailnet",
+      "transport": "https",
+      "traffic": {
+        "tlsTermination": "endpoint",
+        "providerCanReadPayload": null,
+        "readers": [
+          "this device (local tailscaled)"
+        ],
+        "metadataVisibleTo": [
+          "unknown"
+        ],
+        "evidenceRef": "adapters/evidence/tailscale-serve-funnel-source-facts.md"
+      },
+      "address": {
+        "stability": "stable",
+        "scope": "DNS name of this node plus an unused port",
+        "conditions": [
+          "needs an unused Serve port",
+          "tailnet HTTPS and MagicDNS must be enabled",
+          "node and tailnet identity stay the same"
+        ]
+      },
+      "cost": {
+        "kind": "unknown",
+        "summary": "Pricing is not established by the cited sources",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": true,
+      "lifetimes": [
+        "session",
+        "durable"
+      ],
+      "supervision": "provider-persistent",
+      "protocols": {
+        "sse": false,
+        "streamableHttp": false,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [
+      "session",
+      "durable"
+    ],
+    "disclosure": {
+      "revision": "disc-6e785432498d",
+      "text": "Publish this service over HTTPS on an unused private Tailscale Serve port of this device. Only tailnet clients can reach it. Existing listeners stay untouched.",
+      "links": []
+    }
+  }
+}

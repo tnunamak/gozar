@@ -1,0 +1,52 @@
+{
+  "wraps": "../../ngrok-tls-passthrough.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "ngrok-tls-passthrough",
+    "label": "ngrok TLS passthrough",
+    "capabilities": {
+      "reach": "internet",
+      "transport": "https",
+      "traffic": {
+        "tlsTermination": "endpoint",
+        "providerCanReadPayload": false,
+        "readers": [
+          "the application endpoint"
+        ],
+        "metadataVisibleTo": [
+          "unknown"
+        ],
+        "evidenceRef": "adapters/ngrok-tls-passthrough.definition.json"
+      },
+      "address": {
+        "stability": "unknown",
+        "scope": "domain of your ngrok account",
+        "conditions": [
+          "no admitted create recipe",
+          "raw TLS may need a paid account"
+        ]
+      },
+      "cost": {
+        "kind": "unknown",
+        "summary": "Pricing is not established by the cited sources",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": true,
+      "lifetimes": [],
+      "supervision": "controller",
+      "protocols": {
+        "sse": false,
+        "streamableHttp": false,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [],
+    "disclosure": {
+      "revision": "disc-cca8dbf3ce74",
+      "text": "ngrok TLS passthrough is detected only. Gozar cannot create a route with it yet.",
+      "links": []
+    }
+  }
+}
