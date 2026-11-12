@@ -1,0 +1,21 @@
+{
+  "provenance": "Sanitized tunnl.gg JSON event shape from the B17 probe; no credentials.",
+  "adapterIds": [
+    "tunnl-gg"
+  ],
+  "cases": [
+    {
+      "id": "tunnl-tunnel-event",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "{\"event\":\"tunnel\",\"url\":\"https://wild-fox-10bf6aa2.tunnl.gg\",\"upgrade\":\"https://tunnl.gg/pricing\"}"
+      },
+      "predicate": {
+        "op": "equals",
+        "pointer": "/event",
+        "value": "tunnel"
+      },
+      "expected": true
+    }
+  ]
+}

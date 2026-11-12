@@ -2,11 +2,13 @@ import { PublicRelayVerifier } from './public-relay.mjs';
 import { randomUUID } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import { safeOrigin } from './catalog.mjs';
+import { installIdentity } from './install-key.mjs';
+import { dirname } from 'node:path';
 import { selectedInterfaceAddress } from './interfaces.mjs';
 
 // Feature names describe implemented boundaries. Remote execution is an injected trusted capability.
 export const LOCAL_PLAN_FEATURES = ['recipe-sequence', 'typed-bindings', 'predicate-parser', 'owned-resource-ledger',
-  'owned-process', 'interface-forwarder', 'private-file-reference', 'private-file-materialization', 'transport-origin-mapping', 'unused-port-selection'];
+  'owned-process', 'interface-forwarder', 'private-file-reference', 'private-file-materialization', 'transport-origin-mapping', 'unused-port-selection', 'install-ed25519', 'json-event-origin', 'immutable-origin'];
 
 export async function prepareHost(driver, adapter, { origin, gate, probeExecutor, authorities = {}, generation = 1, resolveCredential } = {}) {
   const nowMs = driver.nowMs(), expiresAtMs = nowMs + 900_000;
@@ -29,7 +31,7 @@ export async function prepareHost(driver, adapter, { origin, gate, probeExecutor
     } else if (spec.type === 'selected-interface-address' && driver.bindAddresses.length === 1) {
       const selected = driver.bindAddresses[0];
       if (selectedInterfaceAddress(selected) && Object.values(networkInterfaces()).flat().some(address => address.address === selected && !address.internal)) value = selected;
-    } else if (spec.type === 'session-private-path' && !spec.materialize) {
+    } else if (spec.type === 'session-private-path' && !spec.materialize && !spec.provision) {
       const { fileHandle } = await driver.privateFiles.create();
       host.bindings[name] = { ...receipt(undefined), type: spec.type, handleRef: fileHandle, mode: '0600', parentMode: '0700' };
       delete host.bindings[name].value;
@@ -57,4 +59,23 @@ export async function prepareHost(driver, adapter, { origin, gate, probeExecutor
   }
   driver.publicRelay = probeExecutor instanceof PublicRelayVerifier; driver.gate = gate; driver.probeExecutor = probeExecutor;
   return host;
+}
+
+// Installation identities are created only after the selected route is approved.
+export async function prepareInstallIdentities(driver, adapter) {
+  for (const [name, spec] of Object.entries(adapter?.bindings ?? {})) {
+    if (!spec.provision || driver.host.bindings[name]) continue;
+    if (spec.provision !== 'install-ed25519' || spec.type !== 'session-private-path' || Object.keys(spec).some(key => !['type', 'provision'].includes(key)) ||
+        adapter.planVersion !== 1 || adapter.admission?.state !== 'admitted' || !adapter.admission.requiredFeatures?.includes('install-ed25519') ||
+        !adapter.admission.requiredFeatures.every(feature => driver.host.features.includes(feature))) throw new Error('Identity provisioning is not admitted');
+    if (driver.stopped) return;
+    const content = await installIdentity(dirname(driver.journal.directory));
+    if (driver.stopped) return;
+    const { fileHandle } = await driver.privateFiles.create({ template: content });
+    if (driver.stopped) { await driver.privateFiles.remove(fileHandle); return; }
+    const nowMs = driver.nowMs();
+    driver.host.bindings[name] = { type: 'session-private-path', handleRef: fileHandle, mode: '0600', parentMode: '0700',
+      generation: 1, authorityRef: randomUUID(), sessionId: driver.sessionId, observedAtMs: nowMs,
+      expiresAtMs: driver.gate?.expiresAtMs ?? nowMs + 900000 };
+  }
 }

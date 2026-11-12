@@ -42,6 +42,7 @@ Gozar does not add application authentication. Expose only a service you intend 
 | Tailscale Funnel | Internet clients | Enabled; requires Tailscale HTTPS and Funnel permission. Leaves existing listeners alone. |
 | Tailscale Serve | Clients on your private tailnet | Enabled; requires a trusted verifier on the client network. |
 | localhost.run | Internet clients | Enabled trial; no provider account. The relay terminates TLS and can read forwarded traffic. |
+| tunnl.gg stable | Internet clients | Opt-in trial; the relay can read forwarded traffic and may show a browser warning. Quiet streams can close after two minutes. |
 | LAN | Clients on the selected local network | Enabled HTTP route; requires explicit interface/firewall approval and a trusted peer verifier. Not suitable for HTTPS-required clients. |
 | Your own HTTPS address | Clients that can reach your reverse proxy | Enabled validation of owner-managed ingress; Gozar does not create or delete your DNS or proxy configuration. |
 | ngrok | Depends on the selected mode | Detection only; not enabled for route creation in this release. |
@@ -123,6 +124,8 @@ gozar expose --port 3000 --client-reach internet
 ```
 
 Detection lists the available routes and what it found about each one. Finding a command does not establish login state or permission. `--alternatives` expands the route list; `--adapter ID` selects one. `--json` returns states and actions for automation. `--yes` approves the selected route and exact local target.
+
+To select tunnl.gg explicitly, run `gozar expose --port 3000 --client-reach internet --adapter tunnl-gg`. Gozar creates an Ed25519 identity under its home directory (`GOZAR_HOME`, or `~/.local/state/gozar`) on first approved use and reuses it for later sessions. A changed address withdraws the route. The relay may show a browser warning and closes a quiet stream after about two minutes. The default trial selection is unchanged.
 
 Public routes include the localhost.run trial and Tailscale Funnel. Funnel runs its own process and leaves your existing listeners alone. The trial uses isolated SSH state; the relay terminates TLS and can read forwarded traffic.
 

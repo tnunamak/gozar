@@ -9,7 +9,8 @@
     "ngrok-https-edge.definition.json",
     "ngrok-tls-passthrough.definition.json",
     "ngrok-tcp-passthrough.definition.json",
-    "cloudflare-named.definition.json"
+    "cloudflare-named.definition.json",
+    "tunnl-gg.definition.json"
   ],
   "runtimeProjection": "detect-only.json",
   "definitionKey": "definition",
@@ -36,7 +37,8 @@
     "ngrok-https-edge.definition.json",
     "ngrok-tls-passthrough.definition.json",
     "ngrok-tcp-passthrough.definition.json",
-    "cloudflare-named.definition.json"
+    "cloudflare-named.definition.json",
+    "tunnl-gg.definition.json"
   ],
   "wrapperAdmission": "Normalized definitions stay wrapped; plan admission is only an opt-in declaration, never host feature/authority evidence.",
   "activeDrop1a": [
@@ -51,7 +53,8 @@
     "tailscale-funnel.definition.json",
     "tailscale-private.definition.json",
     "lan.definition.json",
-    "own-address.definition.json"
+    "own-address.definition.json",
+    "tunnl-gg.definition.json"
   ],
   "nextDrop": [
     "ngrok-https-edge",
