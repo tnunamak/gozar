@@ -84,3 +84,7 @@ node crates/gozar-core/tests/public-relay-golden.mjs
 ```
 
 The [live harness](harness/README.md) checks a real MCP tool call, streamed delivery and cleanup against the provider's original configuration.
+
+## Keep an existing service address
+
+For a service already listening behind your reverse proxy, use `gozar service add --origin https://service.example --target HOST:PORT --json`. This records and verifies the existing route without a local proxy or expiry. `gozar service status --json` checks it again; `gozar service remove --origin https://service.example --json` deletes only its record. See [service routes](docs/service-routes.md) for the service challenge, trusted host check command and JavaScript API.
