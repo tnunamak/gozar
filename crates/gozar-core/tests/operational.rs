@@ -799,3 +799,244 @@ fn absent_cleanup_preserves_uncertain_creates_and_other_resource_debt() {
     assert_eq!(cleared["snapshot"]["phase"], "stopping");
     assert!(cleared["effects"].as_array().unwrap().is_empty());
 }
+
+fn nonce_budget_host(now: u64, nonce: &str) -> Value {
+    let mut host = fixture()["host"].clone();
+    host["nowMs"] = json!(now);
+    host["probe"]["nonceRef"] = json!(nonce);
+    host["probe"]["expiresAtMs"] = json!(now + 900_000);
+    host["probe"]["allowPublicRelay"] = json!(true);
+    host
+}
+fn nonce_budget_receipt(probe: &Value, host: &Value) -> Value {
+    json!({"probeReceipt":{
+        "nonceRef":host["probe"]["nonceRef"], "verifierRef":host["probe"]["verifierRef"],
+        "origin":probe["effects"][0]["url"], "vantage":"public",
+        "observedAtMs":host["nowMs"], "expiresAtMs":host["nowMs"].as_u64().unwrap()+30_000,
+        "tls":true,"instanceMatched":true,"sse":true,"streamableHttp":true,"oauthDcr":true,
+        "remote":false,"networkPath":"public-relay","publicDns":true,"resolvedIp":"1.1.1.1"
+    }})
+}
+fn nonce_budget_publish(probe: &Value, host: &Value) -> (Value, Value) {
+    assert_eq!(probe["effects"][0]["kind"], "http-probe", "{probe}");
+    let ready = ack(probe, nonce_budget_receipt(probe, host), host);
+    assert_eq!(ready["snapshot"]["phase"], "candidate-ready", "{ready}");
+    let timer = ready["effects"][0].clone();
+    let published = run(json!({"state":ready["state"],"host":host,"command":{
+        "type":"approve-origin","generation":ready["state"]["generation"],
+        "origin":ready["snapshot"]["candidate"]
+    }}));
+    assert_eq!(
+        published["snapshot"]["phase"], "published-ready",
+        "{published}"
+    );
+    assert!(published["snapshot"]["published"].is_string());
+    (published, timer)
+}
+fn nonce_budget_retire_timer(state: &Value, timer: &Value, host: &Value) -> Value {
+    run(json!({"state":state,"host":host,"command":{
+        "type":"effect-result","effectId":timer["id"],"sessionId":timer["sessionId"],
+        "generation":timer["generation"],"ok":true,"result":{"elapsed":true}
+    }}))
+}
+#[test]
+fn health_nonce_budget_publishes_for_eighty_minutes() {
+    let a = definition("external");
+    let host = nonce_budget_host(1000, "initial");
+    let initial = begin(&a, &host);
+    let (mut out, mut timer) = nonce_budget_publish(&initial, &host);
+    for refresh in 1..=160_u64 {
+        let host = nonce_budget_host(1000 + refresh * 30_000, &format!("refresh-{refresh}"));
+        let probe = run(json!({"state":out["state"],"host":host,"command":{"type":"health"}}));
+        assert_eq!(
+            probe["effects"][0]["kind"], "http-probe",
+            "refresh {refresh}: {probe}"
+        );
+        // Deliver the superseded timer, as a real host does when cancelling it.
+        let retired = nonce_budget_retire_timer(&probe["state"], &timer, &host);
+        let mut pending = probe.clone();
+        pending["state"] = retired["state"].clone();
+        (out, timer) = nonce_budget_publish(&pending, &host);
+        let nonces = out["state"]["usedNonces"].as_array().unwrap();
+        assert!(nonces.len() <= 128, "refresh {refresh}: {nonces:?}");
+        if let Some(expiries) = out["state"]["usedNonceExpiries"].as_object() {
+            assert!(nonces.len() <= 30, "refresh {refresh}: {nonces:?}");
+            assert_eq!(expiries.len(), nonces.len());
+            for nonce in nonces {
+                assert!(
+                    expiries[nonce.as_str().unwrap()].as_u64().unwrap()
+                        > host["nowMs"].as_u64().unwrap()
+                );
+            }
+        }
+    }
+    assert_eq!(
+        out["state"]["usedNonceExpiries"].as_object().unwrap().len(),
+        30
+    );
+}
+#[test]
+fn nonce_retirement_uses_original_authorization_not_new_deadline_or_receipt_expiry() {
+    let a = definition("external");
+    let host = nonce_budget_host(1000, "original");
+    let initial = begin(&a, &host);
+    let (out, _) = nonce_budget_publish(&initial, &host);
+    // Receipt expired at 31000, but this nonce remains reserved until 901000.
+    for deadline in [31_002_u64, 1_801_000] {
+        let mut changed = nonce_budget_host(31_001, "original");
+        changed["probe"]["expiresAtMs"] = json!(deadline);
+        let denied = run(json!({"state":out["state"],"host":changed,"command":{"type":"health"}}));
+        assert_eq!(denied["effects"], json!([]));
+        assert!(denied["snapshot"]["published"].is_null());
+        assert_eq!(denied["state"]["usedNonceExpiries"]["original"], 901_000);
+        assert!(denied["state"]["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("already used")));
+    }
+    let mut expired = nonce_budget_host(901_000, "original");
+    expired["probe"]["expiresAtMs"] = json!(901_000);
+    let denied = run(json!({"state":out["state"],"host":expired,"command":{"type":"health"}}));
+    assert_eq!(denied["effects"], json!([]));
+    let fresh = nonce_budget_host(901_000, "fresh");
+    let probe = run(json!({"state":out["state"],"host":fresh,"command":{"type":"health"}}));
+    let (renewed, _) = nonce_budget_publish(&probe, &fresh);
+    assert_eq!(renewed["state"]["usedNonces"], json!(["fresh"]));
+    assert_eq!(
+        renewed["state"]["usedNonceExpiries"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+#[test]
+fn nonce_budget_rejects_replayed_receipts_and_wrong_generation() {
+    let a = definition("external");
+    let host = nonce_budget_host(1000, "first");
+    let initial = begin(&a, &host);
+    let old_receipt = nonce_budget_receipt(&initial, &host);
+    let (out, _) = nonce_budget_publish(&initial, &host);
+    let fresh = nonce_budget_host(1001, "second");
+    let probe = run(json!({"state":out["state"],"host":fresh,"command":{"type":"health"}}));
+    assert_eq!(
+        ack(&probe, old_receipt.clone(), &fresh)["snapshot"]["phase"],
+        "degraded"
+    );
+    let e = &probe["effects"][0];
+    let wrong = run(json!({"state":probe["state"],"host":fresh,"command":{
+        "type":"effect-result","effectId":e["id"],"sessionId":e["sessionId"],
+        "generation":initial["effects"][0]["generation"],"ok":true,
+        "result":nonce_budget_receipt(&probe, &fresh)
+    }}));
+    assert!(wrong["snapshot"]["published"].is_null());
+    assert!(wrong["state"]["pending"]
+        .get(e["id"].as_str().unwrap())
+        .is_some());
+    let (published, _) = nonce_budget_publish(&probe, &fresh);
+    let duplicate = run(json!({"state":published["state"],"host":fresh,"command":{
+        "type":"effect-result","effectId":initial["effects"][0]["id"],
+        "sessionId":initial["effects"][0]["sessionId"],
+        "generation":initial["effects"][0]["generation"],"ok":true,"result":old_receipt
+    }}));
+    assert_eq!(duplicate["state"], published["state"]);
+    // After retirement, an old receipt is expired even if its nonce is reissued.
+    let later = nonce_budget_host(901_000, "first");
+    let probe = run(json!({"state":out["state"],"host":later,"command":{"type":"health"}}));
+    assert_eq!(probe["effects"][0]["kind"], "http-probe");
+    assert_eq!(
+        ack(&probe, nonce_budget_receipt(&initial, &host), &later)["snapshot"]["phase"],
+        "degraded"
+    );
+}
+#[test]
+fn nonce_budget_keeps_128_live_and_legacy_entries_fail_closed() {
+    let a = definition("external");
+    let host = nonce_budget_host(1000, "initial");
+    let (mut out, _) = nonce_budget_publish(&begin(&a, &host), &host);
+    for i in 1..128 {
+        let next = nonce_budget_host(1000, &format!("live-{i}"));
+        let probe = run(json!({"state":out["state"],"host":next,"command":{"type":"health"}}));
+        (out, _) = nonce_budget_publish(&probe, &next);
+    }
+    let extra = nonce_budget_host(1000, "extra");
+    let denied = run(json!({"state":out["state"],"host":extra,"command":{"type":"health"}}));
+    assert_eq!(denied["effects"], json!([]));
+    assert!(denied["snapshot"]["published"].is_null());
+    assert_eq!(denied["state"]["usedNonces"].as_array().unwrap().len(), 128);
+    assert_eq!(
+        denied["state"]["usedNonceExpiries"]
+            .as_object()
+            .unwrap()
+            .len(),
+        128
+    );
+    let later = nonce_budget_host(901_000, "after-expiry");
+    let probe = run(json!({"state":out["state"],"host":later,"command":{"type":"health"}}));
+    let (renewed, _) = nonce_budget_publish(&probe, &later);
+    assert_eq!(renewed["state"]["usedNonces"], json!(["after-expiry"]));
+    let mut legacy = out["state"].clone();
+    legacy.as_object_mut().unwrap().remove("usedNonceExpiries");
+    let denied = run(json!({"state":legacy,"host":later,"command":{"type":"health"}}));
+    assert_eq!(denied["effects"], json!([]));
+    assert_eq!(denied["state"]["usedNonces"].as_array().unwrap().len(), 128);
+    assert!(denied["snapshot"]["published"].is_null());
+}
+
+#[test]
+fn retired_nonce_rejects_old_receipt_even_when_receipt_claims_later_expiry() {
+    let a = definition("external");
+    let host = nonce_budget_host(1000, "reused");
+    let initial = begin(&a, &host);
+    let mut old_receipt = nonce_budget_receipt(&initial, &host);
+    old_receipt["probeReceipt"]["expiresAtMs"] = json!(2_000_000);
+    let ready = ack(&initial, old_receipt.clone(), &host);
+    assert_eq!(ready["snapshot"]["phase"], "candidate-ready");
+    assert_eq!(ready["state"]["healthExpiry"], 901_000);
+    let mut later = nonce_budget_host(901_000, "reused");
+    // A caller cannot backdate the core-owned issuance fence.
+    later["probe"]["issuedAtMs"] = json!(0);
+    let probe = run(json!({"state":ready["state"],"host":later,"command":{"type":"health"}}));
+    assert_eq!(probe["effects"][0]["kind"], "http-probe");
+    assert_eq!(probe["effects"][0]["probe"]["issuedAtMs"], 901_000);
+    let denied = ack(&probe, old_receipt, &later);
+    assert_eq!(denied["snapshot"]["phase"], "degraded");
+    assert!(denied["snapshot"]["published"].is_null());
+    // A receipt observed at this issuance time still succeeds.
+    let (published, _) = nonce_budget_publish(&probe, &later);
+    assert!(published["snapshot"]["published"].is_string());
+}
+
+#[test]
+fn public_relay_health_stays_publishable_for_eighty_minutes_past_nonce_budget() {
+    let f = fixture();
+    let a = definition("process");
+    let mut host = f["host"].clone();
+    let mut out = until(begin(&a, &host), &a, &host, &f["baselineConfig"], "health");
+    out = run(
+        json!({"state":out["state"],"host":host,"command":{"type":"approve-origin","generation":out["state"]["generation"],"origin":out["snapshot"]["candidate"]}}),
+    );
+    let original = out["snapshot"]["published"].clone();
+    assert!(original.is_string());
+    for refresh in 1..=160 {
+        let now = 1000 + refresh * 30_000;
+        host["nowMs"] = json!(now);
+        host["probe"]["nonceRef"] = json!(format!("health-proof-{refresh}"));
+        host["probe"]["expiresAtMs"] = json!(now + 30_000);
+        out = run(json!({"state":out["state"],"host":host,"command":{"type":"health"}}));
+        assert_eq!(
+            out["effects"][0]["kind"], "http-probe",
+            "refresh {refresh}: {out}"
+        );
+        let receipt = json!({"nonceRef":host["probe"]["nonceRef"],"verifierRef":host["probe"]["verifierRef"],"origin":original,"vantage":"public","observedAtMs":now,"expiresAtMs":now+30_000,"tls":true,"instanceMatched":true,"sse":true,"streamableHttp":true,"oauthDcr":true,"remote":true});
+        out = ack(&out, json!({"probeReceipt":receipt}), &host);
+        out = run(
+            json!({"state":out["state"],"host":host,"command":{"type":"approve-origin","generation":out["state"]["generation"],"origin":original}}),
+        );
+        assert_eq!(
+            out["snapshot"]["published"], original,
+            "refresh {refresh}: {out}"
+        );
+    }
+}

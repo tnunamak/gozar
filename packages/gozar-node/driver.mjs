@@ -265,7 +265,11 @@ export class EffectDriver {
   timer(effect) {
     const delay = effect.expiresAtMs ? Math.max(1, effect.expiresAtMs - this.nowMs()) : bounded(effect.delayMs, 1, 86400000);
     return new Promise(resolve => {
-      const finish = cancelled => { clearTimeout(timer); this.timers.delete(effect.id); resolve(cancelled ? { cancelled: true } : { elapsed: true }); };
+      const finish = cancelled => {
+        clearTimeout(timer); this.timers.delete(effect.id);
+        if (effect.recipeRef === 'health/expiry' && this.proofExpiries.get(effect.generation) === effect.expiresAtMs) this.proofExpiries.delete(effect.generation);
+        resolve(cancelled ? { cancelled: true } : { elapsed: true });
+      };
       const timer = setTimeout(() => finish(false), Math.min(delay, 86400000));
       this.timers.set(effect.id, () => finish(true));
     });

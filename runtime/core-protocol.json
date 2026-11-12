@@ -247,6 +247,7 @@
       "owned-process-origin": "owned-process only; binds selected adapter, active process allocation generation and immutable ledger continuity; validates against the admitted create URL parser, withdraws old publication and probes the replacement origin with a fresh challenge",
       "timer": "successful probe emits asynchronous timer recipeRef health/expiry; schedule then return candidate-ready, deliver completion when elapsed; failure/expiry withdraws readiness and returns external-owner fix action",
       "probeReceipt": "nonceRef,verifierRef,origin,vantage,observedAtMs,expiresAtMs,tls,instanceMatched,sse,streamableHttp,oauthDcr; remote:true remains valid for nonlocal. Public-only alternative: remote:false,networkPath:public-relay,publicDns:true,resolvedIp:public-unicast IP, with trusted request host.probe.allowPublicRelay:true. Exact identity/protocol/time checks remain required.",
+      "probeIssuedAt": "The core stamps trusted host.nowMs as issuedAtMs in each pending probe challenge, overriding host input. Receipt observedAtMs must be at or after issuance and no later than current host.nowMs. This fences pre-retirement receipts even if their claimed expiry outlives the original authorization. Legacy pending probes without this stamp retain their prior checks; legacy nonce entries never expire.",
       "expiryOnEveryInput": "The core revokes an expired accepted proof before processing any next command, including approve-origin; callers must advance trusted host.nowMs."
     },
     "bounds": {
@@ -255,7 +256,8 @@
       "bindings": 32,
       "capturesPerStep": 32,
       "assertions": 64,
-      "probeNoncesPerSession": 128
+      "concurrentlyLiveProbeNonces": 128,
+      "probeNonceRetention": "usedNonces retain their original authorization deadline in usedNonceExpiries; prune only when that deadline has passed. Never replace a live nonce deadline from a later challenge. Legacy nonces without expiry metadata remain reserved for the session and count toward the bound."
     },
     "cleanup": "always original resource ledger.bindings; host-derived saved binding values and authority still current/fresh; source-derived node/port not reselected. Route guard requires fresh retained ownership receipt and exact live record. Local handles get intrinsic inspect before durable remove.",
     "jsonNumbers": "Persisted deadlines use exact JSON-safe integers; no u64::MAX sentinel crosses the JS boundary.",

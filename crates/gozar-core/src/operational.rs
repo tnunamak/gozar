@@ -1576,7 +1576,7 @@ fn drive(out: &mut Output, mut e: Execution) -> Result<(), String> {
     Err("Invalid plan stage".into())
 }
 fn request_probe(out: &mut Output, a: &Adapter, url: String) -> Result<(), String> {
-    let proof = out
+    let mut proof = out
         .state
         .host
         .probe
@@ -1591,14 +1591,34 @@ fn request_probe(out: &mut Output, a: &Adapter, url: String) -> Result<(), Strin
     {
         return Err("Probe challenge missing authority or expired".into());
     }
+    // Retire only the original authorization, never a caller's replacement deadline.
+    // Legacy persisted nonces without metadata remain reserved for this session.
+    let now = out.state.host.now_ms;
+    let expiries = &out.state.used_nonce_expiries;
+    out.state
+        .used_nonces
+        .retain(|nonce| expiries.get(nonce).is_none_or(|expires| *expires > now));
+    let retained = &out.state.used_nonces;
+    out.state
+        .used_nonce_expiries
+        .retain(|nonce, _| retained.contains(nonce));
     let nonce = str_field(&proof, "nonceRef").to_owned();
     if out.state.used_nonces.contains(&nonce) {
         return Err("Probe nonce was already used; a fresh challenge is required".into());
     }
     if out.state.used_nonces.len() >= 128 {
-        return Err("Session probe budget exhausted".into());
+        return Err("Concurrent live probe challenge budget exhausted".into());
     }
+    out.state.used_nonce_expiries.insert(
+        nonce.clone(),
+        proof["expiresAtMs"]
+            .as_u64()
+            .expect("validated challenge expiry"),
+    );
     out.state.used_nonces.push(nonce);
+    // Core-owned issuance time prevents an old receipt surviving nonce retirement.
+    // Override any host-supplied timestamp rather than trusting it.
+    proof["issuedAtMs"] = json!(now);
     out.state.health_expiry = None;
     probe(out, &a.id, url.clone());
     let Some(effect) = out
@@ -1992,7 +2012,13 @@ fn finish_probe(out: &mut Output, p: &Pending, cmd: &Value) {
         && receipt
             .get("observedAtMs")
             .and_then(Value::as_u64)
-            .is_some_and(|t| t <= now)
+            .is_some_and(|t| {
+                t <= now
+                    && challenge
+                        .get("issuedAtMs")
+                        .and_then(Value::as_u64)
+                        .is_none_or(|issued| t >= issued)
+            })
         && receipt
             .get("expiresAtMs")
             .and_then(Value::as_u64)

@@ -43,6 +43,7 @@ test('real operational WASM + driver creates, returns before expiry timer, inspe
   assert.equal(stopped.snapshot.phase, 'stopped', JSON.stringify(stopped.snapshot));
   assert.equal(Object.keys(journal.value.owned).length, 0);
   assert.equal(controller.driver.timers.size, 0);
+  assert.equal(controller.driver.proofExpiries.size, 0);
 });
 
 test('operational health rechecks exact instance and withdraws wrong-origin health without mutation', async t => {
@@ -54,6 +55,7 @@ test('operational health rechecks exact instance and withdraws wrong-origin heal
   const refreshed = await controller.command({ type: 'health' });
   assert.equal(refreshed.snapshot.phase, 'candidate-ready', JSON.stringify(refreshed.snapshot));
   assert.ok(refreshed.snapshot.generation > generation);
+  assert.deepEqual([...controller.driver.proofExpiries.keys()], [refreshed.snapshot.generation]);
   await controller.approve();
   const original = gate.verify;
   gate.verify = async () => { throw new Error('Origin points to a different instance'); };

@@ -147,6 +147,9 @@ pub struct State {
     host: operational::Host,
     #[serde(default)]
     used_nonces: Vec<String>,
+    // Original authorization deadlines; absent entries are legacy and never retired.
+    #[serde(default)]
+    used_nonce_expiries: BTreeMap<String, u64>,
     #[serde(default)]
     pub plans: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -174,6 +177,7 @@ impl Default for State {
             execution: None,
             host: operational::Host::default(),
             used_nonces: vec![],
+            used_nonce_expiries: BTreeMap::new(),
             plans: vec![],
             health_expiry: None,
         }
