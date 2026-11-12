@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -52,3 +52,35 @@ test('CLI failed checks exit nonzero and invalid service syntax returns versione
   assert.equal(failed.reply.route.verification.status, 'failed');
   assert.equal((await invoke(home, 'status')).reply.routes.length, 1);
 });
+
+for (const layout of ['home', 'state']) {
+  test(`CLI default home supports a symlinked ${layout} across add/status/remove`, async t => {
+    const root = await mkdtemp(join(homedir(), '.tmp', 'gozar-default-alias-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const actualHome = join(root, 'actual-home');
+    await mkdir(actualHome, { mode: 0o700 });
+    const env = { ...process.env, HOME: actualHome };
+    delete env.GOZAR_HOME;
+    if (layout === 'home') {
+      env.HOME = join(root, 'home-alias');
+      await symlink(actualHome, env.HOME);
+    } else {
+      const state = join(root, 'actual-state');
+      await mkdir(state, { mode: 0o700 });
+      await mkdir(join(actualHome, '.local'), { mode: 0o700 });
+      await symlink(state, join(actualHome, '.local', 'state'));
+    }
+    const origin = 'https://default-home.example';
+    async function run(...args) {
+      const { stdout, stderr } = await exec(process.execPath,
+        [cli, 'service', ...args, '--json'], { env });
+      assert.equal(stderr, '');
+      return JSON.parse(stdout);
+    }
+    const added = await run('add', '--origin', origin, '--target', 'localhost:3000', '--verify-cmd', 'exit 0');
+    assert.equal(added.route.verification.status, 'verified');
+    assert.equal((await run('status')).routes[0].origin, origin);
+    assert.equal((await run('remove', '--origin', origin)).removed, true);
+    assert.deepEqual((await run('status')).routes, []);
+  });
+}
