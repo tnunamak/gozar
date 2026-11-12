@@ -7,6 +7,11 @@ export function validateLifetimeMs(value) {
   return value;
 }
 
+// Forwarding headers an inbound request may carry. The gate never passes them on: whatever a client or an
+// intermediary wrote there is not evidence. It writes one normalised header of its own instead.
+export const STRIPPED_FORWARDING_HEADERS = Object.freeze(['x-forwarded-for', 'forwarded', 'x-real-ip']);
+export const NORMALISED_HEADER = 'x-forwarded-for';
+
 export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = () => {} } = {}) {
   validateLifetimeMs(lifetimeMs);
   let secretPath = `/.gozar-${randomBytes(24).toString('hex')}`;
@@ -31,8 +36,11 @@ export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = 
       const timer = setInterval(send, 1000); send(); // Stay above short batching intervals; full-response buffering still fails verification.
       response.on('close', () => clearInterval(timer)); return;
     }
-    const upstream = http.request({ hostname: '127.0.0.1', port: targetPort, method: request.method, path: request.url,
-      headers: { ...request.headers, host: `127.0.0.1:${targetPort}` } }, result => {
+    const headers = { ...request.headers, host: `127.0.0.1:${targetPort}` };
+    for (const name of STRIPPED_FORWARDING_HEADERS) delete headers[name];
+    // The only address the gate knows is its own peer; the app learns that one value and nothing a client wrote.
+    headers[NORMALISED_HEADER] = String(request.socket.remoteAddress ?? '').replace(/^::ffff:/i, '');
+    const upstream = http.request({ hostname: '127.0.0.1', port: targetPort, method: request.method, path: request.url, headers }, result => {
       response.writeHead(result.statusCode, result.headers); result.pipe(response);
     });
     upstream.on('error', () => { if (!response.headersSent) response.writeHead(502); response.end(); });
@@ -49,6 +57,10 @@ export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = 
   return {
     port, lifetimeMs, expiresAtMs, target: `http://127.0.0.1:${port}`,
     get nonceRef() { return nonceRef; }, get verifierRef() { return verifierRef; },
+    // The snapshot an Ingress is built from: which header the gate writes and which it strips.
+    // The gate-to-app hop is loopback TCP, which proves nothing about the sender, so no boundary is claimed here.
+    forwarding: Object.freeze({ header: Object.freeze({ name: NORMALISED_HEADER, format: 'ip-list', sanitization: 'strip-inbound-and-write',
+      selection: 'rightmost-untrusted', trustedHops: 0 }), stripped: STRIPPED_FORWARDING_HEADERS }),
     challenge() { return { identityPath: `${secretPath}/identity`, streamPath: `${secretPath}/stream`, nonce }; },
     rotate() {
       secretPath = `/.gozar-${randomBytes(24).toString('hex')}`; nonce = randomBytes(32).toString('hex');
