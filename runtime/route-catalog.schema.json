@@ -74,7 +74,13 @@
       ],
       "properties": {
         "reach": {
-          "$ref": "#/$defs/Reach"
+          "type": "string",
+          "enum": [
+            "internet",
+            "tailnet",
+            "lan",
+            "this-device"
+          ]
         },
         "transport": {
           "const": "https"
@@ -475,11 +481,26 @@
             ],
             "properties": {
               "requirement": {
-                "type": "string"
+                "type": "string",
+                "enum": [
+                  "reach",
+                  "transport",
+                  "payloadAccess",
+                  "address",
+                  "setup",
+                  "protocols",
+                  "usage",
+                  "platform"
+                ]
               },
               "actual": {},
               "reasonCode": {
-                "type": "string"
+                "type": "string",
+                "enum": [
+                  "not_met",
+                  "unknown",
+                  "unsupported_platform"
+                ]
               }
             },
             "additionalProperties": false
@@ -549,21 +570,32 @@
       "additionalProperties": false,
       "anyOf": [
         {
+          "required": [
+            "eligible",
+            "setup",
+            "candidateToken"
+          ],
           "properties": {
             "eligible": {
               "const": true
+            },
+            "setup": {
+              "properties": {
+                "state": {
+                  "const": "ready"
+                }
+              }
+            },
+            "candidateToken": {
+              "type": "string"
             }
           }
         },
         {
           "required": [
-            "eligible",
             "candidateToken"
           ],
           "properties": {
-            "eligible": {
-              "const": false
-            },
             "candidateToken": {
               "type": "null"
             }
@@ -1015,7 +1047,9 @@
         "provider_unavailable",
         "cleanup_debt",
         "unsupported",
-        "ambiguous_route"
+        "ambiguous_route",
+        "busy",
+        "internal_error"
       ]
     },
     "GozarError": {
@@ -1165,7 +1199,8 @@
         "target",
         "bridgeHome",
         "state",
-        "reasonCode"
+        "reasonCode",
+        "nextAction"
       ],
       "properties": {
         "schemaVersion": {
@@ -1201,6 +1236,24 @@
           "type": [
             "string",
             "null"
+          ],
+          "enum": [
+            "unrecognized_format",
+            "not_found",
+            "target_mismatch",
+            "origin_mismatch",
+            "not_adoptable",
+            null
+          ]
+        },
+        "nextAction": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Action"
+            }
           ]
         }
       },
@@ -1327,8 +1380,7 @@
         "intent": {
           "type": "string",
           "enum": [
-            "create",
-            "adopt"
+            "create"
           ]
         },
         "migrationRef": {
@@ -1397,7 +1449,6 @@
         "intent": {
           "type": "string",
           "enum": [
-            "create",
             "adopt"
           ]
         },
@@ -1423,6 +1474,9 @@
             }
           },
           "additionalProperties": false
+        },
+        "reconsent": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -1496,8 +1550,7 @@
         "intent": {
           "type": "string",
           "enum": [
-            "create",
-            "adopt"
+            "create"
           ]
         },
         "migrationRef": {

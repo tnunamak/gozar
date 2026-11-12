@@ -105,7 +105,7 @@ test('closed shapes reject unknown properties', () => {
 
 test('every consumer shape has at least one valid fixture, and every valid fixture passes', () => {
   const covered = new Set(fixtures.valid.map(item => item.shape));
-  for (const shape of [...consumerShapes, 'AdapterDefinition', 'ProviderEntry']) assert.ok(covered.has(shape), `no valid fixture for ${shape}`);
+  for (const shape of [...consumerShapes, 'AdapterDefinition', 'ProviderEntry', 'AdapterPlan', 'AdapterEffectError']) assert.ok(covered.has(shape), `no valid fixture for ${shape}`);
   for (const item of fixtures.valid) assert.deepEqual(check(item.schema, item.shape, item.value), [], `${item.shape}: ${item.name}`);
 });
 
@@ -128,13 +128,24 @@ test('every invalid fixture is rejected, names its shape and says why', () => {
 
 test('the required invalid cases are present', () => {
   const has = pattern => fixtures.invalid.some(item => pattern.test(`${item.shape} ${item.name}`));
-  for (const pattern of [/unknown schemaVersion/, /missing cost/, /missing needsAccount/, /missing traffic/, /extra unknown property/, /incomplete/, /Query provider-enum field adapterId/]) assert.ok(has(pattern), String(pattern));
+  for (const pattern of [/unknown schemaVersion/, /missing cost/, /missing needsAccount/, /missing traffic/, /extra unknown property/, /incomplete/, /Query provider-enum field adapterId/, /action-required candidate carries a token/, /Requirements reach unknown/, /AdoptRouteRequest intent create/]) assert.ok(has(pattern), String(pattern));
 });
 
 test('every errorNormalization target is in the frozen union, which equals the schema enum', () => {
   assert.deepEqual([...fixtures.frozenErrorCodes].sort(), [...catalogSchema.$defs.ErrorCode.enum].sort());
-  assert.equal(fixtures.frozenErrorCodes.length, 19);
+  assert.equal(fixtures.frozenErrorCodes.length, 21);
   for (const [code, entry] of Object.entries(fixtures.errorNormalization)) assert.ok(fixtures.frozenErrorCodes.includes(entry.target), `${code} -> ${entry.target}`);
+});
+
+test('every adapterEffectErrors target is in the frozen union and the keys match the d.ts AdapterEffectError', async () => {
+  for (const [code, entry] of Object.entries(fixtures.adapterEffectErrors)) assert.ok(fixtures.frozenErrorCodes.includes(entry.target), `${code} -> ${entry.target}`);
+  assert.equal(fixtures.adapterEffectErrors.precondition_failed.target, 'provider_unavailable');
+  const text = await readFile(join(root, 'packages/gozar-node/adapter-contract.d.ts'), 'utf8');
+  const block = /export type AdapterEffectError = \{\s*code:([^;]+);/.exec(text)[1];
+  assert.deepEqual([...block.matchAll(/'([a-z_]+)'/g)].map(match => match[1]).sort(), Object.keys(fixtures.adapterEffectErrors).sort());
+  assert.deepEqual([...adapterSchema.$defs.AdapterEffectError.properties.code.enum].sort(), Object.keys(fixtures.adapterEffectErrors).sort());
+  // Every non-internal adapter outcome is itself a frozen code.
+  for (const code of Object.keys(fixtures.adapterEffectErrors)) if (code !== 'precondition_failed') assert.ok(fixtures.frozenErrorCodes.includes(code), code);
 });
 
 test('the frozen union is the same list the d.ts declares', async () => {
@@ -164,6 +175,19 @@ test('the error codes in the source equal the errorNormalization keys', async ()
   for (const code of found) assert.ok(keys.has(code), `source code ${code} has no errorNormalization entry: map it to a frozen code`);
   for (const code of keys) if (!found.has(code)) assert.ok(dynamicKeys.includes(code), `errorNormalization.${code} no longer appears in the source`);
   if (dynamicKeys.length) assert.ok(dynamic, 'dynamic state codes are listed but the source no longer throws refuse(<record>.state)');
+});
+
+test('a candidate token appears only when eligible and setup is ready; unmet entries use the closed vocabulary', () => {
+  const candidates = fixtures.valid.flatMap(item => item.shape === 'Catalog' ? item.value.candidates : item.shape === 'Candidate' ? [item.value] : []);
+  assert.ok(candidates.length >= 5);
+  for (const c of candidates) {
+    if (c.candidateToken !== null) assert.ok(c.eligible && c.setup.state === 'ready', c.name);
+    for (const u of c.unmet) {
+      assert.ok(['reach', 'transport', 'payloadAccess', 'address', 'setup', 'protocols', 'usage', 'platform'].includes(u.requirement), u.requirement);
+      assert.ok(['not_met', 'unknown', 'unsupported_platform'].includes(u.reasonCode), u.reasonCode);
+    }
+  }
+  assert.ok(candidates.some(c => c.setup.state === 'action-required' && c.candidateToken === null));
 });
 
 test('every provisional mapping carries its open question', () => {

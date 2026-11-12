@@ -20,7 +20,9 @@
     "provider_unavailable",
     "cleanup_debt",
     "unsupported",
-    "ambiguous_route"
+    "ambiguous_route",
+    "busy",
+    "internal_error"
   ],
   "valid": [
     {
@@ -599,7 +601,7 @@
           {
             "requirement": "address",
             "actual": "ephemeral",
-            "reasonCode": "address_not_stable"
+            "reasonCode": "not_met"
           }
         ],
         "display": {
@@ -684,7 +686,7 @@
           {
             "requirement": "platform",
             "actual": "darwin",
-            "reasonCode": "unsupported"
+            "reasonCode": "unsupported_platform"
           }
         ],
         "display": {
@@ -872,7 +874,7 @@
           {
             "requirement": "payloadAccess",
             "actual": null,
-            "reasonCode": "privacy_unknown"
+            "reasonCode": "unknown"
           }
         ],
         "display": {
@@ -1031,7 +1033,7 @@
               {
                 "requirement": "address",
                 "actual": "ephemeral",
-                "reasonCode": "address_not_stable"
+                "reasonCode": "not_met"
               }
             ],
             "display": {
@@ -1111,7 +1113,7 @@
               {
                 "requirement": "platform",
                 "actual": "darwin",
-                "reasonCode": "unsupported"
+                "reasonCode": "unsupported_platform"
               }
             ],
             "display": {
@@ -1289,7 +1291,7 @@
               {
                 "requirement": "payloadAccess",
                 "actual": null,
-                "reasonCode": "privacy_unknown"
+                "reasonCode": "unknown"
               }
             ],
             "display": {
@@ -2212,7 +2214,8 @@
         "target": "127.0.0.1:8799",
         "bridgeHome": "/private/example-bridge",
         "state": "adoptable",
-        "reasonCode": null
+        "reasonCode": null,
+        "nextAction": null
       }
     },
     {
@@ -2226,7 +2229,8 @@
         "target": "127.0.0.1:8799",
         "bridgeHome": null,
         "state": "external",
-        "reasonCode": "ambiguous_route"
+        "reasonCode": "not_adoptable",
+        "nextAction": null
       }
     },
     {
@@ -2240,7 +2244,8 @@
         "target": "127.0.0.1:8799",
         "bridgeHome": null,
         "state": "blocked",
-        "reasonCode": "ambiguous_route"
+        "reasonCode": "not_adoptable",
+        "nextAction": null
       }
     },
     {
@@ -2689,6 +2694,307 @@
         "id": "example-adapter",
         "module": "providers/example-adapter/index.mjs",
         "definition": "providers/example-adapter/definition.json"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "InspectLegacyRouteResult",
+      "name": "unrecognized_format with sign-in-again action",
+      "value": {
+        "schemaVersion": 1,
+        "migrationRef": "mig_synthetic_2",
+        "origin": null,
+        "target": "127.0.0.1:8799",
+        "bridgeHome": null,
+        "state": "blocked",
+        "reasonCode": "unrecognized_format",
+        "nextAction": {
+          "id": "act_synthetic_signin",
+          "kind": "open-url",
+          "label": "Sign in again",
+          "digest": "sha256:synthetic-signin-1",
+          "disclosure": {
+            "revision": "disc-synthetic-1",
+            "text": "Example disclosure text for a synthetic provider.",
+            "links": [
+              {
+                "rel": "terms",
+                "label": "Terms",
+                "href": "https://provider.example/terms"
+              },
+              {
+                "rel": "privacy",
+                "label": "Privacy",
+                "href": "https://provider.example/privacy"
+              }
+            ]
+          },
+          "href": "https://provider.example/login"
+        }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "InspectLegacyRouteResult",
+      "name": "not_found",
+      "value": {
+        "schemaVersion": 1,
+        "migrationRef": "mig_synthetic_3",
+        "origin": null,
+        "target": "127.0.0.1:8799",
+        "bridgeHome": null,
+        "state": "blocked",
+        "reasonCode": "not_found",
+        "nextAction": null
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "InspectLegacyRouteResult",
+      "name": "target_mismatch",
+      "value": {
+        "schemaVersion": 1,
+        "migrationRef": "mig_synthetic_3",
+        "origin": null,
+        "target": "127.0.0.1:8799",
+        "bridgeHome": null,
+        "state": "blocked",
+        "reasonCode": "target_mismatch",
+        "nextAction": null
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "InspectLegacyRouteResult",
+      "name": "origin_mismatch",
+      "value": {
+        "schemaVersion": 1,
+        "migrationRef": "mig_synthetic_3",
+        "origin": null,
+        "target": "127.0.0.1:8799",
+        "bridgeHome": null,
+        "state": "blocked",
+        "reasonCode": "origin_mismatch",
+        "nextAction": null
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "AdoptRouteRequest",
+      "name": "adopt with reconsent after a user stop",
+      "value": {
+        "schemaVersion": 1,
+        "owner": "example-app",
+        "target": "127.0.0.1:8799",
+        "home": "/private/gozar-state",
+        "route": "work",
+        "usage": {
+          "kind": "durable",
+          "routeId": "example-main"
+        },
+        "requirements": {
+          "reach": "internet",
+          "transport": "https",
+          "payloadAccess": "allow-provider",
+          "address": "stable",
+          "setup": "allow",
+          "protocols": [
+            "sse",
+            "streamable-http",
+            "oauth-dcr"
+          ]
+        },
+        "intent": "adopt",
+        "origin": "https://example.invalid",
+        "approval": {
+          "candidateToken": "tok_synthetic_eligible_1",
+          "disclosureRevision": "disc-synthetic-1"
+        },
+        "handover": {
+          "from": "example-app-legacy",
+          "generation": 7
+        },
+        "reconsent": true
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "GozarError",
+      "name": "unsafe state directory: instructions action",
+      "value": {
+        "schemaVersion": 1,
+        "error": {
+          "code": "setup_required",
+          "message": "The Gozar state directory is writable by other users.",
+          "nextAction": {
+            "id": "act_synthetic_perms",
+            "kind": "instructions",
+            "label": "Fix state directory permissions",
+            "digest": "sha256:synthetic-perms-1",
+            "disclosure": {
+              "revision": "disc-synthetic-1",
+              "text": "Example disclosure text for a synthetic provider.",
+              "links": [
+                {
+                  "rel": "terms",
+                  "label": "Terms",
+                  "href": "https://provider.example/terms"
+                },
+                {
+                  "rel": "privacy",
+                  "label": "Privacy",
+                  "href": "https://provider.example/privacy"
+                }
+              ]
+            },
+            "instructions": "Run: chmod go-w /private/gozar-state, and make sure you own the directory. Then retry."
+          }
+        }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "GozarError",
+      "name": "busy",
+      "value": {
+        "schemaVersion": 1,
+        "error": {
+          "code": "busy",
+          "message": "Synthetic message.",
+          "nextAction": null
+        }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "GozarError",
+      "name": "internal_error",
+      "value": {
+        "schemaVersion": 1,
+        "error": {
+          "code": "internal_error",
+          "message": "Synthetic message.",
+          "nextAction": null
+        }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Requirements",
+      "name": "reach this-device",
+      "value": {
+        "reach": "this-device",
+        "transport": "https",
+        "payloadAccess": "endpoint-only",
+        "address": "any",
+        "setup": "none",
+        "protocols": []
+      }
+    },
+    {
+      "schema": "adapter",
+      "shape": "AdapterPlan",
+      "name": "precondition on a provider revision",
+      "value": {
+        "digest": "sha256:synthetic-plan-1",
+        "origin": "https://example.invalid",
+        "resourceKey": "resource-synthetic-1",
+        "effects": [
+          {
+            "kind": "synthetic-effect"
+          }
+        ],
+        "readback": {
+          "synthetic": true
+        },
+        "cleanup": {
+          "synthetic": true
+        },
+        "precondition": {
+          "revision": "etag-synthetic-1"
+        }
+      }
+    },
+    {
+      "schema": "adapter",
+      "shape": "AdapterPlan",
+      "name": "precondition on a provider without revisions",
+      "value": {
+        "digest": "sha256:synthetic-plan-1",
+        "origin": "https://example.invalid",
+        "resourceKey": "resource-synthetic-1",
+        "effects": [
+          {
+            "kind": "synthetic-effect"
+          }
+        ],
+        "readback": {
+          "synthetic": true
+        },
+        "cleanup": {
+          "synthetic": true
+        },
+        "precondition": {
+          "revision": null
+        }
+      }
+    },
+    {
+      "schema": "adapter",
+      "shape": "AdapterPlan",
+      "name": "null precondition: unconditional effect",
+      "value": {
+        "digest": "sha256:synthetic-plan-1",
+        "origin": "https://example.invalid",
+        "resourceKey": "resource-synthetic-1",
+        "effects": [
+          {
+            "kind": "synthetic-effect"
+          }
+        ],
+        "readback": {
+          "synthetic": true
+        },
+        "cleanup": {
+          "synthetic": true
+        },
+        "precondition": null
+      }
+    },
+    {
+      "schema": "adapter",
+      "shape": "AdapterEffectError",
+      "name": "precondition_failed",
+      "value": {
+        "code": "precondition_failed",
+        "message": "Synthetic message."
+      }
+    },
+    {
+      "schema": "adapter",
+      "shape": "AdapterEffectError",
+      "name": "unsupported",
+      "value": {
+        "code": "unsupported",
+        "message": "Synthetic message."
+      }
+    },
+    {
+      "schema": "adapter",
+      "shape": "AdapterEffectError",
+      "name": "provider_unavailable",
+      "value": {
+        "code": "provider_unavailable",
+        "message": "Synthetic message."
+      }
+    },
+    {
+      "schema": "adapter",
+      "shape": "AdapterEffectError",
+      "name": "setup_required",
+      "value": {
+        "code": "setup_required",
+        "message": "Synthetic message."
       }
     }
   ],
@@ -5182,6 +5488,772 @@
         "definition": "d",
         "path": "/private/plugin.mjs"
       }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Candidate",
+      "name": "action-required candidate carries a token",
+      "why": "a token is issued only when eligible and setup.state is ready; after runSetupAction the app asks the catalog again",
+      "value": {
+        "name": "cand_synthetic_4",
+        "preferenceRef": "pref_synthetic_4",
+        "rank": 4,
+        "eligible": true,
+        "unmet": [],
+        "display": {
+          "label": "Example route needing sign-in",
+          "description": "Example route needing sign-in (synthetic)"
+        },
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ]
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          }
+        },
+        "setup": {
+          "state": "action-required",
+          "actions": [
+            {
+              "id": "act_synthetic_1",
+              "kind": "open-url",
+              "label": "Sign in to the provider",
+              "digest": "sha256:synthetic-action-1",
+              "disclosure": {
+                "revision": "disc-synthetic-1",
+                "text": "Example disclosure text for a synthetic provider.",
+                "links": [
+                  {
+                    "rel": "terms",
+                    "label": "Terms",
+                    "href": "https://provider.example/terms"
+                  },
+                  {
+                    "rel": "privacy",
+                    "label": "Privacy",
+                    "href": "https://provider.example/privacy"
+                  }
+                ]
+              },
+              "href": "https://provider.example/login"
+            }
+          ]
+        },
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "candidateToken": "tok_synthetic_early",
+        "expiresAt": null
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Candidate",
+      "name": "ineligible ready candidate carries a token (unsupported platform)",
+      "why": "no token for an unsupported or ineligible candidate",
+      "value": {
+        "name": "cand_synthetic_3",
+        "preferenceRef": "pref_synthetic_3",
+        "rank": 3,
+        "eligible": false,
+        "unmet": [
+          {
+            "requirement": "platform",
+            "actual": "darwin",
+            "reasonCode": "unsupported_platform"
+          }
+        ],
+        "display": {
+          "label": "Example route on macOS",
+          "description": "Example route on macOS (synthetic)"
+        },
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ]
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          }
+        },
+        "setup": {
+          "state": "unsupported",
+          "actions": []
+        },
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "candidateToken": "tok_synthetic_macos",
+        "expiresAt": null
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Candidate",
+      "name": "unmet requirement outside vocabulary",
+      "why": "unmet.requirement is a closed list",
+      "value": {
+        "name": "cand_synthetic_1",
+        "preferenceRef": "pref_synthetic_1",
+        "rank": 1,
+        "eligible": false,
+        "unmet": [
+          {
+            "requirement": "cost",
+            "actual": "paid",
+            "reasonCode": "not_met"
+          }
+        ],
+        "display": {
+          "label": "Example public route",
+          "description": "Example public route (synthetic)"
+        },
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ]
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          }
+        },
+        "setup": {
+          "state": "ready",
+          "actions": []
+        },
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "candidateToken": null,
+        "expiresAt": "2026-11-12T12:10:00.000Z"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Candidate",
+      "name": "unmet reasonCode outside vocabulary",
+      "why": "unmet.reasonCode is not_met, unknown or unsupported_platform",
+      "value": {
+        "name": "cand_synthetic_1",
+        "preferenceRef": "pref_synthetic_1",
+        "rank": 1,
+        "eligible": false,
+        "unmet": [
+          {
+            "requirement": "address",
+            "actual": "ephemeral",
+            "reasonCode": "address_not_stable"
+          }
+        ],
+        "display": {
+          "label": "Example public route",
+          "description": "Example public route (synthetic)"
+        },
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ]
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          }
+        },
+        "setup": {
+          "state": "ready",
+          "actions": []
+        },
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "candidateToken": null,
+        "expiresAt": "2026-11-12T12:10:00.000Z"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Candidate",
+      "name": "unmet entry missing actual",
+      "why": "actual is required (null when unknown)",
+      "value": {
+        "name": "cand_synthetic_1",
+        "preferenceRef": "pref_synthetic_1",
+        "rank": 1,
+        "eligible": false,
+        "unmet": [
+          {
+            "requirement": "address",
+            "reasonCode": "not_met"
+          }
+        ],
+        "display": {
+          "label": "Example public route",
+          "description": "Example public route (synthetic)"
+        },
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ]
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          }
+        },
+        "setup": {
+          "state": "ready",
+          "actions": []
+        },
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "candidateToken": null,
+        "expiresAt": "2026-11-12T12:10:00.000Z"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Requirements",
+      "name": "reach unknown",
+      "why": "a requirement cannot ask for unknown reach; only Properties.reach may be unknown",
+      "value": {
+        "reach": "unknown",
+        "transport": "https",
+        "payloadAccess": "allow-provider",
+        "address": "stable",
+        "setup": "allow",
+        "protocols": [
+          "sse",
+          "streamable-http",
+          "oauth-dcr"
+        ]
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Query",
+      "name": "requirements reach unknown",
+      "why": "Requirements.reach excludes unknown",
+      "value": {
+        "schemaVersion": 1,
+        "owner": "example-app",
+        "target": "127.0.0.1:8799",
+        "home": "/private/gozar-state",
+        "route": "work",
+        "usage": {
+          "kind": "durable",
+          "routeId": "example-main"
+        },
+        "requirements": {
+          "reach": "unknown",
+          "transport": "https",
+          "payloadAccess": "allow-provider",
+          "address": "stable",
+          "setup": "allow",
+          "protocols": [
+            "sse",
+            "streamable-http",
+            "oauth-dcr"
+          ]
+        }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "AdoptRouteRequest",
+      "name": "intent create",
+      "why": "adoptRoute intent can only be adopt",
+      "value": {
+        "schemaVersion": 1,
+        "owner": "example-app",
+        "target": "127.0.0.1:8799",
+        "home": "/private/gozar-state",
+        "route": "work",
+        "usage": {
+          "kind": "durable",
+          "routeId": "example-main"
+        },
+        "requirements": {
+          "reach": "internet",
+          "transport": "https",
+          "payloadAccess": "allow-provider",
+          "address": "stable",
+          "setup": "allow",
+          "protocols": [
+            "sse",
+            "streamable-http",
+            "oauth-dcr"
+          ]
+        },
+        "intent": "create",
+        "origin": "https://example.invalid",
+        "approval": {
+          "candidateToken": "tok_synthetic_eligible_1",
+          "disclosureRevision": "disc-synthetic-1"
+        },
+        "handover": {
+          "from": "example-app-legacy",
+          "generation": 7
+        }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "EnsureRouteRequest",
+      "name": "intent adopt",
+      "why": "ensureRoute intent can only be create",
+      "value": {
+        "schemaVersion": 1,
+        "owner": "example-app",
+        "target": "127.0.0.1:8799",
+        "home": "/private/gozar-state",
+        "route": "work",
+        "usage": {
+          "kind": "durable",
+          "routeId": "example-main"
+        },
+        "requirements": {
+          "reach": "internet",
+          "transport": "https",
+          "payloadAccess": "allow-provider",
+          "address": "stable",
+          "setup": "allow",
+          "protocols": [
+            "sse",
+            "streamable-http",
+            "oauth-dcr"
+          ]
+        },
+        "approval": {
+          "candidateToken": "tok_synthetic_eligible_1",
+          "disclosureRevision": "disc-synthetic-1"
+        },
+        "intent": "adopt"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "ExposeRequest",
+      "name": "intent adopt",
+      "why": "expose intent can only be create",
+      "value": {
+        "schemaVersion": 1,
+        "owner": "example-app",
+        "target": "127.0.0.1:8799",
+        "home": "/private/gozar-state",
+        "route": "work",
+        "usage": {
+          "kind": "session",
+          "lifetimeMs": 3600000
+        },
+        "requirements": {
+          "reach": "internet",
+          "transport": "https",
+          "payloadAccess": "allow-provider",
+          "address": "stable",
+          "setup": "allow",
+          "protocols": [
+            "sse",
+            "streamable-http",
+            "oauth-dcr"
+          ]
+        },
+        "approval": {
+          "candidateToken": "tok_synthetic_eligible_1",
+          "disclosureRevision": "disc-synthetic-1"
+        },
+        "wait": "verified",
+        "intent": "adopt"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "AdoptRouteRequest",
+      "name": "reconsent not boolean",
+      "why": "reconsent is a boolean",
+      "value": {
+        "schemaVersion": 1,
+        "owner": "example-app",
+        "target": "127.0.0.1:8799",
+        "home": "/private/gozar-state",
+        "route": "work",
+        "usage": {
+          "kind": "durable",
+          "routeId": "example-main"
+        },
+        "requirements": {
+          "reach": "internet",
+          "transport": "https",
+          "payloadAccess": "allow-provider",
+          "address": "stable",
+          "setup": "allow",
+          "protocols": [
+            "sse",
+            "streamable-http",
+            "oauth-dcr"
+          ]
+        },
+        "intent": "adopt",
+        "origin": "https://example.invalid",
+        "approval": {
+          "candidateToken": "tok_synthetic_eligible_1",
+          "disclosureRevision": "disc-synthetic-1"
+        },
+        "handover": {
+          "from": "example-app-legacy",
+          "generation": 7
+        },
+        "reconsent": "yes"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "InspectLegacyRouteResult",
+      "name": "reasonCode outside vocabulary",
+      "why": "reasonCode is a closed list or null",
+      "value": {
+        "schemaVersion": 1,
+        "migrationRef": "m",
+        "origin": null,
+        "target": "127.0.0.1:1",
+        "bridgeHome": null,
+        "state": "blocked",
+        "reasonCode": "ambiguous_route",
+        "nextAction": null
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "InspectLegacyRouteResult",
+      "name": "missing nextAction",
+      "why": "nextAction is required, null when none",
+      "value": {
+        "schemaVersion": 1,
+        "migrationRef": "m",
+        "origin": null,
+        "target": "127.0.0.1:1",
+        "bridgeHome": null,
+        "state": "blocked",
+        "reasonCode": null
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "GozarError",
+      "name": "provider_not_running leaks",
+      "why": "provider codes are not in the frozen union",
+      "value": {
+        "schemaVersion": 1,
+        "error": {
+          "code": "provider_not_running",
+          "message": "x",
+          "nextAction": null
+        }
+      }
+    },
+    {
+      "schema": "adapter",
+      "shape": "AdapterPlan",
+      "name": "missing precondition",
+      "why": "precondition is required; null means unconditional, never absent",
+      "value": {
+        "digest": "sha256:synthetic-plan-1",
+        "origin": "https://example.invalid",
+        "resourceKey": "resource-synthetic-1",
+        "effects": [
+          {
+            "kind": "synthetic-effect"
+          }
+        ],
+        "readback": {
+          "synthetic": true
+        },
+        "cleanup": {
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "schema": "adapter",
+      "shape": "AdapterPlan",
+      "name": "precondition without revision",
+      "why": "a non-null precondition carries revision (string or null)",
+      "value": {
+        "digest": "sha256:synthetic-plan-1",
+        "origin": "https://example.invalid",
+        "resourceKey": "resource-synthetic-1",
+        "effects": [
+          {
+            "kind": "synthetic-effect"
+          }
+        ],
+        "readback": {
+          "synthetic": true
+        },
+        "cleanup": {
+          "synthetic": true
+        },
+        "precondition": {}
+      }
+    },
+    {
+      "schema": "adapter",
+      "shape": "AdapterPlan",
+      "name": "extra unknown property",
+      "why": "AdapterPlan is a closed shape",
+      "value": {
+        "digest": "sha256:synthetic-plan-1",
+        "origin": "https://example.invalid",
+        "resourceKey": "resource-synthetic-1",
+        "effects": [
+          {
+            "kind": "synthetic-effect"
+          }
+        ],
+        "readback": {
+          "synthetic": true
+        },
+        "cleanup": {
+          "synthetic": true
+        },
+        "precondition": null,
+        "claim": {}
+      }
+    },
+    {
+      "schema": "adapter",
+      "shape": "AdapterEffectError",
+      "name": "code outside the adapter outcomes",
+      "why": "adapter effect codes are precondition_failed, unsupported, provider_unavailable, setup_required",
+      "value": {
+        "code": "route_conflict",
+        "message": "x"
+      }
     }
   ],
   "errorNormalization": {
@@ -5232,16 +6304,12 @@
     "provider_not_running": {
       "target": "setup_required",
       "source": "tailscale-localapi.mjs",
-      "rule": "plan line 122: missing prerequisites map to setup_required with a Gozar action",
-      "provisional": true,
-      "question": "Plan names LocalAPI denied/missing prerequisites; confirm a provider that is installed but not running counts as a missing prerequisite."
+      "rule": "owner decision"
     },
     "ETIMEDOUT": {
       "target": "provider_unavailable",
       "source": "tailscale-localapi.mjs",
-      "rule": "plan line 122: remaining provider errors",
-      "provisional": true,
-      "question": "Node errno string reused as a typed code; confirm it is normalized, not exempted."
+      "rule": "owner decision"
     },
     "provider_create_failed": {
       "target": "provider_unavailable",
@@ -5306,9 +6374,7 @@
     "uncertain": {
       "target": "cleanup_debt",
       "source": "durable-route.mjs",
-      "rule": "plan line 122: cleanup_debt or the matching RouteView state",
-      "provisional": true,
-      "question": "Plan allows two targets for uncertain; the matching RouteView state is not an error code. Contract owner picks."
+      "rule": "owner decision: the error code is cleanup_debt; RouteView keeps the uncertain state"
     },
     "address_changed": {
       "target": "address_changed",
@@ -5336,10 +6402,9 @@
       "rule": "same meaning as the frozen route_not_found"
     },
     "not_owned": {
-      "target": "unsupported",
+      "target": "invalid_input",
       "source": "durable-route.mjs",
-      "provisional": true,
-      "question": "Gozar holds no receipt, so it cannot hand back (the route is external-owned). Plan has no rule; proposed unsupported."
+      "rule": "owner decision"
     },
     "nothing_to_dismiss": {
       "target": "invalid_input",
@@ -5350,58 +6415,68 @@
     "not_handing_back": {
       "target": "route_conflict",
       "source": "durable-route.mjs",
-      "provisional": true,
-      "question": "Plan has no rule; proposed route_conflict (route not in the expected state)."
+      "rule": "owner decision"
     },
     "stale_transfer": {
       "target": "route_conflict",
       "source": "durable-route.mjs",
-      "provisional": true,
-      "question": "Plan has no rule; proposed route_conflict (stale hand-back transfer). candidate_stale is the alternative."
+      "rule": "owner decision"
     },
     "releasing": {
       "target": "route_conflict",
       "source": "durable-route.mjs (refuse(record.state))",
       "dynamic": true,
-      "provisional": true,
-      "question": "Dynamic state code; proposed the same target as route_releasing."
+      "rule": "owner decision"
     },
     "unknown": {
       "target": "cleanup_debt",
       "source": "durable-route.mjs (refuse(current.state))",
       "dynamic": true,
-      "provisional": true,
-      "question": "Dynamic state code from a failed observation; plan names no target. Proposed cleanup_debt; provider_unavailable is the alternative."
+      "rule": "owner decision"
     },
     "gozar_owned": {
       "target": "route_conflict",
       "source": "service.mjs",
-      "provisional": true,
-      "question": "removeService on a Gozar-owned origin; plan has no rule. Proposed route_conflict."
+      "rule": "owner decision"
     },
     "unsafe_state_path": {
-      "target": "invalid_input",
+      "target": "setup_required",
       "source": "service-state.mjs",
-      "provisional": true,
-      "question": "Unsafe state directory (symlink, wrong owner, group-writable); plan has no rule. Proposed invalid_input; setup_required is the alternative."
+      "rule": "owner decision",
+      "nextAction": {
+        "kind": "instructions",
+        "summary": "Fix the state-directory permissions (owner is the invoking user, no group or world write)."
+      }
     },
     "busy": {
-      "target": "route_conflict",
+      "target": "busy",
       "source": "durable-route.mjs, service-state.mjs",
-      "provisional": true,
-      "question": "Reservation or mutation lock held; plan has no rule. Proposed route_conflict; provider_unavailable is the alternative."
+      "rule": "owner decision: lock held; the app retries after a pause"
     },
     "SERVICE_ERROR": {
-      "target": "invalid_input",
+      "target": "internal_error",
       "source": "bin/gozar.mjs",
-      "provisional": true,
-      "question": "Catch-all CLI envelope code for service commands. The frozen list has no operational/internal code; proposed invalid_input."
+      "rule": "owner decision: unexpected Gozar fault"
     },
     "needs-validation": {
       "target": "verification_failed",
       "source": "driver.mjs, probe-directory.mjs",
-      "provisional": true,
-      "question": "Core-protocol result when only the local vantage was observed; plan has no rule. Proposed verification_failed."
+      "rule": "owner decision"
+    }
+  },
+  "adapterEffectErrors": {
+    "precondition_failed": {
+      "target": "provider_unavailable",
+      "surfacing": "internal: nothing changed, the core re-observes and re-plans; only when retries are exhausted does an app see provider_unavailable. Never surfaced directly."
+    },
+    "unsupported": {
+      "target": "unsupported"
+    },
+    "provider_unavailable": {
+      "target": "provider_unavailable"
+    },
+    "setup_required": {
+      "target": "setup_required"
     }
   }
 }

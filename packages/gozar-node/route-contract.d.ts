@@ -16,7 +16,8 @@ export type Usage =
   | { kind: 'attached' };
 
 export type Requirements = {
-  reach: Reach;
+  /** A requirement can never ask for 'unknown' reach; only Properties.reach may be unknown. */
+  reach: Exclude<Reach, 'unknown'>;
   transport: 'https';
   payloadAccess: 'endpoint-only' | 'allow-provider';
   address: 'stable' | 'any';
@@ -76,6 +77,9 @@ export type Properties = {
   protocols: { sse: boolean; streamableHttp: boolean; oauthDcr: boolean };
 };
 
+export type UnmetRequirement = 'reach' | 'transport' | 'payloadAccess' | 'address' | 'setup' | 'protocols' | 'usage' | 'platform';
+export type UnmetReason = 'not_met' | 'unknown' | 'unsupported_platform';
+
 export type Candidate = {
   /** Opaque to apps. */
   name: string;
@@ -83,16 +87,20 @@ export type Candidate = {
   preferenceRef: string;
   rank: number;
   eligible: boolean;
-  unmet: { requirement: string; actual: unknown; reasonCode: string }[];
+  unmet: { requirement: UnmetRequirement; actual: unknown; reasonCode: UnmetReason }[];
   display: { label: string; description: string };
   properties: Properties;
   /**
-   * On macOS every candidate has setup.state 'unsupported', eligible false and an unmet entry with
-   * reasonCode 'unsupported' (revision 3).
+   * On macOS every candidate has setup.state 'unsupported', eligible false and the unmet entry
+   * `{requirement:'platform', reasonCode:'unsupported_platform'}` (revision 3).
    */
   setup: { state: 'ready' | 'action-required' | 'unsupported' | 'unknown'; actions: Action[] };
   disclosure: Disclosure;
-  /** Never set for an ineligible candidate. Bearer data: hold transiently or in a 0600 file; never log. */
+  /**
+   * Set only when `eligible` is true AND `setup.state` is 'ready'. An 'action-required' candidate has
+   * null: after runSetupAction the app asks the catalog again to get a token. Bearer data: hold
+   * transiently or in a 0600 file; never log.
+   */
   candidateToken: string | null;
   expiresAt: string | null;
 };
@@ -156,7 +164,8 @@ export type GozarErrorCode =
   | 'invalid_input' | 'requirements_unsatisfied' | 'setup_required' | 'consent_required' | 'consent_unknown'
   | 'consent_expired' | 'consent_mismatch' | 'candidate_stale' | 'preference_conflict' | 'route_not_found'
   | 'route_conflict' | 'address_changed' | 'stopped_by_user' | 'handing_back' | 'verification_failed'
-  | 'provider_unavailable' | 'cleanup_debt' | 'unsupported' | 'ambiguous_route';
+  | 'provider_unavailable' | 'cleanup_debt' | 'unsupported' | 'ambiguous_route' | 'busy' | 'internal_error';
+// 'busy': a lock is held; retry after a pause. 'internal_error': an unexpected Gozar fault.
 
 export type GozarError = { schemaVersion: 1; error: { code: GozarErrorCode; message: string; nextAction: Action | null } };
 
@@ -195,7 +204,9 @@ export type InspectLegacyRouteResult = {
   target: string;
   bridgeHome: string | null;
   state: 'adoptable' | 'external' | 'blocked';
-  reasonCode: string | null;
+  reasonCode: 'unrecognized_format' | 'not_found' | 'target_mismatch' | 'origin_mismatch' | 'not_adoptable' | null;
+  /** For 'unrecognized_format': the sign-in-again setup action. */
+  nextAction: Action | null;
 };
 
 export type ResolveClientAddressResult = {
@@ -219,18 +230,29 @@ export type InspectLegacyRouteRequest = {
  * Requires usage.kind 'durable'. Clearing a user-stop tombstone needs a fresh `approval`;
  * `reconsent: true` without `approval` fails with consent_required (revision 3).
  */
-export type EnsureRouteRequest = Query & { usage: { kind: 'durable'; routeId: string }; approval?: Approval; reconsent?: boolean };
+export type EnsureRouteRequest = Query & { intent?: 'create'; usage: { kind: 'durable'; routeId: string }; approval?: Approval; reconsent?: boolean };
 
-/** Durable only; no claim input. The old-owner fence is the caller's precondition. */
+/**
+ * Durable only; no claim input. The old-owner fence is the caller's precondition. `approval` is always
+ * required. A user-stop tombstone is cleared only when `reconsent: true` is also set; without it,
+ * adopt fails with stopped_by_user (symmetric with ensureRoute).
+ */
 export type AdoptRouteRequest = Query & {
+  intent?: 'adopt';
   usage: { kind: 'durable'; routeId: string };
+  reconsent?: boolean;
   origin: string;
   approval: Approval;
   handover: { from: string; generation: number };
 };
 
-/** Session or attached usage only. */
+/**
+ * Session or attached usage only. With attached usage the calling process holds the lease: the library
+ * sends heartbeats on an unref'd timer, process exit ends the lease within the expiry window, and
+ * closeRoute({handle}) ends it early. There is no lease object and no extra export.
+ */
 export type ExposeRequest = Query & {
+  intent?: 'create';
   usage: { kind: 'session'; lifetimeMs: number } | { kind: 'attached' };
   approval: Approval;
   wait: 'allocated' | 'verified';
@@ -274,6 +296,10 @@ export function detect(query: Query): Promise<Catalog>;
 export function inspectLegacyRoute(request: InspectLegacyRouteRequest): Promise<InspectLegacyRouteResult>;
 export function ensureRoute(request: EnsureRouteRequest): Promise<RouteView>;
 export function adoptRoute(request: AdoptRouteRequest): Promise<RouteView>;
+/**
+ * Fresh proof for one handle. An external service is read with `handle: {kind:'external', id:<origin>}`
+ * and returns the normalized RouteView (ownership 'external-owned'); there is no separate projection export.
+ */
 export function routeStatus(request: RouteRef): Promise<RouteView>;
 export function closeRoute(request: CloseRouteRequest): Promise<RouteView>;
 export function watchRoutes(request: WatchRoutesRequest): AsyncIterable<WatchEvent>;
@@ -294,12 +320,16 @@ export type LegacyExposeOptions = {
   installLinkTemplate?: string; yes?: boolean; sse?: boolean; streamableHttp?: boolean; oauthDcr?: boolean; operational?: boolean;
 };
 export type LegacySessionReply = Record<string, unknown>;
+/** Attached usage returns a plain RouteView; see ExposeRequest for who holds the lease. */
 export function expose(request: ExposeRequest): Promise<RouteView>;
 export function expose(options: LegacyExposeOptions): Promise<LegacySessionReply>;
 export function status(options?: LegacyExposeOptions): Promise<LegacySessionReply>;
 export function stop(options?: LegacyExposeOptions): Promise<LegacySessionReply>;
 
 // --- Kept service and hand-back exports (also at @tnunamak/gozar/service) ------------------------
+// The pre-0.2 durable signatures (ensureRoute/adoptRoute with adapterId and approvals tuples, and
+// statusRoutes) are not kept: durable routes were never published, only 0.1.0 is on npm. The root
+// ensureRoute/adoptRoute above replace them.
 
 export type ServiceRoute = Record<string, unknown>;
 export function addService(request: { origin: string; target: string; home?: string; verifyCmd?: string | null }): Promise<{ schemaVersion: 1; route: ServiceRoute }>;

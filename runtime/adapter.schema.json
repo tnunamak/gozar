@@ -304,6 +304,82 @@
         }
       },
       "additionalProperties": false
+    },
+    "AdapterPlan": {
+      "type": "object",
+      "required": [
+        "digest",
+        "origin",
+        "resourceKey",
+        "effects",
+        "readback",
+        "cleanup",
+        "precondition"
+      ],
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "origin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resourceKey": {
+          "type": "string"
+        },
+        "effects": {
+          "type": "array"
+        },
+        "readback": {},
+        "cleanup": {},
+        "precondition": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "revision"
+              ],
+              "properties": {
+                "revision": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AdapterEffectError": {
+      "type": "object",
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "precondition_failed",
+            "unsupported",
+            "provider_unavailable",
+            "setup_required"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

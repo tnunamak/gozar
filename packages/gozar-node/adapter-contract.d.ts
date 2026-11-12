@@ -7,7 +7,12 @@ import type { Action, Properties, RouteView, Ingress, Usage, Requirements, Discl
 
 export type AdapterState = 'ready' | 'action-required' | 'unsupported' | 'unknown';
 
-/** Every method is required. Unsupported setup/create/kinds return a typed `unsupported`, never fabricated success. */
+/**
+ * Every method is required. Unsupported setup/create/kinds return a typed `unsupported`, never fabricated success.
+ * `create` and `remove` reject with an AdapterEffectError when they cannot apply the effect. A
+ * `precondition_failed` rejection means nothing was changed: the core re-observes and re-plans (the
+ * ownership decision stays in the core, never inside the adapter or `executePlan`).
+ */
 export interface Adapter {
   id: string;
   definition: AdapterDefinition;
@@ -40,11 +45,31 @@ export type AdapterRequest = {
   configurationRef: string | null;
 };
 
-export type AdapterPlan = { digest: string; origin: string | null; resourceKey: string; effects: unknown[]; readback: unknown; cleanup: unknown };
+/**
+ * `precondition` is required. null means the effect is unconditional. When non-null, `executePlan` and
+ * `compareAndRemove` apply the effect only if the provider's current revision still equals
+ * `precondition.revision` (null meaning the provider has no revision to compare); otherwise they reject with
+ * AdapterEffectError `precondition_failed` and change nothing.
+ */
+export type AdapterPlan = {
+  digest: string; origin: string | null; resourceKey: string; effects: unknown[]; readback: unknown; cleanup: unknown;
+  precondition: { revision: string | null } | null;
+};
+
+/**
+ * What an adapter operation (create, remove, executePlan, compareAndRemove) rejects with. Internal: apps never
+ * see `precondition_failed`. The core retries the read-decide-write loop; when retries run out it surfaces
+ * `provider_unavailable`. The other three codes are in the frozen consumer union and map to themselves.
+ */
+export type AdapterEffectError = {
+  code: 'precondition_failed' | 'unsupported' | 'provider_unavailable' | 'setup_required';
+  message: string;
+};
 
 /** No raw secrets in facts, plans or receipts. */
 export type Receipt = { schemaVersion: 1; adapterId: string; resourceKey: string; generation: number; identity: unknown; readback: unknown };
 
+/** `revision` is the provider's config revision (for example an ETag), or null when the provider has none. */
 export type Observation = { present: boolean; resourceKey: string; identity: unknown; revision: string | null };
 
 export type Verification = RouteView['verification'];
@@ -67,7 +92,11 @@ export type SetupContext = ReadContext & {
   withSecret: <T>(handle: string, use: (secret: Uint8Array) => Promise<T>) => Promise<T>;
 };
 
-/** Adds only plan-engine-admitted create and conditional-remove operations plus generation checking. */
+/**
+ * Adds only plan-engine-admitted create and conditional-remove operations plus generation checking.
+ * Both honor `plan.precondition` / the observed revision and reject with AdapterEffectError
+ * (`precondition_failed` when the provider revision moved; nothing is changed). Neither contains ownership logic.
+ */
 export type AdmittedEffectContext = ReadContext & {
   assertGeneration: () => Promise<void>;
   executePlan: (plan: AdapterPlan) => Promise<Receipt>;
