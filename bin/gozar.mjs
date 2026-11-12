@@ -64,6 +64,11 @@ export function clientRequirements(options, defaults = {}, profile = {}) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
+  if (argv[0] === 'service') {
+    const { serviceMain } = await import('../packages/gozar-node/service-cli.mjs');
+    await serviceMain(argv.slice(1));
+    return;
+  }
   if (argv[0] === '--daemon') {
     const directory = argv[1];
     try { await serve(directory); }
@@ -82,6 +87,7 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   if (['help', '--help'].includes(options.command)) {
+    console.log('Service routes (existing owner-managed ingress):\n  gozar service add --origin URL --target HOST:PORT [--verify-cmd COMMAND] --json\n  gozar service status [--origin URL] --json\n  gozar service remove --origin URL --json\n');
     console.log('Gozar\n  gozar demo-server [--port N]\n  gozar expose --port N [--client-reach internet|tailnet|lan|this-device|unknown] [--origin URL]\n  gozar detect --port N\n  gozar status [--port N]\n  gozar health [--port N]\n  gozar update-origin --origin URL [--port N]\n  gozar stop [--port N]\n\n--yes approves only the displayed selected route and exact loopback target.\n--adapter ID selects a catalog route. --json returns machine-readable status.\n--install-link-template HTTPS_TEMPLATE supplies a client install link using {url}; only the link is printed.\n--alternatives expands the route alternatives. No route is installed automatically.\n--probe-directory PATH selects the private challenge/receipt channel for the trusted outside verifier.\n--sse --streamable-http --oauth-dcr require those protocol checks; no inferred success.\n--operational opts into only the operational plans listed in the adapter manifest.\nLAN: --bind-address IP --firewall-ack IP records your exact-interface firewall approval.\n--transport http|https|tls|tcp and --client-profile ID select catalog data; unsupported modes remain blocked.');
     return;
   }
@@ -220,6 +226,12 @@ export async function main(argv = process.argv.slice(2)) {
 if (process.argv[1] && await realpath(resolve(process.argv[1])).catch(() => null) === fileURLToPath(import.meta.url)) {
   main().catch(error => {
     const argv = process.argv.slice(2), port = argv[argv.indexOf('--port') + 1];
+    if (argv[0] === 'service') {
+      if (argv.includes('--json')) console.log(JSON.stringify({ schemaVersion: 1, error: { code: 'SERVICE_ERROR', message: error.message } }));
+      else console.error(`Gozar service: ${error.message}`);
+      process.exitCode = 1;
+      return;
+    }
     const next = `gozar detect --port ${/^\d+$/.test(port ?? '') ? port : 'N'}`;
     if (argv.includes('--json')) console.log(JSON.stringify({ error: error.message, action: { kind: 'repair', instruction: `Run ${next} to inspect prerequisites.`, command: next, expectedSuccess: 'Detection lists route prerequisites for this service port.' } }));
     else console.error(`Gozar: ${error.message}\nNext: ${next}\nSuccess: detection lists route prerequisites for this service port.`);
