@@ -1,6 +1,8 @@
 import net from 'node:net';
+import { cliCommand } from './cli-command.mjs';
 import { chmod, readFile, unlink, open, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { retireInstallKeyLease } from './key-route-lease.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
@@ -9,9 +11,10 @@ import { atomicWrite, Journal, processIdentity } from './journal.mjs';
 import { Controller } from './controller.mjs';
 import { PublicRelayVerifier } from './public-relay.mjs';
 import { ProbeDirectoryExecutor } from './probe-directory.mjs';
+import { routeAnnouncement } from './announcement.mjs';
 import { prepareHost, LOCAL_PLAN_FEATURES } from './host.mjs';
 import { loadCatalog } from './catalog.mjs';
-import { createGate } from './gate.mjs';
+import { createGate, validateLifetimeMs } from './gate.mjs';
 import { loadCore } from './core.mjs';
 
 export const socketPath = directory => join(directory, 'control.sock');
@@ -64,7 +67,11 @@ export async function stopSession(directory) {
 }
 
 export async function launch(directory, configuration, executable) {
-  try { return await control(directory, { type: 'status' }, 1_000); }
+  if (configuration.lifetimeMs !== undefined) validateLifetimeMs(configuration.lifetimeMs);
+  try {
+    await control(directory, { type:'status', initial:true }, 1_000);
+    return await control(directory, { type:'status' }, 1_000);
+  }
   catch (error) { if (!['ENOENT', 'ECONNREFUSED'].includes(error.code) && !error.message.includes('not running')) throw error; }
   await mkdir(directory, { recursive: true, mode: 0o700 });
   // Launch lock belongs to the caller until the child acknowledges. No competing launch overwrites configuration.
@@ -97,12 +104,13 @@ export async function launch(directory, configuration, executable) {
         await new Promise(resolve => setTimeout(resolve, 50));
       }
     }
-    throw new Error('Controller startup still pending; run status before retrying expose');
+    throw new Error(`Controller startup still pending; run ${cliCommand('status', configuration.targetPort, dirname(directory))} before retrying expose`);
   } finally { await unlink(lockPath).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
 }
 
 export async function serve(directory, { step: suppliedStep, probeExecutor, hostAuthorities, processOutputObserver } = {}) {
   const config = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
+  if (config.lifetimeMs !== undefined) validateLifetimeMs(config.lifetimeMs);
   const journal = new Journal(directory);
   await journal.load();
   // A crashed prior controller never restores readiness from disk. Only remove attributable local children.
@@ -112,6 +120,8 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
     const prior = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8'));
     if (await processIdentity(prior.pid) === prior.startIdentity) throw new Error('Existing controller is still running');
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  await retireInstallKeyLease(dirname(directory), directory);
+  await journal.load();
   if (journal.value.state && journal.value.snapshot?.phase !== 'stopped') {
     const recovered = await recoverStop(directory);
     if (recovered.snapshot.phase !== 'stopped' || recovered.localCleanupFailures?.length) {
@@ -121,19 +131,64 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   }
   if (Object.keys(journal.value.owned).length) throw new Error('Cleanup remains pending; stop the recorded session before restarting');
   let controller;
+  let initializedDone = false;
+  let initializationError;
+  let initializedResolve;
+  const initialized = new Promise(resolve => { initializedResolve = resolve; });
   if (!probeExecutor && config.probeDirectory) probeExecutor = new ProbeDirectoryExecutor(config.probeDirectory, { vantages: ['public', 'tailnet', 'lan'], executorRef: config.probeExecutorId, requestPath: config.probeRequest, receiptPath: config.probeReceipt });
   if (!probeExecutor) probeExecutor = new PublicRelayVerifier();
   const selectedAdapter = config.adapters.find(adapter => adapter.id === config.adapterId);
+  let routeQueue = Promise.resolve();
+  const queuedRouteOrigins = new Set();
   const operational = config.operational === true || selectedAdapter?.planVersion === 1;
-  const gate = operational ? await createGate(config.targetPort, { onExpire: () => { controller?.command({ type: 'stop' }).catch(() => {}); } }) : null;
-  controller = new Controller({ ...config, targetPort: gate?.port ?? config.targetPort, servicePort: config.targetPort, step, journal });
+  const gate = operational ? await createGate(config.targetPort, { lifetimeMs: config.lifetimeMs, onExpire: () => { setImmediate(() => initialized.then(() => finalize()).catch(() => {})); } }) : null;
+  controller = new Controller({ ...config, targetPort: gate?.port ?? config.targetPort, servicePort: config.targetPort, step, journal, onAutomaticStop: () => initialized.then(() => finalize()) });
+  controller.driver.lifetimeMs = config.lifetimeMs;
   controller.driver.probeWaitMs = config.probeWaitMs;
   controller.driver.observeProcessOutput = config.observeProcessOutput === true;
-  controller.driver.onProcessOutput = processOutputObserver;
+  controller.driver.onProcessOutput = event => {
+    try { processOutputObserver?.(event); } catch {}
+    if (!event.completeLine || event.sessionId !== controller.sessionId || event.adapterId !== selectedAdapter?.id ||
+        controller.driver.stopped || controller.state?.stopRequested) return;
+    const resource = controller.driver.journal.value.owned[event.resourceId];
+    if (!resource || resource.kind !== 'process' || resource.retired || resource.sessionId !== event.sessionId ||
+        resource.adapterId !== event.adapterId || resource.generation !== event.generation || resource.continuityRef !== event.continuityRef) return;
+    const adapter = controller.driver.adapters.find(item => item.id === event.adapterId);
+    if (adapter?.ownership !== 'owned' || adapter.planVersion !== 1) return;
+    const origin = routeAnnouncement(adapter.recipes?.create?.parser, event.completeLine);
+    if (!origin) return;
+    if (origin === controller.state?.published || origin === controller.state?.candidate || queuedRouteOrigins.has(origin)) return;
+    queuedRouteOrigins.add(origin);
+    routeQueue = routeQueue.then(async () => {
+      if (origin === controller.state?.published || origin === controller.state?.candidate || controller.driver.stopped || controller.state?.stopRequested) return;
+      const activeUntil = Date.now() + 2000;
+      while (Date.now() < activeUntil && !controller.state?.resources?.some(item => item.id === event.resourceId && item.cleanup === 'active')) {
+        if (controller.driver.stopped || controller.state?.stopRequested) return;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      if (!controller.state?.resources?.some(item => item.id === event.resourceId && item.cleanup === 'active')) return;
+      if (origin === controller.state?.published || origin === controller.state?.candidate) return;
+      const identity = await processIdentity(resource.pid);
+      if (identity !== resource.startIdentity || controller.driver.stopped || controller.state?.stopRequested) return;
+      const current = controller.driver.journal.value.owned[event.resourceId];
+      if (current !== resource || current.retired || current.continuityRef !== event.continuityRef) return;
+      const receipt = await controller.driver.continuity(event.resourceId);
+      if (!receipt?.continuous || receipt.handleRef !== event.resourceId || receipt.continuityRef !== event.continuityRef ||
+          receipt.sessionId !== event.sessionId || receipt.expiresAtMs <= controller.driver.nowMs() ||
+          controller.driver.stopped || controller.state?.stopRequested || controller.driver.journal.value.owned[event.resourceId] !== resource || resource.retired) return;
+      if (origin === controller.state?.published || origin === controller.state?.candidate) return;
+      const result = await controller.command({ type: 'owned-process-origin', sessionId: event.sessionId, adapterId: event.adapterId,
+        resourceId: event.resourceId, allocationGeneration: event.generation, continuityRef: event.continuityRef, origin, line: event.completeLine });
+      if (config.approveOrigin === true && result.snapshot?.phase === 'candidate-ready' && result.snapshot.candidate === origin &&
+          !controller.driver.stopped && !controller.state?.stopRequested) {
+        await controller.command({ type: 'approve-origin', origin, generation: result.snapshot.generation });
+      }
+    }).catch(() => {}).finally(() => queuedRouteOrigins.delete(origin));
+  };
   if (operational) await prepareHost(controller.driver, selectedAdapter, { origin: config.origin, gate, probeExecutor, authorities: hostAuthorities });
   let setupPending = Boolean(gate && selectedAdapter?.setup?.requiresProxyTarget);
-  const present = output => ({ ...output, ...(selectedAdapter?.clientProfile ? { connectionProfile: selectedAdapter.clientProfile } : {}),
-    ...(setupPending && !controller.state?.stopRequested ? { action: { kind: 'external', instruction: `Point the existing origin ${config.origin} at ${gate.target}, then run gozar health --port ${config.targetPort}.`, target: gate.target, recheckCommand: 'health' } } : {}) });
+  const present = output => ({ ...output, ...(gate ? { lifetimeMs: gate.lifetimeMs, expiresAtMs: gate.expiresAtMs } : {}), ...(selectedAdapter?.clientProfile ? { connectionProfile: selectedAdapter.clientProfile } : {}),
+    ...(setupPending && !controller.state?.stopRequested ? { action: { kind: 'external', instruction: `Point the existing origin ${config.origin} at ${gate.target}, then run ${cliCommand('health', config.targetPort, dirname(directory))}.`, target: gate.target, recheckCommand: 'health' } } : {}) });
   const nonce = randomUUID();
   const identity = { pid: process.pid, startIdentity: await processIdentity(process.pid), nonce };
   // Only remove a stale socket after proving the prior daemon identity is gone.
@@ -143,10 +198,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
     await unlink(socketPath(directory)).catch(error => { if (error.code !== 'ENOENT') throw error; });
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   let closing = false;
-  let initializedDone = false;
-  let initializedResolve;
   let armMonitor = () => {};
-  const initialized = new Promise(resolve => { initializedResolve = resolve; });
   const server = net.createServer(socket => {
     let input = '', dispatched = false;
     socket.setTimeout((config.probeWaitMs ?? 5000) + 120000, () => socket.destroy());
@@ -165,11 +217,13 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
           socket.end(`${JSON.stringify({ events:controller.driver.readProcessOutput(command.after ?? 0) })}\n`); return;
         }
         if (!['status', 'health', 'update-origin', 'stop', 'reconcile', 'approve-origin'].includes(command?.type)) throw new Error('Unsupported controller command');
-        if (command.initial === true) await initialized;
+        if (command.initial === true) {
+          await initialized;
+          if (initializationError) throw initializationError;
+        }
         let output;
         if (command.type === 'stop') {
-          output = await controller.shutdown();
-          if (output.snapshot.phase === 'stopped' && !output.localCleanupFailures.length) closing = true;
+          output = await finalize();
         } else {
           if (setupPending && command.type === 'health') {
             setupPending = false;
@@ -210,11 +264,22 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
     // Keep the last controller identity for crash/status auditing. The socket closes here;
     // every status call still proves the process birth identity and authenticates its live socket.
   });
+  let finalizing;
+  const finalize = () => {
+    if (finalizing) return finalizing;
+    finalizing = controller.shutdown().then(output => {
+      if (output.snapshot.phase === 'stopped' && !output.localCleanupFailures.length &&
+          Object.keys(controller.journal.value.owned).length === 0) {
+        closing = true;
+        server.close();
+      }
+      return output;
+    }).finally(() => { finalizing = null; });
+    return finalizing;
+  };
   const terminate = async () => {
     if (closing) return;
-    closing = true;
-    await controller.shutdown().catch(() => {});
-    server.close();
+    try { await finalize(); } finally { closing = true; server.close(); }
   };
   process.once('SIGTERM', terminate); process.once('SIGINT', terminate);
   try {
@@ -228,6 +293,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
       if (config.approveOrigin === true) await controller.approve();
     }
   } catch (error) {
+    initializationError = error;
     await atomicWrite(join(directory, 'failure.json'), { message: error.message });
     await terminate();
     throw error;
@@ -255,7 +321,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
 }
 
 export function publicReply(output, directory) {
-  return { snapshot: { ...output.snapshot, adapterId: output.state?.selected ?? output.snapshot?.adapterId }, ...(output.action ? { action: output.action } : {}), ...(output.gateTarget ? { gateTarget: output.gateTarget } : {}), ...(output.validation ? { validation: output.validation } : {}), journalPath: join(directory, 'session.json'),
+  return { ...(output.lifetimeMs !== undefined ? { lifetimeMs: output.lifetimeMs, expiresAtMs: output.expiresAtMs } : {}), snapshot: { ...output.snapshot, adapterId: output.state?.selected ?? output.snapshot?.adapterId }, ...(output.action ? { action: output.action } : {}), ...(output.gateTarget ? { gateTarget: output.gateTarget } : {}), ...(output.validation ? { validation: output.validation } : {}), journalPath: join(directory, 'session.json'),
     ...(output.connectionProfile ? { connectionProfile: output.connectionProfile } : {}),
     ...(output.localCleanupFailures ? { localCleanupFailures: output.localCleanupFailures } : {}) };
 }

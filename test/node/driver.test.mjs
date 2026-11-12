@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, symlink, stat } from 'node:fs/promises';
@@ -8,6 +9,45 @@ import { spawn } from 'node:child_process';
 import { Journal, processIdentity } from '../../packages/gozar-node/journal.mjs';
 import { EffectDriver } from '../../packages/gozar-node/driver.mjs';
 import { fixture, effect, persist } from './helpers.mjs';
+
+test('effect replay history is bounded without reopening old IDs', async t => {
+  const recipe = { kind: 'interfaces' };
+  const { driver } = await fixture(t, { detect: recipe });
+  const request = (generation, sequence) => ({ ...recipe, id: `test:${generation}:${sequence}`, sessionId: 'test', generation, operation: 'detect', adapterId: 'fake' });
+  for (let generation = 1; generation <= 1280; generation++) {
+    const current = request(generation, generation * 2);
+    assert.equal((await driver.execute(current)).ok, true);
+    assert.equal((await driver.execute(current)).ok, false);
+    assert.ok(driver.issued.size <= 128, 'retained replay state is bounded');
+  }
+  assert.equal((await driver.execute(request(1, 2))).ok, false, 'old replay');
+  assert.equal((await driver.execute(request(1280, 2559))).ok, false, 'unseen out-of-order ID');
+  assert.equal((await driver.execute({ ...request(1280, 2561), id: 'test:1279:2561' })).ok, false, 'ID generation mismatch');
+  assert.equal((await driver.execute({ ...request(1280, 2561), id: 'test:1280:02561' })).ok, false, 'noncanonical sequence');
+  assert.equal((await driver.execute(request(1280, 2561))).ok, true, 'invalid requests do not consume valid IDs');
+});
+
+test('fresh older-generation cleanup remains allowed but its replay does not', async t => {
+  const { driver } = await fixture(t, {});
+  // Isolate replay admission from ownership I/O, which has separate tests above.
+  driver.admitInspection = () => {};
+  driver.inspectOwnership = async () => ({});
+  const request = (generation, sequence) => ({ id: `test:${generation}:${sequence}`, sessionId: 'test', generation, operation: 'remove', action: 'inspect' });
+  assert.equal((await driver.execute(request(9, 10))).ok, true);
+  assert.equal((await driver.execute(request(2, 11))).ok, true);
+  assert.equal((await driver.execute(request(2, 11))).ok, false);
+  assert.equal((await driver.execute(request(2, 9))).ok, false);
+});
+
+test('legacy opaque replay IDs fail closed at their bounded capacity', async t => {
+  const recipe = { kind: 'interfaces' };
+  const { driver } = await fixture(t, { detect: recipe });
+  const request = id => ({ ...recipe, id, sessionId: 'test', generation: 1, operation: 'detect', adapterId: 'fake' });
+  for (let i = 0; i < 128; i++) assert.equal((await driver.execute(request(`opaque-${i}`))).ok, true);
+  assert.equal((await driver.execute(request('opaque-128'))).ok, false);
+  assert.equal((await driver.execute(request('opaque-0'))).ok, false);
+  assert.equal(driver.issued.size, 128);
+});
 
 const program = process.execPath;
 const spawnRecipe = { kind: 'spawn', program, args: ['-e', 'process.stdout.write("ok")'], timeoutMs: 1000, maxOutputBytes: 100 };
@@ -97,7 +137,7 @@ test('owned child survives driver restart, exact stop preserves unrelated proces
 
 test('PID identity mismatch never kills an unrelated process', async t => {
   const { driver, journal } = await fixture(t, {});
-  await journal.own({ id: 'stale', kind: 'process', sessionId: 'test', pid: process.pid, nonce: 'old', startIdentity: 'not-current' });
+  await journal.own({ id: 'stale', kind: 'process', sessionId: 'test', pid: process.pid, nonce: randomUUID(), startIdentity: 'not-current' });
   await driver.removeProcess('stale');
   assert.ok(await processIdentity(process.pid));
 });
@@ -188,4 +228,37 @@ test('opt-in process observer captures later bounded transient output without jo
   assert.ok(events.every(event=>event.resourceId===result.result.resourceId&&Number.isSafeInteger(event.observedAtMs)));
   assert.equal((await readFile(journal.path,'utf8')).includes('later-output'),false);
   assert.equal(driver.readProcessOutput(events.at(-1).sequence).length,0);
+});
+
+test('owned process output frames complete lines across chunks without diagnostic observation', async t => {
+  const { driver } = await fixture(t, {});
+  const lines = [];
+  driver.onProcessOutput = event => { if (event.completeLine !== undefined) lines.push(event); };
+  const resource = { id: 'owned', generation: 2, adapterId: 'adapter', continuityRef: 'ledger-ref' };
+  const effect = { id: 'create', generation: 8 };
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('https://a.lhr.life\r\n'));
+  assert.equal(lines.length, 0, 'initial output is buffered until the create effect is settled');
+  driver.routeOutputReady.add(resource.id);
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('https://split.'));
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('https://b.lhr.'));
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('life\n'));
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('lhr.life\n'));
+  driver.processOutput(effect, resource, 'stdout', Buffer.from(`${'x'.repeat(4097)}\nhttps://c.lhr.life\n`));
+  assert.deepEqual(lines.map(line => line.completeLine), ['https://b.lhr.life', 'https://split.lhr.life', 'https://c.lhr.life']);
+  assert.deepEqual(lines.map(line => [line.generation, line.adapterId, line.continuityRef]),
+    Array.from({ length: 3 }, () => [2, 'adapter', 'ledger-ref']));
+  assert.equal(JSON.stringify(driver.journal.value).includes('lhr.life'), false);
+});
+
+test('initial create URL is handled by the core result and never re-emitted as a route change', async t => {
+  const recipe = { kind: 'spawn', program, args: ['-e', 'process.stdout.write("https://a.lhr.life\\n");setTimeout(()=>process.stdout.write("https://b.lhr.life\\n"),120);setInterval(()=>{},1000)'],
+    timeoutMs: 1000, maxOutputBytes: 4096, longRunning: true, collectMs: 30 };
+  const { driver } = await fixture(t, { create: recipe });
+  const lines = [];
+  driver.onProcessOutput = event => { if (event.completeLine !== undefined) lines.push(event.completeLine); };
+  await persist(driver);
+  const result = await driver.execute(effect(recipe, 'create'));
+  assert.equal(result.ok, true);
+  await new Promise(resolve => setTimeout(resolve, 180));
+  assert.deepEqual(lines, ['https://b.lhr.life']);
 });

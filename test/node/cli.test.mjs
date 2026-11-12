@@ -1,3 +1,4 @@
+import { cliCommand } from '../../packages/gozar-node/cli-command.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -46,7 +47,7 @@ test('one screen folds alternatives, prints local state/recovery and validates i
   assert.equal(installLink('javascript:alert({url})', 'https://one.example'), null);
   assert.equal(installLink('https://password@client.example/{url}', 'https://one.example'), null);
   const pending = render({ snapshot: { phase: 'cleanup-pending' } }, [], { port: 3000 });
-  assert.match(pending, /Retry: gozar stop --port 3000/);
+  assert.ok(pending.includes(`Retry: ${cliCommand('stop', 3000)}`));
 });
 
 test('private daemon exposes fake loopback target, status works across invocations, stop owns exact mapping', async t => {

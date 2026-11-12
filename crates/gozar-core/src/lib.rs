@@ -48,6 +48,8 @@ pub struct Adapter {
     pub plan_version: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_policy: Option<String>,
     #[serde(default)]
     pub actions: Vec<Value>,
 }
@@ -129,6 +131,8 @@ pub struct State {
     pub stop_requested: bool,
     pub candidate: Option<String>,
     pub published: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_route_change: Option<Value>,
     pub adapters: Vec<Adapter>,
     pub requirements: Requirements,
     pub selected: Option<String>,
@@ -143,6 +147,9 @@ pub struct State {
     host: operational::Host,
     #[serde(default)]
     used_nonces: Vec<String>,
+    // Original authorization deadlines; absent entries are legacy and never retired.
+    #[serde(default)]
+    used_nonce_expiries: BTreeMap<String, u64>,
     #[serde(default)]
     pub plans: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -158,6 +165,7 @@ impl Default for State {
             stop_requested: false,
             candidate: None,
             published: None,
+            last_route_change: None,
             adapters: vec![],
             requirements: Requirements::default(),
             selected: None,
@@ -169,6 +177,7 @@ impl Default for State {
             execution: None,
             host: operational::Host::default(),
             used_nonces: vec![],
+            used_nonce_expiries: BTreeMap::new(),
             plans: vec![],
             health_expiry: None,
         }
@@ -445,12 +454,27 @@ fn parse_url(parser: &Value, stdout: &str, stderr: &str) -> Option<String> {
         None
     };
     let mut origins = std::collections::BTreeSet::new();
-    for token in text.split_whitespace() {
+    let candidates: Vec<String> = if let Some(event) = parser.get("jsonEvent") {
+        text.lines()
+            .filter_map(|line| {
+                let doc: Value = serde_json::from_str(line).ok()?;
+                let event_pointer = event.get("eventPointer")?.as_str()?;
+                let origin_pointer = event.get("originPointer")?.as_str()?;
+                if doc.pointer(event_pointer)? != event.get("eventValue")? {
+                    return None;
+                }
+                doc.pointer(origin_pointer)?.as_str().map(str::to_owned)
+            })
+            .collect()
+    } else {
+        text.split_whitespace().map(str::to_owned).collect()
+    };
+    for token in &candidates {
         if !prefix.is_empty() && !token.starts_with(prefix) {
             continue;
         }
         if let Some(url) = origin(token) {
-            if constraints.get("exactOriginToken") == Some(&Value::Bool(true)) && token != url {
+            if constraints.get("exactOriginToken") == Some(&Value::Bool(true)) && *token != url {
                 continue;
             }
             let authority = url.split("://").nth(1)?;
@@ -797,6 +821,7 @@ pub fn transition(input: &str) -> Result<Output, String> {
         "reconcile-absent" => operational::reconcile_absent(&mut out, &cmd),
         "health" => operational::health(&mut out, false),
         "update-origin" => operational::health(&mut out, true),
+        "owned-process-origin" => operational::owned_process_origin(&mut out, &cmd),
         "approve-origin" => {
             if !out.state.stop_requested
                 && out.state.phase == "candidate-ready"
@@ -813,7 +838,7 @@ pub fn transition(input: &str) -> Result<Output, String> {
         "status" => {}
         _ => event(&mut out, "unsupported-command"),
     }
-    out.snapshot = json!({"sessionId":out.state.session_id,"generation":out.state.generation,"phase":out.state.phase,"candidate":out.state.candidate,"published":out.state.published,"observations":out.state.observations,"recommendations":out.state.recommendations,"plans":out.state.plans,"resources":out.state.resources,"limitations":out.state.limitations});
+    out.snapshot = json!({"sessionId":out.state.session_id,"generation":out.state.generation,"phase":out.state.phase,"candidate":out.state.candidate,"published":out.state.published,"lastRouteChange":out.state.last_route_change,"observations":out.state.observations,"recommendations":out.state.recommendations,"plans":out.state.plans,"resources":out.state.resources,"limitations":out.state.limitations});
     Ok(out)
 }
 fn complete(out: &mut Output, cmd: &Value) {
@@ -1015,5 +1040,50 @@ pub fn step(input_json: &str) -> String {
     match transition(input_json) {
         Ok(output) => serde_json::to_string(&output).expect("serializable core state"),
         Err(error) => json!({"error":{"code":"invalid-input","message":error}}).to_string(),
+    }
+}
+
+#[cfg(test)]
+mod stable_json_origin_tests {
+    use super::*;
+    #[test]
+    fn json_event_origin_ignores_other_fields_and_event_types() {
+        let p = json!({"kind":"url","prefix":"https://","jsonEvent":{"eventPointer":"/event","eventValue":"tunnel","originPointer":"/url"},"constraints":{"hostnamePattern":"^[a-z0-9-]+\\.tunnl\\.gg$","exactOriginToken":true}});
+        let valid = r#"{"event":"tunnel","url":"https://wild-fox-10bf6aa2.tunnl.gg","upgrade":"https://tunnl.gg/pricing"}"#;
+        assert_eq!(
+            parse_url(&p, valid, "").as_deref(),
+            Some("https://wild-fox-10bf6aa2.tunnl.gg")
+        );
+        assert_eq!(
+            parse_url(
+                &p,
+                r#"{"event":"request","url":"https://bad.tunnl.gg"}"#,
+                ""
+            ),
+            None
+        );
+        assert_eq!(
+            parse_url(
+                &p,
+                r#"{"event":"tunnel","url":"https://bad.tunnl.gg/path"}"#,
+                ""
+            ),
+            None
+        );
+        assert_eq!(
+            parse_url(&p, r#"{"event":"tunnel","url":"https://bad.example"}"#, ""),
+            None
+        );
+        assert_eq!(
+            parse_url(
+                &p,
+                &format!(
+                    "{valid}\n{}",
+                    r#"{"event":"tunnel","url":"https://other.tunnl.gg"}"#
+                ),
+                ""
+            ),
+            None
+        );
     }
 }

@@ -12,12 +12,13 @@ const fixture = await json('test/adapters/fixtures/plan-v1.json');
 const records = await loadCatalog(new URL(root).pathname, { operational: true });
 const step = input => JSON.parse(core.step(JSON.stringify(input)));
 
-test('Drop1 catalog admits the first five plans and detects all nine logical modes', () => {
+test('Drop1 catalog keeps five defaults and admits an opt-in stable relay', () => {
   assert.deepEqual(manifest.activeDrop1a, ['localhost-run', 'tailscale-funnel', 'tailscale-private', 'lan', 'own-address']);
-  assert.deepEqual(records.filter(record => record.planVersion === 1).map(record => record.id).sort(), [...manifest.activeDrop1a].sort());
-  assert.equal(records.length, 9);
+  assert.deepEqual(records.filter(record => record.planVersion === 1).map(record => record.id).sort(), [...manifest.activeDrop1a, 'tunnl-gg'].sort());
+  assert.equal(records.length, 10);
   for (const record of records) {
-    if (!manifest.activeDrop1a.includes(record.id)) { assert.equal(record.drop, 'next'); assert.equal(record.recipes.create, undefined); }
+    if (record.id === 'tunnl-gg') { assert.equal(record.originPolicy, 'immutable'); }
+    else if (!manifest.activeDrop1a.includes(record.id)) { assert.equal(record.drop, 'next'); assert.equal(record.recipes.create, undefined); }
     else if (['localhost-run', 'tailscale-funnel'].includes(record.id)) assert.deepEqual(record.clientProfile.clientRequirements, { httpsRequired: true, sse: true });
   }
 });

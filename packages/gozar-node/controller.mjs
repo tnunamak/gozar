@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { EffectDriver } from './driver.mjs';
+import { acquireInstallIdentityLease, prepareInstallIdentities } from './host.mjs';
 import { safeOrigin } from './catalog.mjs';
 
 // Only core transitions are serialized. Slow effects do not prevent a stop from fencing publication.
 export class Controller {
-  constructor({ step, journal, adapters, requirements, targetPort, servicePort, sessionId = randomUUID(), origin, bindAddresses = [], firewallApproved = false, driver }) {
+  constructor({ step, journal, adapters, requirements, targetPort, servicePort, sessionId = randomUUID(), origin, bindAddresses = [], firewallApproved = false, driver, onAutomaticStop }) {
     Object.assign(this, { step, journal, adapters, requirements, targetPort, servicePort, sessionId, origin });
     this.state = undefined;
     this.last = undefined;
@@ -12,13 +13,20 @@ export class Controller {
     this.inFlight = new Set();
     this.background = new Set();
     this.hostLimitations = new Set();
+    this.keyLease = null;
     this.driver = driver ?? new EffectDriver({ adapters, journal, sessionId, targetPort, origin, bindAddresses, firewallApproved,
-      onExit: () => { if (!this.driver.stopped) this.command({ type: 'stop' }).catch(() => {}); } });
+      onExit: () => { if (!this.driver.stopped) {
+        // Never await finalization from an effect completion that it must drain.
+        setImmediate(() => (onAutomaticStop ? onAutomaticStop() : this.shutdown()).catch(() => {}));
+      } } });
   }
   async advance(command) {
     this.last = this.step({ ...(this.state ? { state: this.state } : {}), command: { sessionId: this.sessionId, ...command },
       adapters: this.adapters, requirements: this.requirements, host: { ...this.driver.host, nowMs: this.driver.nowMs?.() ?? 0 } });
     this.state = this.last.state;
+    for (const generation of this.driver.proofExpiries?.keys() ?? []) {
+      if (generation !== this.state.generation) this.driver.proofExpiries.delete(generation);
+    }
     for (const resource of this.last.snapshot.resources ?? []) {
       if (resource.cleanup === 'removed' && this.journal.value.owned?.[resource.id]?.retired) delete this.journal.value.owned[resource.id];
     }
@@ -59,12 +67,36 @@ export class Controller {
     return work;
   }
   async command(command) {
-    if (['health', 'update-origin'].includes(command.type) && this.driver.gate) {
+    if (['health', 'update-origin', 'owned-process-origin'].includes(command.type) && this.driver.gate) {
       const refs = this.driver.gate.rotate();
       this.driver.host.probe = { ...refs, expiresAtMs: this.driver.nowMs() + 900000, ...(this.driver.publicRelay ? { allowPublicRelay:true } : {}) };
       this.driver.cancelTimers?.();
     }
-    if (command.type === 'start' && command.consent === true) this.driver.authorize(command.adapterId);
+    if (command.type === 'start' && command.consent === true) {
+      if (this.driver.stopped) return this.present();
+      const adapter = this.adapters.find(adapter => adapter.id === command.adapterId);
+      if (Object.values(adapter?.bindings ?? {}).some(binding => binding.provision)) {
+        // Ask the same pure core admission decision before creating any identity.
+        // Do not commit this preview state or dispatch its effects.
+        const admission = this.step({
+          ...(this.state ? { state: this.state } : {}),
+          command: { ...command, sessionId: this.sessionId, consent: false },
+          adapters: this.adapters, requirements: this.requirements,
+          host: { ...this.driver.host, nowMs: this.driver.nowMs?.() ?? 0 },
+        });
+        if (admission.action?.kind !== 'confirm' || admission.action.adapterId !== command.adapterId ||
+            !Array.isArray(admission.effects) || admission.effects.length !== 0)
+          throw new Error('Identity provisioning is not admitted by core');
+      }
+      if (!this.keyLease) {
+        const lease = await acquireInstallIdentityLease(this.driver, adapter, this.servicePort ?? this.targetPort);
+        if (this.driver.stopped) { await lease?.release(); return this.present(); }
+        this.keyLease = lease;
+      }
+      await prepareInstallIdentities(this.driver, adapter);
+      if (this.driver.stopped) return this.present();
+      this.driver.authorize(command.adapterId);
+    }
     if (command.type === 'stop') { this.driver.stopped = true; this.driver.cancelTimers?.(); this.driver.cancelProbes?.(); }
     const output = await this.apply(command);
     await Promise.all(output.effects.map(effect => this.schedule(effect)));
@@ -75,7 +107,12 @@ export class Controller {
     const { candidate, generation } = this.last.snapshot;
     return this.command({ type: 'approve-origin', origin: candidate, generation });
   }
-  async shutdown() {
+  shutdown() {
+    if (this.shuttingDown) return this.shuttingDown;
+    this.shuttingDown = this.finalize().finally(() => { this.shuttingDown = null; });
+    return this.shuttingDown;
+  }
+  async finalize() {
     await this.command({ type: 'stop' });
     await Promise.allSettled([...this.background]);
     await Promise.allSettled([...this.inFlight]);
@@ -96,6 +133,11 @@ export class Controller {
           failures.push({ resourceId: resource.id, detail: error.message });
         } finally { delete this.driver.host.cleanupAbsent; }
       }
+    }
+    if (this.keyLease && this.last?.snapshot.phase === 'stopped' && !failures.length &&
+        Object.keys(this.journal.value.owned).length === 0) {
+      try { await this.keyLease.release(); this.keyLease = null; }
+      catch (error) { failures.push({ resourceId:'installation-key-lease', detail:error.message }); }
     }
     return { ...this.present(), localCleanupFailures: failures };
   }

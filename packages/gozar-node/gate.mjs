@@ -2,7 +2,13 @@ import http from 'node:http';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
+export function validateLifetimeMs(value) {
+  if (!Number.isInteger(value) || value < 1 || value > 2_147_483_647) throw new Error('lifetimeMs must be an integer in 1..2147483647');
+  return value;
+}
+
 export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = () => {} } = {}) {
+  validateLifetimeMs(lifetimeMs);
   let secretPath = `/.gozar-${randomBytes(24).toString('hex')}`;
   let nonce = randomBytes(32).toString('hex');
   let nonceRef = randomUUID(), verifierRef = randomUUID();
@@ -22,7 +28,7 @@ export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = 
         response.write(`data: ${JSON.stringify({ nonce, sequence: sequence++ })}\n\n`);
         if (sequence === 3) { clearInterval(timer); response.end(); }
       };
-      const timer = setInterval(send, 150); send();
+      const timer = setInterval(send, 1000); send(); // Stay above short batching intervals; full-response buffering still fails verification.
       response.on('close', () => clearInterval(timer)); return;
     }
     const upstream = http.request({ hostname: '127.0.0.1', port: targetPort, method: request.method, path: request.url,
@@ -37,10 +43,11 @@ export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = 
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   const port = server.address().port;
   const matches = value => typeof value === 'string' && value.length === nonce.length && timingSafeEqual(Buffer.from(value), Buffer.from(nonce));
+  const expiresAtMs = Date.now() + lifetimeMs;
   const deadline = setTimeout(() => { open = false; for (const socket of sockets) socket.destroy(); onExpire(); }, lifetimeMs);
   deadline.unref();
   return {
-    port, target: `http://127.0.0.1:${port}`,
+    port, lifetimeMs, expiresAtMs, target: `http://127.0.0.1:${port}`,
     get nonceRef() { return nonceRef; }, get verifierRef() { return verifierRef; },
     challenge() { return { identityPath: `${secretPath}/identity`, streamPath: `${secretPath}/stream`, nonce }; },
     rotate() {

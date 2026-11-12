@@ -6,7 +6,7 @@
   "input": {
     "state": "optional previous opaque state",
     "command": {
-      "type": "detect|recommend|start|effect-result|stop|reconcile|reconcile-absent|status|approve-origin|health|update-origin",
+      "type": "detect|recommend|start|effect-result|stop|reconcile|reconcile-absent|status|approve-origin|health|update-origin|owned-process-origin",
       "sessionId": "optional on first input; caller supplies unique id",
       "adapterId": "start selection",
       "resourceId": "reconcile-absent selects one stopped owned process allocation",
@@ -156,6 +156,7 @@
       "phase": "idle|detecting|planned|preflight|persisting|starting|validating|transport-ready|candidate-ready|published-ready|degraded|stopping|cleanup-pending|stopped|failed",
       "candidate": "origin or null",
       "published": "origin or null",
+      "lastRouteChange": "null or {oldOrigin,newOrigin,generation}; retained after subsequent status/health commands",
       "recommendations": [],
       "resources": [],
       "limitations": []
@@ -199,7 +200,10 @@
       "client-vantage-probe",
       "unused-port-selection",
       "private-file-materialization",
-      "transport-origin-mapping"
+      "transport-origin-mapping",
+      "install-ed25519",
+      "json-event-origin",
+      "immutable-origin"
     ],
     "host": {
       "nowMs": "monotonic caller-supplied milliseconds",
@@ -235,12 +239,15 @@
       "adapterFields": "none; all planVersion1 adapters use core generic health/rotation",
       "commands": [
         "health",
-        "update-origin"
+        "update-origin",
+        "owned-process-origin"
       ],
       "health": "advances generation, withdraws old publication, requests fresh exact-origin probe; requires new host.probe nonce",
       "update-origin": "external-owned only; trusted scoped host.bindings.externalOrigin receipt; advances generation, invalidates all old probes/acks, fresh exact-origin approval required",
+      "owned-process-origin": "owned-process only; binds selected adapter, active process allocation generation and immutable ledger continuity; validates against the admitted create URL parser, withdraws old publication and probes the replacement origin with a fresh challenge",
       "timer": "successful probe emits asynchronous timer recipeRef health/expiry; schedule then return candidate-ready, deliver completion when elapsed; failure/expiry withdraws readiness and returns external-owner fix action",
       "probeReceipt": "nonceRef,verifierRef,origin,vantage,observedAtMs,expiresAtMs,tls,instanceMatched,sse,streamableHttp,oauthDcr; remote:true remains valid for nonlocal. Public-only alternative: remote:false,networkPath:public-relay,publicDns:true,resolvedIp:public-unicast IP, with trusted request host.probe.allowPublicRelay:true. Exact identity/protocol/time checks remain required.",
+      "probeIssuedAt": "The core stamps trusted host.nowMs as issuedAtMs in each pending probe challenge, overriding host input. Receipt observedAtMs must be at or after issuance and no later than current host.nowMs. This fences pre-retirement receipts even if their claimed expiry outlives the original authorization. Legacy pending probes without this stamp retain their prior checks; legacy nonce entries never expire.",
       "expiryOnEveryInput": "The core revokes an expired accepted proof before processing any next command, including approve-origin; callers must advance trusted host.nowMs."
     },
     "bounds": {
@@ -249,7 +256,8 @@
       "bindings": 32,
       "capturesPerStep": 32,
       "assertions": 64,
-      "probeNoncesPerSession": 128
+      "concurrentlyLiveProbeNonces": 128,
+      "probeNonceRetention": "usedNonces retain their original authorization deadline in usedNonceExpiries; prune only when that deadline has passed. Never replace a live nonce deadline from a later challenge. Legacy nonces without expiry metadata remain reserved for the session and count toward the bound."
     },
     "cleanup": "always original resource ledger.bindings; host-derived saved binding values and authority still current/fresh; source-derived node/port not reselected. Route guard requires fresh retained ownership receipt and exact live record. Local handles get intrinsic inspect before durable remove.",
     "jsonNumbers": "Persisted deadlines use exact JSON-safe integers; no u64::MAX sentinel crosses the JS boundary.",

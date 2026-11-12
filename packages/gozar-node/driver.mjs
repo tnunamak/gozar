@@ -51,6 +51,8 @@ export class EffectDriver {
     this.outputEvents = []; this.outputBytes = 0; this.outputSequence = 0;
     this.recoveryOnly = recoveryOnly;
     this.children = new Map();
+    this.routeLineBuffers = new Map();
+    this.routeOutputReady = new Set();
     this.forwarders = new Map();
     this.receipts = new Map();
     this.intentRecords = new Map();
@@ -61,6 +63,9 @@ export class EffectDriver {
     this.generation = 0;
     this.selectedAdapter = null;
     this.stopped = false;
+    // Core IDs carry a session-wide increasing sequence, including cleanup.
+    this.issuedSequence = 0n;
+    // Compatibility IDs cannot be compacted safely: cap without eviction.
     this.issued = new Set();
   }
   async materializePrivateFile(adapterId, bindingName, { generation } = {}) {
@@ -84,13 +89,31 @@ export class EffectDriver {
     if (resource?.privateMaterialized) return;
     if (!resource || (!this.observeProcessOutput && !this.onProcessOutput)) return;
     const output = chunk.subarray(Math.max(0,chunk.length-8192)).toString('utf8');
-    const event = { sequence:++this.outputSequence, sessionId:this.sessionId, generation:effect.generation,
-      resourceId:resource.id, effectId:effect.id, stream, observedAtMs:this.nowMs(), output };
+    const event = { sequence:++this.outputSequence, sessionId:this.sessionId, generation:resource.generation,
+      adapterId:resource.adapterId, resourceId:resource.id, continuityRef:resource.continuityRef,
+      effectId:effect.id, stream, observedAtMs:this.nowMs(), output };
     if (this.observeProcessOutput) {
       this.outputEvents.push(event); this.outputBytes += Buffer.byteLength(output);
       while (this.outputEvents.length > 128 || this.outputBytes > 32768) this.outputBytes -= Buffer.byteLength(this.outputEvents.shift().output);
     }
-    if (this.onProcessOutput) { try { this.onProcessOutput(event); } catch {} }
+    if (this.onProcessOutput) {
+      const key = `${resource.id}\0${stream}`;
+      const frame = this.routeLineBuffers.get(key) ?? { buffer: '', dropping: false };
+      for (const char of chunk.toString('utf8')) {
+        if (char === '\n') {
+          const line = frame.buffer.endsWith('\r') ? frame.buffer.slice(0, -1) : frame.buffer;
+          if (!frame.dropping && line.length <= 4096) {
+            if (this.routeOutputReady.has(resource.id)) { try { this.onProcessOutput({ ...event, completeLine: line }); } catch {} }
+          }
+          frame.buffer = ''; frame.dropping = false;
+        } else if (!frame.dropping) {
+          if (frame.buffer.length >= 4096) { frame.buffer = ''; frame.dropping = true; }
+          else frame.buffer += char;
+        }
+      }
+      this.routeLineBuffers.set(key, frame);
+      try { this.onProcessOutput(event); } catch {}
+    }
   }
   readProcessOutput(after = 0) { return this.outputEvents.filter(event=>event.sequence>after).map(event=>({...event})); }
   nowMs() { return Math.floor(performance.timeOrigin + performance.now()); }
@@ -117,12 +140,29 @@ export class EffectDriver {
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, this.expand(item, effect)]));
     return value;
   }
+  replaySequence(effect) {
+    if (typeof effect.id !== 'string' || !effect.id || effect.id.length > 1024) throw new Error('Invalid effect ID');
+    const prefix = `${this.sessionId}:`;
+    if (!effect.id.startsWith(prefix)) return null;
+    const suffix = effect.id.slice(prefix.length);
+    if (!/^[0-9]+:[0-9]+$/.test(suffix)) return null;
+    const match = /^(0|[1-9][0-9]*):([1-9][0-9]{0,19})$/.exec(suffix);
+    if (!match || match[1] !== String(effect.generation)) throw new Error('Effect ID generation mismatch');
+    const sequence = BigInt(match[2]);
+    if (sequence > 18446744073709551615n) throw new Error('Invalid effect sequence');
+    return sequence;
+  }
   admit(effect) {
     if (effect.sessionId !== this.sessionId || !effect.id || !Number.isSafeInteger(effect.generation)) throw new Error('Effect identity mismatch');
     if (this.stopped && effect.operation !== 'remove' && !effect.recipeRef?.startsWith('remove/')) throw new Error('Session stopped; observation or allocation dispatch is fenced');
-    if (this.issued.has(effect.id)) throw new Error('Effect already dispatched');
+    const sequence = this.replaySequence(effect);
+    if (sequence !== null) {
+      if (sequence <= this.issuedSequence) throw new Error('Effect already dispatched or out of order');
+    } else {
+      if (this.issued.has(effect.id)) throw new Error('Effect already dispatched');
+      if (this.issued.size >= 128) throw new Error('Legacy effect replay capacity exhausted');
+    }
     if (effect.operation !== 'remove' && effect.generation < this.generation) throw new Error('Stale effect generation');
-    this.generation = Math.max(this.generation, effect.generation);
     if (effect.action === 'inspect') {
       this.admitInspection(effect); return;
     }
@@ -192,7 +232,10 @@ export class EffectDriver {
     let dispatched = false;
     try {
       this.admit(effect);
-      this.issued.add(effect.id);
+      const sequence = this.replaySequence(effect);
+      if (sequence === null) this.issued.add(effect.id);
+      else this.issuedSequence = sequence;
+      this.generation = Math.max(this.generation, effect.generation);
       effect = this.expand(effect, effect);
       if (mutates(effect) && effect.kind !== 'persist') this.receipts.delete(this.receiptKey(effect));
       let result;
@@ -245,7 +288,11 @@ export class EffectDriver {
   timer(effect) {
     const delay = effect.expiresAtMs ? Math.max(1, effect.expiresAtMs - this.nowMs()) : bounded(effect.delayMs, 1, 86400000);
     return new Promise(resolve => {
-      const finish = cancelled => { clearTimeout(timer); this.timers.delete(effect.id); resolve(cancelled ? { cancelled: true } : { elapsed: true }); };
+      const finish = cancelled => {
+        clearTimeout(timer); this.timers.delete(effect.id);
+        if (effect.recipeRef === 'health/expiry' && this.proofExpiries.get(effect.generation) === effect.expiresAtMs) this.proofExpiries.delete(effect.generation);
+        resolve(cancelled ? { cancelled: true } : { elapsed: true });
+      };
       const timer = setTimeout(() => finish(false), Math.min(delay, 86400000));
       this.timers.set(effect.id, () => finish(true));
     });
@@ -326,7 +373,7 @@ export class EffectDriver {
         nonce: randomUUID(), artifacts: [...artifacts], ...(privateMaterialized ? { privateMaterialized: true, dispatchEffectId: effect.id } : {}), continuityRef: randomUUID(), bindings: effect.bindings ?? {}, details: processDetails, baseline: this.intentRecords.get(this.receiptKey(effect))?.baseline ?? {}, sessionId: this.sessionId, adapterId: this.selectedAdapter, generation: effect.generation };
       if (!resource.startIdentity) { child.kill('SIGTERM'); throw new Error('Cannot establish process ownership'); }
       if (effect.lifetimeMs) {
-        const lifetime = setTimeout(() => { if (!this.stopped) this.onExit({ resourceId: id, reason: 'lifetime-expired' }); }, bounded(effect.lifetimeMs, 900000, 86400000));
+        const lifetime = setTimeout(() => { if (!this.stopped) this.onExit({ resourceId: id, reason: 'lifetime-expired' }); }, (this.lifetimeMs ?? bounded(effect.lifetimeMs, 900000, 86400000)));
         lifetime.unref(); child.once('exit', () => clearTimeout(lifetime));
       }
       this.children.set(id, child);
@@ -338,7 +385,7 @@ export class EffectDriver {
         }
       } catch (error) { child.kill('SIGTERM'); throw error; }
     }
-    return new Promise((resolve, reject) => {
+    const completion = await new Promise((resolve, reject) => {
       let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), receivedBytes = 0, settled = false, idle;
       const finish = (error, exitCode = null) => {
         if (settled) return;
@@ -367,6 +414,10 @@ export class EffectDriver {
         else finish(null, code);
       });
     });
+    if (resource && this.onProcessOutput && !resource.privateMaterialized) {
+      this.routeOutputReady.add(resource.id);
+    }
+    return completion;
   }
   ledgerDetails(effect, actual) {
     const recipe = this.adapters.find(adapter => adapter.id === effect.adapterId)?.recipes?.create;
@@ -451,6 +502,8 @@ export class EffectDriver {
   async removeProcess(id, effect = {}) {
     const resource = this.journal.value.owned[id];
     if (!resource || resource.sessionId !== this.sessionId || !resource.nonce || !resource.startIdentity) throw new Error('Unknown owned process');
+    for (const key of this.routeLineBuffers.keys()) if (key.startsWith(`${id}\0`)) this.routeLineBuffers.delete(key);
+    this.routeOutputReady.delete(id);
     if ((effect.signal && effect.signal !== 'SIGTERM') || (effect.thenSignal && effect.thenSignal !== 'SIGKILL')) throw new Error('Unsupported owned-process signal');
     const attempts = Math.ceil(bounded(effect.graceMs, 500, 5000) / 25);
     if (await attributable(resource, this.sessionId)) {

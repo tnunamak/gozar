@@ -14,6 +14,9 @@ pub const FEATURES: &[&str] = &[
     "probe-assertions",
     "client-vantage-probe",
     "unused-port-selection",
+    "install-ed25519",
+    "json-event-origin",
+    "immutable-origin",
 ];
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1089,7 +1092,36 @@ fn valid_recipe(recipe: &Recipe, observation: bool) -> bool {
     }
     if let Some(parser) = recipe.fields.get("parser") {
         match str_field(parser, "kind") {
-            "contains" | "url" | "json" | "exit-code" => {}
+            "contains" | "json" | "exit-code" => {}
+            "url" => {
+                if let Some(event) = parser.get("jsonEvent") {
+                    if !only_keys(event, &["eventPointer", "eventValue", "originPointer"])
+                        || !["eventPointer", "originPointer"].iter().all(|key| {
+                            event.get(key).and_then(Value::as_str).is_some_and(|v| {
+                                v.starts_with('/') && v.len() > 1 && v.len() <= 256
+                            })
+                        })
+                        || event
+                            .get("eventValue")
+                            .and_then(Value::as_str)
+                            .is_none_or(|v| v.is_empty() || v.len() > 256)
+                        || parser["constraints"]["exactOriginToken"] != json!(true)
+                        || parser["constraints"]["rejectMultipleDistinct"] != json!(true)
+                        || str_field(parser, "prefix") != "https://"
+                        || parser["constraints"]
+                            .get("hostnamePattern")
+                            .and_then(Value::as_str)
+                            .is_none_or(|v| {
+                                v.len() > 2048
+                                    || !v.starts_with('^')
+                                    || !v.ends_with('$')
+                                    || Regex::new(v).is_err()
+                            })
+                    {
+                        return false;
+                    }
+                }
+            }
             "json-document" => {
                 if !parser
                     .get("predicate")
@@ -1166,6 +1198,15 @@ fn admissible(a: &Adapter, state: &State) -> Result<(), String> {
             {
                 return Err("Unsupported typed binding".into());
             }
+            if spec.get("provision").is_some()
+                && (str_field(spec, "provision") != "install-ed25519"
+                    || str_field(spec, "type") != "session-private-path"
+                    || !features
+                        .iter()
+                        .any(|v| v.as_str() == Some("install-ed25519")))
+            {
+                return Err("Unsupported identity provisioning".into());
+            }
             let required = match str_field(spec, "type") {
                 "credential-reference" => Some("private-file-reference"),
                 "transport-endpoint" => Some("transport-origin-mapping"),
@@ -1198,6 +1239,7 @@ fn admissible(a: &Adapter, state: &State) -> Result<(), String> {
                         "candidates",
                         "protectedPorts",
                         "materialize",
+                        "provision",
                     ]
                     .contains(&k.as_str())
                 })
@@ -1206,12 +1248,32 @@ fn admissible(a: &Adapter, state: &State) -> Result<(), String> {
             }
         }
     }
+    if a.origin_policy
+        .as_deref()
+        .is_some_and(|policy| policy != "immutable")
+        || (a.origin_policy.is_some()
+            && !features
+                .iter()
+                .any(|v| v.as_str() == Some("immutable-origin")))
+    {
+        return Err("Unsupported origin policy".into());
+    }
     for (operation, recipe) in &a.recipes {
         if operation == "detect" {
             continue;
         }
         if !["create", "remove"].contains(&operation.as_str()) || !valid_recipe(recipe, false) {
             return Err("Unsupported executable plan field or operation".into());
+        }
+        if recipe
+            .fields
+            .get("parser")
+            .is_some_and(|p| p.get("jsonEvent").is_some())
+            && !features
+                .iter()
+                .any(|v| v.as_str() == Some("json-event-origin"))
+        {
+            return Err("JSON event origin requires negotiated feature".into());
         }
         if contains_transport_mapping(&json!(recipe.fields))
             && !features
@@ -1514,7 +1576,7 @@ fn drive(out: &mut Output, mut e: Execution) -> Result<(), String> {
     Err("Invalid plan stage".into())
 }
 fn request_probe(out: &mut Output, a: &Adapter, url: String) -> Result<(), String> {
-    let proof = out
+    let mut proof = out
         .state
         .host
         .probe
@@ -1529,14 +1591,34 @@ fn request_probe(out: &mut Output, a: &Adapter, url: String) -> Result<(), Strin
     {
         return Err("Probe challenge missing authority or expired".into());
     }
+    // Retire only the original authorization, never a caller's replacement deadline.
+    // Legacy persisted nonces without metadata remain reserved for this session.
+    let now = out.state.host.now_ms;
+    let expiries = &out.state.used_nonce_expiries;
+    out.state
+        .used_nonces
+        .retain(|nonce| expiries.get(nonce).is_none_or(|expires| *expires > now));
+    let retained = &out.state.used_nonces;
+    out.state
+        .used_nonce_expiries
+        .retain(|nonce, _| retained.contains(nonce));
     let nonce = str_field(&proof, "nonceRef").to_owned();
     if out.state.used_nonces.contains(&nonce) {
         return Err("Probe nonce was already used; a fresh challenge is required".into());
     }
     if out.state.used_nonces.len() >= 128 {
-        return Err("Session probe budget exhausted".into());
+        return Err("Concurrent live probe challenge budget exhausted".into());
     }
+    out.state.used_nonce_expiries.insert(
+        nonce.clone(),
+        proof["expiresAtMs"]
+            .as_u64()
+            .expect("validated challenge expiry"),
+    );
     out.state.used_nonces.push(nonce);
+    // Core-owned issuance time prevents an old receipt surviving nonce retirement.
+    // Override any host-supplied timestamp rather than trusting it.
+    proof["issuedAtMs"] = json!(now);
     out.state.health_expiry = None;
     probe(out, &a.id, url.clone());
     let Some(effect) = out
@@ -1930,7 +2012,13 @@ fn finish_probe(out: &mut Output, p: &Pending, cmd: &Value) {
         && receipt
             .get("observedAtMs")
             .and_then(Value::as_u64)
-            .is_some_and(|t| t <= now)
+            .is_some_and(|t| {
+                t <= now
+                    && challenge
+                        .get("issuedAtMs")
+                        .and_then(Value::as_u64)
+                        .is_none_or(|issued| t >= issued)
+            })
         && receipt
             .get("expiresAtMs")
             .and_then(Value::as_u64)
@@ -2290,6 +2378,118 @@ pub fn health(out: &mut Output, rotate: bool) {
     })();
     if let Err(error) = result {
         withdraw(out, &error);
+    }
+}
+
+pub fn owned_process_origin(out: &mut Output, cmd: &Value) {
+    let mut route_withdrawn = false;
+    let result = (|| -> Result<(), String> {
+        if out.state.stop_requested {
+            return Err("Stopped session cannot rotate an owned route".into());
+        }
+        if str_field(cmd, "sessionId") != out.state.session_id {
+            return Err("Owned route session mismatch".into());
+        }
+        let adapter_id = str_field(cmd, "adapterId");
+        let resource_id = str_field(cmd, "resourceId");
+        let continuity = str_field(cmd, "continuityRef");
+        let allocation_generation = cmd
+            .get("allocationGeneration")
+            .and_then(Value::as_u64)
+            .ok_or("Missing allocation generation")?;
+        let adapter = out
+            .state
+            .adapters
+            .iter()
+            .find(|a| a.id == adapter_id && a.ownership == "owned" && a.plan_version == Some(1))
+            .cloned()
+            .ok_or("Owned route adapter mismatch")?;
+        if out.state.selected.as_deref() != Some(adapter_id) {
+            return Err("Owned route adapter is not selected".into());
+        }
+        let resource = out
+            .state
+            .resources
+            .iter()
+            .find(|r| r.id == resource_id)
+            .ok_or("Owned route resource is unknown")?;
+        let ledger = resource
+            .ledger
+            .as_ref()
+            .ok_or("Owned route lacks immutable cleanup ledger")?;
+        if resource.ownership != "owned"
+            || resource.cleanup != "active"
+            || resource.adapter_id != adapter_id
+            || resource.generation != allocation_generation
+            || ledger.handle_ref != resource_id
+            || ledger.continuity_ref != continuity
+            || ledger.kind != "process"
+        {
+            return Err("Owned route resource identity mismatch".into());
+        }
+        let recipe = adapter
+            .recipes
+            .get("create")
+            .ok_or("Create recipe unavailable")?;
+        if recipe.kind != EffectKind::Spawn
+            || recipe
+                .fields
+                .get("process")
+                .is_none_or(|p| str_field(p, "mode") != "owned-long-running")
+        {
+            return Err("Route rotation requires an admitted long-running owned process".into());
+        }
+        let parser = recipe
+            .fields
+            .get("parser")
+            .ok_or("Create URL parser unavailable")?;
+        if str_field(parser, "kind") != "url" {
+            return Err("Route rotation requires the admitted create URL parser".into());
+        }
+        let url = str_field(cmd, "origin");
+        let line = str_field(cmd, "line");
+        if super::parse_url(parser, line, "").as_deref() != Some(url) {
+            return Err("Replacement origin violates the admitted URL parser".into());
+        }
+        let old = out
+            .state
+            .published
+            .clone()
+            .or_else(|| out.state.candidate.clone())
+            .ok_or("No active route to rotate")?;
+        if old == url {
+            return Ok(());
+        }
+        out.state.generation += 1;
+        out.state.published = None;
+        out.state.candidate = None;
+        route_withdrawn = true;
+        if adapter.origin_policy.as_deref() == Some("immutable") {
+            out.state.last_route_change =
+                Some(json!({"oldOrigin":old,"newOrigin":url,"generation":out.state.generation}));
+            out.events.push(json!({"type":"route-lost","sessionId":out.state.session_id,"generation":out.state.generation,"oldOrigin":old,"newOrigin":url}));
+            withdraw(
+                out,
+                "Owned route changed its fixed address; stop and start a new session",
+            );
+            out.action = Some(
+                json!({"kind":"external", "instruction":"Stop the current session and start a new route.", "recheckCommand":"stop"}),
+            );
+            return Ok(());
+        }
+        out.state.last_route_change =
+            Some(json!({"oldOrigin":old,"newOrigin":url,"generation":out.state.generation}));
+        out.events.push(json!({"type":"route-change","sessionId":out.state.session_id,"generation":out.state.generation,"oldOrigin":old,"newOrigin":url}));
+        event(out, "endpoint-withdrawn");
+        request_probe(out, &adapter, url.to_owned())
+    })();
+    if let Err(error) = result {
+        if route_withdrawn {
+            withdraw(out, &error);
+        } else {
+            limit(out, &error);
+            event(out, "owned-route-rotation-rejected");
+        }
     }
 }
 pub fn potential(a: &Adapter, r: &Requirements) -> bool {
