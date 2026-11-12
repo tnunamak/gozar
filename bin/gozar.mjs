@@ -2,7 +2,7 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { homedir, networkInterfaces } from 'node:os';
-import { readFile, realpath } from 'node:fs/promises';
+import { readFile, readdir, realpath } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { loadCatalog, loadDefinition, loadActiveDrop, loadDropRequirements, safeOrigin } from '../packages/gozar-node/catalog.mjs';
 import { loadCore } from '../packages/gozar-node/core.mjs';
@@ -23,10 +23,10 @@ export function parseArgs(argv) {
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i];
     if (['--yes', '--json', '--alternatives', '--operational', '--sse', '--streamable-http', '--oauth-dcr', '--observe-process-output'].includes(flag)) options[flag.slice(2)] = true;
-    else if (['--port', '--client-reach', '--origin', '--adapter', '--bind-address', '--firewall-ack', '--client-profile', '--install-link-template', '--transport', '--local-name', '--probe-directory', '--probe-request', '--probe-receipt', '--probe-executor-id', '--probe-wait-ms', '--lifetime-ms'].includes(flag)) {
+    else if (['--port', '--client-reach', '--origin', '--adapter', '--bind-address', '--firewall-ack', '--client-profile', '--install-link-template', '--transport', '--local-name', '--probe-directory', '--probe-request', '--probe-receipt', '--probe-executor-id', '--probe-wait-ms', '--lifetime-ms', '--route'].includes(flag)) {
       const value = argv[++i];
       if (!value || value.startsWith('--')) throw new Error(`Missing value for ${flag}`);
-      options[{ '--port': 'port', '--client-reach': 'clientReach', '--origin': 'origin', '--adapter': 'adapterId', '--bind-address': 'bindAddress', '--firewall-ack': 'firewallAck', '--client-profile': 'clientProfileId', '--install-link-template': 'installLinkTemplate', '--transport': 'transport', '--local-name': 'localName', '--probe-directory': 'probeDirectory', '--probe-request': 'probeRequest', '--probe-receipt': 'probeReceipt', '--probe-executor-id': 'probeExecutorId', '--probe-wait-ms': 'probeWaitMs', '--lifetime-ms': 'lifetimeMs' }[flag]] = value;
+      options[{ '--port': 'port', '--client-reach': 'clientReach', '--origin': 'origin', '--adapter': 'adapterId', '--bind-address': 'bindAddress', '--firewall-ack': 'firewallAck', '--client-profile': 'clientProfileId', '--install-link-template': 'installLinkTemplate', '--transport': 'transport', '--local-name': 'localName', '--probe-directory': 'probeDirectory', '--probe-request': 'probeRequest', '--probe-receipt': 'probeReceipt', '--probe-executor-id': 'probeExecutorId', '--probe-wait-ms': 'probeWaitMs', '--route': 'route', '--lifetime-ms': 'lifetimeMs' }[flag]] = value;
     } else throw new Error(`Unknown option: ${flag}`);
   }
   if (!['expose', 'detect', 'status', 'health', 'update-origin', 'stop', 'demo-server', 'help', '--help'].includes(options.command)) throw new Error('Use expose, detect, status, stop or demo-server');
@@ -34,6 +34,7 @@ export function parseArgs(argv) {
     if (!/^\d+$/.test(options.port) || Number(options.port) < (options.command === 'demo-server' ? 0 : 1) || Number(options.port) > 65535) throw new Error('--port must be 1..65535');
     options.port = Number(options.port);
   }
+  if (options.route !== undefined && (!['status', 'stop'].includes(options.command) || options.port !== undefined || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(options.route))) throw new Error('--route is for status and stop, takes a route ID and excludes --port');
   if (options.lifetimeMs !== undefined) {
     if (options.command !== 'expose' || !/^\d+$/.test(options.lifetimeMs)) throw new Error('--lifetime-ms is for expose and must be 1..2147483647');
     options.lifetimeMs = validateLifetimeMs(Number(options.lifetimeMs));
@@ -69,6 +70,41 @@ export function clientRequirements(options, defaults = {}, profile = {}) {
   };
 }
 
+// Every session, service route and durable route in one home. Each entry is a fresh observation.
+async function inventory(home, routeId) {
+  const { statusRoutes } = await import('../packages/gozar-node/durable-route.mjs');
+  const durableRoutes = (await statusRoutes({ routeId, home })).routes;
+  if (routeId !== undefined) return { schemaVersion: 1, durableRoutes };
+  const { statusServices } = await import('../packages/gozar-node/service.mjs');
+  const sessions = [];
+  let names = [];
+  try { names = await readdir(home); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  for (const name of names.sort()) {
+    const match = /^port-([0-9]+)$/.exec(name);
+    if (!match) continue;
+    const directory = join(home, name), port = Number(match[1]);
+    try {
+      const reply = await control(directory, { type: 'status' }, 5000);
+      sessions.push({ port, phase: reply.snapshot?.phase ?? 'unknown', origin: reply.snapshot?.phase === 'published-ready' ? reply.snapshot.published ?? null : null });
+    } catch {
+      const journal = new Journal(directory); await journal.load();
+      sessions.push({ port, phase: Object.keys(journal.value.owned).length ? 'cleanup-pending' : 'not-running', origin: null });
+    }
+  }
+  return { schemaVersion: 1, sessions, serviceRoutes: (await statusServices({ home })).routes, durableRoutes };
+}
+function renderInventory(reply) {
+  const lines = [];
+  if (reply.sessions) {
+    lines.push('Sessions:', ...(reply.sessions.length ? reply.sessions.map(item => `  port ${item.port}  ${item.phase}${item.origin ? '  ' + item.origin : ''}`) : ['  none']));
+    lines.push('Service routes:', ...(reply.serviceRoutes.length ? reply.serviceRoutes.map(item => `  ${item.origin} -> ${item.target}  ${item.verification.status}`) : ['  none']));
+  }
+  lines.push('Durable routes:', ...(reply.durableRoutes.length ? reply.durableRoutes.map(item =>
+    `  ${item.routeId}  provider ${item.adapterId}  origin ${item.origin ?? '(none yet)'}  owner ${item.owner}  created ${item.createdAt}  state ${item.state}` +
+    (item.cleanupDebt ? `  cleanup debt: ${item.cleanupDebt.reason}` : '') + `\n    stop: gozar stop --route ${item.routeId}`) : ['  none']));
+  return lines.join('\n');
+}
+
 export async function main(argv = process.argv.slice(2)) {
   if (argv[0] === 'service') {
     const { serviceMain } = await import('../packages/gozar-node/service-cli.mjs');
@@ -95,10 +131,24 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (['help', '--help'].includes(options.command)) {
     console.log('Service routes (existing owner-managed ingress):\n  gozar service add --origin URL --target HOST:PORT [--verify-cmd COMMAND] --json\n  gozar service status [--origin URL] --json\n  gozar service remove --origin URL --json\n');
-    console.log('Gozar\n  gozar demo-server [--port N]\n  gozar expose --port N [--client-reach internet|tailnet|lan|this-device|unknown] [--origin URL] [--lifetime-ms N]\n  gozar detect --port N\n  gozar status [--port N]\n  gozar health [--port N]\n  gozar update-origin --origin URL [--port N]\n  gozar stop [--port N]\n\n--yes approves only the displayed selected route and exact loopback target.\n--adapter ID selects a catalog route. --json returns machine-readable status.\n--install-link-template HTTPS_TEMPLATE supplies a client install link using {url}; only the link is printed.\n--alternatives expands the route alternatives. No route is installed automatically.\n--probe-directory PATH selects the private challenge/receipt channel for the trusted outside verifier.\n--sse --streamable-http --oauth-dcr require those protocol checks; no inferred success.\n--operational opts into only the operational plans listed in the adapter manifest.\nLAN: --bind-address IP --firewall-ack IP records your exact-interface firewall approval.\n--transport http|https|tls|tcp and --client-profile ID select catalog data; unsupported modes remain blocked.');
+    console.log('Gozar\n  gozar demo-server [--port N]\n  gozar expose --port N [--client-reach internet|tailnet|lan|this-device|unknown] [--origin URL] [--lifetime-ms N]\n  gozar detect --port N\n  gozar status [--port N | --route ID]\n  gozar health [--port N]\n  gozar update-origin --origin URL [--port N]\n  gozar stop [--port N | --route ID]\n\n--yes approves only the displayed selected route and exact loopback target.\n--adapter ID selects a catalog route. --json returns machine-readable status.\n--install-link-template HTTPS_TEMPLATE supplies a client install link using {url}; only the link is printed.\n--alternatives expands the route alternatives. No route is installed automatically.\n--probe-directory PATH selects the private challenge/receipt channel for the trusted outside verifier.\n--sse --streamable-http --oauth-dcr require those protocol checks; no inferred success.\n--operational opts into only the operational plans listed in the adapter manifest.\nLAN: --bind-address IP --firewall-ack IP records your exact-interface firewall approval.\n--transport http|https|tls|tcp and --client-profile ID select catalog data; unsupported modes remain blocked.');
     return;
   }
   const home = process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
+  if (options.command === 'stop' && options.route) {
+    const { stopRoute } = await import('../packages/gozar-node/durable-route.mjs');
+    const reply = await stopRoute({ routeId: options.route, home });
+    console.log(options.json ? JSON.stringify(reply) : reply.removed ? `Stopped durable route ${reply.routeId}.${reply.providerRemoved ? ' Provider rule removed.' : ''}` +
+      (reply.cleanupDebt ? ` Cleanup debt: ${reply.cleanupDebt.reason} on port ${reply.cleanupDebt.port}; the rule was left in place.` : '') :
+      `Durable route ${reply.routeId} was not removed.` + (reply.cleanupDebt ? ` Cleanup debt: ${reply.cleanupDebt.reason} on port ${reply.cleanupDebt.port}; the provider rule changed and was left in place.` : ' No record exists.'));
+    if (!reply.removed || reply.cleanupDebt) process.exitCode = 1;
+    return;
+  }
+  if (options.command === 'status' && (options.route || options.port === undefined)) {
+    const reply = await inventory(home, options.route);
+    console.log(options.json ? JSON.stringify(reply) : renderInventory(reply));
+    return;
+  }
   if (!options.port && ['status', 'health', 'update-origin', 'stop'].includes(options.command)) {
     try { options.port = JSON.parse(await readFile(join(home, 'last.json'), 'utf8')).port; }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
