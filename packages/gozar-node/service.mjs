@@ -1,5 +1,6 @@
-import { mkdir, readFile, readdir, unlink, link, lstat, open } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { mkdir, readdir, unlink, link, lstat, open } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { join, resolve, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import http from 'node:http';
@@ -44,16 +45,59 @@ function config({ origin, target, verifyCmd = null }) {
 const hash = origin => createHash('sha256').update(origin).digest('hex');
 const directory = home => join(home, 'services');
 const filename = origin => hash(origin) + '.json';
+// Check from the filesystem root before creating or using anything below it.
+// Symlinks are deliberately unsupported, including owner-controlled home aliases.
+async function trustedDirectory(path, create = false) {
+  const parent = dirname(path);
+  if (parent !== path) await trustedDirectory(parent, create);
+  let stat;
+  try { stat = await lstat(path); }
+  catch (error) {
+    if (error.code !== 'ENOENT' || !create) throw error;
+    await mkdir(path, { mode: 0o700 }).catch(error => { if (error.code !== 'EEXIST') throw error; });
+    stat = await lstat(path);
+  }
+  const rootSticky = stat.uid === 0 && (stat.mode & 0o1000);
+  if (!stat.isDirectory() || stat.isSymbolicLink())
+    throw new Error(`Unsafe service state path ${path}: use a real directory, not a symlink`);
+  if ((stat.uid !== 0 && stat.uid !== process.getuid()) || ((stat.mode & 0o022) && !rootSticky))
+    throw new Error(`Unsafe service state path ${path}: set owner to the invoking user or root and chmod go-w (only root-owned sticky directories may be writable)`);
+}
 async function privateDirectory(path) {
   const stat = await lstat(path);
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid() ||
-      (stat.mode & 0o077)) throw new Error('Invalid service state directory');
+      (stat.mode & 0o077)) throw new Error(`Invalid service state directory ${path}: use an owner-owned directory with chmod 700`);
+}
+async function checkedFile(path, flags, kind) {
+  let file;
+  try {
+    file = await open(path, flags | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.uid !== process.getuid() || (stat.mode & 0o7777) !== 0o600)
+      throw new Error(`Invalid service ${kind} ${path}: use an owner-owned regular file with chmod 600`);
+    return file;
+  } catch (error) {
+    if (file) await file.close();
+    if (['ELOOP', 'EISDIR'].includes(error.code))
+      throw new Error(`Invalid service ${kind} ${path}: use an owner-owned regular file with chmod 600`);
+    throw error;
+  }
 }
 async function stored(path, name) {
-  const stat = await lstat(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536 ||
-      stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600) throw new Error('Invalid service record');
-  const value = JSON.parse(await readFile(path, 'utf8'));
+  const file = await checkedFile(path, constants.O_RDONLY, 'record');
+  let value;
+  try {
+    // One extra byte detects growth beyond the limit without an unbounded read.
+    const bytes = Buffer.alloc(65537);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await file.read(bytes, length, bytes.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > 65536) throw new Error('Invalid service record: exceeds size limit');
+    value = JSON.parse(bytes.subarray(0, length).toString('utf8'));
+  } finally { await file.close(); }
   const checked = config(value);
   if (value.schemaVersion !== 1 || value.adapterId !== checked.adapterId ||
       value.ownership !== checked.ownership || value.origin !== checked.origin ||
@@ -63,32 +107,24 @@ async function stored(path, name) {
 }
 async function mutate(home, origin, action) {
   const dir = directory(resolve(home));
-  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await trustedDirectory(dir, true);
   await privateDirectory(dir);
-  // Kernel locks release on process exit/reboot. Keep the lock inode: unlinking it
-  // could let a second process lock a different inode for the same origin.
+  // Keep the lock inode: unlinking it could split concurrent mutations.
   const locks = join(dir, '.locks');
-  await mkdir(locks, { mode: 0o700 }).catch(error => { if (error.code !== 'EEXIST') throw error; });
+  await trustedDirectory(locks, true);
   await privateDirectory(locks);
-  const holder = spawn('flock', ['--exclusive', '--nonblock', join(locks, hash(origin)),
-    process.execPath, '-e', "process.stdout.write('locked');process.stdin.resume()"],
-    { stdio: ['pipe', 'pipe', 'ignore'] });
-  const exited = new Promise(resolveExit => {
-    holder.once('error', () => resolveExit());
-    holder.once('close', () => resolveExit());
-  });
+  const lock = await checkedFile(join(locks, hash(origin)), constants.O_RDWR | constants.O_CREAT, 'lock');
   try {
+    // flock's numeric-fd form locks the inherited open file description. The
+    // parent keeps it open through action, so exit/reboot still releases it.
+    const holder = spawn('flock', ['--exclusive', '--nonblock', '3'],
+      { stdio: ['ignore', 'ignore', 'ignore', lock.fd] });
     await new Promise((ready, reject) => {
       holder.once('error', () => reject(new Error('Service mutation requires flock (util-linux)')));
-      holder.once('close', () => reject(new Error('Service mutation busy or lock unavailable')));
-      holder.stdout.once('data', chunk => chunk.toString() === 'locked' ? ready() : reject(new Error('Service lock failed')));
+      holder.once('close', code => code === 0 ? ready() : reject(new Error('Service mutation busy or lock unavailable')));
     });
     return await action(dir);
-  } finally {
-    holder.stdin.on('error', () => {});
-    holder.stdin.end();
-    await exited;
-  }
+  } finally { await lock.close(); }
 }
 // HTTPS authority semantics on both the direct HTTP and public HTTPS witness.
 function canonicalAuthority(value) {
@@ -208,8 +244,9 @@ export async function addService({ origin, target, verifyCmd = null, home = defa
 }
 export async function statusServices({ origin, home = defaultHome() } = {}) {
   const normalized = origin === undefined ? null : originValue(origin);
+  home = resolve(home);
   let names;
-  try { await privateDirectory(directory(home)); names = await readdir(directory(home)); }
+  try { await trustedDirectory(directory(home)); await privateDirectory(directory(home)); names = await readdir(directory(home)); }
   catch (error) { if (error.code === 'ENOENT') return { schemaVersion: 1, routes: [] }; throw error; }
   const routes = [];
   for (const name of names.sort()) {

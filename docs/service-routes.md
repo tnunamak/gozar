@@ -64,7 +64,7 @@ await removeService({ origin, home });
 // { schemaVersion: 1, origin, removed: true } // false if already absent
 ```
 
-`home` is optional, defaulting to `GOZAR_HOME` or `~/.local/state/gozar`. Service records use a separate `services` directory. Only configuration is persisted, never verification readiness. Per-origin advisory lock files remain in `services/.locks`; kernel locks release on controller exit and reboot. Concurrent mutations may reject as busy; retry the operation. Records require private ownership and mode 0600; service state directories must be private to the owner.
+`home` is optional, defaulting to `GOZAR_HOME` or `~/.local/state/gozar`. Service records use a separate `services` directory. Only configuration is persisted, never verification readiness. Per-origin advisory lock files remain in `services/.locks`; kernel locks release on controller exit and reboot. Concurrent mutations may reject as busy; retry the operation. Records and lock files require ownership by the invoking user and mode 0600; service state directories must be private to that user. Gozar checks the home and every ancestor before reads or mutations: directories must belong to the invoking user or root, with no group or other write permission unless root-owned with the sticky bit (for example, `/tmp`). Directory symlinks, including owner-controlled home aliases, are refused; use a real directory path. Errors name unsafe paths and the required ownership or permission change. Older lock files created with broader permissions must be changed to mode 0600 before mutations can proceed. Record bytes are bounded to 64 KiB and read through the same non-symlink descriptor whose ownership and permissions were checked.
 
 Every route has this shape:
 
