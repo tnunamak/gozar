@@ -156,6 +156,7 @@
       "phase": "idle|detecting|planned|preflight|persisting|starting|validating|transport-ready|candidate-ready|published-ready|degraded|stopping|cleanup-pending|stopped|failed",
       "candidate": "origin or null",
       "published": "origin or null",
+      "lastRouteChange": "null or {oldOrigin,newOrigin,generation}; retained after subsequent status/health commands",
       "recommendations": [],
       "resources": [],
       "limitations": []

@@ -72,6 +72,8 @@ gozar expose --port 3000 --client-reach internet --json
 
 Handle requested inputs and approvals; JSON output does not grant permission to create a route. Only pass `--yes` after the user approves the selected route and exact local target. Keep application authentication in the host, and use `health` and `stop` for the session lifecycle. For a persistent service, see the [service-route JavaScript API](docs/service-routes.md).
 
+The localhost.run relay can rotate an anonymous address during a session. Gozar reads later announcements from its owned SSH process, withdraws the old address and checks the replacement before publishing it. JSON status includes `snapshot.lastRouteChange` with `oldOrigin`, `newOrigin` and `generation`; `snapshot.published` is the current verified address, or `null` when no address is ready. A client using the old address must adopt the replacement. Keep checking status so a lost route can be reported promptly. The requested session lifetime does not guarantee a stable provider address.
+
 ## JavaScript API
 
 ```js
