@@ -108,7 +108,13 @@ test('challenge compares instances, nonce, response limit and exact Host using l
     verifier(req, res);
   });
   const other = createServiceVerifier();
-  const otherPort = await server(t, (req, res) => other(req, res));
+  let copiedInstanceId;
+  const otherPort = await server(t, (req, res) => {
+    if (!copiedInstanceId) { other(req, res); return; }
+    // A copied public instance ID and an echoed fresh nonce do not prove arrival.
+    res.end(JSON.stringify({ schemaVersion: 1, nonce: new URL(req.url, 'http://local').searchParams.get('nonce'),
+      instanceId: copiedInstanceId, proof: 'a'.repeat(64) }));
+  });
   const originalGet = https.get;
   let mismatch = false;
   // Offline transport seam only: production still uses https.get with default TLS.
@@ -119,6 +125,8 @@ test('challenge compares instances, nonce, response limit and exact Host using l
   assert.equal(route.verification.status, 'verified');
   assert.ok(hosts.length >= 2 && hosts.every(host => host === 'example.test:8443'));
   mismatch = true;
+  assert.equal((await statusServices({ home })).routes[0].verification.status, 'failed');
+  copiedInstanceId = (await (await fetch(`http://127.0.0.1:${port}/.well-known/gozar/service?nonce=${'a'.repeat(64)}`)).json()).instanceId;
   assert.equal((await statusServices({ home })).routes[0].verification.status, 'failed');
   mismatch = false;
   for (behavior of ['nonce', 'large', 'redirect'])

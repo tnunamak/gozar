@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, unlink, link, lstat, open } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
 import { spawn } from 'node:child_process';
@@ -105,9 +105,9 @@ function readChallenge(url, host, nonce, signal) {
         res.on('end', () => {
           try {
             const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            if (body.schemaVersion !== 1 || body.nonce !== nonce || !uuid.test(body.instanceId))
+            if (body.schemaVersion !== 1 || body.nonce !== nonce || !uuid.test(body.instanceId) || !noncePattern.test(body.proof))
               throw new Error('Verification failed');
-            resolve(body.instanceId);
+            resolve(`${body.instanceId}:${body.proof}`);
           } catch { reject(new Error('Verification failed')); }
         });
       });
@@ -211,12 +211,14 @@ export async function removeService({ origin, home = defaultHome() }) {
 }
 export function createServiceVerifier() {
   const instanceId = randomUUID();
+  const secret = randomBytes(32);
   return (req, res) => {
     if (req.method !== 'GET' || typeof req.url !== 'string') return false;
     const match = /^\/\.well-known\/gozar\/service\?nonce=([0-9a-f]{64})$/.exec(req.url);
     if (!match || !noncePattern.test(match[1])) return false;
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ schemaVersion: 1, nonce: match[1], instanceId }));
+    const proof = createHmac('sha256', secret).update(match[1]).digest('hex');
+    res.end(JSON.stringify({ schemaVersion: 1, nonce: match[1], instanceId, proof }));
     return true;
   };
 }

@@ -22,9 +22,9 @@ if (verifyService(req, res)) return;
 // Continue normal application routing and authentication here.
 ```
 
-Create one helper per service instance. It answers only `GET /.well-known/gozar/service?nonce=<64 hex characters>` with `{schemaVersion:1, nonce, instanceId}`. It does not open a port or change normal request handling. The endpoint exposes a random service-instance ID; it provides no application access.
+Create one helper per service instance. It answers only `GET /.well-known/gozar/service?nonce=<64 hex characters>` with `{schemaVersion:1, nonce, instanceId, proof}`. It does not open a port or change normal request handling. The endpoint exposes a random service-instance ID; it provides no application access.
 
-Gozar probes the declared target over HTTP using the public origin's Host, then probes the HTTPS origin with ordinary certificate validation and no redirects. Fresh matching nonces and instance IDs must match. Responses and probe duration are bounded. This proves that the origin reaches the same challenge-capable instance from the controller's network. It does not prove public access from every network, authenticated application behavior, MCP, OAuth or streaming.
+Gozar probes the declared target over HTTP using the public origin's Host, then probes the HTTPS origin with ordinary certificate validation and no redirects. The nonce, instance ID and HMAC-SHA256 proof must match. The helper signs each nonce with a per-instance secret that never leaves the service; copying its public instance ID cannot produce a fresh proof. Responses and probe duration are bounded. This proves that the origin reaches the same challenge-capable instance from the controller's network. It does not prove public access from every network, authenticated application behavior, MCP, OAuth or streaming.
 
 ## Host-supplied verification
 
