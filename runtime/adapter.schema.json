@@ -1,0 +1,309 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tnunamak/gozar/runtime/adapter.schema.json",
+  "title": "Gozar adapter definition v1",
+  "description": "Properties, Reach and Disclosure are copies of the route-catalog.schema.json definitions; a test checks they stay equal.",
+  "$defs": {
+    "AdapterDefinition": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "id",
+        "label",
+        "capabilities",
+        "supportedKinds",
+        "disclosure"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/Properties"
+        },
+        "supportedKinds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "session",
+              "attached",
+              "durable"
+            ]
+          }
+        },
+        "disclosure": {
+          "$ref": "#/$defs/Disclosure"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProviderEntry": {
+      "type": "object",
+      "required": [
+        "id",
+        "module",
+        "definition"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "module": {
+          "type": "string"
+        },
+        "definition": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Properties": {
+      "type": "object",
+      "required": [
+        "reach",
+        "transport",
+        "traffic",
+        "address",
+        "cost",
+        "needsAccount",
+        "lifetimes",
+        "supervision",
+        "protocols"
+      ],
+      "properties": {
+        "reach": {
+          "$ref": "#/$defs/Reach"
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "http",
+            "https"
+          ]
+        },
+        "traffic": {
+          "type": "object",
+          "required": [
+            "tlsTermination",
+            "providerCanReadPayload",
+            "readers",
+            "metadataVisibleTo",
+            "evidenceRef"
+          ],
+          "properties": {
+            "tlsTermination": {
+              "type": "string",
+              "enum": [
+                "endpoint",
+                "provider",
+                "unknown"
+              ]
+            },
+            "providerCanReadPayload": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "readers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "metadataVisibleTo": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "evidenceRef": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "address": {
+          "type": "object",
+          "required": [
+            "stability",
+            "scope",
+            "conditions"
+          ],
+          "properties": {
+            "stability": {
+              "type": "string",
+              "enum": [
+                "stable",
+                "ephemeral",
+                "unknown"
+              ]
+            },
+            "scope": {
+              "type": "string"
+            },
+            "conditions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "cost": {
+          "type": "object",
+          "required": [
+            "kind",
+            "summary",
+            "currency",
+            "amount",
+            "period"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "free",
+                "paid",
+                "unknown"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "currency": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "amount": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "period": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "needsAccount": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "lifetimes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "session",
+              "attached",
+              "durable"
+            ]
+          }
+        },
+        "supervision": {
+          "type": "string",
+          "enum": [
+            "controller",
+            "provider-persistent",
+            "host-supervised"
+          ]
+        },
+        "protocols": {
+          "type": "object",
+          "required": [
+            "sse",
+            "streamableHttp",
+            "oauthDcr"
+          ],
+          "properties": {
+            "sse": {
+              "type": "boolean"
+            },
+            "streamableHttp": {
+              "type": "boolean"
+            },
+            "oauthDcr": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "Reach": {
+      "type": "string",
+      "enum": [
+        "internet",
+        "tailnet",
+        "lan",
+        "this-device",
+        "unknown"
+      ]
+    },
+    "Disclosure": {
+      "type": "object",
+      "required": [
+        "revision",
+        "text",
+        "links"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "rel",
+              "label",
+              "href"
+            ],
+            "properties": {
+              "rel": {
+                "type": "string",
+                "enum": [
+                  "terms",
+                  "privacy"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "href": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,1584 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tnunamak/gozar/runtime/route-catalog.schema.json",
+  "title": "Gozar route contract v1",
+  "description": "One $defs entry per consumer shape. Mirrors packages/gozar-node/route-contract.d.ts.",
+  "$defs": {
+    "Reach": {
+      "type": "string",
+      "enum": [
+        "internet",
+        "tailnet",
+        "lan",
+        "this-device",
+        "unknown"
+      ]
+    },
+    "Usage": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "routeId"
+          ],
+          "properties": {
+            "kind": {
+              "const": "durable"
+            },
+            "routeId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "lifetimeMs"
+          ],
+          "properties": {
+            "kind": {
+              "const": "session"
+            },
+            "lifetimeMs": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "attached"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Requirements": {
+      "type": "object",
+      "required": [
+        "reach",
+        "transport",
+        "payloadAccess",
+        "address",
+        "setup",
+        "protocols"
+      ],
+      "properties": {
+        "reach": {
+          "$ref": "#/$defs/Reach"
+        },
+        "transport": {
+          "const": "https"
+        },
+        "payloadAccess": {
+          "type": "string",
+          "enum": [
+            "endpoint-only",
+            "allow-provider"
+          ]
+        },
+        "address": {
+          "type": "string",
+          "enum": [
+            "stable",
+            "any"
+          ]
+        },
+        "setup": {
+          "type": "string",
+          "enum": [
+            "none",
+            "allow"
+          ]
+        },
+        "protocols": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "sse",
+              "streamable-http",
+              "oauth-dcr"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Query": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "owner",
+        "target",
+        "usage",
+        "requirements",
+        "home"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "owner": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        },
+        "requirements": {
+          "$ref": "#/$defs/Requirements"
+        },
+        "home": {
+          "type": "string"
+        },
+        "route": {
+          "type": "string"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "intent": {
+          "type": "string",
+          "enum": [
+            "create",
+            "adopt"
+          ]
+        },
+        "migrationRef": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Disclosure": {
+      "type": "object",
+      "required": [
+        "revision",
+        "text",
+        "links"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "rel",
+              "label",
+              "href"
+            ],
+            "properties": {
+              "rel": {
+                "type": "string",
+                "enum": [
+                  "terms",
+                  "privacy"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "href": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Action": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "label",
+        "digest",
+        "disclosure"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "open-url",
+            "instructions",
+            "provide-secret",
+            "gozar-runs"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "disclosure": {
+          "$ref": "#/$defs/Disclosure"
+        },
+        "href": {
+          "type": "string"
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "secretLabel": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Properties": {
+      "type": "object",
+      "required": [
+        "reach",
+        "transport",
+        "traffic",
+        "address",
+        "cost",
+        "needsAccount",
+        "lifetimes",
+        "supervision",
+        "protocols"
+      ],
+      "properties": {
+        "reach": {
+          "$ref": "#/$defs/Reach"
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "http",
+            "https"
+          ]
+        },
+        "traffic": {
+          "type": "object",
+          "required": [
+            "tlsTermination",
+            "providerCanReadPayload",
+            "readers",
+            "metadataVisibleTo",
+            "evidenceRef"
+          ],
+          "properties": {
+            "tlsTermination": {
+              "type": "string",
+              "enum": [
+                "endpoint",
+                "provider",
+                "unknown"
+              ]
+            },
+            "providerCanReadPayload": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "readers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "metadataVisibleTo": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "evidenceRef": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "address": {
+          "type": "object",
+          "required": [
+            "stability",
+            "scope",
+            "conditions"
+          ],
+          "properties": {
+            "stability": {
+              "type": "string",
+              "enum": [
+                "stable",
+                "ephemeral",
+                "unknown"
+              ]
+            },
+            "scope": {
+              "type": "string"
+            },
+            "conditions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "cost": {
+          "type": "object",
+          "required": [
+            "kind",
+            "summary",
+            "currency",
+            "amount",
+            "period"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "free",
+                "paid",
+                "unknown"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "currency": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "amount": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "period": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "needsAccount": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "lifetimes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "session",
+              "attached",
+              "durable"
+            ]
+          }
+        },
+        "supervision": {
+          "type": "string",
+          "enum": [
+            "controller",
+            "provider-persistent",
+            "host-supervised"
+          ]
+        },
+        "protocols": {
+          "type": "object",
+          "required": [
+            "sse",
+            "streamableHttp",
+            "oauthDcr"
+          ],
+          "properties": {
+            "sse": {
+              "type": "boolean"
+            },
+            "streamableHttp": {
+              "type": "boolean"
+            },
+            "oauthDcr": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "Candidate": {
+      "type": "object",
+      "required": [
+        "name",
+        "preferenceRef",
+        "rank",
+        "eligible",
+        "unmet",
+        "display",
+        "properties",
+        "setup",
+        "disclosure",
+        "candidateToken",
+        "expiresAt"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "preferenceRef": {
+          "type": "string"
+        },
+        "rank": {
+          "type": "number"
+        },
+        "eligible": {
+          "type": "boolean"
+        },
+        "unmet": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "requirement",
+              "actual",
+              "reasonCode"
+            ],
+            "properties": {
+              "requirement": {
+                "type": "string"
+              },
+              "actual": {},
+              "reasonCode": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "display": {
+          "type": "object",
+          "required": [
+            "label",
+            "description"
+          ],
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "properties": {
+          "$ref": "#/$defs/Properties"
+        },
+        "setup": {
+          "type": "object",
+          "required": [
+            "state",
+            "actions"
+          ],
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "ready",
+                "action-required",
+                "unsupported",
+                "unknown"
+              ]
+            },
+            "actions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Action"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "disclosure": {
+          "$ref": "#/$defs/Disclosure"
+        },
+        "candidateToken": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expiresAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(\\d{4}-\\d{2}-\\d{2}T.*)?$"
+        }
+      },
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "eligible": {
+              "const": true
+            }
+          }
+        },
+        {
+          "required": [
+            "eligible",
+            "candidateToken"
+          ],
+          "properties": {
+            "eligible": {
+              "const": false
+            },
+            "candidateToken": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    },
+    "Catalog": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "catalogRevision",
+        "observedAt",
+        "preferenceRevision",
+        "candidates",
+        "noMatch"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "catalogRevision": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T"
+        },
+        "preferenceRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Candidate"
+          }
+        },
+        "noMatch": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "code",
+                "requirements"
+              ],
+              "properties": {
+                "code": {
+                  "const": "requirements_unsatisfied"
+                },
+                "requirements": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Handle": {
+      "type": "object",
+      "required": [
+        "kind",
+        "id",
+        "generation"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "session",
+            "attached",
+            "durable",
+            "external"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "Ingress": {
+      "type": "object",
+      "required": [
+        "generation",
+        "verifiedAt",
+        "validUntil",
+        "publicAuthority",
+        "authorityHandling",
+        "clientAddress"
+      ],
+      "properties": {
+        "generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "verifiedAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T"
+        },
+        "validUntil": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T"
+        },
+        "publicAuthority": {
+          "type": "string"
+        },
+        "authorityHandling": {
+          "const": "configured-origin"
+        },
+        "clientAddress": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "source",
+                "reason"
+              ],
+              "properties": {
+                "source": {
+                  "const": "unavailable"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "source"
+              ],
+              "properties": {
+                "source": {
+                  "const": "socket"
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "source",
+                "evidenceRef",
+                "peer",
+                "header"
+              ],
+              "properties": {
+                "source": {
+                  "const": "trusted-header"
+                },
+                "evidenceRef": {
+                  "type": "string"
+                },
+                "peer": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "path",
+                        "ownerUid"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "unix-socket"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "ownerUid": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "spkiSha256"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "mtls"
+                        },
+                        "spkiSha256": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "cidrs",
+                        "boundaryRef"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "network-boundary"
+                        },
+                        "cidrs": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "boundaryRef": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "header": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "format",
+                    "sanitization",
+                    "selection",
+                    "trustedHops",
+                    "trustedProxyCidrs"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "format": {
+                      "type": "string",
+                      "enum": [
+                        "rfc7239",
+                        "ip-list"
+                      ]
+                    },
+                    "sanitization": {
+                      "const": "strip-inbound-and-write"
+                    },
+                    "selection": {
+                      "const": "rightmost-untrusted"
+                    },
+                    "trustedHops": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "trustedProxyCidrs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RouteView": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "handle",
+        "origin",
+        "published",
+        "state",
+        "ownership",
+        "properties",
+        "ingress",
+        "verification",
+        "limits",
+        "cleanup"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "handle": {
+          "$ref": "#/$defs/Handle"
+        },
+        "origin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "published": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "creating",
+            "usable",
+            "unverified",
+            "unknown",
+            "lost",
+            "address_changed",
+            "uncertain",
+            "releasing",
+            "released",
+            "handing-back"
+          ]
+        },
+        "ownership": {
+          "type": "string",
+          "enum": [
+            "gozar-owned",
+            "external-owned"
+          ]
+        },
+        "properties": {
+          "$ref": "#/$defs/Properties"
+        },
+        "ingress": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Ingress"
+            }
+          ]
+        },
+        "verification": {
+          "type": "object",
+          "required": [
+            "status",
+            "checkedAt"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "verified",
+                "unverified"
+              ]
+            },
+            "checkedAt": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^(\\d{4}-\\d{2}-\\d{2}T.*)?$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "limits": {
+          "type": "object",
+          "required": [
+            "recommendedPollIntervalMs",
+            "idleTimeoutMs"
+          ],
+          "properties": {
+            "recommendedPollIntervalMs": {
+              "type": "number"
+            },
+            "idleTimeoutMs": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "cleanup": {
+          "type": "object",
+          "required": [
+            "state"
+          ],
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "none",
+                "debt"
+              ]
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "Approval": {
+      "type": "object",
+      "required": [
+        "candidateToken",
+        "disclosureRevision"
+      ],
+      "properties": {
+        "candidateToken": {
+          "type": "string"
+        },
+        "disclosureRevision": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ErrorCode": {
+      "type": "string",
+      "enum": [
+        "invalid_input",
+        "requirements_unsatisfied",
+        "setup_required",
+        "consent_required",
+        "consent_unknown",
+        "consent_expired",
+        "consent_mismatch",
+        "candidate_stale",
+        "preference_conflict",
+        "route_not_found",
+        "route_conflict",
+        "address_changed",
+        "stopped_by_user",
+        "handing_back",
+        "verification_failed",
+        "provider_unavailable",
+        "cleanup_debt",
+        "unsupported",
+        "ambiguous_route"
+      ]
+    },
+    "GozarError": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "error"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "error": {
+          "type": "object",
+          "required": [
+            "code",
+            "message",
+            "nextAction"
+          ],
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "message": {
+              "type": "string"
+            },
+            "nextAction": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/Action"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "PreferenceRecord": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "scope",
+        "revision",
+        "adapterPreference",
+        "onUnavailable"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "scope": {
+          "const": "user"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "adapterPreference": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "onUnavailable": {
+          "const": "ask"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SetupActionResult": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "state",
+        "nextAction",
+        "catalogRevision"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "complete",
+            "pending",
+            "blocked"
+          ]
+        },
+        "nextAction": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Action"
+            }
+          ]
+        },
+        "catalogRevision": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WatchEvent": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "sequence",
+        "type",
+        "route"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "snapshot",
+            "changed",
+            "terminal"
+          ]
+        },
+        "route": {
+          "$ref": "#/$defs/RouteView"
+        }
+      },
+      "additionalProperties": false
+    },
+    "InspectLegacyRouteResult": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "migrationRef",
+        "origin",
+        "target",
+        "bridgeHome",
+        "state",
+        "reasonCode"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "migrationRef": {
+          "type": "string"
+        },
+        "origin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "type": "string"
+        },
+        "bridgeHome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "adoptable",
+            "external",
+            "blocked"
+          ]
+        },
+        "reasonCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResolveClientAddressResult": {
+      "type": "object",
+      "required": [
+        "address",
+        "source",
+        "reason"
+      ],
+      "properties": {
+        "address": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "socket",
+            "trusted-header",
+            "unavailable"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "InspectLegacyRouteRequest": {
+      "type": "object",
+      "required": [
+        "home",
+        "owner",
+        "source",
+        "target"
+      ],
+      "properties": {
+        "home": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "source": {
+          "type": "object",
+          "required": [
+            "stateFiles"
+          ],
+          "properties": {
+            "stateFiles": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "origin": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnsureRouteRequest": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "owner",
+        "target",
+        "usage",
+        "requirements",
+        "home"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "owner": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "usage": {
+          "type": "object",
+          "required": [
+            "kind",
+            "routeId"
+          ],
+          "properties": {
+            "kind": {
+              "const": "durable"
+            },
+            "routeId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "requirements": {
+          "$ref": "#/$defs/Requirements"
+        },
+        "home": {
+          "type": "string"
+        },
+        "route": {
+          "type": "string"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "intent": {
+          "type": "string",
+          "enum": [
+            "create",
+            "adopt"
+          ]
+        },
+        "migrationRef": {
+          "type": "string"
+        },
+        "approval": {
+          "$ref": "#/$defs/Approval"
+        },
+        "reconsent": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AdoptRouteRequest": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "owner",
+        "target",
+        "usage",
+        "requirements",
+        "home",
+        "origin",
+        "approval",
+        "handover"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "owner": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "usage": {
+          "type": "object",
+          "required": [
+            "kind",
+            "routeId"
+          ],
+          "properties": {
+            "kind": {
+              "const": "durable"
+            },
+            "routeId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "requirements": {
+          "$ref": "#/$defs/Requirements"
+        },
+        "home": {
+          "type": "string"
+        },
+        "route": {
+          "type": "string"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "intent": {
+          "type": "string",
+          "enum": [
+            "create",
+            "adopt"
+          ]
+        },
+        "migrationRef": {
+          "type": "string"
+        },
+        "approval": {
+          "$ref": "#/$defs/Approval"
+        },
+        "handover": {
+          "type": "object",
+          "required": [
+            "from",
+            "generation"
+          ],
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExposeRequest": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "owner",
+        "target",
+        "usage",
+        "requirements",
+        "home",
+        "approval",
+        "wait"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "owner": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "usage": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "kind",
+                "lifetimeMs"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "session"
+                },
+                "lifetimeMs": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "attached"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "requirements": {
+          "$ref": "#/$defs/Requirements"
+        },
+        "home": {
+          "type": "string"
+        },
+        "route": {
+          "type": "string"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "intent": {
+          "type": "string",
+          "enum": [
+            "create",
+            "adopt"
+          ]
+        },
+        "migrationRef": {
+          "type": "string"
+        },
+        "approval": {
+          "$ref": "#/$defs/Approval"
+        },
+        "wait": {
+          "type": "string",
+          "enum": [
+            "allocated",
+            "verified"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SetRoutePreferencesRequest": {
+      "type": "object",
+      "required": [
+        "profileHome",
+        "expectedRevision",
+        "adapterPreference",
+        "onUnavailable"
+      ],
+      "properties": {
+        "profileHome": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "adapterPreference": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "onUnavailable": {
+          "const": "ask"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunSetupActionRequest": {
+      "type": "object",
+      "required": [
+        "home",
+        "actionId",
+        "approval"
+      ],
+      "properties": {
+        "home": {
+          "type": "string"
+        },
+        "actionId": {
+          "type": "string"
+        },
+        "approval": {
+          "type": "object",
+          "required": [
+            "digest",
+            "disclosureRevision"
+          ],
+          "properties": {
+            "digest": {
+              "type": "string"
+            },
+            "disclosureRevision": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "secretHandle": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
