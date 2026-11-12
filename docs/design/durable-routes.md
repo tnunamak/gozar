@@ -50,7 +50,7 @@ One home-wide **reservation lock** serializes every allocation that can collide:
 // Create the route, or reuse the one this record owns. Idempotent.
 await ensureRoute({
   routeId,            // app-chosen, stable
-  owner,              // app name shown to the user, for example 'faravan'
+  owner,              // app name shown to the user, for example 'example-app'
   adapterId,          // 'tailscale-funnel' | 'tailscale-private' | later 'ngrok-https-edge'
   target,             // '127.0.0.1:PORT' — the app's own listener
   origin,             // optional; see "Resolution"
