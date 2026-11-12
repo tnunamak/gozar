@@ -160,6 +160,17 @@ test('one installation identity admits one live stable relay route across ports'
   const restarted = await serve(third.directory, { probeExecutor:third.probeExecutor });
   t.after(async () => { await restarted.terminate(); });
   assert.equal(restarted.controller.state.published, first);
+
+  const reusedRelay = Object.values(restarted.controller.journal.value.owned).find(resource => resource.kind === 'process');
+  restarted.controller.driver.stopped = true; // The simulated dead controller must not react to the orphan's exit.
+  await atomicWrite(join(identities, `.active-route-${fingerprint}.json`), { version:1, leaseId:'stale-reused-port',
+    keyFingerprint:fingerprint, pid:2147483647, startIdentity:'1', sessionId:restarted.controller.sessionId,
+    sessionDirectory:third.directory, targetPort:18768 });
+  await atomicWrite(join(third.directory, 'control.json'), { pid:2147483647, startIdentity:'1', nonce:'dead-again' });
+  const reused = await serve(third.directory, { probeExecutor:third.probeExecutor });
+  t.after(async () => { await reused.terminate(); });
+  assert.equal(reused.controller.state.published, first);
+  assert.equal(await processIdentity(reusedRelay.pid), null);
 });
 
 test('an unresolved stale owner keeps its key lease and reports the stop command', async t => {
@@ -181,6 +192,13 @@ test('an unresolved stale owner keeps its key lease and reports the stop command
     return true;
   });
   assert.equal(JSON.parse(await readFile(leasePath, 'utf8')).leaseId, 'cleanup-pending');
+  for (const session of [{sessionId:'old-session'}, {}]) {
+    await journal.save({ owned:{}, state:{sessionId:'old-session',resources:[]},
+      intents:{ pending:{operation:'create',adapterId:'tunnl-gg',generation:1,resourceId:null,...session} } });
+    await assert.rejects(acquireInstallKeyLease({home,keyFingerprint:fingerprint,
+      sessionDirectory:join(home,'port-18766'),sessionId:'new-session',targetPort:18766}), /cleanup is not confirmed/);
+    assert.equal(JSON.parse(await readFile(leasePath,'utf8')).leaseId,'cleanup-pending');
+  }
 });
 
 test('stop while provisioning an identity leaves no late file or publication', async t => {

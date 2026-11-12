@@ -49,6 +49,14 @@ async function recoverOwner(owner) {
     throw new Error('Previous key owner session path is outside this Gozar home');
   const journal = new Journal(owner.sessionDirectory);
   await journal.load();
+  const ownerIntents = () => {
+    const intents = Object.values(journal.value.intents ?? {});
+    if (intents.some(intent => typeof intent.sessionId !== 'string' || !intent.sessionId))
+      throw new Error('Previous key owner has an intent without a session identity');
+    // serve starts a new session only after the prior state is stopped and owned is empty.
+    // Its retained audit records are not resource authority for the current lease owner.
+    return intents.filter(intent => intent.sessionId === owner.sessionId);
+  };
   const createIntents = intents => intents.filter(intent => intent.operation === 'create');
   const matchCreatedResources = (intents, state) => createIntents(intents).map(intent => {
     const unkeyedPeers = createIntents(intents).filter(peer => !peer.resourceId &&
@@ -62,7 +70,7 @@ async function recoverOwner(owner) {
   if (journal.value.state) {
     if (journal.value.state.sessionId !== owner.sessionId)
       throw new Error('Previous key owner session identity does not match its journal');
-    const unresolvedBeforeRecovery = matchCreatedResources(Object.values(journal.value.intents ?? {}), journal.value.state)
+    const unresolvedBeforeRecovery = matchCreatedResources(ownerIntents(), journal.value.state)
       .filter(entry => entry.resources.length !== 1);
     if (unresolvedBeforeRecovery.length)
       throw new Error('Previous key owner has a create intent without a durable resource identity');
@@ -78,7 +86,7 @@ async function recoverOwner(owner) {
     throw new Error('Recovered session identity changed');
   if (Object.keys(journal.value.owned ?? {}).length)
     throw new Error('Previous key owner still has recorded local resources');
-  const intents = Object.values(journal.value.intents ?? {});
+  const intents = ownerIntents();
   const removedResources = new Set(intents.filter(intent => intent.operation === 'remove' && intent.resourceId)
     .map(intent => intent.resourceId));
   const unresolvedCreates = matchCreatedResources(intents, journal.value.state).filter(entry =>
