@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { atomicWrite, Journal, processIdentity } from './journal.mjs';
+import { recordController, controllerAlive, stopController, withCleanupOutcome } from './controller-start.mjs';
 import { Controller } from './controller.mjs';
 import { PublicRelayVerifier } from './public-relay.mjs';
 import { ProbeDirectoryExecutor } from './probe-directory.mjs';
@@ -66,7 +67,9 @@ export async function stopSession(directory) {
   return { ...await recoverStop(directory), controllerHandover: true };
 }
 
-export async function launch(directory, configuration, executable) {
+// options is a test seam: { identity, kill, startupTimeoutMs, graceMs }.
+export async function launch(directory, configuration, executable, options = {}) {
+  const identity = options.identity ?? processIdentity;
   if (configuration.lifetimeMs !== undefined) validateLifetimeMs(configuration.lifetimeMs);
   try {
     await control(directory, { type:'status', initial:true }, 1_000);
@@ -92,19 +95,28 @@ export async function launch(directory, configuration, executable) {
       PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
     child.unref();
     await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-    const startupDeadline = Date.now() + (configuration.probeWaitMs ?? 5000) + 120000;
-    while (Date.now() < startupDeadline) {
-      try { return await control(directory, { type: 'status', initial: true }, Math.min(10000, startupDeadline - Date.now())); }
-      catch (error) {
-        if (await processIdentity(child.pid) === null) {
-          let failure;
-          try { failure = JSON.parse(await readFile(join(directory, 'failure.json'), 'utf8')); } catch {}
-          throw new Error(failure?.message ?? 'Controller exited before startup completed');
+    // From here the detached controller is ours to stop on every failure: nothing else knows it exists.
+    let record;
+    try {
+      record = await recordController(child, { identity });
+      const startupDeadline = Date.now() + (options.startupTimeoutMs ?? (configuration.probeWaitMs ?? 5000) + 120000);
+      while (Date.now() < startupDeadline) {
+        try { return await control(directory, { type: 'status', initial: true }, Math.min(10000, startupDeadline - Date.now())); }
+        catch (error) {
+          // Exit is proven by the identity function (or our child handle), never inferred from one failed read.
+          if (!await controllerAlive(record, { identity })) {
+            let failure;
+            try { failure = JSON.parse(await readFile(join(directory, 'failure.json'), 'utf8')); } catch {}
+            throw new Error(failure?.message ?? 'Controller exited before startup completed');
+          }
+          await new Promise(resolve => setTimeout(resolve, 50));
         }
-        await new Promise(resolve => setTimeout(resolve, 50));
       }
+      throw new Error(`Controller startup still pending; run ${cliCommand('status', configuration.targetPort, dirname(directory))} before retrying expose`);
+    } catch (error) {
+      if (!record) record = { pid: child.pid, startIdentity: null, child };
+      throw withCleanupOutcome(error, await stopController(record, { identity, kill: options.kill, graceMs: options.graceMs }));
     }
-    throw new Error(`Controller startup still pending; run ${cliCommand('status', configuration.targetPort, dirname(directory))} before retrying expose`);
   } finally { await unlink(lockPath).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
 }
 

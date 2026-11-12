@@ -1,4 +1,4 @@
-// Tailscale LocalAPI transport for durable routes (Linux unix socket).
+// Tailscale LocalAPI transport for durable routes (unix socket on Linux and macOS).
 //
 // Reference: the official Go client and handler at tailscale v1.104.6:
 //   client/local/serve.go    GetServeConfig (GET, Etag response header), SetServeConfig (POST, If-Match)
@@ -13,7 +13,15 @@ import http from 'node:http';
 import { lstat } from 'node:fs/promises';
 
 const host = 'local-tailscaled.sock';
-const defaultSockets = ['/var/run/tailscale/tailscaled.sock', '/run/tailscale/tailscaled.sock'];
+const linuxSockets = ['/var/run/tailscale/tailscaled.sock', '/run/tailscale/tailscaled.sock'];
+// Open-source tailscaled on macOS (including Homebrew's) listens on /var/run/tailscaled.socket:
+//   tailscale/paths/paths.go   DefaultTailscaledSocket: `if runtime.GOOS == "darwin" { return "/var/run/tailscaled.socket" }`
+// The Mac App Store and standalone Tailscale apps run tailscaled inside the app and expose no such socket.
+// Their LocalAPI is a loopback TCP port plus a token read from /Library/Tailscale (ipnport, sameuserproof-<port>):
+//   tailscale/safesocket/safesocket_darwin.go   readMacsysSameUserProof
+// That transport is not implemented here; those installs report provider_unavailable.
+const darwinSockets = ['/var/run/tailscaled.socket', ...linuxSockets];
+export const defaultSocketCandidates = (platform = process.platform) => platform === 'darwin' ? darwinSockets : linuxSockets;
 const replyLimit = 4 * 1024 * 1024;
 const timeoutMs = 10000;
 
@@ -28,7 +36,7 @@ export const conflict = () => typed('provider_conflict', 'Another program keeps 
 
 // Test seam and non-default installs: GOZAR_TAILSCALED_SOCKET names one socket path.
 async function socketPath() {
-  const candidates = process.env.GOZAR_TAILSCALED_SOCKET ? [process.env.GOZAR_TAILSCALED_SOCKET] : defaultSockets;
+  const candidates = process.env.GOZAR_TAILSCALED_SOCKET ? [process.env.GOZAR_TAILSCALED_SOCKET] : defaultSocketCandidates();
   for (const path of candidates) {
     try { if ((await lstat(path)).isSocket()) return path; }
     catch (error) { if (error.code === 'EACCES') throw denied(); if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw unavailable(); }

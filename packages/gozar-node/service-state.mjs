@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
 import { spawn } from 'node:child_process';
+import { acquireProcessLock } from './process-lock.mjs';
 import { isIP } from 'node:net';
 
 export const challengePath = '/.well-known/gozar/service';
@@ -98,21 +99,20 @@ export async function readRecord(path) {
     return JSON.parse(bytes.subarray(0, length).toString('utf8'));
   } finally { await file.close(); }
 }
-// Run action while holding an exclusive kernel lock on a private lock file.
+// Run action while holding an exclusive lock named by a private lock file.
 // Without waitSeconds a held lock fails at once as busy; with it, acquisition blocks up to that bound.
-export async function withExclusiveLock(path, action, { waitSeconds = 0 } = {}) {
-  const lock = await checkedFile(path, constants.O_RDWR | constants.O_CREAT, 'lock');
-  try {
-    // flock's numeric-fd form locks the inherited open file description. The
-    // parent keeps it open through action, so exit/reboot still releases it.
-    const holder = spawn('flock', ['--exclusive', ...(waitSeconds > 0 ? ['--wait', String(waitSeconds)] : ['--nonblock']), '3'],
-      { stdio: ['ignore', 'ignore', 'ignore', lock.fd] });
-    await new Promise((ready, reject) => {
-      holder.once('error', () => reject(new Error('Service mutation requires flock (util-linux)')));
-      holder.once('close', code => code === 0 ? ready() : reject(Object.assign(new Error('Service mutation busy or lock unavailable'), { code: 'busy' })));
-    });
-    return await action();
-  } finally { await lock.close(); }
+// A holder that dies, even by SIGKILL, loses the lock; a live holder never does (see process-lock.mjs).
+export async function withExclusiveLock(path, action, { waitSeconds = 0, identity } = {}) {
+  // The lock file itself stays the private anchor that is checked for owner and mode.
+  const anchor = await checkedFile(path, constants.O_RDWR | constants.O_CREAT, 'lock');
+  await anchor.close();
+  let release;
+  try { release = await acquireProcessLock(path, { waitMs: waitSeconds * 1000, ...(identity ? { identity } : {}) }); }
+  catch (error) {
+    if (error.code === 'busy') throw Object.assign(new Error('Service mutation busy or lock unavailable'), { code: 'busy' });
+    throw error;
+  }
+  try { return await action(); } finally { await release(); }
 }
 // HTTPS authority semantics on both the direct HTTP and public HTTPS witness.
 export function canonicalAuthority(value) {
