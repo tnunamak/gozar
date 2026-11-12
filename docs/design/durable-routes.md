@@ -1,6 +1,6 @@
 # Design: durable routes and route adoption
 
-Status: proposal, revision 2 (after the first design review). No code yet. Targets Gozar 0.2.0.
+Status: proposal, revision 3 (after the first design review, plus the visibility rule). No code yet. Targets Gozar 0.2.0.
 
 ## Problem
 
@@ -50,13 +50,14 @@ One home-wide **reservation lock** serializes every allocation that can collide:
 // Create the route, or reuse the one this record owns. Idempotent.
 await ensureRoute({
   routeId,            // app-chosen, stable
+  owner,              // app name shown to the user, for example 'faravan'
   adapterId,          // 'tailscale-funnel' | 'tailscale-private' | later 'ngrok-https-edge'
   target,             // '127.0.0.1:PORT' — the app's own listener
   origin,             // optional; see "Resolution"
   approvals,          // ordered list of approved tuples; see "Consent"
   home,
 });
-// -> { schemaVersion: 1, route: { routeId, origin, target, adapterId, ownership: 'gozar-owned',
+// -> { schemaVersion: 1, route: { routeId, owner, createdAt, origin, target, adapterId, ownership: 'gozar-owned',
 //      lifetime: 'provider-persistent' | 'host-supervised', state, verification } }
 
 await adoptRoute({ routeId, adapterId, target, origin, claim, handover, approvals, home }); // see "Adoption"
@@ -113,6 +114,13 @@ An intent without a receipt proves only that Gozar meant to create the rule, not
 - intent, no receipt, rule absent → `lost` (nothing to clean);
 - intent, no receipt, rule present → `uncertain`. Gozar does not claim, verify into `usable`, or remove that rule. The host can take it with an explicit `adoptRoute` (fresh approval) or drop the record with `releaseRoute`, which then leaves the rule in place and reports it;
 - receipt present → normal reconciliation.
+
+### Visibility replaces a lifetime
+
+A durable route has no expiry, so the user must always be able to see it and stop it without the app that made it:
+- `gozar status` with no arguments lists every session **and** every durable and service route in the home. Each durable route shows its route ID, provider (adapter), origin, owner app, created-at time and state. `gozar status --route ID` shows one. `--json` gives the same fields.
+- `gozar stop --route ID` releases the route with compare-and-remove (below), exactly as `releaseRoute({mode:'remove'})` does.
+- **A user stop is sticky.** It leaves a small tombstone for the route ID. The owner app's next `ensureRoute` for that ID is refused with `stopped_by_user` instead of quietly re-creating the route. The app may create it again only with `reconsent: true`, which a host sets only after it has shown the durable consent prompt again. A tombstone is deleted by that re-consented call or by `releaseRoute` from the app.
 
 ### Stop
 
@@ -181,6 +189,11 @@ Crashes and races:
 15. release racing a late create or verification → the route is not re-published, and debt is kept;
 16. concurrent ensure, adopt and session for one listener or port with distinct origins → exactly one wins;
 17. `removeService` on a `gozar-owned` record → refused.
+
+Visibility:
+21. `gozar status` with no arguments lists a durable route with route ID, provider, origin, owner app, created-at time and state, next to sessions and service routes; `--json` has the same fields;
+22. `gozar stop --route ID` removes the provider rule by compare-and-remove and deletes the record; with a changed rule it leaves the rule, keeps cleanup debt and says so;
+23. after `gozar stop --route ID`, the owner app's `ensureRoute` is refused with `stopped_by_user` and makes no mutation; with `reconsent: true` it creates the route again.
 
 Adoption:
 18. adopt of an exact rule with a handover → no provider mutation, record `adopted`; a mismatch, a missing handover, or a rule change during verification → refused;
