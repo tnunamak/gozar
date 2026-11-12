@@ -107,7 +107,8 @@ export async function main(argv = process.argv.slice(2)) {
   let adapters = await loadCatalog(root, { operational: true });
   const activeIds = await loadActiveDrop(root);
   if (options.adapterId && options.command === 'expose') {
-    if (!activeIds.includes(options.adapterId)) throw new Error('Selected mode is NEXT DROP. Run detect to see current mode states.');
+    const operational = adapters.find(adapter => adapter.id === options.adapterId && adapter.planVersion === 1 && adapter.admission?.state === 'admitted');
+    if (!activeIds.includes(options.adapterId) && !operational) throw new Error('Selected mode is NEXT DROP. Run detect to see current mode states.');
     const definition = await loadDefinition(root, options.adapterId);
     adapters = [...adapters.filter(adapter => adapter.id !== definition.id), definition];
   }
