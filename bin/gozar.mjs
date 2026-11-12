@@ -15,6 +15,8 @@ import { validateLifetimeMs } from '../packages/gozar-node/gate.mjs';
 import { selectedInterfaceAddress } from '../packages/gozar-node/interfaces.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const shellQuote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
+const cliCommand = (command, port) => [process.execPath, fileURLToPath(import.meta.url), command, '--port', String(port)].map(shellQuote).join(' ');
 const reaches = ['internet', 'tailnet', 'lan', 'this-device', 'unknown'];
 export function parseArgs(argv) {
   const options = { command: argv[0] ?? 'help', clientReach: 'unknown' };
@@ -115,17 +117,17 @@ export async function main(argv = process.argv.slice(2)) {
   const print = reply => {
     const view = options.command === 'detect' ? reply : { ...reply, snapshot: exposeSnapshot(reply.snapshot, activeIds) };
     if (['cleanup-pending', 'stopping'].includes(view.snapshot?.phase) || view.localCleanupFailures?.length) {
-      view.nextAction = { command: `gozar stop --port ${options.port}`, expectedSuccess: 'Exposure stopped, with no remaining cleanup failures.' };
+      view.nextAction = { command: cliCommand('stop', options.port), expectedSuccess: 'Exposure stopped, with no remaining cleanup failures.' };
     } else if (view.snapshot?.phase === 'unknown') {
-      view.nextAction = { command: `gozar expose --port ${options.port}`, expectedSuccess: 'The guided setup starts a fresh controller for this service.' };
+      view.nextAction = { command: cliCommand('expose', options.port), expectedSuccess: 'The guided setup starts a fresh controller for this service.' };
     } else if (['failed', 'blocked', 'degraded'].includes(view.snapshot?.phase)) {
       const immutableLoss = adapters.some(adapter => adapter.id === view.snapshot.adapterId && adapter.originPolicy === 'immutable') &&
         view.snapshot.lastRouteChange && !view.snapshot.candidate && !view.snapshot.published;
       if (view.action?.recheckCommand === 'stop' || immutableLoss) {
         if (immutableLoss && view.action?.recheckCommand !== 'stop') view.action = { kind: 'external', instruction: 'Stop the current session and start a new route.', recheckCommand: 'stop' };
-        view.nextAction = { command: `gozar stop --port ${options.port}`, expectedSuccess: 'Stop the session, then start a new route.' };
+        view.nextAction = { command: cliCommand('stop', options.port), expectedSuccess: 'Stop the session, then start a new route.' };
       } else {
-        view.nextAction = { command: `gozar health --port ${options.port}`, expectedSuccess: 'Route checks pass and a validated URL is printed.' };
+        view.nextAction = { command: cliCommand('health', options.port), expectedSuccess: 'Route checks pass and a validated URL is printed.' };
       }
     }
     console.log(options.json ? JSON.stringify(view) : render(view, adapters, options));
@@ -245,7 +247,7 @@ if (process.argv[1] && await realpath(resolve(process.argv[1])).catch(() => null
       process.exitCode = 1;
       return;
     }
-    const next = `gozar detect --port ${/^\d+$/.test(port ?? '') ? port : 'N'}`;
+    const next = cliCommand('detect', /^\d+$/.test(port ?? '') ? port : 'N');
     if (argv.includes('--json')) console.log(JSON.stringify({ error: error.message, action: { kind: 'repair', instruction: `Run ${next} to inspect prerequisites.`, command: next, expectedSuccess: 'Detection lists route prerequisites for this service port.' } }));
     else console.error(`Gozar: ${error.message}\nNext: ${next}\nSuccess: detection lists route prerequisites for this service port.`);
     process.exitCode = 1;

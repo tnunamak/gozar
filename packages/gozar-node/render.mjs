@@ -15,7 +15,7 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
   if (snapshot.phase === 'stopped') {
     const lines = ['Gozar · stopped', 'Exposure stopped.'];
     for (const failure of reply.localCleanupFailures ?? []) lines.push(`Cleanup needs attention: ${typeof failure === 'string' ? failure : JSON.stringify(failure)}`);
-    if (reply.localCleanupFailures?.length) lines.push(`Retry: gozar stop --port ${port}`, 'Success: Exposure stopped, with no remaining cleanup failures.');
+    if (reply.localCleanupFailures?.length) lines.push(`Retry: ${reply.nextAction?.command ?? `gozar stop --port ${port}`}`, 'Success: Exposure stopped, with no remaining cleanup failures.');
     if (reply.journalPath) lines.push(`Local state: ${reply.journalPath}`);
     return lines.join('\n');
   }
@@ -76,7 +76,7 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
   if (reply.gateTarget) lines.push(`Proxy target for this instance: ${reply.gateTarget}`);
   if (reply.journalPath) lines.push(`Local state: ${reply.journalPath}`);
   if (snapshot.phase === 'cleanup-pending' || snapshot.phase === 'stopping') {
-    lines.push('Route removal is not confirmed.', `Retry: gozar stop --port ${port}`, 'Success: Exposure stopped, with no remaining cleanup failures.');
+    lines.push('Route removal is not confirmed.', `Retry: ${reply.nextAction?.command ?? `gozar stop --port ${port}`}`, 'Success: Exposure stopped, with no remaining cleanup failures.');
   } else if (!['planned', 'stopped'].includes(snapshot.phase)) {
     const scope = port ? ` --port ${port}` : '';
     lines.push(`Status: gozar status${scope}`, `Stop: gozar stop${scope}`);
