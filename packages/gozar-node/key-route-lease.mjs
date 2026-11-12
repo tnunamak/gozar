@@ -101,7 +101,7 @@ export async function acquireInstallKeyLease({ home, keyFingerprint, sessionDire
   const identitiesDirectory = join(home, 'identities');
   const recordPath = leaseFile(identitiesDirectory, keyFingerprint);
   const mutexPath = lockFile(identitiesDirectory, keyFingerprint);
-  const stop = port => cliCommand('stop', port);
+  const stop = port => cliCommand('stop', port, home);
 
   return withLock(mutexPath, async () => {
     const previous = await readLease(recordPath);
@@ -152,7 +152,7 @@ export async function retireInstallKeyLease(home, sessionDirectory) {
     if (!validLease(previous) || previous.keyFingerprint !== keyFingerprint)
       throw new Error('Installation key lease is unreadable; inspect its recorded session before retrying');
     if (resolve(previous.sessionDirectory) !== resolve(sessionDirectory)) return;
-    const stop = cliCommand('stop', previous.targetPort);
+    const stop = cliCommand('stop', previous.targetPort, home);
     if (await processIdentity(previous.pid) === previous.startIdentity)
       throw new Error(`The installation key is held by port ${previous.targetPort}. Stop it with ${stop}.`);
     try { await recoverOwner({ ...previous, home }); }
