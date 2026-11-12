@@ -1,48 +1,44 @@
 # Gozar
 
-Give a local service an HTTPS address a remote client can reach, or a private route inside your Tailscale network. Gozar can use Tailscale Funnel, Tailscale Serve, localhost.run, your own HTTPS proxy, or a selected LAN interface.
+Give a local service an address its client can reach: public HTTPS, a private Tailscale route, or HTTP on a selected LAN interface. Gozar discovers routes, asks before exposing your service, verifies the result, and tracks cleanup. MCP is supported, not required.
 
-**Start with a service already listening on port 3000.** On Linux with Node.js 24+, run:
+## Choose your route
+
+**Start with a service listening on port 3000, Linux, and Node.js 24+.** Inspect the candidates without creating a route:
+
+```sh
+npx --package=@tnunamak/gozar@0.1.0 gozar detect --port 3000 --alternatives
+```
+
+Choose for the client that will connect, not just the tools installed on your machine:
+
+| Route | Reach and trust boundary | Setup and lifecycle |
+| --- | --- | --- |
+| Tailscale Funnel | Public internet | Signed-in client, Funnel/HTTPS permission and a verified unused listener. Gozar does not take over existing routes. |
+| Tailscale Serve | Your tailnet | Signed-in client and a trusted check from the intended tailnet. |
+| localhost.run | Public internet; relay terminates TLS and can read traffic | OpenSSH. Anonymous HTTPS URLs can change within minutes. |
+| tunnl.gg stable | Public internet; relay can read traffic | Explicit opt-in, OpenSSH and Linux `flock`. **One active route per installation key.** Gozar refuses a second same-home start until the holder ends and owned-process cleanup is confirmed; it does not queue it. Browser warnings and roughly two-minute quiet-stream limits are possible. |
+| LAN | Selected local network; **HTTP, not HTTPS** | Explicit interface, exact firewall approval and a trusted check. |
+| Your HTTPS proxy | Clients that can reach your configured proxy | You manage DNS, TLS, the proxy and uptime. Use a temporary exposure or register an existing service route below. |
+| ngrok / Cloudflare named Tunnel | Detection only in 0.1.0 | Gozar cannot create these routes. Finding a CLI does not establish permission or readiness. |
+
+**Before sharing:** Gozar does not add application authentication. Keep your service's access controls enabled and choose a provider you trust with its data. Detection is not proof of login, permission, reachability or URL stability.
+
+**When the address disappears:** stop advertising the old URL. Only the current verified `snapshot.published` may be shared. A requested session lifetime does not reserve an address; update clients when a newly verified address replaces it.
+
+[Expose a service](#expose-a-service) · [Keep an existing service address](#keep-an-existing-service-address) · [Embed and supervise](#embed-and-supervise)
+
+## Expose a service
+
+For a public internet client:
 
 ```sh
 npx --package=@tnunamak/gozar@0.1.0 gozar expose --port 3000 --client-reach internet
 ```
 
-Gozar finds eligible routes, shows what it would connect, and asks for approval before making the service reachable. Provider setup or an outside-network verification step may still be required. Only share an address once Gozar verifies it; the address can change or expire. **Gozar does not add authentication to your app.**
+Review the displayed provider and exact local target before approving. Provider setup or verification from outside your network may still be required. Share the address only after verification succeeds.
 
-For a persistent service behind your existing HTTPS proxy, use a [service route](#keep-an-existing-service-address). For an app integration, see [JavaScript API](#javascript-api). MCP is supported, but not required.
-
-## Install
-
-Use Linux with Node.js 24 or newer.
-
-For a one-off command, use the scoped package explicitly:
-
-```sh
-npx --package=@tnunamak/gozar@0.1.0 gozar --help
-```
-
-For a project or an embedded integration:
-
-```sh
-npm install @tnunamak/gozar@0.1.0
-```
-
-The examples below use npx with an explicit package, so they do not require a global installation. Installing locally does not add a bare `gozar` command to your normal shell PATH.
-
-The npm package includes the compiled WASM core and JavaScript bindings. You do not need Rust or wasm-bindgen to use it.
-
-Providers have their own prerequisites: localhost.run needs OpenSSH; Tailscale needs a signed-in client and permission for the selected route. The stable tunnl.gg key lease and adding or removing service-route records need Linux `flock` from util-linux.
-
-## Share a local service
-
-Start your own service on port 3000, then:
-
-```sh
-npx --package=@tnunamak/gozar@0.1.0 gozar expose --port 3000 --client-reach internet
-```
-
-Review the displayed provider and exact local target. Approve only the route you want. Gozar creates the route when its provider is ready and checks it before publishing an address; outside-client verification can require additional setup.
+Use `--client-reach tailnet` for an authorized Tailscale client, or `--client-reach lan` for a local-network client. Select a detected provider with `--adapter ID`; unsupported routes are still refused.
 
 ```sh
 npx --package=@tnunamak/gozar@0.1.0 gozar status --port 3000
@@ -50,27 +46,42 @@ npx --package=@tnunamak/gozar@0.1.0 gozar health --port 3000
 npx --package=@tnunamak/gozar@0.1.0 gozar stop --port 3000
 ```
 
-Status tells you what is currently published. Health rechecks it. Stop attempts to close the temporary exposure and reports unresolved cleanup. Sessions default to 15 minutes, but a provider can remove or rename an address earlier—especially the anonymous localhost.run relay, which can change its URL within minutes. Do not keep sharing a previous URL when status stops publishing it.
+- **Status** reports the currently published address.
+- **Health** rechecks the route. Recheck after a network change, resume or wake.
+- **Stop** attempts to close the exposure. Inspect unresolved cleanup before assuming the route is gone or starting another session.
 
-## Providers
+Temporary sessions default to 15 minutes. Request a different lifetime with `--lifetime-ms`, an integer from 1 through 2147483647:
 
-| Route | Who can reach it | Required setup / limit |
-| --- | --- | --- |
-| Tailscale Funnel | Public internet | Signed-in Tailscale client, HTTPS/Funnel permission, and verified unused listener; existing routes are not taken over. |
-| Tailscale Serve | Your tailnet | Signed-in Tailscale client and a trusted check from the intended tailnet. |
-| localhost.run | Public internet | OpenSSH, a short-lived anonymous relay, and successful route checks. It terminates TLS and can read your traffic. Its HTTPS URL can change within minutes. |
-| tunnl.gg stable | Public internet | Explicit opt-in with an installation key. The relay can read traffic, may show a browser warning, and can close quiet streams after about two minutes. |
-| LAN | Selected local network | Explicit non-loopback interface and firewall approval. **HTTP only**; not a public HTTPS route. |
-| Your HTTPS proxy | Clients that reach your configured proxy | You own DNS, TLS, reverse proxy, service uptime and cleanup. Gozar verifies the route, but does not deploy your proxy. |
-| ngrok; Cloudflare named Tunnel | Not creatable by Gozar 0.1.0 | Detection only; a detected CLI is not evidence of account permission or a usable route. |
+```sh
+npx --package=@tnunamak/gozar@0.1.0 gozar expose --port 3000 --client-reach internet --lifetime-ms 1500000
+```
 
-Use `npx --package=@tnunamak/gozar@0.1.0 gozar detect --port 3000 --alternatives` to inspect candidates before making changes. A visible candidate does not prove login, permission, correct routing, client reachability or address stability. For a long-running origin that Gozar must not manage, use [service routes](docs/service-routes.md).
+That requests 25 minutes, not 25 minutes of guaranteed provider uptime or URL stability. Keep the service and host awake.
+
+### Opt into the key-bound relay
+
+```sh
+npx --package=@tnunamak/gozar@0.1.0 gozar expose --port 3000 --client-reach internet --adapter tunnl-gg
+```
+
+On first approved use, Gozar creates an Ed25519 identity under `GOZAR_HOME` (default `~/.local/state/gozar`) and reuses it. A refused second start reports the holding port and its stop command. Retry only after the holder stops and cleanup is confirmed.
+
+Coordination covers the same home. **Do not copy the key into another home to start a second route:** those processes cannot coordinate, and a new route can interrupt the first. An announced address change withdraws this route; stop it and start a new session. This provider is opt-in, not a change to automatic selection.
+
+### Use your own proxy temporarily
+
+```sh
+npx --package=@tnunamak/gozar@0.1.0 gozar expose --port 3000 --client-reach internet --origin https://service.example
+npx --package=@tnunamak/gozar@0.1.0 gozar health --port 3000
+```
+
+Replace the example origin. Point your HTTPS proxy to the local Gozar proxy target printed during setup, then recheck. Stopping Gozar closes its local proxy, not your DNS or external proxy.
 
 ## Keep an existing service address
 
-Already run a service behind your own HTTPS reverse proxy? Save and verify the existing route, without starting a tunnel, proxy or Gozar daemon. Gozar will not change DNS/TLS/proxy configuration or put an expiry on your service.
+For a backend and HTTPS proxy that should outlive Gozar, register a **service route** instead of a temporary exposure. Gozar starts no tunnel, listener or daemon and adds no session expiry. You retain responsibility for service uptime, DNS, TLS, proxy configuration and cleanup.
 
-First install the [service verification helper](docs/service-routes.md#service-challenge) inside your backend request handler, before your ordinary routes. It proves that the public HTTPS address reaches the configured backend listener. If the controller cannot probe your service directly, the [trusted verifier-command alternative](docs/service-routes.md#host-supplied-verification) is available.
+First install the [service verification helper](docs/service-routes.md#service-challenge) before your backend's ordinary request handlers. The proxy must preserve the public Host header, and the declared target port must equal the backend's actual listener. A [trusted verifier command](docs/service-routes.md#host-supplied-verification) is available when the controller cannot probe directly.
 
 ```sh
 npx --package=@tnunamak/gozar@0.1.0 gozar service add --origin https://service.example --target 127.0.0.1:3000 --json
@@ -78,194 +89,116 @@ npx --package=@tnunamak/gozar@0.1.0 gozar service status --origin https://servic
 npx --package=@tnunamak/gozar@0.1.0 gozar service remove --origin https://service.example --json
 ```
 
-Replace the example origin and target. The target port must be the port your backend actually receives; the reverse proxy must preserve the public Host header. A saved record is not a passing verification result: read the returned status. Each status invocation probes afresh. Removing the record removes only Gozar metadata; your service, DNS and proxy continue running. Linux `flock` from util-linux is needed when adding or removing records.
+A saved record is not successful verification: inspect the returned status. Every status call probes afresh. Removing the record removes only Gozar metadata, not the service or proxy. Adding and removing records require Linux `flock` from util-linux. See the [service-route contract](docs/service-routes.md) for verification boundaries and the API.
 
-## Embed Gozar in your app
+## Embed and supervise
 
-Use the JavaScript API below, or execute CLI commands with `--json`:
-
-```sh
-npx --package=@tnunamak/gozar@0.1.0 gozar detect --port 3000 --json
-npx --package=@tnunamak/gozar@0.1.0 gozar expose --port 3000 --client-reach internet --json
-```
-
-Detection never authorizes an exposure. If a user must choose a provider, confirm a firewall change or accept the exact service target, show that choice in your interface. Pass `--yes` only after the user approves the selected route and exact target.
-
-For active sessions, repeatedly read `status`: `snapshot.published` is the current verified address, or `null` when no address may be advertised. `snapshot.lastRouteChange` identifies the old and new origins and generation when an address changes. Clear stale links promptly and tell clients to reconnect to the newly verified address. Anonymous localhost.run URLs can change within minutes. The requested lifetime does not lock the address.
-
-Use CLI `health` to recheck a route and `stop` for cleanup. A passing route check is not proof of authentication or of a successful application-level MCP call. For owner-operated persistent HTTPS, see [service routes](docs/service-routes.md).
-
-## JavaScript API
-
-Install into your Node.js 24+ project:
+Install the package into your Node.js 24+ project:
 
 ```sh
 npm install @tnunamak/gozar@0.1.0
 ```
 
-Start a service on port 18765. This example chooses localhost.run, which requires OpenSSH, forwards traffic through a relay that can read it, and may change its URL. **Obtain the user's approval of this provider and `http://127.0.0.1:18765` first.** This example polls six times and attempts cleanup; production integrations must monitor the entire session.
+The npm package includes the compiled WASM core and JavaScript bindings; npm users need neither Rust nor wasm-bindgen. The CLI examples use an explicit package with npx because a project-local installation does not put bare `gozar` on your normal shell PATH.
+
+Your integration owns four decisions:
+
+1. **Consent:** obtain approval for the selected provider and exact local target. Detection or JSON output is not consent.
+2. **Publication:** read status for the whole session. Clear the displayed URL on status failure or absent `snapshot.published`; notify clients when the verified address changes.
+3. **Recovery:** inspect route loss and follow the returned repair action. Do not silently expose a different target or provider.
+4. **Cleanup:** stop the session your app owns, inspect the reply, and surface unresolved cleanup.
+
+This example uses localhost.run and a service already listening on port 18765. **Obtain approval for that relay, which can read traffic, and `http://127.0.0.1:18765` before running it.** It supervises until interrupted or the route is lost, then attempts cleanup. Replace the logging with your UI and reconnection handling.
 
 ```js
 import { setTimeout as delay } from 'node:timers/promises';
 import { expose, status, stop } from '@tnunamak/gozar';
 
 const target = { port: 18765 };
-const display = reply => console.log(reply.snapshot?.published ?? null);
+let stopping = false;
+const requestStop = () => { stopping = true; };
+process.on('SIGINT', requestStop);
+process.on('SIGTERM', requestStop);
+
+const display = published => console.log('Current route:', published);
 
 try {
-  display(await expose({
+  let reply = await expose({
     ...target,
     clientReach: 'internet',
     adapterId: 'localhost-run',
     lifetimeMs: 1_500_000,
-    yes: true, // Explicit approval already obtained in your app.
-  }));
-  for (let i = 0; i < 6; i++) {
+    yes: true, // Approval already obtained by your application.
+  });
+
+  while (!stopping) {
+    const published = reply.snapshot?.published ?? null;
+    display(published); // Replace the old route; never retain a stale link.
+    if (published === null) {
+      console.error('Route unavailable; inspect this reply:', reply);
+      break; // This example stops rather than silently restarting.
+    }
+    if (reply.snapshot?.lastRouteChange) {
+      console.log('Notify clients of route change:', reply.snapshot.lastRouteChange);
+    }
     await delay(5000);
-    display(await status(target));
+    if (!stopping) reply = await status(target);
   }
 } catch (error) {
+  display(null);
   console.error(error.reply ?? error.message);
 } finally {
+  display(null);
   try {
-    console.log(await stop(target));
+    const cleanup = await stop(target);
+    console.log('Inspect cleanup result:', cleanup);
   } catch (error) {
     console.error('Cleanup needs attention:', error.reply ?? error.message);
   }
+  process.removeListener('SIGINT', requestStop);
+  process.removeListener('SIGTERM', requestStop);
 }
 ```
 
-Each call runs the packaged CLI. The optional `home` sets `GOZAR_HOME`; use the same `home` and port throughout. A successful reply is not a guarantee that all cleanup succeeded—inspect it. If status fails or `snapshot.published` is null, stop advertising the old URL. Use this example only for a port and session your application owns.
+Polling is not instantaneous loss detection; choose a cadence appropriate for your app. The example's five seconds is not a Gozar guarantee. An abrupt process kill cannot run its cleanup handler, so your host must also reconcile interrupted sessions.
 
-Accepted camelCase options include `probeDirectory`, `probeWaitMs`, `streamableHttp` and `oauthDcr`. Invalid/unknown options throw (sometimes before a promise is returned), so keep the invocation inside `try`. JSON CLI failures surface as `error.reply` plus `error.code`; other failures may contain only a message.
+Each API call runs the packaged CLI. Optional `home` sets `GOZAR_HOME`; use the same home and port throughout, and only manage sessions your application owns. A successful reply does not guarantee all cleanup succeeded.
 
-The root package exports `expose`, `status`, `stop`, `addService`, `statusServices`, `removeService` and `createServiceVerifier`. Service functions are also available at `@tnunamak/gozar/service`. There are no root JavaScript `health` or `detect` exports in 0.1.0; invoke the CLI for those, using `@tnunamak/gozar/bin/gozar.mjs` if you need a resolved executable inside a package.
+Unknown or invalid options throw, sometimes before a promise is returned; keep calls inside `try`. JSON CLI failures carry `error.reply` and `error.code`; other failures may contain only a message.
 
-## Try the echo server
+The root package exports `expose`, `status`, `stop`, `addService`, `statusServices`, `removeService` and `createServiceVerifier`. Service functions are also exported from `@tnunamak/gozar/service`. There are no root JavaScript `detect` or `health` exports in 0.1.0. Use the CLI for those, with `--json` for machine-readable output; `@tnunamak/gozar/bin/gozar.mjs` is the exported executable path for package integrations.
 
-In one terminal, launch the local MCP demo:
+## Verification is not authentication
 
-```sh
-npx --package=@tnunamak/gozar@0.1.0 gozar demo-server --port 18765
-```
+A passing route check does not prove that every external client can connect, that callers are authorized, or that an application-level MCP call succeeds. Test your application's access controls and client flow separately.
 
-In a second terminal, request a route:
+Temporary exposures forward to the selected loopback port and replace the request Host header with `127.0.0.1:PORT`. Test apps that check hostnames or generate public redirects and links. Existing service routes differ: your proxy must preserve the expected public Host.
 
-```sh
-npx --package=@tnunamak/gozar@0.1.0 gozar expose --port 18765 --client-reach internet
-```
-
-Review and approve the provider and target. Once the route is verified, connect an MCP client to its `/mcp` URL. This demo alone can be used with no application authentication; invoke the `echo` tool with `{"echo":"hello"}` to receive your text and an instance nonce.
-
-```sh
-npx --package=@tnunamak/gozar@0.1.0 gozar stop --port 18765
-```
-
-Use Ctrl+C to stop the local demo server. The unauthenticated demo is not a safe deployment template for a real service.
-
-## Choose a route
-
-To inspect available providers without creating anything:
-
-```sh
-npx --package=@tnunamak/gozar@0.1.0 gozar detect --port 3000 --alternatives
-```
-
-Choose `--client-reach internet` for a hosted client, `tailnet` for an authorized Tailscale client, or `lan` for a client on a local network. Use `--adapter ID` to select a provider listed by detection; unsupported or detection-only providers will still be refused.
-
-To select tunnl.gg explicitly:
-
-```sh
-npx --package=@tnunamak/gozar@0.1.0 gozar expose --port 3000 --client-reach internet --adapter tunnl-gg
-```
-
-Gozar creates an Ed25519 identity under its home directory (`GOZAR_HOME`, or `~/.local/state/gozar`) on first approved use and reuses it for later sessions. The key-bound relay permits one active route per installation key. Gozar refuses a second start that uses the same key and reports the holding port and its stop command. Retry after that session has stopped and its owned process cleanup is confirmed; Gozar does not queue the start. Gozar coordinates sessions in the same home. If you copy the key into another home, those processes cannot coordinate and a new route can interrupt the existing one. An announced address change withdraws this route and requires stop followed by a new session. The relay can read traffic, may show a browser warning, and can close quiet streams after about two minutes. Automatic provider selection is unchanged.
-
-For a temporary route through an existing HTTPS proxy:
-
-```sh
-npx --package=@tnunamak/gozar@0.1.0 gozar expose --port 3000 --client-reach internet --origin https://service.example
-npx --package=@tnunamak/gozar@0.1.0 gozar health --port 3000
-```
-
-Replace the sample origin; point your own HTTPS proxy to the local Gozar proxy target printed during setup, then run the health check. Stopping Gozar closes its local proxy, not your DNS or external proxy. For a service and reverse proxy that should outlive Gozar independently, [register a service route](#keep-an-existing-service-address) instead.
-
-Private tailnet routes require a trusted check from the intended client network. LAN requires an explicit selected interface, exact firewall approval and a trusted check; it serves HTTP rather than HTTPS.
-
-## Security and privacy
-
-Gozar makes a service reachable; it does not add application authentication. Keep your service's access controls enabled and share only the intended service.
-
-The localhost.run relay terminates TLS and can read requests and responses. Public HTTPS does not hide traffic from that relay operator. Choose a provider you trust with your service's data.
-
-Route verification and application testing are different. A route check does not prove that every external client can connect, that a caller is authorized, or that an MCP client completed a tool call. Test your application's authentication and client flow separately.
-
-Temporary sessions forward requests to the selected loopback port and replace the request's Host header with `127.0.0.1:PORT`. If your app checks hostnames or generates public links and redirects, test that behavior before sharing it. This differs from a service route through your own proxy, where the backend must receive the expected public Host; see [service routes](docs/service-routes.md).
-
-Gozar cleans up resources it owns. Your own proxy and DNS remain your responsibility. If cleanup is pending, retry stopping the session and inspect the result before assuming the route is gone.
-
-## Session lifetime
-
-A temporary exposure defaults to 15 minutes. To request 25 minutes:
-
-```sh
-npx --package=@tnunamak/gozar@0.1.0 gozar expose --port 18765 --client-reach internet --lifetime-ms 1500000
-```
-
-The lifetime option is an integer from 1 through 2147483647 milliseconds. JSON status includes `lifetimeMs` and `expiresAtMs` (Unix milliseconds). This bounds Gozar's temporary session, **not a provider's URL stability or uptime**. A localhost.run trial URL can change within minutes; a host must read `status`, clear an old published URL when absent and update clients after a verified route change.
-
-Keep the service and the host awake. On network change, resume or wake, recheck with `npx --package=@tnunamak/gozar@0.1.0 gozar health --port 18765`. When expired or finished, run `npx --package=@tnunamak/gozar@0.1.0 gozar stop --port 18765`; check for outstanding cleanup before starting a fresh exposure.
-
-Registered service routes do not have Gozar session expiry, but their uptime depends on the service, proxy and network you manage.
+The localhost.run and tunnl.gg relays terminate TLS and can read traffic. Public HTTPS does not hide payloads from those relay operators. Your own proxy and DNS remain your responsibility, even after Gozar stops.
 
 ## Troubleshooting
 
-**Command not found:** For a local or one-shot npm install, use the full `npx --package=@tnunamak/gozar@0.1.0 gozar …` form shown throughout this README; a project-local install does not put `gozar` on your shell's PATH.
+| Symptom | Next step |
+| --- | --- |
+| Command not found | Use the full npx form above, not a bare command after a local install. |
+| No eligible route | Run detection and resolve the reported tool, login, permission, interface or verification prerequisite. |
+| No published address or stale link | Clear the old URL, inspect status, and run health. Share only a currently verified address. |
+| Noninteractive approval required | Collect approval for the selected provider and exact target, then pass `--yes`. |
+| Key already in use | Stop the reported holder using the reported recovery command in the same Gozar home; wait for confirmed owned-process cleanup before retrying. |
+| Cleanup pending | Inspect the stop reply and retry as indicated. Do not assume the exposure is gone. |
+| Existing service fails verification | Check the helper, public Host preservation and exact backend listener port; see [service routes](docs/service-routes.md). |
 
-**Nothing eligible:** Run `npx --package=@tnunamak/gozar@0.1.0 gozar detect --port 3000 --alternatives`. Fix missing tools, login, permission, interface or outside-network verification; detection alone is not readiness.
-
-**No published address, route changed or stopped responding:**
-```sh
-npx --package=@tnunamak/gozar@0.1.0 gozar status --port 3000 --json
-npx --package=@tnunamak/gozar@0.1.0 gozar health --port 3000 --json
-```
-Use only the current verified `snapshot.published`. If it is `null`, remove the old link from your app. Anonymous relay URLs can change within minutes even within the requested session lifetime.
-
-**Noninteractive approval required:** Collect the user's approval of the chosen provider and exact local target, then retry with `--yes`. A JSON response is not consent.
-
-**Expired session or cleanup debt:**
-```sh
-npx --package=@tnunamak/gozar@0.1.0 gozar stop --port 3000 --json
-```
-Inspect cleanup failures and retry when indicated. Start a fresh `expose` only after cleanup is resolved.
-
-**Existing HTTPS service fails verification:** Ensure the service challenge helper is installed before normal routes, the proxy preserves the public Host, and the declared target port equals the backend's actual listener. See [service routes](docs/service-routes.md). A saved route record is not a verified route.
-
-## Contributing
-
-**npm users do not need Rust or a source build.** Only contributors building the WASM core need Rust and wasm-bindgen 0.2.105:
+For machine-readable diagnostics, add `--json` to status, health or stop. For CLI usage:
 
 ```sh
-git clone https://github.com/tnunamak/gozar.git
-cd gozar
-rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli --version 0.2.105 --locked
-bash scripts/build-wasm.sh
+npx --package=@tnunamak/gozar@0.1.0 gozar --help
 ```
 
-Run `npm link` in a source checkout if you want a bare `gozar` command.
+## Development
 
-### Develop
+Gozar combines a Rust planning core compiled to WASM, Node.js effects and data-defined provider adapters. npm use does not require a source build.
 
-Gozar uses a Rust planning core compiled to WASM, a Node.js process to perform effects, and provider adapters defined in data. Consult the [architecture](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/docs/architecture.md), [protocol contract](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/runtime/core-protocol.json), and [adapter guide](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/adapters/INTEGRATION.md).
+See the [architecture](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/docs/architecture.md), [protocol contract](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/runtime/core-protocol.json), [adapter guide](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/adapters/INTEGRATION.md) and [live provider harness](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/harness/README.md).
 
-```sh
-cargo test -p gozar-core
-cargo build -p gozar-core --bin gozar-core-json
-node --test --test-concurrency=2 test/adapters/*.test.mjs test/e2e/*.test.mjs test/node/*.test.mjs
-node crates/gozar-core/tests/golden.cjs
-node crates/gozar-core/tests/operational-golden.mjs
-node crates/gozar-core/tests/public-relay-golden.mjs
-```
 
-The [live provider harness](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/harness/README.md) checks a real MCP call, streaming and cleanup. These development tools are not required for npm use.
+---
