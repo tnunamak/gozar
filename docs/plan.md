@@ -354,6 +354,8 @@ For each piece, `scope_paths` in [slices.md](slices.md) and the dispatch rules b
 
 **Dependencies:** R3 provider-neutral host-port contract; R4 recovery rules; R10/R11 packaging. Keep OS-specific effects generic and platform-owned, not provider-owned. Exercise both the CLI Node host and the native Rust shim; one does not establish portability of the other.
 
+**Tailscale LocalAPI transport:** durable Tailscale routes use the LocalAPI (see `docs/design/durable-routes.md`). On Linux that is the tailscaled unix socket. On macOS the Mac App Store and standalone Tailscale apps reach the LocalAPI on loopback with a token instead; do not assume the Linux transport carries over. R12 must discover and test that transport.
+
 **Deterministic acceptance:** Birth-identity and scoped termination; PID reuse; private journal permissions and durable writes; stale socket/restart; signal/cancel behavior; listener collisions and foreign-resource preservation.
 
 **Live acceptance:** On supported macOS versions, complete supported route/client flows and recovery; confirm unrelated processes/routes survive stop.

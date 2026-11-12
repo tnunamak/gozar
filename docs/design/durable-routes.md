@@ -1,6 +1,6 @@
 # Design: durable routes and route adoption
 
-Status: proposal, revision 4 (after the design review, the visibility rule, and the spike on `feat/durable-routes-spike`). No code yet. Targets Gozar 0.2.0.
+Status: proposal, revision 5 (after the design review, the visibility rule, the spike, and the spike review). Decision: Tailscale durable routes use the LocalAPI with ETag compare-and-set. No code yet. Targets Gozar 0.2.0.
 
 ## Problem
 
@@ -126,7 +126,7 @@ A durable route has no expiry, so the user must always be able to see it and sto
 
 ### Stop
 
-`releaseRoute({mode:'remove'})` first marks the record `releasing` durably, so publication is withdrawn even if the process dies. It then removes the provider route by **compare-and-remove**: read the provider config, require an exact match with the receipt, and remove only that listener. **Residual window (0.2.0):** Tailscale's LocalAPI has a serve-config ETag (`GET /localapi/v0/serve-config` returns `Etag`, `POST` with `If-Match` returns 412 on mismatch), but the CLI does not expose it (`ServeConfig.ETag` is `json:"-"`). Recipes run the CLI, so removal reads back immediately before `serve --https=PORT off` and checks again after it. An edit to **the same listener** by another program between that readback and `off` is lost without an error; an edit to another listener is detected. This window is documented in `gozar status` help and in the adapter data. A conditional removal through the LocalAPI is a follow-up, not part of 0.2.0. A mismatch leaves the foreign config in place and records **cleanup debt**, as sessions do today. Gozar never removes a rule it cannot attribute to a receipt.
+`releaseRoute({mode:'remove'})` first marks the record `releasing` durably, so publication is withdrawn even if the process dies. It then removes the provider route by **compare-and-remove**: read the provider config, require an exact match with the receipt, and remove only that listener. For Tailscale, removal is a LocalAPI compare-and-set (see "Tailscale adapters"): Gozar reads the serve config with its ETag, checks the receipt against that read, and writes the config without its own listener with `If-Match` set to that ETag. A concurrent edit makes the write fail with 412, so Gozar never deletes an edit it did not see. A mismatch leaves the foreign config in place and records **cleanup debt**, as sessions do today. Gozar never removes a rule it cannot attribute to a receipt.
 
 `releaseRoute({mode:'hand-back'})` deletes the record without touching the provider route and returns a claim, for rollback to a previous owner.
 
@@ -143,7 +143,21 @@ No double exposure: adoption refuses if the reservation table already holds the 
 
 ### Tailscale adapters
 
-Durable Funnel/Serve recipes use `--bg`. They choose the HTTPS port from the node's `funnel-ports` capability (candidates 443, 8443, 10000; only 443/8443/10000 can be Funnel ports), refuse occupied ports instead of replacing them, and remove with `serve --https=PORT off` (which works after Funnel permission is revoked), conditional on the serve-config ETag where reachable. Continuity across restarts compares the node DNS name and the exact rule. Gozar does not claim stronger node identity than that. The current session recipes (foreground, :8443) stay as they are.
+Durable Funnel/Serve routes change the node's **background** serve config (the same config `serve --bg` writes), but not through the CLI. The CLI reads the config, changes it and writes it back conditional on the ETag from **its own** read, and `SetWebHandler` silently replaces an existing web handler on the same port and path (`cmd/tailscale/cli/serve_v2.go`). So "check that the port is free, then run `tailscale serve --bg`" can overwrite a rule another program adds in between, and "check, then `serve off`" can delete another program's edit.
+
+Instead, the durable Tailscale adapter uses the LocalAPI directly, with **compare-and-set for create and for remove**:
+1. `GET /localapi/v0/serve-config` returns the config and an `Etag` header.
+2. Gozar checks that config: for create, the chosen port has no handler; for remove, the listener equals the receipt exactly.
+3. Gozar writes the changed config with `POST /localapi/v0/serve-config` and `If-Match: <that ETag>`. On `412 Precondition Failed`, another program changed the config: Gozar mutates nothing, re-reads, and re-decides from the new state (at most a few attempts, then a typed error). It never retries the same write blindly.
+4. It reads back after the write and records the exact listener in the receipt.
+
+The reference for request shapes and the `If-Match`/412 behaviour is the official Go client, `tailscale.com/client/local` (`GetServeConfig`, `SetServeConfig`, `IsPreconditionsFailedError`); the adapter cites it. On Linux the transport is the tailscaled unix socket (default `/var/run/tailscale/tailscaled.sock`, `Host: local-tailscaled.sock`), with the same operator permission the CLI needs.
+
+**Fail closed, no fallback to the CLI.** If the LocalAPI socket is missing, access is denied, the endpoint is absent, the reply has no `Etag`, or the body is not the expected shape, the adapter returns a typed error that names the next action (`tailscale_localapi_unavailable`: start tailscaled; `tailscale_localapi_denied`: run `sudo tailscale set --operator=$USER`; `tailscale_localapi_unsupported`: upgrade tailscaled; `tailscale_serve_config_conflict`: retry later, another program is changing serve config). It never drops back to the racy CLI path.
+
+**Version range.** The tested tailscaled version is recorded here when the live contract test first runs: _to be filled by the G1 PR_. The serve-config endpoint with ETag has existed since the 2022 serve redesign; a tailscaled without it (404 or no `Etag`) gets `tailscale_localapi_unsupported`, never a fallback.
+
+Port choice uses the node's `funnel-ports` capability (candidates 443, 8443, 10000; only 443/8443/10000 can be Funnel ports), and occupied ports are refused, never replaced. Removal works after Funnel permission is revoked, because it only deletes the listener from the config. Continuity across restarts compares the node DNS name and the exact rule. Gozar does not claim stronger node identity than that. The current session recipes (foreground, :8443) stay as they are.
 
 ### Per-adapter idle limit
 
@@ -164,7 +178,7 @@ The session path does not change.
 
 ## Not in scope
 - Finite lifetimes for durable routes (see "Lifetimes").
-- macOS host (plan R12) and ngrok operational recipes (slice S1). Durable routes are designed for them but ship first for Tailscale on Linux.
+- macOS host (plan R12) and ngrok operational recipes (slice S1). Durable routes are designed for them but ship first for Tailscale on Linux. **On macOS the LocalAPI transport differs**: the Mac App Store and standalone Tailscale apps do not expose the Linux unix socket; the LocalAPI is reached on loopback with a token. The Linux transport does not carry over (recorded under R12).
 - Authentication for the app's own routes (plan R5).
 - Authenticated origin migration. An app that wants to move clients to a new origin signs that itself. Gozar only refuses to move silently.
 
@@ -189,10 +203,15 @@ Crashes and races:
 11. crash after intent, before the command → `lost`;
 12. crash after intent, then an identical foreign rule appears → `uncertain`, not claimed, not removed;
 13. crash after the command, before the receipt → `uncertain`;
-14. release with a changed rule → cleanup debt, foreign rule untouched, record stays; an edit between readback and removal makes the conditional removal fail;
+14. release with a changed rule keeps cleanup debt, foreign rule untouched, record stays; an edit between readback and removal makes the conditional removal fail (412) and the foreign edit survives;
 15. release racing a late create or verification → the route is not re-published, and debt is kept;
 16. concurrent ensure, adopt and session for one listener or port with distinct origins → exactly one wins;
 17. `removeService` on a `gozar-owned` record → refused.
+
+LocalAPI contract:
+24. a foreign edit between Gozar's GET and its POST, for create and for remove, gives 412; Gozar mutates nothing, re-reads, and never overwrites or deletes the foreign edit (fake socket);
+25. a missing socket, a denied request, a 404 endpoint, a reply without `Etag`, or an unexpected body each give the named typed error, and no CLI command runs;
+26. live, read-only: against this host's tailscaled, `GET serve-config` returns a parseable config and an `Etag`; skipped when no tailscaled is running; asserts shape only and prints no config values.
 
 Visibility:
 21. `gozar status` with no arguments lists a durable route with route ID, provider, origin, owner app, created-at time and state, next to sessions and service routes; `--json` has the same fields;
