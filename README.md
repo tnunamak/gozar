@@ -199,6 +199,3 @@ npx --package=@tnunamak/gozar@0.1.0 gozar --help
 Gozar combines a Rust planning core compiled to WASM, Node.js effects and data-defined provider adapters. npm use does not require a source build.
 
 See the [architecture](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/docs/architecture.md), [protocol contract](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/runtime/core-protocol.json), [adapter guide](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/adapters/INTEGRATION.md) and [live provider harness](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/harness/README.md).
-
-
----
