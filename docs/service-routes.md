@@ -64,7 +64,11 @@ await removeService({ origin, home });
 // { schemaVersion: 1, origin, removed: true } // false if already absent
 ```
 
-`home` is optional, defaulting to `GOZAR_HOME` or `~/.local/state/gozar`. Service records use a separate `services` directory. Only configuration is persisted, never verification readiness. Per-origin advisory lock files remain in `services/.locks`; kernel locks release on controller exit and reboot. Concurrent mutations may reject as busy; retry the operation. Records require private ownership and mode 0600; service state directories must be private to the owner.
+`home` is optional, defaulting to `GOZAR_HOME` or `~/.local/state/gozar`. Service records use a separate `services` directory. Only configuration is persisted, never verification readiness. Per-origin advisory lock files remain in `services/.locks`; kernel locks release on controller exit and reboot. Concurrent mutations may reject as busy; retry the operation. Records and lock files require ownership by the invoking user and mode 0600; service state directories must be private to that user.
+
+Gozar resolves the requested home to its real path once and uses that path for every read or mutation. Home symlinks and aliases in its ancestry are supported when the resolved path is trusted. Gozar checks every directory in the resolved ancestry: directories must belong to the invoking user or root, with no group or other write permission unless root-owned with the sticky bit (for example, `/tmp`). If the home does not exist, Gozar resolves its nearest existing ancestor, checks that ancestry, then creates and checks each missing directory below that real path. Status leaves missing state absent. Changing an alias after resolution does not redirect the current operation. Dangling and looping aliases are refused with a repair message. The services directory and its lock directory must still be real directories; record and lock symlinks are refused.
+
+Errors name unsafe paths and the required ownership or permission change. Older lock files created with broader permissions must be changed to mode 0600 before mutations can proceed. Record bytes are bounded to 64 KiB and read through the same non-symlink descriptor whose ownership and permissions were checked.
 
 Every route has this shape:
 
