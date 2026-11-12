@@ -103,7 +103,7 @@ test('challenge compares instances, nonce, response limit and exact Host using l
   const port = await server(t, (req, res) => {
     hosts.push(req.headers.host);
     if (behavior === 'large') { res.end('x'.repeat(4097)); return; }
-    if (behavior === 'nonce') { res.end(JSON.stringify({ schemaVersion: 1, nonce: 'wrong', instanceId: '00000000-0000-4000-8000-000000000000' })); return; }
+    if (behavior === 'nonce') { res.end(JSON.stringify({ schemaVersion: 2, nonce: 'wrong', instanceId: '00000000-0000-4000-8000-000000000000', authority: req.headers.host, localPort: port, proof: 'a'.repeat(64) })); return; }
     if (behavior === 'redirect') { res.writeHead(302, { Location: '/secret' }); res.end(); return; }
     verifier(req, res);
   });
@@ -112,8 +112,8 @@ test('challenge compares instances, nonce, response limit and exact Host using l
   const otherPort = await server(t, (req, res) => {
     if (!copiedInstanceId) { other(req, res); return; }
     // A copied public instance ID and an echoed fresh nonce do not prove arrival.
-    res.end(JSON.stringify({ schemaVersion: 1, nonce: new URL(req.url, 'http://local').searchParams.get('nonce'),
-      instanceId: copiedInstanceId, proof: 'a'.repeat(64) }));
+    res.end(JSON.stringify({ schemaVersion: 2, nonce: new URL(req.url, 'http://local').searchParams.get('nonce'),
+      instanceId: copiedInstanceId, authority: req.headers.host, localPort: port, proof: 'a'.repeat(64) }));
   });
   const originalGet = https.get;
   let mismatch = false;
@@ -171,4 +171,38 @@ test('POSIX timed-out command kills descendants in its dedicated group', { skip:
     await new Promise(resolve => setTimeout(resolve, 25));
   }
   assert.equal(alive, false);
+});
+
+test('v2 signed authority canonicalization and listener identity', async t => {
+  const verifier = createServiceVerifier();
+  const handler = (req, res) => { if (!verifier(req, res)) { res.writeHead(400); res.end(); } };
+  const firstPort = await server(t, handler), secondPort = await server(t, handler);
+  const nonce = 'a'.repeat(64);
+  const probe = (port, host) => new Promise((resolve, reject) => {
+    http.get({ hostname: '127.0.0.1', port, path: '/.well-known/gozar/service?nonce=' + nonce, headers: { Host: host } }, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve({ status: res.statusCode, body: data ? JSON.parse(data) : null }));
+    }).on('error', reject);
+  });
+  const first = (await probe(firstPort, 'PUBLIC.EXAMPLE:443')).body;
+  assert.equal(first.schemaVersion, 2);
+  assert.equal(first.authority, 'public.example');
+  assert.equal(first.localPort, firstPort);
+  assert.equal(first.proof, (await probe(firstPort, 'public.example')).body.proof);
+  const wrongHost = (await probe(firstPort, 'internal.example')).body;
+  const wrongPort = (await probe(secondPort, 'public.example')).body;
+  assert.equal(first.instanceId, wrongPort.instanceId);
+  assert.notEqual(first.proof, wrongHost.proof);
+  assert.notEqual(first.proof, wrongPort.proof);
+  assert.equal((await probe(firstPort, '[0:0:0:0:0:0:0:1]:443')).body.authority, '[::1]');
+  for (const host of ['bad host', 'user@public.example', 'public.example:0', 'public.example:65536', '[bad]:443', 'public.example,other'])
+    assert.equal((await probe(firstPort, host)).status, 400);
+});
+
+test('trusted command keeps accepted origins independent of challenge Host rules', async t => {
+  const home = await fixture(t);
+  const added = await addService({ home, origin: 'https://owner_service.test', target: 'localhost:1', verifyCmd: 'exit 0' });
+  assert.equal(added.route.verification.status, 'verified');
+  assert.equal(added.route.verification.method, 'host-command');
 });

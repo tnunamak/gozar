@@ -90,7 +90,26 @@ async function mutate(home, origin, action) {
     await exited;
   }
 }
-function readChallenge(url, host, nonce, signal) {
+// HTTPS authority semantics on both the direct HTTP and public HTTPS witness.
+function canonicalAuthority(value) {
+  if (typeof value !== 'string' || !value || /[\s\\/@?#%,]/.test(value)) throw new Error('Invalid service Host');
+  const match = /^(\[[^\]]+\]|[a-zA-Z0-9.-]+)(?::([0-9]+))?$/.exec(value);
+  if (!match) throw new Error('Invalid service Host');
+  const hostname = match[1];
+  if (hostname.startsWith('[')) {
+    if (isIP(hostname.slice(1, -1)) !== 6) throw new Error('Invalid service Host');
+  } else if (!isIP(hostname) && (hostname.length > 253 || /^[0-9.]+$/.test(hostname) ||
+      !hostname.replace(/\.$/, '').split('.').every(label => /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(label)))) {
+    throw new Error('Invalid service Host');
+  }
+  if (match[2] !== undefined && (!Number.isInteger(Number(match[2])) || Number(match[2]) < 1 || Number(match[2]) > 65535))
+    throw new Error('Invalid service Host');
+  return new URL('https://' + value).host;
+}
+const transcript = (nonce, instanceId, authority, localPort) =>
+  JSON.stringify(['gozar-service-proof', 2, nonce, instanceId, authority, localPort]);
+
+function readChallenge(url, host, targetPort, nonce, signal) {
   return new Promise((resolve, reject) => {
     const req = (url.protocol === 'https:' ? https : http).get(url,
       { headers: { Host: host, Accept: 'application/json' }, signal }, res => {
@@ -105,7 +124,8 @@ function readChallenge(url, host, nonce, signal) {
         res.on('end', () => {
           try {
             const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            if (body.schemaVersion !== 1 || body.nonce !== nonce || !uuid.test(body.instanceId) || !noncePattern.test(body.proof))
+            if (body.schemaVersion !== 2 || body.nonce !== nonce || !uuid.test(body.instanceId) || !noncePattern.test(body.proof) ||
+                body.authority !== host || canonicalAuthority(body.authority) !== body.authority || body.localPort !== targetPort)
               throw new Error('Verification failed');
             resolve(`${body.instanceId}:${body.proof}`);
           } catch { reject(new Error('Verification failed')); }
@@ -149,11 +169,13 @@ async function verification(route) {
   let status = 'verified', error = null;
   try {
     const nonce = randomBytes(32).toString('hex');
+    const authority = route.verifyCmd === null ? canonicalAuthority(new URL(route.origin).host) : null;
+    const targetPort = Number(route.target.slice(route.target.lastIndexOf(':') + 1));
     const work = route.verifyCmd !== null ? commandCheck(route, nonce, controller.signal) : Promise.all([
       readChallenge(new URL('http://' + route.target + challengePath + '?nonce=' + nonce),
-        new URL(route.origin).host, nonce, controller.signal),
+        authority, targetPort, nonce, controller.signal),
       readChallenge(new URL(route.origin + challengePath + '?nonce=' + nonce),
-        new URL(route.origin).host, nonce, controller.signal)
+        authority, targetPort, nonce, controller.signal)
     ]).then(([local, publicId]) => { if (local !== publicId) throw new Error('Verification failed'); });
     await Promise.race([work, new Promise((_, reject) =>
       controller.signal.addEventListener('abort', () => reject(new Error('Verification timed out')), { once: true }))]);
@@ -216,9 +238,16 @@ export function createServiceVerifier() {
     if (req.method !== 'GET' || typeof req.url !== 'string') return false;
     const match = /^\/\.well-known\/gozar\/service\?nonce=([0-9a-f]{64})$/.exec(req.url);
     if (!match || !noncePattern.test(match[1])) return false;
+    let authority;
+    try {
+      if (!Array.isArray(req.rawHeaders) || req.rawHeaders.filter((_, i) => i % 2 === 0 && req.rawHeaders[i].toLowerCase() === 'host').length !== 1) return false;
+      authority = canonicalAuthority(req.headers.host);
+    } catch { return false; }
+    const localPort = req.socket?.localPort;
+    if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) return false;
+    const proof = createHmac('sha256', secret).update(transcript(match[1], instanceId, authority, localPort), 'utf8').digest('hex');
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    const proof = createHmac('sha256', secret).update(match[1]).digest('hex');
-    res.end(JSON.stringify({ schemaVersion: 1, nonce: match[1], instanceId, proof }));
+    res.end(JSON.stringify({ schemaVersion: 2, nonce: match[1], instanceId, authority, localPort, proof }));
     return true;
   };
 }

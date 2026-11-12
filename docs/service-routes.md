@@ -22,9 +22,21 @@ if (verifyService(req, res)) return;
 // Continue normal application routing and authentication here.
 ```
 
-Create one helper per service instance. It answers only `GET /.well-known/gozar/service?nonce=<64 hex characters>` with `{schemaVersion:1, nonce, instanceId, proof}`. It does not open a port or change normal request handling. The endpoint exposes a random service-instance ID; it provides no application access.
+Create one helper per service instance (the no-argument API is unchanged). It answers only `GET /.well-known/gozar/service?nonce=<64 hex characters>` with `{schemaVersion:2, nonce, instanceId, authority, localPort, proof}`. It does not open a port or change normal request handling. The endpoint exposes a random service-instance ID; it provides no application access.
 
-Gozar probes the declared target over HTTP using the public origin's Host, then probes the HTTPS origin with ordinary certificate validation and no redirects. The nonce, instance ID and HMAC-SHA256 proof must match. The helper signs each nonce with a per-instance secret that never leaves the service; copying its public instance ID cannot produce a fresh proof. Responses and probe duration are bounded. This proves that the origin reaches the same challenge-capable instance from the controller's network. It does not prove public access from every network, authenticated application behavior, MCP, OAuth or streaming.
+Gozar probes the declared target over HTTP using the public origin's Host, then probes the HTTPS origin with ordinary certificate validation and no redirects. Both responses must contain the requested nonce, the canonical intended public authority, and the declared target port as the observed localPort; instance ID and HMAC-SHA256 proof must match. The helper signs the versioned transcript with a per-instance secret that never leaves the service; copying its public instance ID cannot produce a fresh proof. Responses and probe duration are bounded. This proves that the origin reaches the same challenge-capable instance from the controller's network. It does not prove public access from every network, authenticated application behavior, MCP, OAuth or streaming.
+
+### Exact challenge wire contract (v2)
+
+The response object is `{schemaVersion:2, nonce, instanceId, authority, localPort, proof}`.
+`nonce` is the requested 64 lowercase hexadecimal characters. `instanceId` is the helper's random UUID, stable only for that helper instance. `authority` is the canonical received Host header, not a caller-supplied override. `localPort` is the integer from `req.socket.localPort`, not a forwarded header.
+`proof` is lowercase hex HMAC-SHA256 under the helper's per-instance in-memory secret over these exact UTF-8 bytes:
+`JSON.stringify(["gozar-service-proof",2,nonce,instanceId,authority,localPort])`.
+JSON array framing is unambiguous; no whitespace or trailing newline is added.
+
+Exactly one Host field is required. Canonicalization uses HTTPS authority semantics even for the direct HTTP probe: DNS case folds to lowercase, explicit port 443 is omitted, other ports remain, IPv6 must be bracketed and is URL-normalized. Invalid DNS labels, unbracketed IPv6, userinfo, whitespace, paths, query/fragment, percent escapes, comma lists and ports outside 1..65535 are refused. A malformed challenge Host returns false from the helper for the application's normal handling. Legacy v1 responses fail closed; update the helper and checker together.
+
+The declared target port MUST equal the service-observed local listener port. NAT, a sidecar, or an alias mapping that changes that port is not supported by this challenge contract: use an explicitly trusted `verifyCmd` instead. There is no unsigned or configurable observed-port override. Sharing one helper across multiple listeners cannot make the wrong listener pass. The public proxy must preserve the canonical public Host. Proof is still a bounded controller-vantage observation, not an assertion of arbitrary application behavior.
 
 ## Host-supplied verification
 
