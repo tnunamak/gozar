@@ -832,6 +832,13 @@ test('27. a user stop survives app release in every mode and a restart; it clear
   w.state.crash = 'before-apply';
   assert.equal((await w.gozar('stop', '--route', 'coordinator')).signal, 'SIGKILL');
   assert.equal((await w.run('ensure', w.request)).error.code, 'stopped_by_user');
+  // The record is still there beside the tombstone. Reconsent alone must not clear the stop on the
+  // strength of that record: a fresh approval is still required.
+  assert.equal((await w.records()).length, 1);
+  const afterCrash = w.writes().length;
+  assert.equal((await w.run('ensure', { ...w.request, reconsent: true })).error.code, 'consent_required');
+  assert.equal(w.writes().length, afterCrash);
+  assert.equal((await w.gozar('status', '--json')).json.stoppedRoutes[0].routeId, 'coordinator');
 });
 
 // Hand-back
