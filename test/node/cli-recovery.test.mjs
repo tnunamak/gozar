@@ -102,3 +102,26 @@ test('packed local recovery action executes without global gozar, including quot
   } finally { await api.stop(external); }
   await assert.rejects(readFile(trap),{code:'ENOENT'});
 });
+
+test('concurrent CLI exposes await a published controller startup failure', async t => {
+  const {directory:home} = await fixture(t, {});
+  const port=18765, dir=join(home,`port-${port}`); await mkdir(dir);
+  const nonce=randomUUID();
+  await writeFile(join(dir,'control.json'),JSON.stringify({pid:process.pid,startIdentity:await processIdentity(process.pid),nonce}));
+  const server=createServer(socket=>socket.on('data',async data=>{
+    const message=JSON.parse(data.toString());assert.equal(message.nonce,nonce);
+    if(message.command.initial){
+      await new Promise(resolve=>setTimeout(resolve,100));
+      socket.end(JSON.stringify({error:'Fixture startup refused'})+'\n');
+    }else socket.end(JSON.stringify({snapshot:{phase:'planned',published:null}})+'\n');
+  }));
+  await new Promise(resolve=>server.listen(join(dir,'control.sock'),resolve));
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const expose=()=>run(process.execPath,[cli,'expose','--port',String(port),'--adapter','tunnl-gg','--client-reach','internet','--yes','--json'],{
+    env:{...process.env,GOZAR_HOME:home},timeout:15000,
+  }).then(reply=>({...reply,code:0}),error=>error);
+  for(const result of await Promise.all([expose(),expose()])){
+    assert.equal(result.code,1,'pending failed initialization must not be reported as successful expose');
+    assert.match(JSON.parse(result.stdout).error,/Fixture startup refused/);
+  }
+});

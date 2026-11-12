@@ -68,7 +68,10 @@ export async function stopSession(directory) {
 
 export async function launch(directory, configuration, executable) {
   if (configuration.lifetimeMs !== undefined) validateLifetimeMs(configuration.lifetimeMs);
-  try { return await control(directory, { type: 'status' }, 1_000); }
+  try {
+    await control(directory, { type:'status', initial:true }, 1_000);
+    return await control(directory, { type:'status' }, 1_000);
+  }
   catch (error) { if (!['ENOENT', 'ECONNREFUSED'].includes(error.code) && !error.message.includes('not running')) throw error; }
   await mkdir(directory, { recursive: true, mode: 0o700 });
   // Launch lock belongs to the caller until the child acknowledges. No competing launch overwrites configuration.
