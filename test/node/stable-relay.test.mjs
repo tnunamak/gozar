@@ -1,4 +1,6 @@
 import test from 'node:test';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile, lstat, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -104,6 +106,16 @@ test('one installation identity admits one live stable relay route across ports'
   assert.equal(running[0].session.controller.state.published, first);
   assert.ok(refused[0].message.includes(`port ${ownerPort}`), refused[0].message);
   assert.ok(refused[0].message.includes(cliCommand('stop', ownerPort)), refused[0].message);
+
+  const cli = fileURLToPath(new URL('../../bin/gozar.mjs', import.meta.url));
+  const result = await promisify(execFile)(process.execPath, [cli, 'expose', '--port', '18769',
+    '--client-reach', 'internet', '--adapter', 'tunnl-gg', '--yes', '--json'], {
+    env:{...process.env, GOZAR_HOME:home}, timeout:15000,
+  }).then(reply => ({...reply,code:0}), error => error);
+  assert.equal(result.code, 1, 'a rejected daemon startup must fail the CLI invocation');
+  const refusedReply = JSON.parse(result.stdout);
+  assert.ok(refusedReply.error.includes(cliCommand('stop', ownerPort)), JSON.stringify(refusedReply));
+  assert.equal(running[0].session.controller.state.published, first);
 
   await running[0].session.terminate();
   const waiting = ownerPort === 18765 ? b : a;

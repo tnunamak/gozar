@@ -189,6 +189,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   let closing = false;
   let initializedDone = false;
+  let initializationError;
   let initializedResolve;
   let armMonitor = () => {};
   const initialized = new Promise(resolve => { initializedResolve = resolve; });
@@ -210,7 +211,10 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
           socket.end(`${JSON.stringify({ events:controller.driver.readProcessOutput(command.after ?? 0) })}\n`); return;
         }
         if (!['status', 'health', 'update-origin', 'stop', 'reconcile', 'approve-origin'].includes(command?.type)) throw new Error('Unsupported controller command');
-        if (command.initial === true) await initialized;
+        if (command.initial === true) {
+          await initialized;
+          if (initializationError) throw initializationError;
+        }
         let output;
         if (command.type === 'stop') {
           output = await controller.shutdown();
@@ -273,6 +277,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
       if (config.approveOrigin === true) await controller.approve();
     }
   } catch (error) {
+    initializationError = error;
     await atomicWrite(join(directory, 'failure.json'), { message: error.message });
     await terminate();
     throw error;
