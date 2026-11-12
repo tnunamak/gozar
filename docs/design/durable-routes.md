@@ -1,6 +1,6 @@
 # Design: durable routes and route adoption
 
-Status: proposal, revision 3 (after the first design review, plus the visibility rule). No code yet. Targets Gozar 0.2.0.
+Status: proposal, revision 4 (after the design review, the visibility rule, and the spike on `feat/durable-routes-spike`). No code yet. Targets Gozar 0.2.0.
 
 ## Problem
 
@@ -42,7 +42,7 @@ Durable records live next to service routes in the same home, one 0600 record pe
 
 ### Reservations
 
-One home-wide **reservation lock** serializes every allocation that can collide: sessions (`expose`), `ensureRoute`, `adoptRoute` and `releaseRoute`. Under it, Gozar keeps a reservation table of `{listener target}` and `{adapter, provider resource}` (for Tailscale: node and HTTPS port). A caller takes the lock **before** it scans the provider and holds it through commit. Per-origin locks are not enough, because two routes with different origins can still claim the same listener or provider port.
+One home-wide **reservation lock** serializes every allocation that can collide: sessions (`expose`), `ensureRoute`, `adoptRoute` and `releaseRoute`. Under it, Gozar keeps a reservation table of `{listener target}` and `{adapter, provider resource}` (for Tailscale: node and HTTPS port). A caller takes the lock **before** it scans the provider and holds it through commit. Acquisition blocks with a bounded wait (30 s) instead of failing at once as `busy`, so a `releaseRoute` that arrives during a create runs after it and sees the committed record, instead of being turned away. Per-origin locks are not enough, because two routes with different origins can still claim the same listener or provider port.
 
 ### API (Node, `@tnunamak/gozar/service`)
 
@@ -88,11 +88,12 @@ An adapter can offer a durable route only if it declares `addressStability: 'sta
 
 ### States
 
-`creating → usable → (lost | address_changed) → releasing → released`, plus `uncertain`.
+`creating → (usable | unverified) → (lost | address_changed) → releasing → released`, plus `uncertain`.
 
 - `lost`: the provider route is absent. Gozar does **not** re-create it on its own. The host decides, normally by calling `ensureRoute` on start. That restores the route only if the result would have the pinned origin.
 - `address_changed`: the provider would give, or gives, a different origin. **Terminal for publication.** Gozar never reports the new origin as the route's origin. The host must release, then create a new route with new consent.
-- `uncertain`: Gozar saved its intent but cannot prove it made the mutation (see below). Not owned. Reported as cleanup debt.
+- `unverified`: the receipt exists (Gozar made the rule), but the challenge through the origin failed. No origin is published. The next `ensureRoute` or `statusServices` re-verifies. Because the receipt proves ownership, `releaseRoute` may remove the rule.
+- `uncertain`: Gozar saved its intent but cannot prove it made the mutation (see below), **or** a `lost` route's pinned port now holds a rule Gozar cannot tell apart from its own changed rule. Not owned. Reported as cleanup debt. The route is never moved to another port.
 
 ### Pinned origin fails closed
 
@@ -119,12 +120,13 @@ An intent without a receipt proves only that Gozar meant to create the rule, not
 
 A durable route has no expiry, so the user must always be able to see it and stop it without the app that made it:
 - `gozar status` with no arguments lists every session **and** every durable and service route in the home. Each durable route shows its route ID, provider (adapter), origin, owner app, created-at time and state. `gozar status --route ID` shows one. `--json` gives the same fields.
+- This changes bare `gozar status` (human and `--json`): it used to show only the session in `last.json`; in 0.2.0 it shows the inventory. `status --port N` is unchanged. `health`, `update-origin` and `stop` without `--port` still use `last.json`. The changelog for 0.2.0 names this as a breaking change for callers of bare `status --json`.
 - `gozar stop --route ID` releases the route with compare-and-remove (below), exactly as `releaseRoute({mode:'remove'})` does.
 - **A user stop is sticky.** It leaves a small tombstone for the route ID. The owner app's next `ensureRoute` for that ID is refused with `stopped_by_user` instead of quietly re-creating the route. The app may create it again only with `reconsent: true`, which a host sets only after it has shown the durable consent prompt again. A tombstone is deleted by that re-consented call or by `releaseRoute` from the app.
 
 ### Stop
 
-`releaseRoute({mode:'remove'})` first marks the record `releasing` durably, so publication is withdrawn even if the process dies. It then removes the provider route by **compare-and-remove**: read the provider config, require an exact match with the receipt, and remove only that listener. Where the provider offers an ETag (Tailscale serve config), removal is conditional on it, so a concurrent edit makes the removal fail instead of deleting the edit. Where no conditional write exists, the residual window between readback and removal is documented, and an identical delete-and-recreate by another program inside that window cannot be detected. A mismatch leaves the foreign config in place and records **cleanup debt**, as sessions do today. Gozar never removes a rule it cannot attribute to a receipt.
+`releaseRoute({mode:'remove'})` first marks the record `releasing` durably, so publication is withdrawn even if the process dies. It then removes the provider route by **compare-and-remove**: read the provider config, require an exact match with the receipt, and remove only that listener. **Residual window (0.2.0):** Tailscale's LocalAPI has a serve-config ETag (`GET /localapi/v0/serve-config` returns `Etag`, `POST` with `If-Match` returns 412 on mismatch), but the CLI does not expose it (`ServeConfig.ETag` is `json:"-"`). Recipes run the CLI, so removal reads back immediately before `serve --https=PORT off` and checks again after it. An edit to **the same listener** by another program between that readback and `off` is lost without an error; an edit to another listener is detected. This window is documented in `gozar status` help and in the adapter data. A conditional removal through the LocalAPI is a follow-up, not part of 0.2.0. A mismatch leaves the foreign config in place and records **cleanup debt**, as sessions do today. Gozar never removes a rule it cannot attribute to a receipt.
 
 `releaseRoute({mode:'hand-back'})` deletes the record without touching the provider route and returns a claim, for rollback to a previous owner.
 
@@ -149,7 +151,9 @@ Adapters publish `idleTimeoutMs` (unknown = null) so hosts with long-lived strea
 
 ## Implementation: a new owned-route path in the host
 
-The pure plan engine is reused. The session host is not. Today's driver admits only long-running owned processes as creates, derives ownership continuity from live processes, requires a gate for proof, installs a lifetime timer, and on shutdown stops and reconciles. A durable route needs the opposite on each point. So the host gets a separate bounded transaction:
+The adapter data and the plan engine are reused; the session host is not. The spike wrote the Tailscale recipe inline, because `admitPlanEffect` (`plan.mjs`) requires a session ID, a generation and a session-scoped authority for every binding. G1 adds a **route-scoped admission context** (route ID, record generation, route authority) so durable recipes come from adapter definitions like every other route. The durable-capable adapter list also moves from a table in code into adapter data (`addressStability`, `durableLifetime`).
+
+The session host is not reused. Today's driver admits only long-running owned processes as creates, derives ownership continuity from live processes, requires a gate for proof, installs a lifetime timer, and on shutdown stops and reconciles. A durable route needs the opposite on each point. So the host gets a separate bounded transaction:
 
 1. a finite create command, admitted only with an owned-route receipt and a readback guard (a new path, not a relaxed guard in the session driver);
 2. a persisted route resource identity in the record, so a fresh process can rehydrate it after exit or reboot;
