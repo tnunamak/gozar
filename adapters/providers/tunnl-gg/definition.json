@@ -1,0 +1,80 @@
+{
+  "wraps": "../../tunnl-gg.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "tunnl-gg",
+    "label": "tunnl.gg trial",
+    "capabilities": {
+      "reach": "internet",
+      "transport": "https",
+      "traffic": {
+        "tlsTermination": "provider",
+        "providerCanReadPayload": true,
+        "readers": [
+          "tunnl.gg relay"
+        ],
+        "metadataVisibleTo": [
+          "tunnl.gg relay"
+        ],
+        "evidenceRef": "https://tunnl.gg (accessed 2026-11-12) ; https://tunnl.gg/terms.md (accessed 2026-11-12) ; https://tunnl.gg/privacy.md (accessed 2026-11-12)"
+      },
+      "address": {
+        "stability": "stable",
+        "scope": "address bound to an installation key",
+        "conditions": [
+          "an announced address change ends the route",
+          "the relay can close quiet streams after about two minutes",
+          "browsers can show a warning page"
+        ]
+      },
+      "cost": {
+        "kind": "free",
+        "summary": "The free tier costs nothing and needs no account; Pro is $6 a month or $60 a year and removes time limits and the warning page.",
+        "currency": "USD",
+        "amount": 0,
+        "period": null
+      },
+      "needsAccount": false,
+      "lifetimes": [
+        "session"
+      ],
+      "supervision": "controller",
+      "protocols": {
+        "sse": true,
+        "streamableHttp": true,
+        "oauthDcr": true
+      }
+    },
+    "supportedKinds": [
+      "session"
+    ],
+    "disclosure": {
+      "revision": "disc-6d909da5b275",
+      "text": "Start a public HTTPS trial through the tunnl.gg relay. The relay terminates TLS and can read payloads. Quiet streams can close after two minutes.",
+      "links": [
+        {
+          "rel": "terms",
+          "label": "Terms",
+          "href": "https://tunnl.gg/terms.md"
+        },
+        {
+          "rel": "privacy",
+          "label": "Privacy",
+          "href": "https://tunnl.gg/privacy.md"
+        }
+      ]
+    }
+  },
+  "evidence": {
+    "accessed": "2026-11-12",
+    "sources": [
+      "https://tunnl.gg",
+      "https://tunnl.gg/terms.md",
+      "https://tunnl.gg/privacy.md"
+    ],
+    "protocols": {
+      "sse/streamableHttp": "true. Backed by validation.sse (timed incremental event delivery when required) and validation.publish (exact-origin approval only after all required probes) in the wrapped recipe definition, with admission.requiredFeatures probe-assertions and client-vantage-probe.",
+      "oauthDcr": "oauthDcr: the stable user gives 'a URL tied to your SSH key that stays the same across reconnects' (https://tunnl.gg); Gozar preserves the configured authority. The wrapped recipe's addressStability 'random' conflicts with this page and is reported as an open question."
+    }
+  }
+}

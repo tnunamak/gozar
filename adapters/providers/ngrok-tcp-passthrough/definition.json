@@ -1,0 +1,73 @@
+{
+  "wraps": "../../ngrok-tcp-passthrough.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "ngrok-tcp-passthrough",
+    "label": "ngrok TCP passthrough",
+    "capabilities": {
+      "reach": "internet",
+      "transport": "http",
+      "traffic": {
+        "tlsTermination": "unknown",
+        "providerCanReadPayload": null,
+        "readers": [
+          "the application endpoint (opaque TCP)"
+        ],
+        "metadataVisibleTo": [
+          "unknown"
+        ],
+        "evidenceRef": "https://ngrok.com/pricing (accessed 2026-11-12)"
+      },
+      "address": {
+        "stability": "unknown",
+        "scope": "assigned TCP address of your ngrok account",
+        "conditions": [
+          "no admitted create recipe",
+          "opaque TCP: no HTTPS origin until a mapping passes a client probe"
+        ]
+      },
+      "cost": {
+        "kind": "unknown",
+        "summary": "The ngrok pricing page does not settle the cost of TCP passthrough.",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": true,
+      "lifetimes": [],
+      "supervision": "controller",
+      "protocols": {
+        "sse": false,
+        "streamableHttp": false,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [],
+    "disclosure": {
+      "revision": "disc-283687cfc6f4",
+      "text": "ngrok TCP passthrough is detected only. Gozar cannot create a route with it yet.",
+      "links": [
+        {
+          "rel": "terms",
+          "label": "Terms",
+          "href": "https://ngrok.com/tos"
+        },
+        {
+          "rel": "privacy",
+          "label": "Privacy",
+          "href": "https://ngrok.com/privacy"
+        }
+      ]
+    }
+  },
+  "evidence": {
+    "accessed": "2026-11-12",
+    "sources": [
+      "https://ngrok.com/pricing"
+    ],
+    "protocols": {
+      "sse/streamableHttp": "false. no admitted recipe: this adapter creates no route, so no timed stream probe gates a publication",
+      "oauthDcr": "Detected only: no kind, nothing is published."
+    }
+  }
+}

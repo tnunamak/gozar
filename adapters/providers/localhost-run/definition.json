@@ -1,0 +1,68 @@
+{
+  "wraps": "../../localhost-run.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "localhost-run",
+    "label": "localhost.run trial",
+    "capabilities": {
+      "reach": "internet",
+      "transport": "https",
+      "traffic": {
+        "tlsTermination": "provider",
+        "providerCanReadPayload": true,
+        "readers": [
+          "localhost.run relay"
+        ],
+        "metadataVisibleTo": [
+          "localhost.run relay"
+        ],
+        "evidenceRef": "https://localhost.run/ (accessed 2026-11-12) ; https://localhost.run/docs/forever-free (accessed 2026-11-12)"
+      },
+      "address": {
+        "stability": "ephemeral",
+        "scope": "random hostname under lhr.life for one connection",
+        "conditions": [
+          "trial: uptime and URL lifetime are not guaranteed",
+          "a new connection gets a new URL",
+          "the plan limits a session to 15 minutes"
+        ]
+      },
+      "cost": {
+        "kind": "free",
+        "summary": "The free tier costs nothing and needs no signup; its domains change regularly and have a speed limit.",
+        "currency": "USD",
+        "amount": 0,
+        "period": null
+      },
+      "needsAccount": false,
+      "lifetimes": [
+        "session"
+      ],
+      "supervision": "controller",
+      "protocols": {
+        "sse": true,
+        "streamableHttp": true,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [
+      "session"
+    ],
+    "disclosure": {
+      "revision": "disc-8fd297ce7670",
+      "text": "Start a public HTTPS trial through the localhost.run relay for the requested lifetime (15 minutes by default). The relay terminates TLS and can read payloads.",
+      "links": []
+    }
+  },
+  "evidence": {
+    "accessed": "2026-11-12",
+    "sources": [
+      "https://localhost.run/",
+      "https://localhost.run/docs/forever-free"
+    ],
+    "protocols": {
+      "sse/streamableHttp": "true. Backed by validation.sse (timed incremental event delivery when required) and validation.publish (exact-origin approval only after all required probes) in the wrapped recipe definition, with admission.requiredFeatures probe-assertions and client-vantage-probe.",
+      "oauthDcr": "oauthDcr false: free domains are ephemeral ('Domain names change regularly'), so no stable HTTPS origin."
+    }
+  }
+}

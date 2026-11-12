@@ -1,0 +1,81 @@
+{
+  "wraps": "../../tailscale-private.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "tailscale-private",
+    "label": "Tailscale private Serve",
+    "capabilities": {
+      "reach": "tailnet",
+      "transport": "https",
+      "traffic": {
+        "tlsTermination": "endpoint",
+        "providerCanReadPayload": null,
+        "readers": [
+          "this device (local tailscaled)"
+        ],
+        "metadataVisibleTo": [
+          "unknown"
+        ],
+        "evidenceRef": "https://tailscale.com/kb/1312/serve (accessed 2026-11-12) ; https://tailscale.com/pricing (accessed 2026-11-12)"
+      },
+      "address": {
+        "stability": "stable",
+        "scope": "DNS name of this node plus an unused port",
+        "conditions": [
+          "needs an unused Serve port",
+          "tailnet HTTPS and MagicDNS must be enabled",
+          "node and tailnet identity stay the same"
+        ]
+      },
+      "cost": {
+        "kind": "unknown",
+        "summary": "Tailscale pricing is documented, but the Serve page does not say which plans include Serve.",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": true,
+      "lifetimes": [
+        "session",
+        "durable"
+      ],
+      "supervision": "provider-persistent",
+      "protocols": {
+        "sse": true,
+        "streamableHttp": true,
+        "oauthDcr": true
+      }
+    },
+    "supportedKinds": [
+      "session",
+      "durable"
+    ],
+    "disclosure": {
+      "revision": "disc-6e785432498d",
+      "text": "Publish this service over HTTPS on an unused private Tailscale Serve port of this device. Only tailnet clients can reach it. Existing listeners stay untouched.",
+      "links": [
+        {
+          "rel": "terms",
+          "label": "Terms",
+          "href": "https://tailscale.com/terms"
+        },
+        {
+          "rel": "privacy",
+          "label": "Privacy",
+          "href": "https://tailscale.com/privacy-policy"
+        }
+      ]
+    }
+  },
+  "evidence": {
+    "accessed": "2026-11-12",
+    "sources": [
+      "https://tailscale.com/kb/1312/serve",
+      "https://tailscale.com/pricing"
+    ],
+    "protocols": {
+      "sse/streamableHttp": "true. Backed by validation.sse (timed incremental event delivery when required) and validation.publish (exact-origin approval only after all required probes) in the wrapped recipe definition, with admission.requiredFeatures probe-assertions and client-vantage-probe.",
+      "oauthDcr": "oauthDcr: Serve publishes a stable HTTPS origin and Gozar preserves the configured authority."
+    }
+  }
+}

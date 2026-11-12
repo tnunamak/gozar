@@ -1,0 +1,55 @@
+{
+  "wraps": "./fake-wave.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "fake-wave",
+    "label": "Fake wave (test only)",
+    "capabilities": {
+      "reach": "internet",
+      "transport": "https",
+      "traffic": {
+        "tlsTermination": "provider",
+        "providerCanReadPayload": true,
+        "readers": [
+          "fake-wave relay"
+        ],
+        "metadataVisibleTo": [
+          "fake-wave relay"
+        ],
+        "evidenceRef": null
+      },
+      "address": {
+        "stability": "ephemeral",
+        "scope": "synthetic",
+        "conditions": [
+          "test fixture"
+        ]
+      },
+      "cost": {
+        "kind": "unknown",
+        "summary": "synthetic",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": false,
+      "lifetimes": [
+        "session"
+      ],
+      "supervision": "controller",
+      "protocols": {
+        "sse": false,
+        "streamableHttp": false,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [
+      "session"
+    ],
+    "disclosure": {
+      "revision": "disc-53642d00753e",
+      "text": "Publish this service through the synthetic fake-wave relay for the requested lifetime.",
+      "links": []
+    }
+  }
+}

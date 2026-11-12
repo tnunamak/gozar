@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "definition": {
+    "id": "fake-wave",
+    "planVersion": 1,
+    "idleTimeoutMs": null,
+    "actions": [
+      {
+        "id": "install",
+        "label": "Install fake-wave",
+        "reason": "The synthetic CLI is absent.",
+        "url": "https://example.test/install"
+      }
+    ],
+    "recipes": {
+      "detect": {
+        "kind": "spawn",
+        "program": "fake-wave",
+        "timeoutMs": 5000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "exit-code"
+        },
+        "args": [
+          "--version"
+        ]
+      },
+      "create": {
+        "kind": "spawn",
+        "program": "fake-wave",
+        "timeoutMs": 5000,
+        "maxOutputBytes": 65536,
+        "parser": {
+          "kind": "exit-code"
+        },
+        "args": [
+          "serve",
+          "{gatePort}"
+        ],
+        "process": {
+          "mode": "owned-long-running",
+          "lifetimeMs": 900000
+        }
+      },
+      "remove": {
+        "kind": "owned-process",
+        "signal": "SIGTERM",
+        "graceMs": 2000,
+        "confirmExit": true,
+        "timeoutMs": 5000,
+        "maxOutputBytes": 16384,
+        "parser": {
+          "kind": "exit-code"
+        }
+      }
+    }
+  }
+}
