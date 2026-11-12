@@ -10,6 +10,45 @@ import { Journal, processIdentity } from '../../packages/gozar-node/journal.mjs'
 import { EffectDriver } from '../../packages/gozar-node/driver.mjs';
 import { fixture, effect, persist } from './helpers.mjs';
 
+test('effect replay history is bounded without reopening old IDs', async t => {
+  const recipe = { kind: 'interfaces' };
+  const { driver } = await fixture(t, { detect: recipe });
+  const request = (generation, sequence) => ({ ...recipe, id: `test:${generation}:${sequence}`, sessionId: 'test', generation, operation: 'detect', adapterId: 'fake' });
+  for (let generation = 1; generation <= 1280; generation++) {
+    const current = request(generation, generation * 2);
+    assert.equal((await driver.execute(current)).ok, true);
+    assert.equal((await driver.execute(current)).ok, false);
+    assert.ok(driver.issued.size <= 128, 'retained replay state is bounded');
+  }
+  assert.equal((await driver.execute(request(1, 2))).ok, false, 'old replay');
+  assert.equal((await driver.execute(request(1280, 2559))).ok, false, 'unseen out-of-order ID');
+  assert.equal((await driver.execute({ ...request(1280, 2561), id: 'test:1279:2561' })).ok, false, 'ID generation mismatch');
+  assert.equal((await driver.execute({ ...request(1280, 2561), id: 'test:1280:02561' })).ok, false, 'noncanonical sequence');
+  assert.equal((await driver.execute(request(1280, 2561))).ok, true, 'invalid requests do not consume valid IDs');
+});
+
+test('fresh older-generation cleanup remains allowed but its replay does not', async t => {
+  const { driver } = await fixture(t, {});
+  // Isolate replay admission from ownership I/O, which has separate tests above.
+  driver.admitInspection = () => {};
+  driver.inspectOwnership = async () => ({});
+  const request = (generation, sequence) => ({ id: `test:${generation}:${sequence}`, sessionId: 'test', generation, operation: 'remove', action: 'inspect' });
+  assert.equal((await driver.execute(request(9, 10))).ok, true);
+  assert.equal((await driver.execute(request(2, 11))).ok, true);
+  assert.equal((await driver.execute(request(2, 11))).ok, false);
+  assert.equal((await driver.execute(request(2, 9))).ok, false);
+});
+
+test('legacy opaque replay IDs fail closed at their bounded capacity', async t => {
+  const recipe = { kind: 'interfaces' };
+  const { driver } = await fixture(t, { detect: recipe });
+  const request = id => ({ ...recipe, id, sessionId: 'test', generation: 1, operation: 'detect', adapterId: 'fake' });
+  for (let i = 0; i < 128; i++) assert.equal((await driver.execute(request(`opaque-${i}`))).ok, true);
+  assert.equal((await driver.execute(request('opaque-128'))).ok, false);
+  assert.equal((await driver.execute(request('opaque-0'))).ok, false);
+  assert.equal(driver.issued.size, 128);
+});
+
 const program = process.execPath;
 const spawnRecipe = { kind: 'spawn', program, args: ['-e', 'process.stdout.write("ok")'], timeoutMs: 1000, maxOutputBytes: 100 };
 

@@ -63,6 +63,9 @@ export class EffectDriver {
     this.generation = 0;
     this.selectedAdapter = null;
     this.stopped = false;
+    // Core IDs carry a session-wide increasing sequence, including cleanup.
+    this.issuedSequence = 0n;
+    // Compatibility IDs cannot be compacted safely: cap without eviction.
     this.issued = new Set();
   }
   async materializePrivateFile(adapterId, bindingName, { generation } = {}) {
@@ -137,12 +140,29 @@ export class EffectDriver {
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, this.expand(item, effect)]));
     return value;
   }
+  replaySequence(effect) {
+    if (typeof effect.id !== 'string' || !effect.id || effect.id.length > 1024) throw new Error('Invalid effect ID');
+    const prefix = `${this.sessionId}:`;
+    if (!effect.id.startsWith(prefix)) return null;
+    const suffix = effect.id.slice(prefix.length);
+    if (!/^[0-9]+:[0-9]+$/.test(suffix)) return null;
+    const match = /^(0|[1-9][0-9]*):([1-9][0-9]{0,19})$/.exec(suffix);
+    if (!match || match[1] !== String(effect.generation)) throw new Error('Effect ID generation mismatch');
+    const sequence = BigInt(match[2]);
+    if (sequence > 18446744073709551615n) throw new Error('Invalid effect sequence');
+    return sequence;
+  }
   admit(effect) {
     if (effect.sessionId !== this.sessionId || !effect.id || !Number.isSafeInteger(effect.generation)) throw new Error('Effect identity mismatch');
     if (this.stopped && effect.operation !== 'remove' && !effect.recipeRef?.startsWith('remove/')) throw new Error('Session stopped; observation or allocation dispatch is fenced');
-    if (this.issued.has(effect.id)) throw new Error('Effect already dispatched');
+    const sequence = this.replaySequence(effect);
+    if (sequence !== null) {
+      if (sequence <= this.issuedSequence) throw new Error('Effect already dispatched or out of order');
+    } else {
+      if (this.issued.has(effect.id)) throw new Error('Effect already dispatched');
+      if (this.issued.size >= 128) throw new Error('Legacy effect replay capacity exhausted');
+    }
     if (effect.operation !== 'remove' && effect.generation < this.generation) throw new Error('Stale effect generation');
-    this.generation = Math.max(this.generation, effect.generation);
     if (effect.action === 'inspect') {
       this.admitInspection(effect); return;
     }
@@ -212,7 +232,10 @@ export class EffectDriver {
     let dispatched = false;
     try {
       this.admit(effect);
-      this.issued.add(effect.id);
+      const sequence = this.replaySequence(effect);
+      if (sequence === null) this.issued.add(effect.id);
+      else this.issuedSequence = sequence;
+      this.generation = Math.max(this.generation, effect.generation);
       effect = this.expand(effect, effect);
       if (mutates(effect) && effect.kind !== 'persist') this.receipts.delete(this.receiptKey(effect));
       let result;
