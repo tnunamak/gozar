@@ -1,6 +1,8 @@
 # Existing service routes
 
-A service route records an existing HTTPS origin and its fixed HTTP target. The owner manages the service, reverse proxy, TLS and startup. Service mutations require Linux with `flock` from util-linux; checks use Node 22+. Gozar starts no listener or daemon, forwards no traffic, rewrites no Host header and changes no ingress. There is no route expiry. Records survive controller exit and reboot; service availability still depends on the owner's supervisors. Each status call checks the route again instead of restoring saved readiness.
+A service route records an existing HTTPS origin and its fixed HTTP target. Use Linux with Node.js 24 or newer; adding or removing records also requires `flock` from util-linux. You manage the service, reverse proxy, TLS and startup. Gozar starts no listener or daemon, forwards no traffic and changes no ingress. Records survive controller exit and reboot and have no Gozar expiry. Service availability still depends on your own supervisors. Each status call checks the route again rather than restoring saved readiness.
+
+The commands below assume a global `gozar` executable. If you installed the package locally or want a one-off command, replace `gozar` with `npx --package=@tnunamak/gozar@0.1.0 gozar`.
 
 ```sh
 gozar service add --origin https://service.example --target 192.0.2.10:3000 --json
@@ -15,7 +17,7 @@ Use a credential-free HTTPS origin without a path, query or fragment. The target
 Integrate the helper in the existing service before its application routes:
 
 ```js
-import { createServiceVerifier } from './packages/gozar-node/service.mjs';
+import { createServiceVerifier } from '@tnunamak/gozar/service';
 const verifyService = createServiceVerifier();
 // In the existing HTTP request handler:
 if (verifyService(req, res)) return;
@@ -54,7 +56,7 @@ The command is trusted owner code, executed by a shell under the invoking user's
 
 ```js
 import { addService, statusServices, removeService, createServiceVerifier }
-  from './packages/gozar-node/service.mjs';
+  from '@tnunamak/gozar/service';
 
 await addService({ origin, target, verifyCmd: null, home });
 // { schemaVersion: 1, route }
