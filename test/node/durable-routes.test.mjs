@@ -147,17 +147,20 @@ test('3. a pinned origin with a different node DNS name gives address_changed an
   assert.equal((await w.run('status', {})).result.routes[0].state, 'address_changed');
 });
 
-test('4. a readback mismatch after creation removes only its own rule by compare-and-set and gives address_changed', async t => {
+test('4. a readback mismatch after creation leaves the listener in place as cleanup debt and publishes nothing', async t => {
+  // The listener on the pinned port differs after our write: another program may have replaced
+  // it, so Gozar cannot attribute it and must not remove it.
   const w = await world(t, { createProxy: 'http://127.0.0.1:1' });
   w.edit(foreignRule(10000, 'http://127.0.0.1:2'));
   const reply = await w.run('ensure', w.request);
-  assert.equal(reply.error.code, 'address_changed');
+  assert.equal(reply.error.code, 'uncertain');
   const { config } = await w.provider();
-  assert.equal(config.Web[`${dnsName}:8443`], undefined);
-  assert.equal(config.TCP[8443], undefined);
+  assert.deepEqual(config.Web[`${dnsName}:8443`], listener('http://127.0.0.1:1'));
   assert.deepEqual(config.Web[`${dnsName}:10000`], listener('http://127.0.0.1:2'));
-  assert.equal(w.writes().length, 2);
-  assert.equal((await w.run('status', {})).result.routes[0].state, 'address_changed');
+  assert.equal(w.writes().length, 1);
+  const status = (await w.run('status', {})).result.routes[0];
+  assert.equal(status.state, 'uncertain');
+  assert.equal(status.origin, null);
 });
 
 test('5. occupied port is refused and the foreign rule is untouched', async t => {
@@ -389,16 +392,27 @@ test('16. concurrent ensure, adopt and session for one listener or port with dis
   assert.equal(session.code, 1);
   assert.match(session.json.error, /already holds this listener/);
   await w.run('release', { routeId: 'coordinator' });
-  // Concurrent: exactly one claim on the listener wins, whichever operation makes it.
+  // Concurrent: three valid contenders for one listener. A previous owner's rule on 10000 is
+  // adoptable; the two ensures would create on 8443. Exactly one wins; the others are refused
+  // as reserved, and the adoptable rule is never changed by a loser.
+  const adoptOrigin = `https://${dnsName}:10000`;
+  w.edit(state => { foreignRule(10000, `http://${w.target}`)(state); state.config.AllowFunnel = { [`${dnsName}:10000`]: true }; });
+  const adoptable = structuredClone(w.state.config.Web[`${dnsName}:10000`]);
   const replies = await Promise.all([
     w.run('ensure', w.request),
     w.run('ensure', { ...w.request, routeId: 'second' }),
-    w.run('adopt', { routeId: 'third', owner: 'example-app', adapterId: 'tailscale-funnel', target: w.target, origin: `https://${dnsName}:10000` }),
+    w.run('adopt', { routeId: 'third', owner: 'example-app', adapterId: 'tailscale-funnel', target: w.target, origin: adoptOrigin,
+      claim: { dnsName, port: 10000, mode: 'funnel', target: `http://${w.target}` }, handover: { from: 'example-app', generation: 1 },
+      approvals: [{ adapterId: 'tailscale-funnel', target: w.target, origin: adoptOrigin, durable: true }] }),
   ]);
-  assert.equal(replies.filter(reply => reply.result).length, 1);
-  assert.equal(Object.keys(w.state.config.Web ?? {}).length, 1);
+  const winners = replies.filter(reply => reply.result);
+  assert.equal(winners.length, 1);
+  assert.deepEqual(replies.filter(reply => !reply.result).map(reply => reply.error.code), ['reserved', 'reserved']);
+  assert.deepEqual(w.state.config.Web[`${dnsName}:10000`], adoptable);
+  assert.equal(Object.keys(w.state.config.Web).length, winners[0].result.route.routeId === 'third' ? 1 : 2);
   // A live session holds its listener: a durable route for that listener is refused.
-  await w.run('release', { routeId: (replies.find(reply => reply.result)).result.route.routeId });
+  await w.run('release', { routeId: winners[0].result.route.routeId });
+  w.edit(state => { state.config = {}; });
   const port = w.app.address().port;
   await mkdir(join(w.home, `port-${port}`), { mode: 0o700 });
   const identity = (await readFile(`/proc/${process.pid}/stat`, 'utf8')).split(') ')[1].split(' ')[19];
@@ -480,6 +494,12 @@ test('20. hand-back then re-adopt with a newer generation keeps exactly one owne
     claim: back.result.claim, handover: { from: 'example-app', generation: 2 } });
   assert.equal(again.result.route.state, 'usable');
   assert.equal(w.writes().length, 1);
+  // A second hand-back gets a new transfer; replaying the first confirmation cannot delete it.
+  const second = await w.run('release', { routeId: 'coordinator', mode: 'hand-back' });
+  assert.notEqual(second.result.transfer, back.result.transfer);
+  assert.equal((await w.run('confirmHandBack', { routeId: 'coordinator', transfer: back.result.transfer })).error.code, 'stale_transfer');
+  assert.equal((await w.records()).length, 1);
+  assert.equal((await w.run('status', {})).result.routes[0].state, 'handing-back');
 });
 
 // Visibility
@@ -519,6 +539,17 @@ test('21. when last.json names a session, bare status keeps the session output a
   // status --port N is unchanged: no inventory.
   const port = await w.gozar('status', '--port', '3000', '--json');
   assert.equal(port.json.inventory, undefined);
+  // An inventory failure is reported inside the inventory; the session reply and exit stay as they were.
+  const routes = (await readdir(w.home)).find(name => ['routes', 'durable-routes'].includes(name)) ?? 'services';
+  await chmod(join(w.home, routes), 0o770);
+  t.after(() => chmod(join(w.home, routes), 0o700));
+  const broken = await w.gozar('status', '--json');
+  assert.equal(broken.code, port.code);
+  assert.deepEqual(broken.json.snapshot, port.json.snapshot);
+  assert.match(broken.json.inventory.error, /./);
+  const brokenText = await w.gozar('status');
+  assert.equal(brokenText.code, port.code);
+  assert.match(brokenText.stdout, /Routes: unavailable/);
 });
 
 test('22. gozar stop --route ID removes the provider rule by compare-and-set and deletes the record; a changed rule is left as cleanup debt', async t => {
@@ -673,7 +704,7 @@ test('29. during hand-back ensure and adopt return handing_back; gozar stop stil
   assert.equal((await w.run('ensure', w.request)).error.code, 'handing_back');
   assert.equal((await w.run('adopt', { ...w.request, origin: w.origin, claim: back.result.claim, handover: { from: 'example-app', generation: 3 } })).error.code, 'handing_back');
   assert.equal((await w.run('release', { routeId: 'coordinator' })).error.code, 'handing_back');
-  assert.equal((await w.run('confirmHandBack', { routeId: 'coordinator', transfer: back.result.transfer - 1 })).error.code, 'stale_transfer');
+  assert.equal((await w.run('confirmHandBack', { routeId: 'coordinator', transfer: '00000000-0000-4000-8000-000000000000' })).error.code, 'stale_transfer');
   assert.equal(w.writes().length, 1);
   const stopped = await w.gozar('stop', '--route', 'coordinator', '--json');
   assert.equal(stopped.json.providerRemoved, true);

@@ -96,6 +96,7 @@ async function inventory(home, routeId) {
   return { schemaVersion: 1, sessions, serviceRoutes, durableRoutes, stoppedRoutes };
 }
 function renderInventory(reply) {
+  if (reply.error) return `Routes: unavailable (${reply.error})`;
   const lines = [];
   if (reply.sessions) {
     lines.push('Sessions:', ...(reply.sessions.length ? reply.sessions.map(item => `  port ${item.port}  ${item.phase}${item.origin ? '  ' + item.origin : ''}`) : ['  none']));
@@ -211,7 +212,8 @@ export async function main(argv = process.argv.slice(2)) {
         view.nextAction = { command: cliCommand('health', options.port), expectedSuccess: 'Route checks pass and a validated URL is printed.' };
       }
     }
-    const extra = withInventory ? inventory(home) : null;
+    // The inventory is additive: its failure is reported inside it, never in place of the session reply.
+    const extra = withInventory ? inventory(home).catch(error => ({ schemaVersion: 1, error: error.message })) : null;
     if (!extra) { console.log(options.json ? JSON.stringify(view) : render(view, adapters, options)); return; }
     return extra.then(inv => console.log(options.json ? JSON.stringify({ ...view, inventory: inv }) : `${render(view, adapters, options)}\n\n${renderInventory(inv)}`));
   };

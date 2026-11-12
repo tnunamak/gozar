@@ -114,7 +114,7 @@ An adapter can offer a durable route only if it declares `addressStability: 'sta
 ### Pinned origin fails closed
 
 1. Before any mutation, the adapter's plan computes the candidate origin from fresh observations (Tailscale: node DNS name + selected HTTPS port; ngrok: requested reserved domain). If the record pins an origin and the candidate differs, stop with `address_changed`. Mutate nothing.
-2. After mutation, read back the provider config and compare it with the exact recorded rule. Then verify through the challenge from the controller vantage. If the observed origin differs, remove what this call created (when ownership continuity holds) and stop with `address_changed`.
+2. After mutation, read back the provider config and compare it with the exact recorded rule. Then verify through the challenge from the controller vantage. If the listener read back differs from the rule Gozar wrote, Gozar cannot tell its own rule from a replacement another program made after the write, so it leaves the listener in place as `uncertain` cleanup debt and publishes nothing. If the verified origin differs, it stops with `address_changed`.
 3. Provider fallback (for example Funnel not permitted, so try ngrok) is allowed **only on a first allocation**. A pinned route never changes adapter.
 
 ### Consent
@@ -151,7 +151,7 @@ A durable route has no expiry, so the user must always be able to see it and sto
 ### Hand-back (two phases)
 
 Hand-back returns a route to its previous owner (for example, a rollback). It is two-phase, so a crash or a lost reply never leaves a rule that nobody owns:
-1. `releaseRoute({mode:'hand-back'})`: under the reservation lock, Gozar durably marks the record `handing-back` with a transfer generation and the claim, keeps the receipt and the reservation, and returns `{ claim, transfer }`. From then on, Gozar makes no mutation for that route, and `ensureRoute` and `adoptRoute` return `handing_back`. A retry returns the same claim and transfer.
+1. `releaseRoute({mode:'hand-back'})`: under the reservation lock, Gozar durably marks the record `handing-back` with a unique transfer token and the claim, keeps the receipt and the reservation, and returns `{ claim, transfer }`. From then on, Gozar makes no mutation for that route, and `ensureRoute` and `adoptRoute` return `handing_back`. A retry returns the same claim and transfer.
 2. `confirmHandBack({routeId, transfer})`: called after the previous owner has durably taken the rule back (lifted its fence with a newer generation). Only then does Gozar delete the record and release the reservation.
 
 Until phase 2, `gozar status` lists the route as `handing-back`. `gozar stop --route ID` still works, because the user outranks both owners: it removes the rule by compare-and-set and writes the tombstone. `cancelHandBack({routeId, transfer})` returns the route to its previous state if the previous owner never took it.
@@ -215,7 +215,7 @@ Allocation and pinning:
 1. ensure creates a `--bg` rule, writes a receipt, verifies through the challenge, and records `gozar-owned`;
 2. a second ensure with the same tuple reuses the rule and makes no mutation;
 3. a pinned origin with a different node DNS name → `address_changed`, no mutation;
-4. a readback mismatch after creation → removes only its own rule → `address_changed`;
+4. a readback mismatch after creation → the listener is left in place as `uncertain` cleanup debt, nothing is published (Gozar cannot tell its rule from a replacement made after its write);
 5. occupied port → refused, the foreign rule is untouched;
 6. restart with an omitted origin uses the recorded pin; a conflicting origin or adapter is refused;
 7. a saved `lost` record is restored only at the pinned origin and never re-allocated unpinned;

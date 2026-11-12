@@ -9,7 +9,7 @@
 import { readdir, readFile, unlink, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 import { isDeepStrictEqual } from 'node:util';
@@ -320,7 +320,6 @@ async function createListener(dir, record, { definition, capability, table, firs
     throw refuse('port_occupied', firstAllocation ? 'Every candidate HTTPS port is occupied or not permitted; existing rules were left untouched'
       : 'The pinned port is occupied by another rule; it was left untouched');
   }
-  const writtenConfig = decision.write;
   const { dnsName, port, rule } = record.intent;
   const readback = await observe();
   const current = ruleAt(readback.config, dnsName, port);
@@ -329,13 +328,8 @@ async function createListener(dir, record, { definition, capability, table, firs
       await save(dir, { ...record, state: 'lost' });
       throw refuse('provider_create_failed', 'Provider readback shows no listener; nothing was published');
     }
-    // Ownership continuity: the rest of the config is exactly what this call wrote, so the
-    // listener on the pinned port is the one this call created. Remove only it, by CAS.
-    if (isDeepStrictEqual(without(readback.config, dnsName, port), without(writtenConfig, dnsName, port)) &&
-        await localapi.setServeConfig(without(readback.config, dnsName, port), readback.etag)) {
-      await save(dir, { ...record, state: 'address_changed', receipt: null });
-      throw refuse('address_changed', 'Provider readback differs from the intended rule; the rule this call created was removed');
-    }
+    // A different listener on the pinned port cannot be attributed to this call: another
+    // program may have replaced it after our write. Leave it in place as cleanup debt.
     await save(dir, { ...record, state: 'uncertain', cleanupDebt: { reason: 'readback-mismatch', port } });
     throw refuse('uncertain', 'Provider readback differs from the intended rule and was left in place; nothing was published');
   }
@@ -511,8 +505,9 @@ async function handBack(dir, record, routeId) {
   if (record.state === 'handing-back') return { schemaVersion: 1, routeId, claim: record.handBack.claim, transfer: record.handBack.transfer };
   if (!record.receipt) throw refuse('not_owned', 'Gozar holds no receipt for this route, so it has nothing to hand back');
   if (['releasing', 'address_changed', 'uncertain'].includes(record.state)) throw refuse(record.state, `Route is ${record.state}; it cannot be handed back`);
-  const transfer = record.generation + 1, claim = claimOf(record);
-  await save(dir, { ...record, generation: transfer, state: 'handing-back', handBack: { transfer, claim, previousState: record.state } });
+  // A unique token per hand-back: generations restart on re-adoption, so they cannot name a transfer.
+  const transfer = randomUUID(), claim = claimOf(record);
+  await save(dir, { ...record, generation: record.generation + 1, state: 'handing-back', handBack: { transfer, claim, previousState: record.state } });
   return { schemaVersion: 1, routeId, claim, transfer };
 }
 async function handBackStep(home, routeId, transfer, step) {
