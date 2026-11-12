@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, symlink, stat } from 'node:fs/promises';
@@ -97,7 +98,7 @@ test('owned child survives driver restart, exact stop preserves unrelated proces
 
 test('PID identity mismatch never kills an unrelated process', async t => {
   const { driver, journal } = await fixture(t, {});
-  await journal.own({ id: 'stale', kind: 'process', sessionId: 'test', pid: process.pid, nonce: 'old', startIdentity: 'not-current' });
+  await journal.own({ id: 'stale', kind: 'process', sessionId: 'test', pid: process.pid, nonce: randomUUID(), startIdentity: 'not-current' });
   await driver.removeProcess('stale');
   assert.ok(await processIdentity(process.pid));
 });

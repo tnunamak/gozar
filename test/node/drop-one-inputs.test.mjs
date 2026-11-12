@@ -68,7 +68,7 @@ test('detect inventories all modes and never treats binary presence as account o
   const output = renderDetection({ snapshot: { observations: Object.fromEntries(adapters.map(adapter => [adapter.id, 'present'])) } }, adapters, active);
   for (const adapter of adapters) assert.ok(output.includes(`${adapter.displayName ?? adapter.label ?? adapter.id}: present`));
   assert.match(output, /Login: unknown/); assert.match(output, /Capability: unknown/);
-  assert.equal(output.split('\n').filter(line => line.includes('NEXT DROP')).length, adapters.length - active.length);
+  assert.equal(output.split('\n').filter(line => line.includes('unavailable in this version')).length, adapters.length - active.length);
 });
 
 test('no-flag JSON expose asks reach once after silent detection without persisting a session', async t => {

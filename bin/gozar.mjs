@@ -108,7 +108,7 @@ export async function main(argv = process.argv.slice(2)) {
   const activeIds = await loadActiveDrop(root);
   if (options.adapterId && options.command === 'expose') {
     const operational = adapters.find(adapter => adapter.id === options.adapterId && adapter.planVersion === 1 && adapter.admission?.state === 'admitted');
-    if (!activeIds.includes(options.adapterId) && !operational) throw new Error('Selected mode is NEXT DROP. Run detect to see current mode states.');
+    if (!activeIds.includes(options.adapterId) && !operational) throw new Error('Selected route is not available in this version. Run detect to see available routes.');
     const definition = await loadDefinition(root, options.adapterId);
     adapters = [...adapters.filter(adapter => adapter.id !== definition.id), definition];
   }

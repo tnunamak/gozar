@@ -92,7 +92,7 @@ export function renderDetection(reply, adapters, activeIds = []) {
   for (const adapter of adapters) {
     const state = observations[adapter.id] ?? 'unknown';
     const next = !activeIds.includes(adapter.id);
-    lines.push(`${adapter.displayName ?? adapter.label ?? adapter.id}: ${state === 'signed-out' ? 'blocked' : state}${next ? ' · NEXT DROP' : ' · validation required'}`);
+    lines.push(`${adapter.displayName ?? adapter.label ?? adapter.id}: ${state === 'signed-out' ? 'blocked' : state}${next ? ' · unavailable in this version' : ' · validation required'}`);
     lines.push('  Login: unknown unless verified by account-state evidence. Capability: unknown until required probes pass.');
     if (['unknown', 'blocked', 'signed-out'].includes(state)) {
       const fix = adapter.copy?.fix ?? adapter.fix;

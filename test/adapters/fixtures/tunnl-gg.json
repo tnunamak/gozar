@@ -1,5 +1,5 @@
 {
-  "provenance": "Sanitized tunnl.gg JSON event shape from the B17 probe; no credentials.",
+  "provenance": "Sanitized tunnl.gg JSON event shape from a relay probe; no credentials.",
   "adapterIds": [
     "tunnl-gg"
   ],

@@ -139,7 +139,7 @@
       "Current capability requires a successful probe from the intended client network.",
       "Detection identifies the CLI; operational endpoint setup is a separate adapter capability.",
       "Existing endpoint listing, online agent and HTTP 200 are separate from client readiness.",
-      "Next drop: detection inventory only; create is not in the active catalog."
+      "Detection only; route creation is not available in this version."
     ],
     "recipes": {
       "detect": {
@@ -177,7 +177,7 @@
       "Current capability requires a successful probe from the intended client network.",
       "Detection identifies the CLI; operational endpoint setup is a separate adapter capability.",
       "Existing endpoint listing, online agent and HTTP 200 are separate from client readiness.",
-      "Next drop: detection inventory only; create is not in the active catalog."
+      "Detection only; route creation is not available in this version."
     ],
     "recipes": {
       "detect": {
@@ -215,7 +215,7 @@
       "Current capability requires a successful probe from the intended client network.",
       "Detection identifies the CLI; operational endpoint setup is a separate adapter capability.",
       "Existing endpoint listing, online agent and HTTP 200 are separate from client readiness.",
-      "Next drop: detection inventory only; create is not in the active catalog."
+      "Detection only; route creation is not available in this version."
     ],
     "recipes": {
       "detect": {
@@ -253,7 +253,7 @@
       "Current capability requires a successful probe from the intended client network.",
       "Detection identifies the named-tunnel CLI; operational connector setup is a separate adapter capability.",
       "No verified CLI DNS inventory/delete command in scoped source; DNS ownership is a prerequisite.",
-      "Next drop: detection inventory only; create is not in the active catalog."
+      "Detection only; route creation is not available in this version."
     ],
     "recipes": {
       "detect": {

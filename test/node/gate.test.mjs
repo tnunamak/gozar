@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -27,7 +28,7 @@ test('gate verifier rejects wrong instance, buffered SSE and oversized identity 
   await new Promise(resolve => buffered.listen(0, '127.0.0.1', resolve));
   t.after(() => { buffered.closeAllConnections(); buffered.close(); });
   await assert.rejects(gate.verify(`http://127.0.0.1:${buffered.address().port}`, { sse: true, signal: AbortSignal.timeout(5000) }), /buffered/);
-  const wrong = http.createServer((request, response) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ nonce: 'different' })); });
+  const wrong = http.createServer((request, response) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ nonce: randomUUID() })); });
   await new Promise(resolve => wrong.listen(0, '127.0.0.1', resolve));
   t.after(() => { wrong.closeAllConnections(); wrong.close(); });
   await assert.rejects(gate.verify(`http://127.0.0.1:${wrong.address().port}`, { signal: AbortSignal.timeout(5000) }), /different instance/);

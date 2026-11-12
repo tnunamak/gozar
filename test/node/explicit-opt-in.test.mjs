@@ -20,5 +20,5 @@ test('API accepts explicit admitted relay selection but continues to block next-
   assert.equal(child.status, 0, child.stderr);
   const lines = child.stdout.trim().split('\n').map(line => JSON.parse(line));
   assert.match(lines[0].message, /Exposure requires approval/);
-  assert.match(lines[1].message, /NEXT DROP/);
+  assert.match(lines[1].message, /Selected route is not available in this version/);
 });

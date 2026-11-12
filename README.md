@@ -16,7 +16,7 @@ For temporary sharing, use a tunnel. For a long-running service behind your own 
 
 ## Install
 
-Linux with Node.js 24 or newer is the tested setup.
+Use Linux with Node.js 24 or newer.
 
 For a one-off command, use the scoped package explicitly:
 
@@ -200,9 +200,10 @@ npx --package=@tnunamak/gozar@0.1.0 gozar detect --port 3000 --alternatives
 
 Use `--client-reach internet` for a hosted client, `tailnet` for a private Tailscale client, or `lan` for a client on your selected local network. Add `--adapter ID` to choose a route shown by detection. Detection alone does not prove login, permission or reachability.
 
-To select tunnl.gg explicitly, run `gozar expose --port 3000 --client-reach internet --adapter tunnl-gg`. Gozar creates an Ed25519 identity under its home directory (`GOZAR_HOME`, or `~/.local/state/gozar`) on first approved use and reuses it for later sessions. A changed address withdraws the route. The relay may show a browser warning and closes a quiet stream after about two minutes. The default trial selection is unchanged.
+To select tunnl.gg explicitly, run `npx --package=@tnunamak/gozar@0.1.0 gozar expose --port 3000 --client-reach internet --adapter tunnl-gg`. Gozar creates an Ed25519 identity under its home directory (`GOZAR_HOME`, or `~/.local/state/gozar`) on first approved use and reuses it for later sessions. A changed address withdraws the route. The relay may show a browser warning and closes a quiet stream after about two minutes. The default trial selection is unchanged.
 
 Public routes include the localhost.run trial and Tailscale Funnel. Funnel runs its own process and leaves your existing listeners alone. The trial uses isolated SSH state; the relay terminates TLS and can read forwarded traffic.
+
 For temporary exposure through your own HTTPS proxy:
 
 ```sh
