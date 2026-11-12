@@ -1,6 +1,6 @@
 # Design: durable routes and route adoption
 
-Status: proposal, revision 5 (after the design review, the visibility rule, the spike, and the spike review). Decision: Tailscale durable routes use the LocalAPI with ETag compare-and-set. No code yet. Targets Gozar 0.2.0.
+Status: proposal, revision 6 (after two design reviews, the visibility rule, the spike, and the spike review). Decision: Tailscale durable routes use the LocalAPI with ETag compare-and-set. No code yet. Targets Gozar 0.2.0.
 
 ## Problem
 
@@ -61,11 +61,27 @@ await ensureRoute({
 //      lifetime: 'provider-persistent' | 'host-supervised', state, verification } }
 
 await adoptRoute({ routeId, adapterId, target, origin, claim, handover, approvals, home }); // see "Adoption"
-await releaseRoute({ routeId, mode: 'remove' | 'hand-back', home });
+await releaseRoute({ routeId, mode: 'remove' | 'hand-back', home }); // hand-back is phase 1; see "Hand-back"
+await confirmHandBack({ routeId, transfer, home }); // phase 2, after the previous owner took the rule back
 await statusServices({ home });   // re-observes and re-verifies; never trusts saved readiness
 ```
 
 The app verifies with the existing `createServiceVerifier()` in its own request handler. **No Gozar gate process sits in the data path** of a durable route. The provider forwards straight to the app's listener, so Host and the provider's forwarding headers reach the app unchanged.
+
+### What a durable route exposes: owner-run, not app-bound
+
+A durable route is a **standing forward** from the public origin to the target port. The user who approved it owns it, not the app process. Between Gozar calls, the provider forwards to whatever listens on the target, whether or not the approved app is running:
+- if the app exits and another process binds the same port, that process is reachable at once, before any Gozar call or challenge;
+- if the node's DNS name changes while no Gozar call runs, the rule keeps forwarding under the new name.
+
+So **pinning fails closed for publication and for Gozar's own mutations, not for traffic.** Gozar never publishes, reports or re-creates a route at a different origin, and never mutates a rule it cannot attribute. It does not claim that traffic stops when the app stops.
+
+Why not bind the route to the app: stopping traffic when the app exits needs a component in the data path (a gate) or a resident supervisor, and a durable route has neither by design, so that it survives app restarts and reboots. An app that wants exposure only while it runs uses a session.
+
+What makes this acceptable:
+- The durable consent copy says so: "stays reachable at ORIGIN whether or not OWNER is running, until you stop it with `gozar stop --route ID`".
+- `gozar status` shows each durable route as `owner-run` and states `forwards to 127.0.0.1:PORT whether or not OWNER is running`. It also shows a live target check: `app answering` (the challenge passes), `nothing listening`, or **`another program is listening`** (the target answers but the challenge fails). The last one is shown as a warning, with `gozar stop --route ID` as the next action.
+- Hosts use a port they keep for the route. On shared multi-user machines a durable route to a TCP loopback port is not recommended. A later version may support unix-socket targets in a private directory, which give the listener an identity.
 
 ### Resolution: the record is authoritative
 
@@ -122,13 +138,22 @@ A durable route has no expiry, so the user must always be able to see it and sto
 - `gozar status` with no arguments lists every session **and** every durable and service route in the home. Each durable route shows its route ID, provider (adapter), origin, owner app, created-at time and state. `gozar status --route ID` shows one. `--json` gives the same fields.
 - This changes bare `gozar status` (human and `--json`): it used to show only the session in `last.json`; in 0.2.0 it shows the inventory. `status --port N` is unchanged. `health`, `update-origin` and `stop` without `--port` still use `last.json`. The changelog for 0.2.0 names this as a breaking change for callers of bare `status --json`.
 - `gozar stop --route ID` releases the route with compare-and-remove (below), exactly as `releaseRoute({mode:'remove'})` does.
-- **A user stop is sticky.** It leaves a small tombstone for the route ID. The owner app's next `ensureRoute` for that ID is refused with `stopped_by_user` instead of quietly re-creating the route. The app may create it again only with `reconsent: true`, which a host sets only after it has shown the durable consent prompt again. A tombstone is deleted by that re-consented call or by `releaseRoute` from the app.
+- **A user stop is sticky.** It writes a durable **consent revocation** (tombstone) for the route ID, fsynced **before** any provider mutation or record deletion. The owner app's next `ensureRoute` for that ID is refused with `stopped_by_user` instead of quietly re-creating the route, and `adoptRoute` for that ID is refused too.
+- **Only a user action clears it:** `gozar allow --route ID` run by the user, or `ensureRoute({ reconsent: true })`, which a host may set only right after the user approved the durable consent prompt again in its own UI. `releaseRoute` in any mode, hand-back, cleanup and adoption never clear it. Gozar cannot tell a host that sets `reconsent` honestly from one that does not; it trusts that flag exactly as far as it trusts `approvals`. The CLI path is the only clearance Gozar itself witnesses.
 
 ### Stop
 
-`releaseRoute({mode:'remove'})` first marks the record `releasing` durably, so publication is withdrawn even if the process dies. It then removes the provider route by **compare-and-remove**: read the provider config, require an exact match with the receipt, and remove only that listener. For Tailscale, removal is a LocalAPI compare-and-set (see "Tailscale adapters"): Gozar reads the serve config with its ETag, checks the receipt against that read, and writes the config without its own listener with `If-Match` set to that ETag. A concurrent edit makes the write fail with 412, so Gozar never deletes an edit it did not see. A mismatch leaves the foreign config in place and records **cleanup debt**, as sessions do today. Gozar never removes a rule it cannot attribute to a receipt.
+`releaseRoute({mode:'remove'})` first marks the record `releasing` durably, so publication is withdrawn even if the process dies. It then removes the provider route by **compare-and-remove**: read the provider config, require an exact match with the receipt, and remove only that listener. For Tailscale, removal is a LocalAPI compare-and-set (see "Tailscale adapters"): Gozar reads the serve config with its ETag, checks the receipt against that read, and writes the config without its own listener with `If-Match` set to that ETag. A concurrent edit makes the write fail with 412, so Gozar never deletes an edit it did not see. A mismatch leaves the foreign config in place and records **cleanup debt**, as sessions do today. Gozar never removes a rule it cannot attribute to a receipt, and never writes provider config without `If-Match`.
 
-`releaseRoute({mode:'hand-back'})` deletes the record without touching the provider route and returns a claim, for rollback to a previous owner.
+**Attribution limit.** Gozar attributes a rule by its exact content. If another program deletes Gozar's rule and creates an identical one between two Gozar calls, Gozar cannot tell them apart and treats the identical rule as its own. Compare-and-set guarantees only that no edit made after Gozar's read is overwritten or deleted.
+
+### Hand-back (two phases)
+
+Hand-back returns a route to its previous owner (for example, a rollback). It is two-phase, so a crash or a lost reply never leaves a rule that nobody owns:
+1. `releaseRoute({mode:'hand-back'})`: under the reservation lock, Gozar durably marks the record `handing-back` with a transfer generation and the claim, keeps the receipt and the reservation, and returns `{ claim, transfer }`. From then on, Gozar makes no mutation for that route, and `ensureRoute` and `adoptRoute` return `handing_back`. A retry returns the same claim and transfer.
+2. `confirmHandBack({routeId, transfer})`: called after the previous owner has durably taken the rule back (lifted its fence with a newer generation). Only then does Gozar delete the record and release the reservation.
+
+Until phase 2, `gozar status` lists the route as `handing-back`. `gozar stop --route ID` still works, because the user outranks both owners: it removes the rule by compare-and-set and writes the tombstone. `cancelHandBack({routeId, transfer})` returns the route to its previous state if the previous owner never took it.
 
 ### Adoption
 
@@ -137,7 +162,7 @@ A durable route has no expiry, so the user must always be able to see it and sto
 1. **Exact match.** `claim` is the exact rule the previous owner recorded (for Tailscale: node DNS name, HTTPS port, mode, proxy target). Under the reservation lock, Gozar reads fresh provider config and requires an exact match: same port, mode and target, no other handler on that port, and the computed origin equals `origin`. Then it verifies through the challenge and re-reads the provider config, to confirm the rule did not change during verification. Any difference is refused, and nothing changes.
 2. **Fenced handover.** `handover: { from, generation }` asserts that the previous owner has already fenced itself: it has recorded that generation as handed over and will no longer create, re-create or remove that rule. Gozar stores `from` and `generation` in the record with provenance `adopted`. Gozar cannot fence another program, so this is a precondition the caller must meet. **If the previous owner cannot record the fence, the caller must not adopt**, and the route is migrated by release and re-creation instead.
 
-Rollback is the reverse: `releaseRoute({mode:'hand-back'})` returns the claim, and the previous owner lifts its fence with a newer generation. At every moment exactly one side may mutate the rule.
+Rollback is the reverse, through the two-phase hand-back above: the previous owner lifts its fence with a newer generation, then confirms. At every moment at most one side may mutate the rule, and the rule is always listed by at least one owner.
 
 No double exposure: adoption refuses if the reservation table already holds the listener or the provider port for a session or another record.
 
@@ -216,7 +241,16 @@ LocalAPI contract:
 Visibility:
 21. `gozar status` with no arguments lists a durable route with route ID, provider, origin, owner app, created-at time and state, next to sessions and service routes; `--json` has the same fields;
 22. `gozar stop --route ID` removes the provider rule by compare-and-remove and deletes the record; with a changed rule it leaves the rule, keeps cleanup debt and says so;
-23. after `gozar stop --route ID`, the owner app's `ensureRoute` is refused with `stopped_by_user` and makes no mutation; with `reconsent: true` it creates the route again.
+23. after `gozar stop --route ID`, the owner app's `ensureRoute` is refused with `stopped_by_user` and makes no mutation; with `reconsent: true` it creates the route again;
+27. stop, then the app's `releaseRoute` (every mode), then a restart and `ensureRoute` with the saved approvals → still `stopped_by_user`; `adoptRoute` after a user stop → refused; `gozar allow --route ID` clears it; a crash during `gozar stop` after the tombstone write and before the provider write still blocks recreation.
+
+Hand-back:
+28. a crash after the `handing-back` write and before the reply, and a crash after the reply and before confirmation: the route stays listed as `handing-back` with its receipt and reservation; a retry returns the same claim and transfer;
+29. `ensureRoute` and `adoptRoute` during hand-back → `handing_back`, no mutation; `gozar stop --route ID` during hand-back removes by compare-and-set and writes the tombstone; `confirmHandBack` with a stale transfer → refused.
+
+Owner-run exposure:
+30. the app stops and another server binds the target port: the provider rule still forwards (the design does not prevent this), and `gozar status` shows `another program is listening` with `gozar stop --route ID` as the next action; with nothing listening it shows `nothing listening`;
+31. the node DNS name changes while no Gozar call runs: the next status shows `address_changed` and never reports the new origin as the route's origin.
 
 Adoption:
 18. adopt of an exact rule with a handover → no provider mutation, record `adopted`; a mismatch, a missing handover, or a rule change during verification → refused;
