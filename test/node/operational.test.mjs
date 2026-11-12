@@ -92,3 +92,32 @@ test('owned handle remains attributable through after-removal readback and retir
   assert.equal(stopped.snapshot.resources[0].cleanup, 'removed');
   assert.equal(Object.keys(journal.value.owned).length, 0);
 });
+
+test('late probe completion cannot retain obsolete proof expiry history', async t => {
+  const { controller, adapter } = await operationalFixture(t, { external:true });
+  adapter.audience = 'public'; adapter.capabilities.https = true; adapter.endpoint = 'https://fixture.invalid';
+  controller.adapters = [adapter]; controller.driver.adapters = structuredClone([adapter]);
+  controller.requirements = { clientReach:'internet', httpsRequired:true, sse:false };
+  let enter, release;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  let calls = 0;
+  controller.driver.probeExecutor = { vantages:['public'], async verify({authorization,origin,vantage}) {
+    const now = controller.driver.nowMs();
+    const receipt = {...authorization,origin,vantage,remote:true,observedAtMs:now,expiresAtMs:now+1500,
+      tls:true,instanceMatched:true,sse:false,streamableHttp:false,oauthDcr:false};
+    if (++calls === 1) { enter(); await blocked; }
+    return {probeReceipt:receipt};
+  }};
+  const start = controller.command({type:'start',adapterId:adapter.id,consent:true});
+  await entered;
+  const current = await controller.command({type:'health'});
+  release(); await start;
+  assert.equal(current.snapshot.phase,'candidate-ready');
+  assert.deepEqual([...controller.driver.proofExpiries.keys()],[current.snapshot.generation]);
+  await new Promise(resolve => setTimeout(resolve,1700));
+  assert.equal(controller.driver.timers.size,0);
+  assert.equal(controller.driver.proofExpiries.size,0);
+  assert.equal(controller.state.published,null);
+});

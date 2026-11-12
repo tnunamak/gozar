@@ -20,6 +20,9 @@ export class Controller {
     this.last = this.step({ ...(this.state ? { state: this.state } : {}), command: { sessionId: this.sessionId, ...command },
       adapters: this.adapters, requirements: this.requirements, host: { ...this.driver.host, nowMs: this.driver.nowMs?.() ?? 0 } });
     this.state = this.last.state;
+    for (const generation of this.driver.proofExpiries?.keys() ?? []) {
+      if (generation !== this.state.generation) this.driver.proofExpiries.delete(generation);
+    }
     for (const resource of this.last.snapshot.resources ?? []) {
       if (resource.cleanup === 'removed' && this.journal.value.owned?.[resource.id]?.retired) delete this.journal.value.owned[resource.id];
     }
