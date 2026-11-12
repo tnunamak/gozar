@@ -28,7 +28,7 @@ export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = 
         response.write(`data: ${JSON.stringify({ nonce, sequence: sequence++ })}\n\n`);
         if (sequence === 3) { clearInterval(timer); response.end(); }
       };
-      const timer = setInterval(send, 150); send();
+      const timer = setInterval(send, 1000); send(); // Stay above short batching intervals; full-response buffering still fails verification.
       response.on('close', () => clearInterval(timer)); return;
     }
     const upstream = http.request({ hostname: '127.0.0.1', port: targetPort, method: request.method, path: request.url,

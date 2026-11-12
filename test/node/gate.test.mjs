@@ -11,10 +11,10 @@ test('instance gate forwards to exact app and proves nonce plus timed incrementa
   t.after(() => { target.closeAllConnections(); target.close(); });
   const gate = await createGate(target.address().port); t.after(() => gate.close());
   assert.equal(await (await fetch(`${gate.target}/mcp`)).text(), 'app:/mcp');
-  const proof = await gate.verify(gate.target, { sse: true, signal: AbortSignal.timeout(2000) });
+  const proof = await gate.verify(gate.target, { sse: true, signal: AbortSignal.timeout(5000) });
   assert.equal(proof.instanceMatched, true); assert.equal(proof.streaming, true); assert.equal(proof.tls, false);
   const previousRef = gate.nonceRef; gate.rotate(); assert.notEqual(gate.nonceRef, previousRef);
-  assert.equal((await gate.verify(gate.target, { signal: AbortSignal.timeout(2000) })).instanceMatched, true);
+  assert.equal((await gate.verify(gate.target, { signal: AbortSignal.timeout(5000) })).instanceMatched, true);
 });
 
 test('gate verifier rejects wrong instance, buffered SSE and oversized identity body', async t => {
@@ -26,11 +26,38 @@ test('gate verifier rejects wrong instance, buffered SSE and oversized identity 
   });
   await new Promise(resolve => buffered.listen(0, '127.0.0.1', resolve));
   t.after(() => { buffered.closeAllConnections(); buffered.close(); });
-  await assert.rejects(gate.verify(`http://127.0.0.1:${buffered.address().port}`, { sse: true, signal: AbortSignal.timeout(2000) }), /buffered/);
+  await assert.rejects(gate.verify(`http://127.0.0.1:${buffered.address().port}`, { sse: true, signal: AbortSignal.timeout(5000) }), /buffered/);
   const wrong = http.createServer((request, response) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ nonce: 'different' })); });
   await new Promise(resolve => wrong.listen(0, '127.0.0.1', resolve));
   t.after(() => { wrong.closeAllConnections(); wrong.close(); });
-  await assert.rejects(gate.verify(`http://127.0.0.1:${wrong.address().port}`, { signal: AbortSignal.timeout(2000) }), /different instance/);
+  await assert.rejects(gate.verify(`http://127.0.0.1:${wrong.address().port}`, { signal: AbortSignal.timeout(5000) }), /different instance/);
+});
+
+test('one-second timed SSE survives a proxy that batches writes every 400 ms', async t => {
+  const gate = await createGate(1); t.after(() => gate.close());
+  const batching = http.createServer((request, response) => {
+    const upstream = http.get(`${gate.target}${request.url}`, result => {
+      response.writeHead(result.statusCode, result.headers);
+      response.flushHeaders();
+      if (request.url !== gate.challenge().streamPath) { result.pipe(response); return; }
+      let pending = [], ended = false;
+      const flush = () => {
+        if (pending.length) { response.write(Buffer.concat(pending)); pending = []; }
+        if (ended) { clearInterval(timer); response.end(); }
+      };
+      const timer = setInterval(flush, 400);
+      result.on('data', chunk => pending.push(Buffer.from(chunk)));
+      result.on('end', () => { ended = true; flush(); });
+      result.on('error', () => { clearInterval(timer); response.destroy(); });
+      response.on('close', () => clearInterval(timer));
+    });
+    upstream.on('error', () => { if (!response.headersSent) response.writeHead(502); response.end(); });
+  });
+  await new Promise(resolve => batching.listen(0, '127.0.0.1', resolve));
+  t.after(() => { batching.closeAllConnections(); batching.close(); });
+  const proof = await gate.verify(`http://127.0.0.1:${batching.address().port}`, { sse: true, signal: AbortSignal.timeout(5000) });
+  assert.equal(proof.instanceMatched, true);
+  assert.equal(proof.streaming, true);
 });
 
 test('host prepares real scoped private file and target bindings without fabricating provider facts', async t => {
