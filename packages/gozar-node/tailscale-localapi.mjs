@@ -100,3 +100,38 @@ export async function getNode() {
   const funnelPorts = Object.keys(status.Self.CapMap ?? {}).flatMap(key => funnelPortsKey.exec(key)?.[1].split(',').map(Number) ?? []);
   return { dnsName, funnelPorts };
 }
+
+// --- Listener arithmetic on a serve config (pure) ---
+// One implementation of "what is on this port", "is it free", "the config with exactly this
+// listener" and "without it". The durable engine and the Tailscale adapters share it, so a
+// plan, a receipt and a removal always agree on what a listener is. A listener is the TCP
+// handler for the port, the Web handler for `dnsName:port` and, for Funnel, its AllowFunnel flag.
+const absentRule = rule => Object.values(rule).every(value => value === null);
+const foreground = (config, dnsName, port) => Object.values(config.Foreground ?? {})
+  .some(session => session?.TCP?.[port] || session?.Web?.[`${dnsName}:${port}`]);
+export const serveListener = {
+  ruleAt: (config, dnsName, port) => ({ tcp: config.TCP?.[port] ?? null, web: config.Web?.[`${dnsName}:${port}`] ?? null,
+    funnel: config.AllowFunnel?.[`${dnsName}:${port}`] ?? null }),
+  absent: absentRule,
+  // True when anything at all holds the port, including a bare TCP entry and any foreground session.
+  occupied: (config, dnsName, port) => !absentRule(serveListener.ruleAt(config, dnsName, port)) || config.TCP?.[port] !== undefined ||
+    foreground(config, dnsName, port),
+  foreground,
+  withListener(config, dnsName, port, listener) {
+    const next = structuredClone(config), hostPort = `${dnsName}:${port}`;
+    (next.TCP ??= {})[port] = listener.tcp;
+    (next.Web ??= {})[hostPort] = listener.web;
+    if (listener.funnel !== null) (next.AllowFunnel ??= {})[hostPort] = listener.funnel;
+    return next;
+  },
+  // The config without exactly one listener; empty maps are dropped.
+  without(config, dnsName, port) {
+    const next = structuredClone(config);
+    for (const [key, field] of [['TCP', String(port)], ['Web', `${dnsName}:${port}`], ['AllowFunnel', `${dnsName}:${port}`]]) {
+      if (!next[key]) continue;
+      delete next[key][field];
+      if (!Object.keys(next[key]).length) delete next[key];
+    }
+    return next;
+  },
+};

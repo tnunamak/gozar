@@ -1,6 +1,6 @@
 # Design: durable routes and route adoption
 
-Status: proposal, revision 6 (after two design reviews, the visibility rule, the spike, and the spike review). Decision: Tailscale durable routes use the LocalAPI with ETag compare-and-set. No code yet. Targets Gozar 0.2.0.
+Status: revision 7. Decision: Tailscale durable routes use the LocalAPI with ETag compare-and-set. Revision 7 removes `adapterId` and `approvals` from the app's calls: the app passes a Query, and Gozar chooses the adapter from a single-use approval token that its own catalog issued (see "Approval tokens"). Targets Gozar 0.2.0.
 
 ## Problem
 
@@ -46,25 +46,33 @@ One home-wide **reservation lock** serializes every allocation that can collide:
 
 ### API (Node, `@tnunamak/gozar/service`)
 
+The app never names an adapter. It passes the contract's Query fields and, for a new route, an approval token.
+
 ```js
 // Create the route, or reuse the one this record owns. Idempotent.
 await ensureRoute({
-  routeId,            // app-chosen, stable
+  schemaVersion: 1,
   owner,              // app name shown to the user, for example 'example-app'
-  adapterId,          // 'tailscale-funnel' | 'tailscale-private' | later 'ngrok-https-edge'
-  target,             // '127.0.0.1:PORT' — the app's own listener
-  origin,             // optional; see "Resolution"
-  approvals,          // ordered list of approved tuples; see "Consent"
+  target,             // '127.0.0.1:PORT' - the app's own listener
+  usage: { kind: 'durable', routeId },  // routeId: app-chosen, stable
+  requirements, route, origin,          // the Query the user approved; origin is optional
+  approval,           // { candidateToken }; needed for a first creation, see "Approval tokens"
+  reconsent,          // true only right after the user approved again; see "Visibility"
   home,
 });
 // -> { schemaVersion: 1, route: { routeId, owner, createdAt, origin, target, adapterId, ownership: 'gozar-owned',
 //      lifetime: 'provider-persistent' | 'host-supervised', state, verification } }
 
-await adoptRoute({ routeId, owner, target, origin, handover, approvals, home }); // no adapter or claim; see "Adoption"
+// Take over a provider route that exists now. Needs the app to be running (it verifies the challenge).
+await adoptRoute({ ...query, usage: { kind: 'durable', routeId }, origin, approval, handover, migrationRef, reconsent });
 await releaseRoute({ routeId, mode: 'remove' | 'hand-back', home }); // hand-back is phase 1; see "Hand-back"
 await confirmHandBack({ routeId, transfer, home }); // phase 2, after the previous owner took the rule back
 await statusServices({ home });   // re-observes and re-verifies; never trusts saved readiness
+await durablePlanFacts({ home, adapterId, target, origin }); // read-only; used by the catalog, see below
+await inspectLegacyRoute({ home, owner, source: { stateFiles }, target, origin }); // read-only; see "Legacy inspection"
 ```
+
+A session usage (`usage.kind: 'session'`) is refused with `durable_lifetime_unsupported`. Any usage other than `durable` is `invalid_input`.
 
 The app verifies with the existing `createServiceVerifier()` in its own request handler. **No Gozar gate process sits in the data path** of a durable route. The provider forwards straight to the app's listener, so Host and the provider's forwarding headers reach the app unchanged.
 
@@ -86,9 +94,11 @@ What makes this acceptable:
 ### Resolution: the record is authoritative
 
 `ensureRoute` takes the reservation lock, then loads the record for `routeId` **before** it computes any candidate or chooses a port.
-- **No record:** this is a first allocation. `origin` may be absent. Adapter fallback is allowed (see "Consent").
-- **Record exists:** the record's origin and adapter are the pin. A caller `origin` that differs is refused. An absent `origin` means "the recorded one", never "unpinned". A different `adapterId` is refused.
+- **No record:** this is a first allocation. It needs an approval token (see "Approval tokens"). The adapter is the one in the token's grant. `origin` may be absent.
+- **Record exists:** the record is the **pin**: its origin and adapter never move. A caller `origin` that differs is refused with `origin_changed`. An absent `origin` means "the recorded one", never "unpinned". No token is needed, and a token that is passed is not used. A different preference, a different catalog order or a token for another adapter never moves the pin.
 - **Record in `lost`, `address_changed`, `uncertain` or `releasing`:** never treated as a new allocation. `lost` may be restored at the pinned origin (below); the other states need `releaseRoute` or `adoptRoute` first.
+
+A restore re-computes the recipe digest for the recorded adapter. If it differs from the digest saved on the record, the recipe changed since the route was made, and the call fails with `adapter_changed`. Gozar mutates nothing.
 
 After every await, the call re-reads the record generation and stops if a concurrent `releaseRoute` moved it to `releasing`. A late create or verification can never re-publish a released route.
 
@@ -98,7 +108,7 @@ An adapter declares how its durable route lives:
 - `provider-persistent`: the provider keeps the route without a process, for example Tailscale `serve --bg` / `funnel --bg`. The route survives app exit and reboot. Removal is an explicit provider command.
 - `host-supervised`: the route exists only while a process runs, for example an ngrok agent. The embedding app keeps that process alive by calling `ensureRoute` on start. Gozar re-creates the process and requires the **same origin** back.
 
-**Durable routes have no finite lifetime in 0.2.0.** A host-set expiry on a `provider-persistent` route has no enforcer: if no Gozar call runs after the deadline, the route stays reachable indefinitely. So `ensureRoute` rejects `lifetimeMs` unless the adapter declares a provider-enforced deadline (no current adapter does). Exposure for a bounded time stays with sessions, which own a live process and a timer. A later version may add expiry with an independent, persistent owner (for example a systemd timer) and an absolute `expiresAt` that reuse can never extend.
+**Durable routes have no finite lifetime in 0.2.0.** A host-set expiry on a `provider-persistent` route has no enforcer: if no Gozar call runs after the deadline, the route stays reachable indefinitely. So a durable request has no lifetime field, and a `session` usage is refused with `durable_lifetime_unsupported`. Exposure for a bounded time stays with sessions, which own a live process and a timer. A later version may add expiry with an independent, persistent owner (for example a systemd timer) and an absolute `expiresAt` that reuse can never extend.
 
 An adapter can offer a durable route only if it declares `addressStability: 'stable'`, meaning the same inputs give the same origin. Anonymous localhost.run fails this. So does any relay that assigns random names. Such adapters stay session-only.
 
@@ -119,9 +129,36 @@ An adapter can offer a durable route only if it declares `addressStability: 'sta
 
 ### Consent
 
-- The host collects approval of exact tuples `{adapterId, target, origin|null, durable:true}` and passes them as `approvals`, in the order it allows them. Gozar uses a tuple only if it is in that list. **Fallback to another adapter needs its own approved tuple**; the first adapter's approval never covers it.
-- The record stores the tuple it was created under. A later `ensureRoute` with an identical tuple reuses that consent. Any difference (target, adapter, origin, durable↔temporary) requires new approval.
+Consent is a consent receipt that Gozar issued itself, not a list that the app supplies.
+
+- The app asks Gozar's catalog for candidates. For an eligible candidate the catalog shows the user the durable consent copy (`durableConsentText`), then issues a token (see "Approval tokens"). The app passes it back as `approval.candidateToken`.
+- **Fallback to another adapter needs its own token.** A token carries exactly one grant (one adapter). The first adapter's token never covers another adapter.
+- The record stores the tuple it was created under (target, owner, origin, adapter, plan digest). A later `ensureRoute` with an existing record reuses that consent and needs no token. A changed target or owner gives `consent_changed`.
 - The CLI asks interactively, as `expose` does. Durable consent copy names the difference: "stays reachable after Gozar exits, until you release it".
+
+### Approval tokens
+
+`consent-token.mjs` holds the mechanism. Three functions, no app knowledge of adapters:
+
+- `consentBinding(query, canonicalHome, disclosureRevision)` is pure. It returns `{owner, home, target, usage, intent, requirements, route, origin, disclosureRevision}`. The issuer and the redeemer both call it, so they cannot disagree on what a field means.
+- `issueConsentToken({home, binding, grant, ttlMs})` returns `{token, expiresAt}`. The grant is `{adapterId, planDigest, observedResource}`. The default TTL is 10 minutes and the longest is 1 hour. On issue it sweeps expired token files, and leftover `.spent` or `.tmp` files older than the longest TTL.
+- `redeemConsentToken({home, token, binding})` returns the grant. The binding is compared as a digest of canonical JSON (keys sorted at every depth), so key order never matters.
+
+Rules:
+1. **Single use.** The first presentation renames the token file to a unique `.spent` name. Rename is atomic, so one of several racing processes wins and the others get `consent_unknown`.
+2. **Spent on any failure.** A token that is expired (`consent_expired`) or whose binding differs in any field (`consent_mismatch`) is spent too. The app must ask the user again.
+3. **Hashes only.** The file name is the SHA-256 of the token. The file holds the binding digest, the grant and the expiry (0600). A copy of the state directory cannot spend a token or reveal what it was bound to.
+4. **No provider write happens before a successful redeem.** Replay, a race, a changed binding field, or drift all give zero provider writes.
+
+**Plan facts.** `durablePlanFacts({home, adapterId, target, origin})` is read-only. It returns `{planDigest, observedResource, origin}` from fresh provider observation. One function, `planFactsFromObservation`, serves the issuer (the catalog, through `durablePlanFacts`) and the redeemer (`ensureRoute` and `adoptRoute`, under the reservation lock), so the two cannot drift apart by design.
+- `planDigest` is a digest of the adapter, the provider resource, the recipe, the target and the origin it would publish.
+- `observedResource` is a digest of the provider, the node DNS name, and **the one candidate listener** (port, rule, occupied). It does not cover the rest of the serve config. An unrelated edit to another port, made by another program, does not make a token stale. A change to the DNS name or to the candidate listener does.
+- With an `origin` given, the candidate port is the one whose origin matches, whatever currently holds it. Without an origin, it is the first permitted, free, unreserved port.
+- An adapter with no durable recipe gives `provider_unsupported` (this is the `unsupported` case of the contract; see "Error codes").
+
+**Redeem under the lock.** On a first creation `ensureRoute` redeems the token, takes `adapterId` from the grant, re-runs the facts under the reservation lock, and compares `planDigest` and `observedResource` with the grant. A difference is `claim_mismatch` (the contract's `candidate_stale`). The token is already spent, so the app asks the user again. The create then pins the port the facts chose (`expectedOrigin`). If a 412 retry would move the allocation to another port, the result is `claim_mismatch` too; Gozar never publishes at an origin the user did not see.
+
+**Cheap refusals come first.** `stopped_by_user`, a listener reserved by another route, and a missing token (`consent_required`) are all decided **before** a token is spent.
 
 ### Ownership: intent is not proof
 
@@ -139,8 +176,13 @@ A durable route has no expiry, so the user must always be able to see it and sto
 - Bare `gozar status` changes additively. When `last.json` names a session, it keeps its old output, JSON shape and exit code, and adds an `inventory` field to the JSON (in human output, an inventory section after the session). With no `last.json`, it prints the inventory and exits 0. `status --port N` is unchanged. `health`, `update-origin` and `stop` without `--port` still use `last.json`. The 0.2.0 changelog names the new `inventory` field.
 - Each route shows as `owner-run` with `forwards to 127.0.0.1:PORT whether or not OWNER is running` and a live target check (`app answering`, `nothing listening`, or the warning `another program is listening` with `gozar stop --route ID` as the next action). Routes the user stopped show in a separate section with the `gozar allow --route ID` command.
 - `gozar stop --route ID` releases the route with compare-and-remove (below), exactly as `releaseRoute({mode:'remove'})` does.
-- **A user stop is sticky.** It writes a durable **consent revocation** (tombstone) for the route ID, fsynced **before** any provider mutation or record deletion. The owner app's next `ensureRoute` for that ID is refused with `stopped_by_user` instead of quietly re-creating the route, and `adoptRoute` for that ID is refused too.
-- **Only a user action clears it:** `gozar allow --route ID` run by the user, or `ensureRoute({ reconsent: true })`, which a host may set only right after the user approved the durable consent prompt again in its own UI. `releaseRoute` in any mode, hand-back, cleanup and adoption never clear it. Gozar cannot tell a host that sets `reconsent` honestly from one that does not; it trusts that flag exactly as far as it trusts `approvals`. The CLI path is the only clearance Gozar itself witnesses.
+- **A user stop is sticky.** It writes a durable **consent revocation** (tombstone) for the route ID, fsynced **before** any provider mutation or record deletion. The owner app's next `ensureRoute` for that ID is refused with `stopped_by_user` instead of quietly re-creating the route, and `adoptRoute` for that ID is refused too, with or without an approval token.
+- **Only a user action clears it:** `gozar allow --route ID` run by the user, or **both** `reconsent: true` **and** a valid `approval` token. A host may set `reconsent` only right after the user approved the durable consent prompt again in its own UI. Three cases for `ensureRoute` and `adoptRoute`:
+  - `reconsent: true` without `approval` → `consent_required`;
+  - `approval` without `reconsent` → `stopped_by_user`, and the token is not spent;
+  - both, and the token redeems → the tombstone is cleared and the call goes on.
+
+  `releaseRoute` in any mode, hand-back and cleanup never clear it. Gozar cannot tell a host that sets `reconsent` honestly from one that does not; the token proves only that Gozar's catalog showed the consent copy and the user approved it, not that the stop was acknowledged. The CLI path is the only clearance Gozar itself witnesses.
 
 ### Stop
 
@@ -158,18 +200,35 @@ Until phase 2, `gozar status` lists the route as `handing-back`. `gozar stop --r
 
 ### Adoption
 
-`adoptRoute` takes ownership of a provider route that exists now, with **no teardown**. Matching the config proves the route is the right one. It does not prove the caller has the authority to take it from its previous owner. So adoption needs both:
+`adoptRoute` takes ownership of a provider route that exists now, with **no teardown**. Matching the config proves the route is the right one. It does not prove the caller has the authority to take it from its previous owner. So adoption needs all of these:
 
-1. **Exact match, found by Gozar.** The caller names no provider and no rule. Under the reservation lock, Gozar reads fresh provider config and, for each adapter that declares a durable capability, looks at each candidate port whose origin equals `origin`. A port matches when its rule deep-equals the adapter's rule for this target (same mode, same proxy target, no other handler) and no foreground session uses it. Exactly one match: proceed. No match: `claim_mismatch`. More than one: `ambiguous_route`. Nothing changes in either refusal. Gozar then checks the approval for the adapter it found, verifies through the challenge, re-reads the provider config and requires the same match again. The record stores the adapter, DNS name, port and mode it found.
-2. **Fenced handover.** `handover: { from, generation }` asserts that the previous owner has already fenced itself: it has recorded that generation as handed over and will no longer create, re-create or remove that rule. Gozar stores `from` and `generation` in the record with provenance `adopted`. Gozar cannot fence another program, so this is a precondition the caller must meet. **If the previous owner cannot record the fence, the caller must not adopt**, and the route is migrated by release and re-creation instead.
+1. **Exact match, found by Gozar.** The caller names no provider and no rule. Under the reservation lock, Gozar reads fresh provider config and, for each adapter that declares a durable capability, looks at each candidate port whose origin equals `origin`. A port matches when its rule deep-equals the adapter's rule for this target (same mode, same proxy target, no other handler) and no foreground session uses it. Exactly one match: proceed. No match: `claim_mismatch`. More than one: `ambiguous_route`. Nothing changes in either refusal.
+2. **Fenced handover.** `handover: { from, generation }` asserts that the previous owner has already fenced itself: it has recorded that generation as handed over and will no longer create, re-create or remove that rule. Gozar stores `from` and `generation` in the record with provenance `adopted`. Gozar cannot fence another program, so this is a precondition the caller must meet. A missing handover is `handover_required`. **If the previous owner cannot record the fence, the caller must not adopt**, and the route is migrated by release and re-creation instead.
+3. **An approval token with intent `adopt`.** The token is redeemed with the binding `intent: 'adopt'`. Its grant adapter must equal the adapter of the rule Gozar matched. A token for another adapter gives `claim_mismatch` (`candidate_stale`), and the token is spent. The grant's plan digest and observed resource must also equal the facts computed from the fresh observation. A missing token is `consent_required`.
+4. **`migrationRef`, if given.** `inspectLegacyRoute` returns `migrationRef`, an opaque digest of `{origin, target, observedResource}`. If the caller passes it, Gozar recomputes it from the fresh observation and refuses a different value with `claim_mismatch`. The route changed since the user was shown it.
+5. **Proof.** Gozar verifies through the challenge, re-reads the provider config and requires the same match again. The record stores the adapter, DNS name, port, mode and plan digest it found.
+
+**Adopt verifies the challenge, so the app must be running.** The challenge is answered by the app's own handler. If the app is not serving it, adoption fails, and nothing changes. Start the app, then adopt.
+
+The tombstone rule is the same as for `ensureRoute` ("Visibility"): a stopped route needs `reconsent: true` and a valid `approval`. Adoption of a listener or port that the reservation table already holds is refused (`reserved`), as is a second record for one route ID (`route_exists`).
 
 Rollback is the reverse, through the two-phase hand-back above: the previous owner lifts its fence with a newer generation, then confirms. At every moment at most one side may mutate the rule, and the rule is always listed by at least one owner.
 
-No double exposure: adoption refuses if the reservation table already holds the listener or the provider port for a session or another record.
+### Legacy inspection
+
+`inspectLegacyRoute({home, owner, source: {stateFiles}, target, origin?})` in `legacy-import.mjs` tells an app whether a route that another program made earlier can be adopted. It reads, it never writes: the only provider requests are the two read-only LocalAPI GETs (node status, serve config).
+
+- **Provider first.** Gozar finds a rule that forwards to `http://target` on any candidate port of any durable adapter, through the LocalAPI. It reads no file format.
+- **Every state file is opaque.** No path in `source.stateFiles` is opened, so no file content, path or token can reach the output. A route that only a file could describe (no provider rule, or the provider not answering) gives `blocked` / `unrecognized_format` with a `nextAction` of kind `instructions` ("sign in again"). A provider rule that matches is `adoptable` whatever files the caller names.
+- **Result.** `adoptable`, `external` or `blocked`, with a closed `reasonCode`: `not_found`, `target_mismatch` (a rule at that origin forwards elsewhere), `origin_mismatch` (the target is forwarded at another origin), `not_adoptable` (no exact adapter rule, a foreground session, or several origins without one named), `unrecognized_format`. `bridgeHome` is always `null`.
+- **`migrationRef`** is returned for every result; the adopt call checks it (above).
+- With no provider answer and no file, the typed provider error propagates.
 
 ### Tailscale adapters
 
 Durable Funnel/Serve routes change the node's **background** serve config (the same config `serve --bg` writes), but not through the CLI. The CLI reads the config, changes it and writes it back conditional on the ETag from **its own** read, and `SetWebHandler` silently replaces an existing web handler on the same port and path (`cmd/tailscale/cli/serve_v2.go`). So "check that the port is free, then run `tailscale serve --bg`" can overwrite a rule another program adds in between, and "check, then `serve off`" can delete another program's edit.
+
+The listener arithmetic (find a port's rule, tell absent from occupied, add or remove one listener from a config) lives in `tailscale-localapi.mjs` as the `serveListener` object, next to the transport that uses it. `durable-route.mjs` and `legacy-import.mjs` import it from there.
 
 Instead, the durable Tailscale adapter uses the LocalAPI directly, with **compare-and-set for create and for remove**:
 1. `GET /localapi/v0/serve-config` returns the config and an `Etag` header.
@@ -184,6 +243,19 @@ The reference for request shapes and the `If-Match`/412 behaviour is the officia
 **Version range.** The tested tailscaled version is recorded here when the live contract test first runs: tailscaled 1.104.6 (Linux). The request shapes and status codes are cited from the Go client at tag v1.104.6. The ETag is a hash of the config content, so an edit that restores the same bytes between our read and write (ABA) is invisible; this is inside the attribution limit above. The serve-config endpoint with ETag has existed since the 2022 serve redesign; a tailscaled without it (404 or no `Etag`) gets `provider_unsupported`, never a fallback.
 
 Port choice uses the node's `funnel-ports` capability (candidates 443, 8443, 10000; only 443/8443/10000 can be Funnel ports), and occupied ports are refused, never replaced. Removal works after Funnel permission is revoked, because it only deletes the listener from the config. Continuity across restarts compares the node DNS name and the exact rule. Gozar does not claim stronger node identity than that. The current session recipes (foreground, :8443) stay as they are.
+
+### Error codes
+
+The source throws only codes that the contract fixture maps in `errorNormalization`. Where the internal reason has a frozen contract name, Gozar uses the mapped code:
+
+| Reason | Code thrown | Contract name |
+|---|---|---|
+| the token's facts differ from the facts now, or a retry would move the port | `claim_mismatch` | `candidate_stale` |
+| the adapter has no durable recipe | `provider_unsupported` | `unsupported` |
+| user stop without reconsent | `stopped_by_user` | |
+| no token, or reconsent without a token | `consent_required` | |
+| token replayed or unknown | `consent_unknown` | |
+| token expired, or binding differs | `consent_expired`, `consent_mismatch` | |
 
 ### Per-adapter idle limit
 
@@ -209,7 +281,7 @@ The session path does not change.
 - Authenticated origin migration. An app that wants to move clients to a new origin signs that itself. Gozar only refuses to move silently.
 
 ## Tests (written red first)
-`test/node/durable-routes.test.mjs` with a fake Tailscale LocalAPI on a unix socket (`test/node/fake-localapi.mjs`): its ETag changes on every write, a stale `If-Match` gets 412, and a hook injects a foreign edit between Gozar's read and write. A `tailscale` stub on PATH fails the test if Gozar calls the CLI. `test/node/tailscale-localapi-live.test.mjs` reads the real serve config once, checks only its shape, and prints no values. These tests prove contract behaviour against the fake. They do not prove real provider atomicity or reboot behaviour.
+`test/node/durable-routes.test.mjs`, `consent-token.test.mjs` and `legacy-import.test.mjs`, with a fake Tailscale LocalAPI on a unix socket (`test/node/fake-localapi.mjs`): its ETag changes on every write, a stale `If-Match` gets 412, and a hook injects a foreign edit between Gozar's read and write. The tests issue tokens the way the catalog does, in a helper child process: facts, then `consentBinding`, then `issueConsentToken`. A `tailscale` stub on PATH fails the test if Gozar calls the CLI. `test/node/tailscale-localapi-live.test.mjs` reads the real serve config once, checks only its shape, and prints no values. These tests prove contract behaviour against the fake. They do not prove real provider atomicity or reboot behaviour.
 
 Allocation and pinning:
 1. ensure creates a `--bg` rule, writes a receipt, verifies through the challenge, and records `gozar-owned`;
@@ -217,13 +289,20 @@ Allocation and pinning:
 3. a pinned origin with a different node DNS name → `address_changed`, no mutation;
 4. a readback mismatch after creation → the listener is left in place as `uncertain` cleanup debt, nothing is published (Gozar cannot tell its rule from a replacement made after its write);
 5. occupied port → refused, the foreign rule is untouched;
-6. restart with an omitted origin uses the recorded pin; a conflicting origin or adapter is refused;
-7. a saved `lost` record is restored only at the pinned origin and never re-allocated unpinned;
-8. an adapter without `addressStability: 'stable'`, or a `lifetimeMs`, → durable refused.
+6. restart with an omitted origin uses the recorded pin; a conflicting origin is refused; a different preference, or a token for another adapter, never moves the pin;
+7. a saved `lost` record is restored only at the pinned origin and never re-allocated unpinned; a changed recipe digest gives `adapter_changed` and writes nothing;
+8. an adapter with no durable recipe gives `provider_unsupported` from `durablePlanFacts`; a session usage → `durable_lifetime_unsupported`.
 
 Consent:
-9. a changed approval tuple → refused;
-10. fallback to another adapter only on a first allocation, and only with that adapter's own approved tuple.
+9. a new route without a token → `consent_required`; a changed tuple on an existing route → `consent_changed`;
+10. a catalog order that offers the other adapter never moves a pin, even when Funnel is available again.
+
+Approval tokens (consent-token and R tests; each fails under the stated mutation, see the report):
+- R1. replay, a race of processes on one token, any changed binding field, and an expired token: zero provider writes, no record, token spent. Mutation: do not spend the token on mismatch.
+- R2. drift between issue and redeem → `claim_mismatch`, token spent, zero provider writes. Mutation: skip the digest comparison.
+- R3. an unrelated foreign edit on another port does not make a token stale, and the edit survives. Mutation: let `observedResource` cover the whole config.
+- R4. `durablePlanFacts` is read-only, stable, and changes with the recipe, target, origin and candidate listener.
+- R5. a crash after intent and before the write, with a token, gives uncertainty once a foreign rule appears, never a claim.
 
 Crashes and races:
 11. crash after intent, before the command → `lost`;
@@ -242,8 +321,8 @@ LocalAPI contract:
 Visibility:
 21. `gozar status` with no arguments lists a durable route with route ID, provider, origin, owner app, created-at time and state, next to sessions and service routes; `--json` has the same fields;
 22. `gozar stop --route ID` removes the provider rule by compare-and-remove and deletes the record; with a changed rule it leaves the rule, keeps cleanup debt and says so;
-23. after `gozar stop --route ID`, the owner app's `ensureRoute` is refused with `stopped_by_user` and makes no mutation; with `reconsent: true` it creates the route again;
-27. stop, then the app's `releaseRoute` (every mode), then a restart and `ensureRoute` with the saved approvals → still `stopped_by_user`; `adoptRoute` after a user stop → refused; `gozar allow --route ID` clears it; a crash during `gozar stop` after the tombstone write and before the provider write still blocks recreation.
+23. after `gozar stop --route ID`, the owner app's `ensureRoute` is refused with `stopped_by_user` and makes no mutation; with `reconsent: true` and a fresh approval it creates the route again;
+27. stop, then the app's `releaseRoute` (every mode), then a restart and `ensureRoute` with the saved token → still `stopped_by_user`; `adoptRoute` after a user stop → refused; `gozar allow --route ID` clears it; reconsent without approval → `consent_required`; approval without reconsent → `stopped_by_user`; both → cleared; a crash during `gozar stop` after the tombstone write and before the provider write still blocks recreation.
 
 Hand-back:
 28. a crash after the `handing-back` write and before the reply, and a crash after the reply and before confirmation: the route stays listed as `handing-back` with its receipt and reservation; a retry returns the same claim and transfer;
@@ -254,9 +333,14 @@ Owner-run exposure:
 31. the node DNS name changes while no Gozar call runs: the next status shows `address_changed` and never reports the new origin as the route's origin.
 
 Adoption:
-18. adopt of an exact rule with a handover → no provider mutation, record `adopted`; a mismatch, a missing handover, or a rule change during verification → refused;
+18. adopt of an exact rule with a handover and a token → no provider mutation, record `adopted`; a mismatch, a missing handover, or a rule change during verification → refused; a token for another adapter than the matched rule's → `claim_mismatch`, no change; a wrong `migrationRef` → refused;
 19. adopt while the reservation table holds the listener or port → refused;
 20. hand-back then re-adopt with a newer generation → exactly one owner at every step.
+
+Legacy inspection (`legacy-import.test.mjs`):
+32. an exact rule is `adoptable`; the result has exactly the contract's keys, and `migrationRef` equals the digest adopt recomputes; an unrelated edit leaves it unchanged and an edit to the listener turns it `external`;
+33. `blocked` reasons `not_found`, `target_mismatch`, `origin_mismatch`, `not_adoptable`;
+34. a state file (known, missing, unreadable) gives `unrecognized_format` and a `sign in again` action; the output holds no file content, no path and no token; the files and their access times are unchanged, and every provider request is a GET.
 
 ## Expect it to work because:
 Both halves exist and are tested. Service routes already persist 0600 records under locks and verify with an HMAC challenge inside the app, with no gate. The plan engine already computes provider rules, readback and cleanup debt. A durable route joins them through a small new host transaction (create with receipt, rehydrate, compare-and-remove) instead of the session driver, with three rules on top: the record is authoritative for the origin, intent without a receipt is never ownership, and adoption needs a fenced handover. The design review showed the session driver cannot run a durable route as a one-shot, so the first implementation step is a spike of exactly that transaction: finite create → persisted receipt → process exit → fresh rehydrate → exact remove, with service-verifier proof, no gate and no timer, against the fake provider, including foreign-rule preservation and crash uncertainty. If the receipt cannot be made to rehydrate without the session controller, the spike shows it before the rest is built.
