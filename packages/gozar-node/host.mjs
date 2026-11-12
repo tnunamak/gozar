@@ -5,6 +5,8 @@ import { safeOrigin } from './catalog.mjs';
 import { installIdentity } from './install-key.mjs';
 import { dirname } from 'node:path';
 import { selectedInterfaceAddress } from './interfaces.mjs';
+import { createHash } from 'node:crypto';
+import { acquireInstallKeyLease } from './key-route-lease.mjs';
 
 // Feature names describe implemented boundaries. Remote execution is an injected trusted capability.
 export const LOCAL_PLAN_FEATURES = ['recipe-sequence', 'typed-bindings', 'predicate-parser', 'owned-resource-ledger',
@@ -62,6 +64,16 @@ export async function prepareHost(driver, adapter, { origin, gate, probeExecutor
 }
 
 // Installation identities are created only after the selected route is approved.
+export async function acquireInstallIdentityLease(driver, adapter, targetPort = driver.targetPort) {
+  const provision = Object.values(adapter?.bindings ?? {}).some(binding => binding.provision === 'install-ed25519');
+  if (!provision) return null;
+  const home = dirname(driver.journal.directory);
+  const identity = await installIdentity(home);
+  const keyFingerprint = createHash('sha256').update(identity).digest('hex');
+  return acquireInstallKeyLease({ home, keyFingerprint, sessionDirectory:driver.journal.directory,
+    sessionId:driver.sessionId, targetPort });
+}
+
 export async function prepareInstallIdentities(driver, adapter) {
   for (const [name, spec] of Object.entries(adapter?.bindings ?? {})) {
     if (!spec.provision || driver.host.bindings[name]) continue;

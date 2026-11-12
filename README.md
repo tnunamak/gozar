@@ -32,7 +32,7 @@ The examples below use npx with an explicit package, so they do not require a gl
 
 The npm package includes the compiled WASM core and JavaScript bindings. You do not need Rust or wasm-bindgen to use it.
 
-Providers have their own prerequisites: localhost.run needs OpenSSH; Tailscale needs a signed-in client and permission for the selected route. Adding or removing service-route records also needs `flock` from util-linux.
+Providers have their own prerequisites: localhost.run needs OpenSSH; Tailscale needs a signed-in client and permission for the selected route. The stable tunnl.gg key lease and adding or removing service-route records need Linux `flock` from util-linux.
 
 ## Share a local service
 
@@ -179,7 +179,7 @@ To select tunnl.gg explicitly:
 npx --package=@tnunamak/gozar@0.1.0 gozar expose --port 3000 --client-reach internet --adapter tunnl-gg
 ```
 
-Gozar creates an Ed25519 identity under its home directory (`GOZAR_HOME`, or `~/.local/state/gozar`) on first approved use and reuses it for later sessions. An announced address change withdraws this route and requires stop followed by a new session. The relay can read traffic, may show a browser warning, and can close quiet streams after about two minutes. Automatic provider selection is unchanged.
+Gozar creates an Ed25519 identity under its home directory (`GOZAR_HOME`, or `~/.local/state/gozar`) on first approved use and reuses it for later sessions. The key-bound relay permits one active route per installation key. Gozar refuses a second start that uses the same key and reports the holding port and its stop command. Retry after that session has stopped and its owned process cleanup is confirmed; Gozar does not queue the start. Gozar coordinates sessions in the same home. If you copy the key into another home, those processes cannot coordinate and a new route can interrupt the existing one. An announced address change withdraws this route and requires stop followed by a new session. The relay can read traffic, may show a browser warning, and can close quiet streams after about two minutes. Automatic provider selection is unchanged.
 
 For a temporary route through an existing HTTPS proxy:
 

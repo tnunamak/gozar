@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { EffectDriver } from './driver.mjs';
-import { prepareInstallIdentities } from './host.mjs';
+import { acquireInstallIdentityLease, prepareInstallIdentities } from './host.mjs';
 import { safeOrigin } from './catalog.mjs';
 
 // Only core transitions are serialized. Slow effects do not prevent a stop from fencing publication.
@@ -13,6 +13,7 @@ export class Controller {
     this.inFlight = new Set();
     this.background = new Set();
     this.hostLimitations = new Set();
+    this.keyLease = null;
     this.driver = driver ?? new EffectDriver({ adapters, journal, sessionId, targetPort, origin, bindAddresses, firewallApproved,
       onExit: () => { if (!this.driver.stopped) this.command({ type: 'stop' }).catch(() => {}); } });
   }
@@ -84,6 +85,11 @@ export class Controller {
             !Array.isArray(admission.effects) || admission.effects.length !== 0)
           throw new Error('Identity provisioning is not admitted by core');
       }
+      if (!this.keyLease) {
+        const lease = await acquireInstallIdentityLease(this.driver, adapter, this.servicePort ?? this.targetPort);
+        if (this.driver.stopped) { await lease?.release(); return this.present(); }
+        this.keyLease = lease;
+      }
       await prepareInstallIdentities(this.driver, adapter);
       if (this.driver.stopped) return this.present();
       this.driver.authorize(command.adapterId);
@@ -119,6 +125,11 @@ export class Controller {
           failures.push({ resourceId: resource.id, detail: error.message });
         } finally { delete this.driver.host.cleanupAbsent; }
       }
+    }
+    if (this.keyLease && this.last?.snapshot.phase === 'stopped' && !failures.length &&
+        Object.keys(this.journal.value.owned).length === 0) {
+      try { await this.keyLease.release(); this.keyLease = null; }
+      catch (error) { failures.push({ resourceId:'installation-key-lease', detail:error.message }); }
     }
     return { ...this.present(), localCleanupFailures: failures };
   }
