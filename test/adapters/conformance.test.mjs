@@ -323,6 +323,13 @@ test('macOS: detect reports unsupported on a non-Linux platform and plan refuses
   await rejects(adapter.plan(readContext({ platform: 'darwin' }), request('session')), 'unsupported');
 });
 
+test('red: platform, home and generation are required context fields, never defaulted', async () => {
+  const [adapter] = await loadAdapters({ manifest: unknownManifest });
+  await rejects(adapter.detect(readContext({ platform: undefined })), 'provider_unavailable');
+  await rejects(adapter.plan(readContext({ platform: '' }), request('session')), 'provider_unavailable');
+  assert.throws(() => createAdmittedContext({ read: readContext(), adapterId: 'adapter-x' }), error => error.code === 'provider_unavailable');
+});
+
 test('the effect error helper only builds the four frozen codes', () => {
   for (const code of ['precondition_failed', 'unsupported', 'provider_unavailable', 'setup_required']) assert.equal(effectError(code, 'm').code, code);
 });

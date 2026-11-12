@@ -6,11 +6,12 @@
 // hands recipe references to the contexts the engine supplies (`probe`, `executePlan`,
 // `compareAndRemove`) and rejects every method or kind that has no recipe with `unsupported`.
 //
-// Context fields this runtime reads beyond the frozen types (all optional, additive):
-//   ctx.platform  string   host platform, injected so logic never reads process.platform itself
-//   ctx.home      string   canonical Gozar home; the durable plan needs it for durablePlanFacts()
-//   ctx.generation number  generation recorded on receipts built by an adapter (default 1)
-// `ctx.probe(recipe)` resolves `{ ok: boolean }`: the engine ran the recipe and its parser said yes.
+// Context fields this runtime reads are contract fields, with no defaults. A context that lacks one is
+// a host bug and fails with `provider_unavailable` instead of being guessed:
+//   ctx.platform   string   host platform, injected so logic never reads process.platform itself
+//   ctx.home       string   canonical Gozar home; the durable plan needs it for durablePlanFacts()
+//   ctx.generation number   generation recorded on receipts built by an adapter
+// `ctx.probe(recipe)` resolves `{ ok: boolean, detail?: string }`: the engine ran the recipe and its parser said yes.
 import { readFileSync } from 'node:fs';
 import { readFile, realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -140,7 +141,6 @@ export async function loadAdapters({ manifest, root } = {}) {
 
 // --- recipeAdapter ------------------------------------------------------------------------------------
 
-const defaultPlatform = () => process.platform; // the one place the host platform is read; callers inject ctx.platform
 const durableState = { load: () => import('./durable-route.mjs'), serve: () => import('./tailscale-localapi.mjs') };
 /** Test seam: replace the durable engine / LocalAPI loaders. Returns a restore function. */
 export function setDurableDepsForTest(deps) {
@@ -182,13 +182,15 @@ const requireReceipt = (plan, receipt, id) => {
  * returns method replacements for providers with a custom protocol (they still receive the frozen contexts).
  * Options: `definition` (URL or path of definition.json), `excludeActions` (definition action ids that
  * are consent steps, covered by the consent token, not setup), `externalOwned` (the route is owner-managed;
- * nothing is created or deleted), `platform` (default host platform provider, used only when the context
- * carries none).
+ * nothing is created or deleted) and `extend` (per-adapter methods layered on the base).
  */
-export function recipeAdapter({ definition: location, excludeActions = [], externalOwned = false, platform = defaultPlatform, extend = null }) {
+export function recipeAdapter({ definition: location, excludeActions = [], externalOwned = false, extend = null }) {
   const { adapter: definition, wrapped } = readDefinition(location);
   const recipes = wrapped?.recipes ?? {};
-  const platformOf = ctx => ctx?.platform ?? platform();
+  const platformOf = ctx => {
+    if (typeof ctx?.platform !== 'string' || !ctx.platform) throw effectError('provider_unavailable', 'The context carries no platform');
+    return ctx.platform;
+  };
   const kinds = new Set(definition.supportedKinds);
   const durableRecipe = wrapped?.durableRecipe ?? null;
   const allActions = (wrapped?.actions ?? []).map(action => toAction(action, definition.disclosure));
@@ -241,7 +243,7 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
       if (!kinds.has(kind)) throw unsupported(`the ${kind} kind`);
       if (kind === 'durable') {
         if (!durableRecipe) throw unsupported('the durable kind');
-        if (typeof ctx.home !== 'string') throw effectError('provider_unavailable', 'A durable plan needs the Gozar home');
+        if (typeof ctx.home !== 'string' || !ctx.home) throw effectError('provider_unavailable', 'A durable plan needs the Gozar home');
         const engine = await durableState.load();
         if (typeof engine.durablePlanFacts !== 'function') throw unsupported('the durable engine');
         let facts, seen;
@@ -311,7 +313,8 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
  * After a failure the state is clean (cleanup ran, intent aborted) or an intent stays as recorded debt;
  * a receipt is only ever written whole.
  */
-export function createAdmittedContext({ read, adapterId, generation = 1, assertGeneration = async () => {}, readRevision, applyPlan, cleanupPlan, removeResource, journal }) {
+export function createAdmittedContext({ read, adapterId, generation, assertGeneration = async () => {}, readRevision, applyPlan, cleanupPlan, removeResource, journal }) {
+  if (!Number.isSafeInteger(generation)) throw effectError('provider_unavailable', 'An admitted context needs a generation');
   return {
     ...read,
     generation,

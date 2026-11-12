@@ -13,13 +13,12 @@ const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('
 
 const configured = config => typeof config?.authToken === 'string' && config.authToken.length > 0 && domainPattern.test(config?.reservedDomain ?? '');
 
-export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok'), platform } = {}) {
+export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = {}) {
   const listeners = new Map(); // resourceKey -> open SDK listener; it lives and dies with this process
   const keyFor = domain => `ngrok-https-edge:${domain}`;
 
   return recipeAdapter({
     definition: new URL('./definition.json', import.meta.url),
-    ...(platform ? { platform } : {}),
     extend: ({ base, definition, platformOf, unsupported }) => {
       const action = (id, label, secretLabel) => {
         const body = { id, kind: 'provide-secret', label, secretLabel, disclosure: definition.disclosure };
@@ -73,6 +72,7 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok'), pla
           const [effect] = plan?.effects ?? [];
           if (plan?.readback?.kind !== 'attached' || effect?.kind !== 'sdk-listener') throw unsupported('this kind');
           await ctx.assertGeneration();
+          if (!Number.isSafeInteger(ctx.generation)) throw effectError('provider_unavailable', 'The context carries no generation');
           if (listeners.has(plan.resourceKey)) throw effectError('provider_unavailable', 'A listener for this domain is already open');
           const config = await ctx.configuration(effect.configurationRef).catch(() => null);
           if (!configured(config) || `https://${config.reservedDomain}` !== effect.origin) throw effectError('setup_required', 'Set up the ngrok auth token and reserved domain first');
@@ -88,7 +88,7 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok'), pla
             throw effectError('provider_unavailable', 'ngrok returned an origin other than the reserved one; the listener was closed');
           }
           listeners.set(plan.resourceKey, listener);
-          return { schemaVersion: 1, adapterId: definition.id, resourceKey: plan.resourceKey, generation: ctx.generation ?? 1,
+          return { schemaVersion: 1, adapterId: definition.id, resourceKey: plan.resourceKey, generation: ctx.generation,
             identity: { origin: actual }, readback: { ...plan.readback } };
         },
 

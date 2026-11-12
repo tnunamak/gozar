@@ -60,6 +60,14 @@ test('attached create opens one SDK listener on the reserved domain; remove clos
   assert.equal((await adapter.observe(ctx, request())).present, false);
 });
 
+test('red: create without a context generation fails and opens nothing', async () => {
+  const sdk = stubSdk(), adapter = adapterWith(sdk);
+  const plan = await adapter.plan(context(), request());
+  await rejects(adapter.create(context({ generation: undefined }), plan), 'provider_unavailable');
+  assert.equal(sdk.opened.length, 0);
+  await rejects(adapter.detect(context({ platform: undefined })), 'provider_unavailable');
+});
+
 test('other kinds are unsupported: the SDK runtime is attached only', async () => {
   const adapter = adapterWith(stubSdk());
   await rejects(adapter.plan(context(), request({ usage: { kind: 'session', lifetimeMs: 1000 } })), 'unsupported');
