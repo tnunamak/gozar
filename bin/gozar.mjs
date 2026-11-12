@@ -119,7 +119,14 @@ export async function main(argv = process.argv.slice(2)) {
     } else if (view.snapshot?.phase === 'unknown') {
       view.nextAction = { command: `gozar expose --port ${options.port}`, expectedSuccess: 'The guided setup starts a fresh controller for this service.' };
     } else if (['failed', 'blocked', 'degraded'].includes(view.snapshot?.phase)) {
-      view.nextAction = { command: `gozar health --port ${options.port}`, expectedSuccess: 'Route checks pass and a validated URL is printed.' };
+      const immutableLoss = adapters.some(adapter => adapter.id === view.snapshot.adapterId && adapter.originPolicy === 'immutable') &&
+        view.snapshot.lastRouteChange && !view.snapshot.candidate && !view.snapshot.published;
+      if (view.action?.recheckCommand === 'stop' || immutableLoss) {
+        if (immutableLoss && view.action?.recheckCommand !== 'stop') view.action = { kind: 'external', instruction: 'Stop the current session and start a new route.', recheckCommand: 'stop' };
+        view.nextAction = { command: `gozar stop --port ${options.port}`, expectedSuccess: 'Stop the session, then start a new route.' };
+      } else {
+        view.nextAction = { command: `gozar health --port ${options.port}`, expectedSuccess: 'Route checks pass and a validated URL is printed.' };
+      }
     }
     console.log(options.json ? JSON.stringify(view) : render(view, adapters, options));
   };
