@@ -107,7 +107,8 @@ export async function main(argv = process.argv.slice(2)) {
   let adapters = await loadCatalog(root, { operational: true });
   const activeIds = await loadActiveDrop(root);
   if (options.adapterId && options.command === 'expose') {
-    if (!activeIds.includes(options.adapterId)) throw new Error('Selected mode is NEXT DROP. Run detect to see current mode states.');
+    const operational = adapters.find(adapter => adapter.id === options.adapterId && adapter.planVersion === 1 && adapter.admission?.state === 'admitted');
+    if (!activeIds.includes(options.adapterId) && !operational) throw new Error('Selected mode is NEXT DROP. Run detect to see current mode states.');
     const definition = await loadDefinition(root, options.adapterId);
     adapters = [...adapters.filter(adapter => adapter.id !== definition.id), definition];
   }
@@ -118,7 +119,14 @@ export async function main(argv = process.argv.slice(2)) {
     } else if (view.snapshot?.phase === 'unknown') {
       view.nextAction = { command: `gozar expose --port ${options.port}`, expectedSuccess: 'The guided setup starts a fresh controller for this service.' };
     } else if (['failed', 'blocked', 'degraded'].includes(view.snapshot?.phase)) {
-      view.nextAction = { command: `gozar health --port ${options.port}`, expectedSuccess: 'Route checks pass and a validated URL is printed.' };
+      const immutableLoss = adapters.some(adapter => adapter.id === view.snapshot.adapterId && adapter.originPolicy === 'immutable') &&
+        view.snapshot.lastRouteChange && !view.snapshot.candidate && !view.snapshot.published;
+      if (view.action?.recheckCommand === 'stop' || immutableLoss) {
+        if (immutableLoss && view.action?.recheckCommand !== 'stop') view.action = { kind: 'external', instruction: 'Stop the current session and start a new route.', recheckCommand: 'stop' };
+        view.nextAction = { command: `gozar stop --port ${options.port}`, expectedSuccess: 'Stop the session, then start a new route.' };
+      } else {
+        view.nextAction = { command: `gozar health --port ${options.port}`, expectedSuccess: 'Route checks pass and a validated URL is printed.' };
+      }
     }
     console.log(options.json ? JSON.stringify(view) : render(view, adapters, options));
   };

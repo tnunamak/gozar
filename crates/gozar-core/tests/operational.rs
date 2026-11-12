@@ -429,6 +429,63 @@ fn owned_process_route_rotation_uses_allocation_ledger_and_fresh_probe() {
     assert_eq!(after_stop["snapshot"]["published"], Value::Null);
 }
 #[test]
+fn immutable_owned_origin_is_withdrawn_on_change_and_cannot_recover() {
+    let f = fixture();
+    let mut a = definition("process");
+    a["originPolicy"] = json!("immutable");
+    a["admission"]["requiredFeatures"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("immutable-origin"));
+    let mut host = f["host"].clone();
+    host["features"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("immutable-origin"));
+    let ready = until(begin(&a, &host), &a, &host, &f["baselineConfig"], "health");
+    let resource = ready["state"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["ownership"] == "owned" && r["cleanup"] == "active")
+        .unwrap();
+    let changed = run(json!({"state":ready["state"],"host":host,"command":{
+        "type":"owned-process-origin", "sessionId":"plan-fixture", "adapterId":"localhost-run", "resourceId":resource["id"],
+        "allocationGeneration":resource["generation"], "continuityRef":resource["ledger"]["continuityRef"],
+        "origin":"https://replacement.lhr.life", "line":"https://replacement.lhr.life"
+    }}));
+    assert_eq!(changed["snapshot"]["published"], Value::Null);
+    assert_eq!(changed["snapshot"]["candidate"], Value::Null);
+    assert!(changed["effects"].as_array().unwrap().is_empty());
+    let health = run(json!({"state":changed["state"],"host":host,"command":{"type":"health"}}));
+    assert_eq!(health["snapshot"]["published"], Value::Null);
+    assert!(health["effects"].as_array().unwrap().is_empty());
+}
+#[test]
+fn malformed_json_origin_declarations_fail_before_create() {
+    let f = fixture();
+    let mut host = f["host"].clone();
+    host["features"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("json-event-origin"));
+    for event in [
+        json!({"eventPointer":"","eventValue":"tunnel","originPointer":"/url"}),
+        json!({"eventPointer":"/event","eventValue":"","originPointer":"/url"}),
+        json!({"eventPointer":"/event","eventValue":"tunnel","originPointer":"url"}),
+    ] {
+        let mut a = definition("process");
+        a["admission"]["requiredFeatures"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("json-event-origin"));
+        a["recipes"]["create"]["parser"]["jsonEvent"] = event;
+        let output = begin(&a, &host);
+        assert!(output["effects"].as_array().unwrap().is_empty());
+        assert_ne!(output["snapshot"]["phase"], "candidate-ready");
+    }
+}
+#[test]
 fn late_allocation_is_tracked_and_never_published() {
     let f = fixture();
     let a = definition("private");

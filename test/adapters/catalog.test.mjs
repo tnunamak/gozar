@@ -50,9 +50,9 @@ function accepts(completion, rule) {
   try { return predicate(JSON.parse(completion.stdout), rule); } catch { return false; }
 }
 
-test('nine full mode definitions, each covered by concrete fixtures', () => {
-  assert.equal(definitions.length, 9);
-  assert.equal(new Set(definitions.map(item => item.id)).size, 9);
+test('ten full mode definitions, each covered by concrete fixtures', () => {
+  assert.equal(definitions.length, 10);
+  assert.equal(new Set(definitions.map(item => item.id)).size, 10);
   for (const definition of definitions) {
     assert.ok(definition.label && definition.reason && definition.actions.length);
     assert.ok(definition.recipes.detect);

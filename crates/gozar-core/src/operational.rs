@@ -14,6 +14,9 @@ pub const FEATURES: &[&str] = &[
     "probe-assertions",
     "client-vantage-probe",
     "unused-port-selection",
+    "install-ed25519",
+    "json-event-origin",
+    "immutable-origin",
 ];
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1089,7 +1092,36 @@ fn valid_recipe(recipe: &Recipe, observation: bool) -> bool {
     }
     if let Some(parser) = recipe.fields.get("parser") {
         match str_field(parser, "kind") {
-            "contains" | "url" | "json" | "exit-code" => {}
+            "contains" | "json" | "exit-code" => {}
+            "url" => {
+                if let Some(event) = parser.get("jsonEvent") {
+                    if !only_keys(event, &["eventPointer", "eventValue", "originPointer"])
+                        || !["eventPointer", "originPointer"].iter().all(|key| {
+                            event.get(key).and_then(Value::as_str).is_some_and(|v| {
+                                v.starts_with('/') && v.len() > 1 && v.len() <= 256
+                            })
+                        })
+                        || event
+                            .get("eventValue")
+                            .and_then(Value::as_str)
+                            .is_none_or(|v| v.is_empty() || v.len() > 256)
+                        || parser["constraints"]["exactOriginToken"] != json!(true)
+                        || parser["constraints"]["rejectMultipleDistinct"] != json!(true)
+                        || str_field(parser, "prefix") != "https://"
+                        || parser["constraints"]
+                            .get("hostnamePattern")
+                            .and_then(Value::as_str)
+                            .is_none_or(|v| {
+                                v.len() > 2048
+                                    || !v.starts_with('^')
+                                    || !v.ends_with('$')
+                                    || Regex::new(v).is_err()
+                            })
+                    {
+                        return false;
+                    }
+                }
+            }
             "json-document" => {
                 if !parser
                     .get("predicate")
@@ -1166,6 +1198,15 @@ fn admissible(a: &Adapter, state: &State) -> Result<(), String> {
             {
                 return Err("Unsupported typed binding".into());
             }
+            if spec.get("provision").is_some()
+                && (str_field(spec, "provision") != "install-ed25519"
+                    || str_field(spec, "type") != "session-private-path"
+                    || !features
+                        .iter()
+                        .any(|v| v.as_str() == Some("install-ed25519")))
+            {
+                return Err("Unsupported identity provisioning".into());
+            }
             let required = match str_field(spec, "type") {
                 "credential-reference" => Some("private-file-reference"),
                 "transport-endpoint" => Some("transport-origin-mapping"),
@@ -1198,6 +1239,7 @@ fn admissible(a: &Adapter, state: &State) -> Result<(), String> {
                         "candidates",
                         "protectedPorts",
                         "materialize",
+                        "provision",
                     ]
                     .contains(&k.as_str())
                 })
@@ -1206,12 +1248,32 @@ fn admissible(a: &Adapter, state: &State) -> Result<(), String> {
             }
         }
     }
+    if a.origin_policy
+        .as_deref()
+        .is_some_and(|policy| policy != "immutable")
+        || (a.origin_policy.is_some()
+            && !features
+                .iter()
+                .any(|v| v.as_str() == Some("immutable-origin")))
+    {
+        return Err("Unsupported origin policy".into());
+    }
     for (operation, recipe) in &a.recipes {
         if operation == "detect" {
             continue;
         }
         if !["create", "remove"].contains(&operation.as_str()) || !valid_recipe(recipe, false) {
             return Err("Unsupported executable plan field or operation".into());
+        }
+        if recipe
+            .fields
+            .get("parser")
+            .is_some_and(|p| p.get("jsonEvent").is_some())
+            && !features
+                .iter()
+                .any(|v| v.as_str() == Some("json-event-origin"))
+        {
+            return Err("JSON event origin requires negotiated feature".into());
         }
         if contains_transport_mapping(&json!(recipe.fields))
             && !features
@@ -2376,6 +2438,19 @@ pub fn owned_process_origin(out: &mut Output, cmd: &Value) {
         out.state.published = None;
         out.state.candidate = None;
         route_withdrawn = true;
+        if adapter.origin_policy.as_deref() == Some("immutable") {
+            out.state.last_route_change =
+                Some(json!({"oldOrigin":old,"newOrigin":url,"generation":out.state.generation}));
+            out.events.push(json!({"type":"route-lost","sessionId":out.state.session_id,"generation":out.state.generation,"oldOrigin":old,"newOrigin":url}));
+            withdraw(
+                out,
+                "Owned route changed its fixed address; stop and start a new session",
+            );
+            out.action = Some(
+                json!({"kind":"external", "instruction":"Stop the current session and start a new route.", "recheckCommand":"stop"}),
+            );
+            return Ok(());
+        }
         out.state.last_route_change =
             Some(json!({"oldOrigin":old,"newOrigin":url,"generation":out.state.generation}));
         out.events.push(json!({"type":"route-change","sessionId":out.state.session_id,"generation":out.state.generation,"oldOrigin":old,"newOrigin":url}));

@@ -48,6 +48,8 @@ pub struct Adapter {
     pub plan_version: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_policy: Option<String>,
     #[serde(default)]
     pub actions: Vec<Value>,
 }
@@ -448,12 +450,27 @@ fn parse_url(parser: &Value, stdout: &str, stderr: &str) -> Option<String> {
         None
     };
     let mut origins = std::collections::BTreeSet::new();
-    for token in text.split_whitespace() {
+    let candidates: Vec<String> = if let Some(event) = parser.get("jsonEvent") {
+        text.lines()
+            .filter_map(|line| {
+                let doc: Value = serde_json::from_str(line).ok()?;
+                let event_pointer = event.get("eventPointer")?.as_str()?;
+                let origin_pointer = event.get("originPointer")?.as_str()?;
+                if doc.pointer(event_pointer)? != event.get("eventValue")? {
+                    return None;
+                }
+                doc.pointer(origin_pointer)?.as_str().map(str::to_owned)
+            })
+            .collect()
+    } else {
+        text.split_whitespace().map(str::to_owned).collect()
+    };
+    for token in &candidates {
         if !prefix.is_empty() && !token.starts_with(prefix) {
             continue;
         }
         if let Some(url) = origin(token) {
-            if constraints.get("exactOriginToken") == Some(&Value::Bool(true)) && token != url {
+            if constraints.get("exactOriginToken") == Some(&Value::Bool(true)) && *token != url {
                 continue;
             }
             let authority = url.split("://").nth(1)?;
@@ -1019,5 +1036,50 @@ pub fn step(input_json: &str) -> String {
     match transition(input_json) {
         Ok(output) => serde_json::to_string(&output).expect("serializable core state"),
         Err(error) => json!({"error":{"code":"invalid-input","message":error}}).to_string(),
+    }
+}
+
+#[cfg(test)]
+mod stable_json_origin_tests {
+    use super::*;
+    #[test]
+    fn json_event_origin_ignores_other_fields_and_event_types() {
+        let p = json!({"kind":"url","prefix":"https://","jsonEvent":{"eventPointer":"/event","eventValue":"tunnel","originPointer":"/url"},"constraints":{"hostnamePattern":"^[a-z0-9-]+\\.tunnl\\.gg$","exactOriginToken":true}});
+        let valid = r#"{"event":"tunnel","url":"https://wild-fox-10bf6aa2.tunnl.gg","upgrade":"https://tunnl.gg/pricing"}"#;
+        assert_eq!(
+            parse_url(&p, valid, "").as_deref(),
+            Some("https://wild-fox-10bf6aa2.tunnl.gg")
+        );
+        assert_eq!(
+            parse_url(
+                &p,
+                r#"{"event":"request","url":"https://bad.tunnl.gg"}"#,
+                ""
+            ),
+            None
+        );
+        assert_eq!(
+            parse_url(
+                &p,
+                r#"{"event":"tunnel","url":"https://bad.tunnl.gg/path"}"#,
+                ""
+            ),
+            None
+        );
+        assert_eq!(
+            parse_url(&p, r#"{"event":"tunnel","url":"https://bad.example"}"#, ""),
+            None
+        );
+        assert_eq!(
+            parse_url(
+                &p,
+                &format!(
+                    "{valid}\n{}",
+                    r#"{"event":"tunnel","url":"https://other.tunnl.gg"}"#
+                ),
+                ""
+            ),
+            None
+        );
     }
 }

@@ -200,7 +200,10 @@
       "client-vantage-probe",
       "unused-port-selection",
       "private-file-materialization",
-      "transport-origin-mapping"
+      "transport-origin-mapping",
+      "install-ed25519",
+      "json-event-origin",
+      "immutable-origin"
     ],
     "host": {
       "nowMs": "monotonic caller-supplied milliseconds",

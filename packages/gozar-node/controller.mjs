@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { EffectDriver } from './driver.mjs';
+import { prepareInstallIdentities } from './host.mjs';
 import { safeOrigin } from './catalog.mjs';
 
 // Only core transitions are serialized. Slow effects do not prevent a stop from fencing publication.
@@ -64,7 +65,12 @@ export class Controller {
       this.driver.host.probe = { ...refs, expiresAtMs: this.driver.nowMs() + 900000, ...(this.driver.publicRelay ? { allowPublicRelay:true } : {}) };
       this.driver.cancelTimers?.();
     }
-    if (command.type === 'start' && command.consent === true) this.driver.authorize(command.adapterId);
+    if (command.type === 'start' && command.consent === true) {
+      if (this.driver.stopped) return this.present();
+      await prepareInstallIdentities(this.driver, this.adapters.find(adapter => adapter.id === command.adapterId));
+      if (this.driver.stopped) return this.present();
+      this.driver.authorize(command.adapterId);
+    }
     if (command.type === 'stop') { this.driver.stopped = true; this.driver.cancelTimers?.(); this.driver.cancelProbes?.(); }
     const output = await this.apply(command);
     await Promise.all(output.effects.map(effect => this.schedule(effect)));

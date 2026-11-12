@@ -9,6 +9,7 @@ import { atomicWrite, Journal, processIdentity } from './journal.mjs';
 import { Controller } from './controller.mjs';
 import { PublicRelayVerifier } from './public-relay.mjs';
 import { ProbeDirectoryExecutor } from './probe-directory.mjs';
+import { routeAnnouncement } from './announcement.mjs';
 import { prepareHost, LOCAL_PLAN_FEATURES } from './host.mjs';
 import { loadCatalog } from './catalog.mjs';
 import { createGate, validateLifetimeMs } from './gate.mjs';
@@ -143,15 +144,8 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
         resource.adapterId !== event.adapterId || resource.generation !== event.generation || resource.continuityRef !== event.continuityRef) return;
     const adapter = controller.driver.adapters.find(item => item.id === event.adapterId);
     if (adapter?.ownership !== 'owned' || adapter.planVersion !== 1) return;
-    const parser = adapter.recipes?.create?.parser;
-    if (parser?.kind !== 'url' || parser.constraints?.exactOriginToken !== true) return;
-    const line = event.completeLine.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
-    const matches = line.split(/\s+/).filter(token => token.startsWith(parser.prefix ?? 'https://'));
-    const origins = new Set(matches.filter(token => token === token.trim() && new RegExp(parser.constraints.hostnamePattern).test(new URL(token).hostname)).map(token => {
-      const url = new URL(token); return url.origin === token ? token : null;
-    }).filter(Boolean));
-    if (origins.size !== 1) return;
-    const origin = [...origins][0];
+    const origin = routeAnnouncement(adapter.recipes?.create?.parser, event.completeLine);
+    if (!origin) return;
     if (origin === controller.state?.published || origin === controller.state?.candidate || queuedRouteOrigins.has(origin)) return;
     queuedRouteOrigins.add(origin);
     routeQueue = routeQueue.then(async () => {
