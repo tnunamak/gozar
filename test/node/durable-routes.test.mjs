@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createServiceVerifier } from '../../packages/gozar-node/service.mjs';
+import { selectAdoptable } from '../../packages/gozar-node/durable-route.mjs';
 import { startFakeLocalApi, forwardTarget } from './fake-localapi.mjs';
 
 const exec = promisify(execFile);
@@ -401,8 +402,7 @@ test('16. concurrent ensure, adopt and session for one listener or port with dis
   const replies = await Promise.all([
     w.run('ensure', w.request),
     w.run('ensure', { ...w.request, routeId: 'second' }),
-    w.run('adopt', { routeId: 'third', owner: 'example-app', adapterId: 'tailscale-funnel', target: w.target, origin: adoptOrigin,
-      claim: { dnsName, port: 10000, mode: 'funnel', target: `http://${w.target}` }, handover: { from: 'example-app', generation: 1 },
+    w.run('adopt', { routeId: 'third', owner: 'example-app', target: w.target, origin: adoptOrigin, handover: { from: 'example-app', generation: 1 },
       approvals: [{ adapterId: 'tailscale-funnel', target: w.target, origin: adoptOrigin, durable: true }] }),
   ]);
   const winners = replies.filter(reply => reply.result);
@@ -438,11 +438,10 @@ test('17. removeService on a gozar-owned record is refused, and statusServices l
 test('18. adopt of an exact rule with a handover makes no provider mutation and records adopted; mismatch, missing handover or a change during verification is refused', async t => {
   const w = await world(t);
   w.edit(state => { foreignRule(8443, `http://${w.target}`)(state); state.config.AllowFunnel = { [`${dnsName}:8443`]: true }; });
-  const claim = { dnsName, port: 8443, mode: 'funnel', target: `http://${w.target}` };
-  const base = { routeId: 'coordinator', owner: 'example-app', adapterId: 'tailscale-funnel', target: w.target, origin: w.origin, claim,
+  const base = { routeId: 'coordinator', owner: 'example-app', target: w.target, origin: w.origin,
     approvals: [{ adapterId: 'tailscale-funnel', target: w.target, origin: w.origin, durable: true }] };
   assert.equal((await w.run('adopt', base)).error.code, 'handover_required');
-  assert.equal((await w.run('adopt', { ...base, claim: { ...claim, port: 443 }, handover: { from: 'example-app', generation: 1 } })).error.code, 'claim_mismatch');
+  assert.equal((await w.run('adopt', { ...base, origin: `https://${dnsName}`, handover: { from: 'example-app', generation: 1 } })).error.code, 'claim_mismatch');
   // The rule changes while the challenge runs: refused, nothing recorded.
   const verifier = createServiceVerifier();
   const app = http.createServer((req, res) => {
@@ -463,16 +462,30 @@ test('18. adopt of an exact rule with a handover makes no provider mutation and 
   assert.deepEqual(w.writes(), []);
 });
 
+test('18. adopt refuses ambiguity: two adapters whose rule matches this target at this origin give ambiguous_route, and one match is chosen without caller input', () => {
+  const rule = { tcp: { HTTPS: true }, web: { Handlers: { '/': { Proxy: 'http://{target}' } } }, funnel: true };
+  const capability = port => ({ candidatePorts: [port], recipe: { listener: rule } });
+  const observed = { dnsName, config: { TCP: { 8443: { HTTPS: true } }, Web: { [`${dnsName}:8443`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:5' } } } }, AllowFunnel: { [`${dnsName}:8443`]: true } } };
+  const input = { origin: `https://${dnsName}:8443`, target: '127.0.0.1:5' };
+  const one = selectAdoptable([{ adapterId: 'a', capability: capability(8443) }, { adapterId: 'b', capability: capability(10000) }], observed, input);
+  assert.deepEqual([one.adapterId, one.port], ['a', 8443]);
+  assert.throws(() => selectAdoptable([{ adapterId: 'a', capability: capability(8443) }, { adapterId: 'b', capability: capability(8443) }], observed, input),
+    { code: 'ambiguous_route' });
+  assert.throws(() => selectAdoptable([{ adapterId: 'a', capability: capability(10000) }], observed, input), { code: 'claim_mismatch' });
+  assert.throws(() => selectAdoptable([{ adapterId: 'a', capability: capability(8443) }], observed, { ...input, target: '127.0.0.1:6' }), { code: 'claim_mismatch' });
+});
+
 test('19. adopt while the reservation table holds the listener or port is refused', async t => {
   const w = await world(t);
   await w.run('ensure', w.request);
-  const reply = await w.run('adopt', { routeId: 'other', owner: 'example-app', adapterId: 'tailscale-funnel', target: w.target, origin: w.origin,
-    claim: { dnsName, port: 8443, mode: 'funnel', target: `http://${w.target}` }, handover: { from: 'example-app', generation: 1 } });
+  const reply = await w.run('adopt', { routeId: 'other', owner: 'example-app', target: w.target, origin: w.origin, handover: { from: 'example-app', generation: 1 } });
   assert.equal(reply.error.code, 'reserved');
-  // Another listener on the provider port that a record holds is refused too.
-  const port = await w.run('adopt', { routeId: 'other', owner: 'example-app', adapterId: 'tailscale-funnel', target: '127.0.0.1:1', origin: w.origin,
-    claim: { dnsName, port: 8443, mode: 'funnel', target: 'http://127.0.0.1:1' }, handover: { from: 'example-app', generation: 1 } });
+  // Another listener on the provider port that a record holds is refused too: a rule for another
+  // target now sits on the held port, so Gozar finds it for that target and sees the port is held.
+  w.edit(state => { state.config.Web[`${dnsName}:8443`].Handlers['/'].Proxy = 'http://127.0.0.1:1'; });
+  const port = await w.run('adopt', { routeId: 'other', owner: 'example-app', target: '127.0.0.1:1', origin: w.origin, handover: { from: 'example-app', generation: 1 } });
   assert.equal(port.error.code, 'reserved');
+  assert.equal(w.writes().length, 1);
 });
 
 test('20. hand-back then re-adopt with a newer generation keeps exactly one owner at every step', async t => {
@@ -490,8 +503,9 @@ test('20. hand-back then re-adopt with a newer generation keeps exactly one owne
   assert.deepEqual(await w.records(), []);
   assert.equal(w.writes().length, 1);
   // Rollback in the other direction: adopt again with a newer generation.
-  const again = await w.run('adopt', { ...w.request, origin: w.origin, approvals: [{ ...w.request.approvals[0], origin: w.origin }],
-    claim: back.result.claim, handover: { from: 'example-app', generation: 2 } });
+  const { adapterId, ...app } = w.request;
+  const again = await w.run('adopt', { ...app, origin: w.origin, approvals: [{ ...w.request.approvals[0], origin: w.origin }],
+    handover: { from: 'example-app', generation: 2 } });
   assert.equal(again.result.route.state, 'usable');
   assert.equal(w.writes().length, 1);
   // A second hand-back gets a new transfer; replaying the first confirmation cannot delete it.
@@ -615,7 +629,10 @@ test('24. a foreign edit between GET and POST gives 412 on create and on remove;
   const busy = await world(t);
   busy.state.beforePost = state => { state.config.Services = { [`svc:${state.etag}`]: {} }; };
   busy.state.beforePostAlways = true;
-  assert.equal((await busy.run('ensure', busy.request)).error.code, 'tailscale_serve_config_conflict');
+  const conflicted = (await busy.run('ensure', busy.request)).error;
+  assert.equal(conflicted.code, 'provider_conflict');
+  assert.equal(conflicted.provider, 'tailscale');
+  assert.equal(conflicted.nextAction, 'retry later');
   assert.deepEqual(busy.writes(), []);
   assert.deepEqual(await busy.cliCalls(), []);
 });
@@ -623,16 +640,18 @@ test('24. a foreign edit between GET and POST gives 412 on create and on remove;
 test('25. a missing socket, a denied request, a 404, a reply without Etag, or an unexpected body each give the named typed error, and no CLI runs', async t => {
   const w = await world(t);
   const cases = [
-    [{ GOZAR_TAILSCALED_SOCKET: join(w.home, 'missing.sock') }, null, 'tailscale_localapi_unavailable'],
-    [{}, 'denied', 'tailscale_localapi_denied'],
-    [{}, 'missing-endpoint', 'tailscale_localapi_unsupported'],
-    [{}, 'no-etag', 'tailscale_localapi_unsupported'],
-    [{}, 'bad-shape', 'tailscale_localapi_unsupported'],
+    [{ GOZAR_TAILSCALED_SOCKET: join(w.home, 'missing.sock') }, null, 'provider_unavailable', 'start tailscaled'],
+    [{}, 'denied', 'provider_denied', 'sudo tailscale set --operator=$USER'],
+    [{}, 'missing-endpoint', 'provider_unsupported', 'upgrade tailscaled'],
+    [{}, 'no-etag', 'provider_unsupported', 'upgrade tailscaled'],
+    [{}, 'bad-shape', 'provider_unsupported', 'upgrade tailscaled'],
   ];
-  for (const [env, failure, code] of cases) {
+  for (const [env, failure, code, nextAction] of cases) {
     w.state.failure = failure;
     const reply = await w.run('ensure', w.request, env);
     assert.equal(reply.error.code, code, failure ?? 'missing socket');
+    assert.equal(reply.error.provider, 'tailscale');
+    assert.equal(reply.error.nextAction, nextAction);
     assert.match(reply.error.message, /start tailscaled|tailscale set --operator|upgrade tailscaled/);
   }
   w.state.failure = null;
@@ -641,7 +660,7 @@ test('25. a missing socket, a denied request, a 404, a reply without Etag, or an
   // Removal fails closed the same way: the record stays and nothing is written.
   await w.run('ensure', w.request);
   w.state.failure = 'no-etag';
-  assert.equal((await w.run('release', { routeId: 'coordinator' })).error.code, 'tailscale_localapi_unsupported');
+  assert.equal((await w.run('release', { routeId: 'coordinator' })).error.code, 'provider_unsupported');
   assert.equal((await w.records()).length, 1);
   assert.equal(w.writes().length, 1);
   assert.deepEqual(await w.cliCalls(), []);
@@ -657,7 +676,7 @@ test('27. a user stop survives app release in every mode and a restart; adopt is
   assert.equal((await w.run('ensure', w.request)).error.code, 'stopped_by_user');
   w.edit(state => { foreignRule(8443, `http://${w.target}`)(state); state.config.AllowFunnel = { [`${dnsName}:8443`]: true }; });
   const adopt = await w.run('adopt', { ...w.request, origin: w.origin, approvals: [{ ...w.request.approvals[0], origin: w.origin }],
-    claim: { dnsName, port: 8443, mode: 'funnel', target: `http://${w.target}` }, handover: { from: 'example-app', generation: 1 } });
+    handover: { from: 'example-app', generation: 1 } });
   assert.equal(adopt.error.code, 'stopped_by_user');
   const listed = await w.gozar('status', '--json');
   assert.equal(listed.json.stoppedRoutes[0].routeId, 'coordinator');
@@ -702,7 +721,7 @@ test('29. during hand-back ensure and adopt return handing_back; gozar stop stil
   await w.run('ensure', w.request);
   const back = await w.run('release', { routeId: 'coordinator', mode: 'hand-back' });
   assert.equal((await w.run('ensure', w.request)).error.code, 'handing_back');
-  assert.equal((await w.run('adopt', { ...w.request, origin: w.origin, claim: back.result.claim, handover: { from: 'example-app', generation: 3 } })).error.code, 'handing_back');
+  assert.equal((await w.run('adopt', { ...w.request, origin: w.origin, handover: { from: 'example-app', generation: 3 } })).error.code, 'handing_back');
   assert.equal((await w.run('release', { routeId: 'coordinator' })).error.code, 'handing_back');
   assert.equal((await w.run('confirmHandBack', { routeId: 'coordinator', transfer: '00000000-0000-4000-8000-000000000000' })).error.code, 'stale_transfer');
   assert.equal(w.writes().length, 1);

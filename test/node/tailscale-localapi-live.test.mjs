@@ -11,7 +11,7 @@ test('26. live: GET serve-config returns a parseable config and a non-empty Etag
   let reply;
   try { reply = await getServeConfig(); }
   catch (error) {
-    if (['tailscale_localapi_unavailable', 'tailscale_localapi_denied'].includes(error.code)) { t.skip(error.code); return; }
+    if (['provider_unavailable', 'provider_denied'].includes(error.code)) { t.skip(error.code); return; }
     // Only the typed code, never a body or header value.
     assert.fail(`serve-config read failed with ${error.code ?? 'an untyped error'}`);
   }

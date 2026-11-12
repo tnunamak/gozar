@@ -17,11 +17,14 @@ const defaultSockets = ['/var/run/tailscale/tailscaled.sock', '/run/tailscale/ta
 const replyLimit = 4 * 1024 * 1024;
 const timeoutMs = 10000;
 
-const typed = (code, message) => Object.assign(new Error(message), { code });
-const unavailable = () => typed('tailscale_localapi_unavailable', 'Tailscale LocalAPI is unavailable: start tailscaled, then retry');
-const denied = () => typed('tailscale_localapi_denied', 'Tailscale LocalAPI denied access: run `sudo tailscale set --operator=$USER`, then retry');
-const unsupported = () => typed('tailscale_localapi_unsupported', 'Tailscale LocalAPI does not offer serve config with an ETag: upgrade tailscaled');
-export const conflict = () => typed('tailscale_serve_config_conflict', 'Another program keeps changing the Tailscale serve config: retry later');
+// Generic provider error codes: apps react to the code, `provider` and `nextAction`, and need no
+// provider knowledge. `provider` is the provider family; this layer does not know the adapter id.
+const provider = 'tailscale';
+const typed = (code, message, nextAction) => Object.assign(new Error(message), { code, provider, nextAction });
+const unavailable = () => typed('provider_unavailable', 'Tailscale LocalAPI is unavailable: start tailscaled, then retry', 'start tailscaled');
+const denied = () => typed('provider_denied', 'Tailscale LocalAPI denied access: run `sudo tailscale set --operator=$USER`, then retry', 'sudo tailscale set --operator=$USER');
+const unsupported = () => typed('provider_unsupported', 'Tailscale LocalAPI does not offer serve config with an ETag: upgrade tailscaled', 'upgrade tailscaled');
+export const conflict = () => typed('provider_conflict', 'Another program keeps changing the Tailscale serve config: retry later', 'retry later');
 
 // Test seam and non-default installs: GOZAR_TAILSCALED_SOCKET names one socket path.
 async function socketPath() {
@@ -47,7 +50,7 @@ function request(path, { method = 'GET', headers = {}, body = null } = {}) {
       res.on('error', () => reject(unavailable()));
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
     });
-    req.on('timeout', () => req.destroy(typed('ETIMEDOUT', 'timeout')));
+    req.on('timeout', () => req.destroy(typed('ETIMEDOUT', 'timeout', 'retry')));
     req.on('error', error => reject(['EACCES', 'EPERM'].includes(error.code) ? denied() : unavailable()));
     req.end(payload ?? undefined);
   }));
@@ -75,11 +78,11 @@ export async function getServeConfig() {
 // POST serve-config with If-Match. Returns false on 412 (another program changed the
 // config after our read); the caller must re-read and re-decide, never repeat the write.
 export async function setServeConfig(config, etag) {
-  if (typeof etag !== 'string' || !etag) throw typed('invalid_input', 'Serve config write requires the ETag of a read');
+  if (typeof etag !== 'string' || !etag) throw typed('invalid_input', 'Serve config write requires the ETag of a read', 'read the serve config first');
   const reply = await request('/localapi/v0/serve-config', { method: 'POST', headers: { 'If-Match': etag }, body: config });
   checkStatus(reply);
   if (reply.status === 412) return false;
-  if (reply.status !== 200) throw typed('tailscale_localapi_failed', 'Tailscale rejected the serve config change; nothing else was changed');
+  if (reply.status !== 200) throw typed('provider_failed', 'Tailscale rejected the serve config change; nothing else was changed', 'retry; check the tailscaled logs if it persists');
   return true;
 }
 
@@ -91,7 +94,7 @@ export async function getNode() {
   if (reply.status !== 200) throw unavailable();
   let status;
   try { status = JSON.parse(reply.body); } catch { throw unsupported(); }
-  if (status?.BackendState !== 'Running') throw typed('provider_not_running', 'Tailscale is not running: run `tailscale up`, then retry');
+  if (status?.BackendState !== 'Running') throw typed('provider_not_running', 'Tailscale is not running: run `tailscale up`, then retry', 'tailscale up');
   if (typeof status.Self?.DNSName !== 'string' || !status.Self.DNSName) throw unsupported();
   const dnsName = status.Self.DNSName.replace(/\.$/, '').toLowerCase();
   const funnelPorts = Object.keys(status.Self.CapMap ?? {}).flatMap(key => funnelPortsKey.exec(key)?.[1].split(',').map(Number) ?? []);

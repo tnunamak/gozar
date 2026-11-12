@@ -308,7 +308,7 @@ async function createListener(dir, record, { definition, capability, table, firs
     if (!isDeepStrictEqual(saved, record)) { await save(dir, record); saved = record; }
     return { write: withListener(observed.config, admitted.dnsName, admitted.port, admitted.listener) };
   }).catch(async error => {
-    if (['tailscale_serve_config_conflict', 'tailscale_localapi_failed'].includes(error.code)) await settle();
+    if (['provider_conflict', 'provider_failed'].includes(error.code)) await settle();
     throw error;
   });
   if (!written) {
@@ -538,12 +538,47 @@ export function cancelHandBack({ routeId, transfer, home = defaultHome() }) {
 
 // --- Adoption ---
 
-// Take ownership of an existing provider route with no teardown: exact match plus a fenced handover.
-export async function adoptRoute({ routeId, owner, adapterId, target, origin, claim, handover, approvals = [], home = defaultHome() }) {
+// Every adapter whose definition declares a durable capability, from the shipped manifest.
+async function durableAdapters() {
+  const manifest = JSON.parse(await readFile(join(root, 'adapters', 'manifest.json'), 'utf8'));
+  const found = [];
+  for (const file of manifest.definitions) {
+    const adapterId = file.replace(/\.definition\.json$/, '');
+    let definition;
+    try { definition = await loadDefinition(root, adapterId); } catch { continue; }
+    const capability = durableCapability(definition);
+    if (capability) found.push({ adapterId, definition, capability });
+  }
+  return found;
+}
+
+// Find the one provider rule that is this target's rule at this origin, across every durable
+// adapter and candidate port. No match: claim_mismatch. More than one: ambiguous_route. Either
+// way nothing changes. A match needs the exact rule for this target at the exact origin, and no
+// foreground session on that port.
+export function selectAdoptable(adapters, observed, { origin, target }) {
+  const matches = [];
+  for (const { adapterId, capability } of adapters) {
+    const rule = expandListener(capability, target);
+    for (const port of capability.candidatePorts) {
+      if (originOf(observed.dnsName, port) !== origin) continue;
+      if (!isDeepStrictEqual(ruleAt(observed.config, observed.dnsName, port), rule)) continue;
+      if (Object.values(observed.config.Foreground ?? {}).some(session => session?.TCP?.[port] || session?.Web?.[`${observed.dnsName}:${port}`])) continue;
+      matches.push({ adapterId, port, rule });
+    }
+  }
+  if (matches.length > 1) throw refuse('ambiguous_route', 'More than one provider rule matches this target and origin; nothing was changed');
+  if (!matches.length) throw refuse('claim_mismatch', 'No provider rule matches this target and origin exactly; nothing was changed');
+  return matches[0];
+}
+
+// Take ownership of an existing provider route with no teardown: Gozar finds the rule itself
+// (exact match for this target at this origin) and the caller supplies a fenced handover.
+export async function adoptRoute({ routeId, owner, target, origin, handover, approvals = [], home = defaultHome() }) {
   routeId = routeIdValue(routeId); target = loopbackTarget(target);
   owner ??= handover?.from;
   if (typeof owner !== 'string' || !owner || owner.length > 128) throw refuse('invalid_input', 'Durable route requires an owner app name');
-  const { definition, capability } = await durableDefinition(adapterId);
+  const adapters = await durableAdapters();
   return reserved(home, async dir => {
     if (await stopped(dir, routeId)) throw refuse('stopped_by_user', 'The user stopped this route; it cannot be adopted until the user allows it again');
     const existing = await load(dir, routeId);
@@ -552,28 +587,28 @@ export async function adoptRoute({ routeId, owner, adapterId, target, origin, cl
     if (typeof handover?.from !== 'string' || !handover.from || !Number.isSafeInteger(handover.generation) || handover.generation < 1)
       throw refuse('handover_required', 'Adoption requires a fenced handover { from, generation } from the previous owner');
     const table = await reservationTable(await canonicalHome(home), dir);
-    if (heldBy(table, { routeId, listener: target }) ||
-        (Number.isSafeInteger(claim?.port) && heldBy(table, { routeId, resource: capability.providerResource, port: claim.port }))) throw reservedError();
-    if (typeof origin !== 'string' || !approvals.some(item => item?.adapterId === adapterId && item.target === target && item.durable === true && item.origin === origin))
-      throw refuse('consent_required', 'No approved durable tuple for this adapter, target and origin');
-    const rule = expandListener(capability, target);
-    const matches = observed => claim && typeof claim === 'object' && claim.mode === capability.mode && claim.target === `http://${target}` &&
-      capability.candidatePorts.includes(claim.port) && observed.dnsName === claim.dnsName && originOf(claim.dnsName, claim.port) === origin &&
-      isDeepStrictEqual(ruleAt(observed.config, claim.dnsName, claim.port), rule) &&
-      !Object.values(observed.config.Foreground ?? {}).some(session => session?.TCP?.[claim.port] || session?.Web?.[`${claim.dnsName}:${claim.port}`]);
+    if (heldBy(table, { routeId, listener: target })) throw reservedError();
+    if (typeof origin !== 'string') throw refuse('invalid_input', 'Adoption requires the origin to adopt');
     const before = await observe();
-    if (!matches(before)) throw refuse('claim_mismatch', 'The provider rule does not match the claim exactly; nothing was changed');
+    const found = selectAdoptable(adapters, before, { origin, target });
+    const { adapterId, port, rule } = found;
+    const { definition, capability } = adapters.find(item => item.adapterId === adapterId);
+    if (heldBy(table, { routeId, resource: capability.providerResource, port })) throw reservedError();
+    if (!approvals.some(item => item?.adapterId === adapterId && item.target === target && item.durable === true && item.origin === origin))
+      throw refuse('consent_required', 'No approved durable tuple for this adapter, target and origin');
     const checked = await verification({ origin, target, verifyCmd: null });
     if (checked.status !== 'verified') throw refuse('verification_failed', 'The route did not pass the challenge; nothing was changed');
-    // Re-read: the rule must not have changed during verification.
+    // Re-read: the same match must still hold after verification.
     const after = await observe();
-    if (!matches(after)) throw refuse('claim_mismatch', 'The provider rule changed during verification; nothing was changed');
+    const again = selectAdoptable(adapters, after, { origin, target });
+    if (again.adapterId !== adapterId || again.port !== port) throw refuse('claim_mismatch', 'The provider rule changed during verification; nothing was changed');
+    const dnsName = after.dnsName;
     const record = { schemaVersion: 1, routeId, owner, adapterId, target, origin, createdAt: new Date().toISOString(), ownership: 'gozar-owned',
       provenance: 'adopted', handover: { from: handover.from, generation: handover.generation }, lifetime: capability.lifetime,
       idleTimeoutMs: capability.idleTimeoutMs, providerResource: capability.providerResource,
       consent: { adapterId, target, origin, durable: true, requestedAdapterId: adapterId }, generation: 1, state: 'usable',
-      intent: { dnsName: claim.dnsName, port: claim.port, mode: claim.mode, origin, rule }, cleanupDebt: null,
-      receipt: { dnsName: claim.dnsName, port: claim.port, mode: claim.mode, origin, rule, observedAt: new Date().toISOString() } };
+      intent: { dnsName, port, mode: capability.mode, origin, rule }, cleanupDebt: null,
+      receipt: { dnsName, port, mode: capability.mode, origin, rule, observedAt: new Date().toISOString() } };
     effectFor(record, definition, 'create');
     await save(dir, record);
     return { schemaVersion: 1, route: view(record, { state: 'usable', verification: checked }) };

@@ -11,5 +11,5 @@ try {
   if (typeof operations[operation] !== 'function') throw Object.assign(new Error(`${operation} is not implemented`), { code: 'not_implemented' });
   console.log(JSON.stringify({ result: await operations[operation](JSON.parse(input)) }));
 } catch (error) {
-  console.log(JSON.stringify({ error: { code: error.code ?? null, message: error.message } }));
+  console.log(JSON.stringify({ error: { code: error.code ?? null, message: error.message, provider: error.provider ?? null, nextAction: error.nextAction ?? null } }));
 }
