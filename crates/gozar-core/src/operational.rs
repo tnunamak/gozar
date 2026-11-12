@@ -2292,6 +2292,105 @@ pub fn health(out: &mut Output, rotate: bool) {
         withdraw(out, &error);
     }
 }
+
+pub fn owned_process_origin(out: &mut Output, cmd: &Value) {
+    let mut route_withdrawn = false;
+    let result = (|| -> Result<(), String> {
+        if out.state.stop_requested {
+            return Err("Stopped session cannot rotate an owned route".into());
+        }
+        if str_field(cmd, "sessionId") != out.state.session_id {
+            return Err("Owned route session mismatch".into());
+        }
+        let adapter_id = str_field(cmd, "adapterId");
+        let resource_id = str_field(cmd, "resourceId");
+        let continuity = str_field(cmd, "continuityRef");
+        let allocation_generation = cmd
+            .get("allocationGeneration")
+            .and_then(Value::as_u64)
+            .ok_or("Missing allocation generation")?;
+        let adapter = out
+            .state
+            .adapters
+            .iter()
+            .find(|a| a.id == adapter_id && a.ownership == "owned" && a.plan_version == Some(1))
+            .cloned()
+            .ok_or("Owned route adapter mismatch")?;
+        if out.state.selected.as_deref() != Some(adapter_id) {
+            return Err("Owned route adapter is not selected".into());
+        }
+        let resource = out
+            .state
+            .resources
+            .iter()
+            .find(|r| r.id == resource_id)
+            .ok_or("Owned route resource is unknown")?;
+        let ledger = resource
+            .ledger
+            .as_ref()
+            .ok_or("Owned route lacks immutable cleanup ledger")?;
+        if resource.ownership != "owned"
+            || resource.cleanup != "active"
+            || resource.adapter_id != adapter_id
+            || resource.generation != allocation_generation
+            || ledger.handle_ref != resource_id
+            || ledger.continuity_ref != continuity
+            || ledger.kind != "process"
+        {
+            return Err("Owned route resource identity mismatch".into());
+        }
+        let recipe = adapter
+            .recipes
+            .get("create")
+            .ok_or("Create recipe unavailable")?;
+        if recipe.kind != EffectKind::Spawn
+            || recipe
+                .fields
+                .get("process")
+                .is_none_or(|p| str_field(p, "mode") != "owned-long-running")
+        {
+            return Err("Route rotation requires an admitted long-running owned process".into());
+        }
+        let parser = recipe
+            .fields
+            .get("parser")
+            .ok_or("Create URL parser unavailable")?;
+        if str_field(parser, "kind") != "url" {
+            return Err("Route rotation requires the admitted create URL parser".into());
+        }
+        let url = str_field(cmd, "origin");
+        let line = str_field(cmd, "line");
+        if super::parse_url(parser, line, "").as_deref() != Some(url) {
+            return Err("Replacement origin violates the admitted URL parser".into());
+        }
+        let old = out
+            .state
+            .published
+            .clone()
+            .or_else(|| out.state.candidate.clone())
+            .ok_or("No active route to rotate")?;
+        if old == url {
+            return Ok(());
+        }
+        out.state.generation += 1;
+        out.state.published = None;
+        out.state.candidate = None;
+        route_withdrawn = true;
+        out.state.last_route_change =
+            Some(json!({"oldOrigin":old,"newOrigin":url,"generation":out.state.generation}));
+        out.events.push(json!({"type":"route-change","sessionId":out.state.session_id,"generation":out.state.generation,"oldOrigin":old,"newOrigin":url}));
+        event(out, "endpoint-withdrawn");
+        request_probe(out, &adapter, url.to_owned())
+    })();
+    if let Err(error) = result {
+        if route_withdrawn {
+            withdraw(out, &error);
+        } else {
+            limit(out, &error);
+            event(out, "owned-route-rotation-rejected");
+        }
+    }
+}
 pub fn potential(a: &Adapter, r: &Requirements) -> bool {
     if !super::reach_allowed(&a.audience, &r.client_reach) {
         return false;

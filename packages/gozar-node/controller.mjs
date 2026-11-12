@@ -59,7 +59,7 @@ export class Controller {
     return work;
   }
   async command(command) {
-    if (['health', 'update-origin'].includes(command.type) && this.driver.gate) {
+    if (['health', 'update-origin', 'owned-process-origin'].includes(command.type) && this.driver.gate) {
       const refs = this.driver.gate.rotate();
       this.driver.host.probe = { ...refs, expiresAtMs: this.driver.nowMs() + 900000, ...(this.driver.publicRelay ? { allowPublicRelay:true } : {}) };
       this.driver.cancelTimers?.();

@@ -326,6 +326,108 @@ fn health_expiry_and_rotation_withdraw_external_without_mutation() {
         .iter()
         .all(|e| e["operation"] != "create" && e["operation"] != "remove"));
 }
+
+#[test]
+fn owned_process_route_rotation_uses_allocation_ledger_and_fresh_probe() {
+    let f = fixture();
+    let a = definition("process");
+    let ready = until(
+        begin(&a, &f["host"]),
+        &a,
+        &f["host"],
+        &f["baselineConfig"],
+        "health",
+    );
+    let resource = ready["state"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["ownership"] == "owned" && r["cleanup"] == "active")
+        .unwrap();
+    let mut host = f["host"].clone();
+    host["nowMs"] = json!(1020);
+    host["probe"]["nonceRef"] = json!("route-rotation-fresh-nonce");
+    let rotated = run(json!({"state":ready["state"],"host":host,"command":{
+        "type":"owned-process-origin", "sessionId":"plan-fixture", "adapterId":"localhost-run", "resourceId":resource["id"],
+        "allocationGeneration":resource["generation"], "continuityRef":resource["ledger"]["continuityRef"],
+        "origin":"https://replacement.lhr.life", "line":"A new address is https://replacement.lhr.life"
+    }}));
+    assert_eq!(rotated["snapshot"]["published"], Value::Null);
+    assert_eq!(rotated["effects"][0]["url"], "https://replacement.lhr.life");
+    assert_eq!(
+        rotated["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["type"] == "route-change")
+            .unwrap()["oldOrigin"],
+        ready["snapshot"]["candidate"]
+    );
+    assert_eq!(
+        rotated["snapshot"]["lastRouteChange"]["newOrigin"],
+        "https://replacement.lhr.life"
+    );
+    let verified = ack(
+        &rotated,
+        response(&rotated, &a, &host, &f["baselineConfig"]),
+        &host,
+    );
+    assert_eq!(verified["snapshot"]["phase"], "candidate-ready");
+    assert_eq!(
+        verified["snapshot"]["candidate"],
+        "https://replacement.lhr.life"
+    );
+    let approved = run(json!({"state":verified["state"],"host":host,"command":{
+        "type":"approve-origin", "generation":verified["snapshot"]["generation"],
+        "origin":"https://replacement.lhr.life"
+    }}));
+    assert_eq!(
+        approved["snapshot"]["published"],
+        "https://replacement.lhr.life"
+    );
+
+    let rejected = run(json!({"state":ready["state"],"host":f["host"],"command":{
+        "type":"owned-process-origin", "sessionId":"plan-fixture", "adapterId":"localhost-run", "resourceId":"foreign",
+        "allocationGeneration":resource["generation"], "continuityRef":resource["ledger"]["continuityRef"],
+        "origin":"https://replacement.lhr.life", "line":"A new address is https://replacement.lhr.life"
+    }}));
+    assert_eq!(
+        rejected["snapshot"]["candidate"],
+        ready["snapshot"]["candidate"]
+    );
+    assert!(rejected["effects"].as_array().unwrap().is_empty());
+
+    let duplicate = run(json!({"state":ready["state"],"host":f["host"],"command":{
+        "type":"owned-process-origin", "sessionId":"plan-fixture", "adapterId":"localhost-run", "resourceId":resource["id"],
+        "allocationGeneration":resource["generation"], "continuityRef":resource["ledger"]["continuityRef"],
+        "origin":ready["snapshot"]["candidate"], "line":ready["snapshot"]["candidate"]
+    }}));
+    assert_eq!(duplicate["effects"], json!([]));
+    assert_eq!(
+        duplicate["snapshot"]["candidate"],
+        ready["snapshot"]["candidate"]
+    );
+
+    let multiple = run(json!({"state":ready["state"],"host":f["host"],"command":{
+        "type":"owned-process-origin", "sessionId":"plan-fixture", "adapterId":"localhost-run", "resourceId":resource["id"],
+        "allocationGeneration":resource["generation"], "continuityRef":resource["ledger"]["continuityRef"],
+        "origin":"https://replacement.lhr.life", "line":"https://replacement.lhr.life https://foreign.lhr.life"
+    }}));
+    assert!(multiple["effects"].as_array().unwrap().is_empty());
+    assert_eq!(
+        multiple["snapshot"]["candidate"],
+        ready["snapshot"]["candidate"]
+    );
+
+    let stopped = run(json!({"state":ready["state"],"host":f["host"],"command":{"type":"stop"}}));
+    let after_stop = run(json!({"state":stopped["state"],"host":f["host"],"command":{
+        "type":"owned-process-origin", "sessionId":"plan-fixture", "adapterId":"localhost-run", "resourceId":resource["id"],
+        "allocationGeneration":resource["generation"], "continuityRef":resource["ledger"]["continuityRef"],
+        "origin":"https://replacement.lhr.life", "line":"https://replacement.lhr.life"
+    }}));
+    assert!(after_stop["effects"].as_array().unwrap().is_empty());
+    assert_eq!(after_stop["snapshot"]["published"], Value::Null);
+}
 #[test]
 fn late_allocation_is_tracked_and_never_published() {
     let f = fixture();

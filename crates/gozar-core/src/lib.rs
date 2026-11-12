@@ -129,6 +129,8 @@ pub struct State {
     pub stop_requested: bool,
     pub candidate: Option<String>,
     pub published: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_route_change: Option<Value>,
     pub adapters: Vec<Adapter>,
     pub requirements: Requirements,
     pub selected: Option<String>,
@@ -158,6 +160,7 @@ impl Default for State {
             stop_requested: false,
             candidate: None,
             published: None,
+            last_route_change: None,
             adapters: vec![],
             requirements: Requirements::default(),
             selected: None,
@@ -797,6 +800,7 @@ pub fn transition(input: &str) -> Result<Output, String> {
         "reconcile-absent" => operational::reconcile_absent(&mut out, &cmd),
         "health" => operational::health(&mut out, false),
         "update-origin" => operational::health(&mut out, true),
+        "owned-process-origin" => operational::owned_process_origin(&mut out, &cmd),
         "approve-origin" => {
             if !out.state.stop_requested
                 && out.state.phase == "candidate-ready"
@@ -813,7 +817,7 @@ pub fn transition(input: &str) -> Result<Output, String> {
         "status" => {}
         _ => event(&mut out, "unsupported-command"),
     }
-    out.snapshot = json!({"sessionId":out.state.session_id,"generation":out.state.generation,"phase":out.state.phase,"candidate":out.state.candidate,"published":out.state.published,"observations":out.state.observations,"recommendations":out.state.recommendations,"plans":out.state.plans,"resources":out.state.resources,"limitations":out.state.limitations});
+    out.snapshot = json!({"sessionId":out.state.session_id,"generation":out.state.generation,"phase":out.state.phase,"candidate":out.state.candidate,"published":out.state.published,"lastRouteChange":out.state.last_route_change,"observations":out.state.observations,"recommendations":out.state.recommendations,"plans":out.state.plans,"resources":out.state.resources,"limitations":out.state.limitations});
     Ok(out)
 }
 fn complete(out: &mut Output, cmd: &Value) {

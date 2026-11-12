@@ -126,13 +126,60 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   if (!probeExecutor && config.probeDirectory) probeExecutor = new ProbeDirectoryExecutor(config.probeDirectory, { vantages: ['public', 'tailnet', 'lan'], executorRef: config.probeExecutorId, requestPath: config.probeRequest, receiptPath: config.probeReceipt });
   if (!probeExecutor) probeExecutor = new PublicRelayVerifier();
   const selectedAdapter = config.adapters.find(adapter => adapter.id === config.adapterId);
+  let routeQueue = Promise.resolve();
+  const queuedRouteOrigins = new Set();
   const operational = config.operational === true || selectedAdapter?.planVersion === 1;
   const gate = operational ? await createGate(config.targetPort, { lifetimeMs: config.lifetimeMs, onExpire: () => { controller?.command({ type: 'stop' }).catch(() => {}); } }) : null;
   controller = new Controller({ ...config, targetPort: gate?.port ?? config.targetPort, servicePort: config.targetPort, step, journal });
   controller.driver.lifetimeMs = config.lifetimeMs;
   controller.driver.probeWaitMs = config.probeWaitMs;
   controller.driver.observeProcessOutput = config.observeProcessOutput === true;
-  controller.driver.onProcessOutput = processOutputObserver;
+  controller.driver.onProcessOutput = event => {
+    try { processOutputObserver?.(event); } catch {}
+    if (!event.completeLine || event.sessionId !== controller.sessionId || event.adapterId !== selectedAdapter?.id ||
+        controller.driver.stopped || controller.state?.stopRequested) return;
+    const resource = controller.driver.journal.value.owned[event.resourceId];
+    if (!resource || resource.kind !== 'process' || resource.retired || resource.sessionId !== event.sessionId ||
+        resource.adapterId !== event.adapterId || resource.generation !== event.generation || resource.continuityRef !== event.continuityRef) return;
+    const adapter = controller.driver.adapters.find(item => item.id === event.adapterId);
+    if (adapter?.ownership !== 'owned' || adapter.planVersion !== 1) return;
+    const parser = adapter.recipes?.create?.parser;
+    if (parser?.kind !== 'url' || parser.constraints?.exactOriginToken !== true) return;
+    const line = event.completeLine.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+    const matches = line.split(/\s+/).filter(token => token.startsWith(parser.prefix ?? 'https://'));
+    const origins = new Set(matches.filter(token => token === token.trim() && new RegExp(parser.constraints.hostnamePattern).test(new URL(token).hostname)).map(token => {
+      const url = new URL(token); return url.origin === token ? token : null;
+    }).filter(Boolean));
+    if (origins.size !== 1) return;
+    const origin = [...origins][0];
+    if (origin === controller.state?.published || origin === controller.state?.candidate || queuedRouteOrigins.has(origin)) return;
+    queuedRouteOrigins.add(origin);
+    routeQueue = routeQueue.then(async () => {
+      if (origin === controller.state?.published || origin === controller.state?.candidate || controller.driver.stopped || controller.state?.stopRequested) return;
+      const activeUntil = Date.now() + 2000;
+      while (Date.now() < activeUntil && !controller.state?.resources?.some(item => item.id === event.resourceId && item.cleanup === 'active')) {
+        if (controller.driver.stopped || controller.state?.stopRequested) return;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      if (!controller.state?.resources?.some(item => item.id === event.resourceId && item.cleanup === 'active')) return;
+      if (origin === controller.state?.published || origin === controller.state?.candidate) return;
+      const identity = await processIdentity(resource.pid);
+      if (identity !== resource.startIdentity || controller.driver.stopped || controller.state?.stopRequested) return;
+      const current = controller.driver.journal.value.owned[event.resourceId];
+      if (current !== resource || current.retired || current.continuityRef !== event.continuityRef) return;
+      const receipt = await controller.driver.continuity(event.resourceId);
+      if (!receipt?.continuous || receipt.handleRef !== event.resourceId || receipt.continuityRef !== event.continuityRef ||
+          receipt.sessionId !== event.sessionId || receipt.expiresAtMs <= controller.driver.nowMs() ||
+          controller.driver.stopped || controller.state?.stopRequested || controller.driver.journal.value.owned[event.resourceId] !== resource || resource.retired) return;
+      if (origin === controller.state?.published || origin === controller.state?.candidate) return;
+      const result = await controller.command({ type: 'owned-process-origin', sessionId: event.sessionId, adapterId: event.adapterId,
+        resourceId: event.resourceId, allocationGeneration: event.generation, continuityRef: event.continuityRef, origin, line: event.completeLine });
+      if (config.approveOrigin === true && result.snapshot?.phase === 'candidate-ready' && result.snapshot.candidate === origin &&
+          !controller.driver.stopped && !controller.state?.stopRequested) {
+        await controller.command({ type: 'approve-origin', origin, generation: result.snapshot.generation });
+      }
+    }).catch(() => {}).finally(() => queuedRouteOrigins.delete(origin));
+  };
   if (operational) await prepareHost(controller.driver, selectedAdapter, { origin: config.origin, gate, probeExecutor, authorities: hostAuthorities });
   let setupPending = Boolean(gate && selectedAdapter?.setup?.requiresProxyTarget);
   const present = output => ({ ...output, ...(gate ? { lifetimeMs: gate.lifetimeMs, expiresAtMs: gate.expiresAtMs } : {}), ...(selectedAdapter?.clientProfile ? { connectionProfile: selectedAdapter.clientProfile } : {}),

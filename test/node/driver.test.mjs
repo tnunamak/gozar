@@ -189,3 +189,36 @@ test('opt-in process observer captures later bounded transient output without jo
   assert.equal((await readFile(journal.path,'utf8')).includes('later-output'),false);
   assert.equal(driver.readProcessOutput(events.at(-1).sequence).length,0);
 });
+
+test('owned process output frames complete lines across chunks without diagnostic observation', async t => {
+  const { driver } = await fixture(t, {});
+  const lines = [];
+  driver.onProcessOutput = event => { if (event.completeLine !== undefined) lines.push(event); };
+  const resource = { id: 'owned', generation: 2, adapterId: 'adapter', continuityRef: 'ledger-ref' };
+  const effect = { id: 'create', generation: 8 };
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('https://a.lhr.life\r\n'));
+  assert.equal(lines.length, 0, 'initial output is buffered until the create effect is settled');
+  driver.routeOutputReady.add(resource.id);
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('https://split.'));
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('https://b.lhr.'));
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('life\n'));
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('lhr.life\n'));
+  driver.processOutput(effect, resource, 'stdout', Buffer.from(`${'x'.repeat(4097)}\nhttps://c.lhr.life\n`));
+  assert.deepEqual(lines.map(line => line.completeLine), ['https://b.lhr.life', 'https://split.lhr.life', 'https://c.lhr.life']);
+  assert.deepEqual(lines.map(line => [line.generation, line.adapterId, line.continuityRef]),
+    Array.from({ length: 3 }, () => [2, 'adapter', 'ledger-ref']));
+  assert.equal(JSON.stringify(driver.journal.value).includes('lhr.life'), false);
+});
+
+test('initial create URL is handled by the core result and never re-emitted as a route change', async t => {
+  const recipe = { kind: 'spawn', program, args: ['-e', 'process.stdout.write("https://a.lhr.life\\n");setTimeout(()=>process.stdout.write("https://b.lhr.life\\n"),120);setInterval(()=>{},1000)'],
+    timeoutMs: 1000, maxOutputBytes: 4096, longRunning: true, collectMs: 30 };
+  const { driver } = await fixture(t, { create: recipe });
+  const lines = [];
+  driver.onProcessOutput = event => { if (event.completeLine !== undefined) lines.push(event.completeLine); };
+  await persist(driver);
+  const result = await driver.execute(effect(recipe, 'create'));
+  assert.equal(result.ok, true);
+  await new Promise(resolve => setTimeout(resolve, 180));
+  assert.deepEqual(lines, ['https://b.lhr.life']);
+});

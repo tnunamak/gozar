@@ -51,6 +51,8 @@ export class EffectDriver {
     this.outputEvents = []; this.outputBytes = 0; this.outputSequence = 0;
     this.recoveryOnly = recoveryOnly;
     this.children = new Map();
+    this.routeLineBuffers = new Map();
+    this.routeOutputReady = new Set();
     this.forwarders = new Map();
     this.receipts = new Map();
     this.intentRecords = new Map();
@@ -84,13 +86,31 @@ export class EffectDriver {
     if (resource?.privateMaterialized) return;
     if (!resource || (!this.observeProcessOutput && !this.onProcessOutput)) return;
     const output = chunk.subarray(Math.max(0,chunk.length-8192)).toString('utf8');
-    const event = { sequence:++this.outputSequence, sessionId:this.sessionId, generation:effect.generation,
-      resourceId:resource.id, effectId:effect.id, stream, observedAtMs:this.nowMs(), output };
+    const event = { sequence:++this.outputSequence, sessionId:this.sessionId, generation:resource.generation,
+      adapterId:resource.adapterId, resourceId:resource.id, continuityRef:resource.continuityRef,
+      effectId:effect.id, stream, observedAtMs:this.nowMs(), output };
     if (this.observeProcessOutput) {
       this.outputEvents.push(event); this.outputBytes += Buffer.byteLength(output);
       while (this.outputEvents.length > 128 || this.outputBytes > 32768) this.outputBytes -= Buffer.byteLength(this.outputEvents.shift().output);
     }
-    if (this.onProcessOutput) { try { this.onProcessOutput(event); } catch {} }
+    if (this.onProcessOutput) {
+      const key = `${resource.id}\0${stream}`;
+      const frame = this.routeLineBuffers.get(key) ?? { buffer: '', dropping: false };
+      for (const char of chunk.toString('utf8')) {
+        if (char === '\n') {
+          const line = frame.buffer.endsWith('\r') ? frame.buffer.slice(0, -1) : frame.buffer;
+          if (!frame.dropping && line.length <= 4096) {
+            if (this.routeOutputReady.has(resource.id)) { try { this.onProcessOutput({ ...event, completeLine: line }); } catch {} }
+          }
+          frame.buffer = ''; frame.dropping = false;
+        } else if (!frame.dropping) {
+          if (frame.buffer.length >= 4096) { frame.buffer = ''; frame.dropping = true; }
+          else frame.buffer += char;
+        }
+      }
+      this.routeLineBuffers.set(key, frame);
+      try { this.onProcessOutput(event); } catch {}
+    }
   }
   readProcessOutput(after = 0) { return this.outputEvents.filter(event=>event.sequence>after).map(event=>({...event})); }
   nowMs() { return Math.floor(performance.timeOrigin + performance.now()); }
@@ -338,7 +358,7 @@ export class EffectDriver {
         }
       } catch (error) { child.kill('SIGTERM'); throw error; }
     }
-    return new Promise((resolve, reject) => {
+    const completion = await new Promise((resolve, reject) => {
       let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), receivedBytes = 0, settled = false, idle;
       const finish = (error, exitCode = null) => {
         if (settled) return;
@@ -367,6 +387,10 @@ export class EffectDriver {
         else finish(null, code);
       });
     });
+    if (resource && this.onProcessOutput && !resource.privateMaterialized) {
+      this.routeOutputReady.add(resource.id);
+    }
+    return completion;
   }
   ledgerDetails(effect, actual) {
     const recipe = this.adapters.find(adapter => adapter.id === effect.adapterId)?.recipes?.create;
@@ -451,6 +475,8 @@ export class EffectDriver {
   async removeProcess(id, effect = {}) {
     const resource = this.journal.value.owned[id];
     if (!resource || resource.sessionId !== this.sessionId || !resource.nonce || !resource.startIdentity) throw new Error('Unknown owned process');
+    for (const key of this.routeLineBuffers.keys()) if (key.startsWith(`${id}\0`)) this.routeLineBuffers.delete(key);
+    this.routeOutputReady.delete(id);
     if ((effect.signal && effect.signal !== 'SIGTERM') || (effect.thenSignal && effect.thenSignal !== 'SIGKILL')) throw new Error('Unsupported owned-process signal');
     const attempts = Math.ceil(bounded(effect.graceMs, 500, 5000) / 25);
     if (await attributable(resource, this.sessionId)) {
