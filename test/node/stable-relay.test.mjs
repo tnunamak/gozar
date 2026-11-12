@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadDefinition } from '../../packages/gozar-node/catalog.mjs';
@@ -15,6 +15,36 @@ async function until(check) {
   while (Date.now() < end) { if (await check()) return; await wait(20); }
   assert.fail('Timed out waiting for route state');
 }
+test('core grammar refusal creates no installation or session identity', async t => {
+  const { directory: home } = await fixture(t, {});
+  const directory = join(home, 'port-18765'); await mkdir(directory);
+  const adapter = structuredClone(await loadDefinition(fileURLToPath(new URL('../../', import.meta.url)), 'tunnl-gg'));
+  // Keep admission and features valid: only the core parser grammar is invalid.
+  adapter.recipes.create.parser.jsonEvent.originPointer = 'url';
+  assert.equal(adapter.admission.state, 'admitted');
+  await atomicWrite(join(directory, 'bootstrap.json'), { adapters:[adapter], adapterId:adapter.id, targetPort:18765,
+    requirements:{ clientReach:'internet', httpsRequired:true, sse:true }, consent:false, lifetimeMs:60000 });
+  // No injected step: serve uses the packaged WASM core.
+  const running = await serve(directory);
+  t.after(async () => { await running.terminate(); });
+  const driver = running.controller.driver;
+  assert.ok(adapter.admission.requiredFeatures.every(feature => driver.host.features.includes(feature)));
+  const privateDirectory = join(directory, 'private');
+  const files = async () => readdir(privateDirectory).then(names => names.sort()).catch(error => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  const before = await files();
+  const ownedBefore = Object.keys(driver.journal.value.owned).sort();
+  const refusal = await running.controller.command({ type:'start', adapterId:adapter.id, consent:true }).catch(error => error);
+  await assert.rejects(lstat(join(home, 'identities')), { code:'ENOENT' });
+  await assert.rejects(lstat(join(home, 'identities', 'ed25519')), { code:'ENOENT' });
+  assert.deepEqual(await files(), before);
+  assert.deepEqual(Object.keys(driver.journal.value.owned).sort(), ownedBefore);
+  assert.match(refusal?.message ?? '', /not admitted/);
+  assert.equal(driver.host.bindings.installIdentityPath, undefined);
+  assert.equal(running.controller.state.published, null);
+});
 test('consented identity and JSON announcements keep a changed route withdrawn', async t => {
   const { directory: home } = await fixture(t, {});
   const directory = join(home, 'port-18765'); await mkdir(directory);

@@ -67,7 +67,21 @@ export class Controller {
     }
     if (command.type === 'start' && command.consent === true) {
       if (this.driver.stopped) return this.present();
-      await prepareInstallIdentities(this.driver, this.adapters.find(adapter => adapter.id === command.adapterId));
+      const adapter = this.adapters.find(adapter => adapter.id === command.adapterId);
+      if (Object.values(adapter?.bindings ?? {}).some(binding => binding.provision)) {
+        // Ask the same pure core admission decision before creating any identity.
+        // Do not commit this preview state or dispatch its effects.
+        const admission = this.step({
+          ...(this.state ? { state: this.state } : {}),
+          command: { ...command, sessionId: this.sessionId, consent: false },
+          adapters: this.adapters, requirements: this.requirements,
+          host: { ...this.driver.host, nowMs: this.driver.nowMs?.() ?? 0 },
+        });
+        if (admission.action?.kind !== 'confirm' || admission.action.adapterId !== command.adapterId ||
+            !Array.isArray(admission.effects) || admission.effects.length !== 0)
+          throw new Error('Identity provisioning is not admitted by core');
+      }
+      await prepareInstallIdentities(this.driver, adapter);
       if (this.driver.stopped) return this.present();
       this.driver.authorize(command.adapterId);
     }
