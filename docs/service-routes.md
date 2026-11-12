@@ -6,11 +6,11 @@ The commands below assume a global `gozar` executable. If you installed the pack
 
 ```sh
 gozar service add --origin https://service.example --target 192.0.2.10:3000 --json
-gozar service status [--origin https://service.example] --json
+gozar service status --origin https://service.example --json
 gozar service remove --origin https://service.example --json
 ```
 
-Use a credential-free HTTPS origin without a path, query or fragment. The target is `HOST:PORT` or `[IPv6]:PORT`, with port 1..65535. The proxy must preserve the application's expected public Host. Removing a record does not stop the service or edit the proxy. To change a target or verifier command, remove its record and add the replacement. Repeating an identical add is safe.
+Use a credential-free HTTPS origin without a path, query or fragment. Omitting `--origin` from `service status` lists every record. The target is `HOST:PORT` or `[IPv6]:PORT`, with port 1..65535. The proxy must preserve the application's expected public Host. Removing a record does not stop the service or edit the proxy. To change a target or verifier command, remove its record and add the replacement. Repeating an identical add is safe.
 
 ## Service challenge
 
