@@ -86,7 +86,7 @@ function without(config, dnsName, port) {
 
 // --- Records, tombstones and the home-wide reservation lock ---
 
-async function routesDirectory(home, create) {
+export async function routesDirectory(home, create) {
   const canonical = await canonicalHome(home, create);
   const dir = routeDirectory(canonical);
   let existed = true;
@@ -107,8 +107,8 @@ async function load(dir, routeId) {
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 const save = (dir, record) => atomicWrite(recordPath(dir, record.routeId), record);
-async function syncDirectory(dir) { const fd = await open(dir, 'r'); try { await fd.sync(); } finally { await fd.close(); } }
-async function removeFile(path) { try { await unlink(path); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } }
+export async function syncDirectory(dir) { const fd = await open(dir, 'r'); try { await fd.sync(); } finally { await fd.close(); } }
+export async function removeFile(path) { try { await unlink(path); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } }
 async function drop(dir, routeId) { await removeFile(recordPath(dir, routeId)); await syncDirectory(dir); }
 async function stopped(dir, routeId) {
   try { await readRecord(tombstonePath(dir, routeId)); return true; }
