@@ -1,6 +1,6 @@
-import { mkdir, readdir, unlink, link, lstat, open } from 'node:fs/promises';
+import { mkdir, readdir, unlink, link, lstat, open, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import http from 'node:http';
@@ -46,7 +46,7 @@ const hash = origin => createHash('sha256').update(origin).digest('hex');
 const directory = home => join(home, 'services');
 const filename = origin => hash(origin) + '.json';
 // Check from the filesystem root before creating or using anything below it.
-// Symlinks are deliberately unsupported, including owner-controlled home aliases.
+// Home aliases are resolved first; directories below that home must stay real.
 async function trustedDirectory(path, create = false) {
   const parent = dirname(path);
   if (parent !== path) await trustedDirectory(parent, create);
@@ -62,6 +62,38 @@ async function trustedDirectory(path, create = false) {
     throw new Error(`Unsafe service state path ${path}: use a real directory, not a symlink`);
   if ((stat.uid !== 0 && stat.uid !== process.getuid()) || ((stat.mode & 0o022) && !rootSticky))
     throw new Error(`Unsafe service state path ${path}: set owner to the invoking user or root and chmod go-w (only root-owned sticky directories may be writable)`);
+}
+// Resolve once, including the nearest existing ancestor of a missing home.
+// Never return to the requested alias after choosing its canonical location.
+async function canonicalHome(home, create = false) {
+  const requested = resolve(home);
+  const missing = [];
+  let ancestor = requested, canonical;
+  const aliasError = () => new Error(`Cannot resolve service home ${requested}: repair dangling or looping symlinks`);
+  while (true) {
+    try { canonical = await realpath(ancestor); break; }
+    catch (error) {
+      if (error.code === 'ELOOP') throw aliasError();
+      if (error.code !== 'ENOENT') throw error;
+      // ENOENT also describes dangling aliases. Do not treat those as new state.
+      let stat;
+      try { stat = await lstat(ancestor); }
+      catch (error) {
+        if (error.code === 'ELOOP') throw aliasError();
+        if (error.code !== 'ENOENT') throw error;
+      }
+      if (stat?.isSymbolicLink()) throw aliasError();
+      const parent = dirname(ancestor);
+      if (parent === ancestor) throw aliasError();
+      missing.unshift(basename(ancestor));
+      ancestor = parent;
+    }
+  }
+  canonical = join(canonical, ...missing);
+  // Root-down checks validate the existing ancestry before creating children,
+  // then validate each new component before proceeding further.
+  await trustedDirectory(canonical, create);
+  return canonical;
 }
 async function privateDirectory(path) {
   const stat = await lstat(path);
@@ -106,7 +138,7 @@ async function stored(path, name) {
   return checked;
 }
 async function mutate(home, origin, action) {
-  const dir = directory(resolve(home));
+  const dir = directory(await canonicalHome(home, true));
   await trustedDirectory(dir, true);
   await privateDirectory(dir);
   // Keep the lock inode: unlinking it could split concurrent mutations.
@@ -244,9 +276,13 @@ export async function addService({ origin, target, verifyCmd = null, home = defa
 }
 export async function statusServices({ origin, home = defaultHome() } = {}) {
   const normalized = origin === undefined ? null : originValue(origin);
-  home = resolve(home);
   let names;
-  try { await trustedDirectory(directory(home)); await privateDirectory(directory(home)); names = await readdir(directory(home)); }
+  try {
+    home = await canonicalHome(home);
+    await trustedDirectory(directory(home));
+    await privateDirectory(directory(home));
+    names = await readdir(directory(home));
+  }
   catch (error) { if (error.code === 'ENOENT') return { schemaVersion: 1, routes: [] }; throw error; }
   const routes = [];
   for (const name of names.sort()) {
