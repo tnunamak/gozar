@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { processIdentity } from '../../packages/gozar-node/journal.mjs';
 import { fixture } from './helpers.mjs';
 
@@ -59,10 +59,11 @@ test('packed local recovery action executes without global gozar, including quot
   const nonce = randomUUID();
   await writeFile(join(dir, 'control.json'), JSON.stringify({ pid:process.pid, startIdentity:await processIdentity(process.pid), nonce }));
   const commands = [];
+  let healthy = false;
   const server = createServer(socket => socket.on('data', data => {
     const message = JSON.parse(data.toString()); assert.equal(message.nonce, nonce);
     commands.push(message.command.type);
-    const snapshot = message.command.type === 'stop' ? {phase:'stopped'} : {
+    const snapshot = message.command.type === 'stop' ? {phase:'stopped'} : healthy ? {phase:'published-ready',published:'https://a.tunnl.gg',adapterId:'tunnl-gg'} : {
       phase:'degraded', adapterId:'tunnl-gg', candidate:null, published:null,
       lastRouteChange:{oldOrigin:'https://a.tunnl.gg',newOrigin:'https://b.tunnl.gg',generation:2},
     };
@@ -75,5 +76,29 @@ test('packed local recovery action executes without global gozar, including quot
   const stopped = await run('/bin/sh',['-c',reply.nextAction.command],{env,timeout:10000});
   assert.match(stopped.stdout,/Exposure stopped/);
   assert.deepEqual(commands,['status','stop']);
+  healthy = true;
+  const human = (await run(process.execPath,[installedCli,'status','--port',String(port)],{env,timeout:10000})).stdout;
+  const recovery = human.split('After sleep or network loss: ')[1]?.split(';')[0];
+  assert.ok(recovery, human);
+  const rechecked = await run('/bin/sh',['-c',recovery],{env,timeout:10000});
+  assert.match(rechecked.stdout,/Route checks passed/);
+  assert.equal(commands.at(-1),'health');
+  for (const line of human.split('\n').filter(line => /^(Status|Stop): /.test(line))) {
+    assert.ok(line.includes(installedCli.replaceAll("'", "'\\''")), line);
+  }
+  const guided = await run(process.execPath,[installedCli,'expose','--port',String(port)],{env,timeout:10000}).catch(error => error);
+  assert.match(guided.stdout,/For an internet client, run:/);
+  assert.ok(guided.stdout.includes(installedCli.replaceAll("'", "'\\''")), guided.stdout);
+
+  const missingOrigin = await run(process.execPath,[installedCli,'expose','--port',String(port),'--client-reach','internet','--adapter','own-address','--json'],{env,timeout:10000}).catch(error => error);
+  const instruction = JSON.parse(missingOrigin.stdout).action.instruction;
+  assert.ok(instruction.includes(installedCli.replaceAll("'", "'\\''")), instruction);
+  const api = await import(pathToFileURL(join(install,'node_modules/@tnunamak/gozar/packages/gozar-node/api.mjs')));
+  const external = { home:join(home,'external-state'),port };
+  try {
+    const setup = await api.expose({...external,origin:'https://owner.example',adapterId:'own-address',clientReach:'internet',yes:true});
+    assert.ok(setup.action.instruction.includes(installedCli.replaceAll("'", "'\\''")), setup.action.instruction);
+    assert.match(setup.action.instruction, /'health' '--port' '18765'/);
+  } finally { await api.stop(external); }
   await assert.rejects(readFile(trap),{code:'ENOENT'});
 });

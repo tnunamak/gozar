@@ -1,3 +1,4 @@
+import { cliCommand } from './cli-command.mjs';
 import { safeOrigin } from './catalog.mjs';
 
 export function installLink(template, endpoint) {
@@ -11,11 +12,11 @@ export function installLink(template, endpoint) {
 
 export function render(reply, adapters, { alternatives = false, port } = {}) {
   const snapshot = reply.snapshot;
-  if (!snapshot) return 'Status unknown. Run status to recheck the controller.';
+  if (!snapshot) return `Status unknown. Run ${cliCommand('status', port)} to recheck the controller.`;
   if (snapshot.phase === 'stopped') {
     const lines = ['Gozar · stopped', 'Exposure stopped.'];
     for (const failure of reply.localCleanupFailures ?? []) lines.push(`Cleanup needs attention: ${typeof failure === 'string' ? failure : JSON.stringify(failure)}`);
-    if (reply.localCleanupFailures?.length) lines.push(`Retry: ${reply.nextAction?.command ?? `gozar stop --port ${port}`}`, 'Success: Exposure stopped, with no remaining cleanup failures.');
+    if (reply.localCleanupFailures?.length) lines.push(`Retry: ${reply.nextAction?.command ?? cliCommand('stop', port)}`, 'Success: Exposure stopped, with no remaining cleanup failures.');
     if (reply.journalPath) lines.push(`Local state: ${reply.journalPath}`);
     return lines.join('\n');
   }
@@ -76,12 +77,11 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
   if (reply.gateTarget) lines.push(`Proxy target for this instance: ${reply.gateTarget}`);
   if (reply.journalPath) lines.push(`Local state: ${reply.journalPath}`);
   if (snapshot.phase === 'cleanup-pending' || snapshot.phase === 'stopping') {
-    lines.push('Route removal is not confirmed.', `Retry: ${reply.nextAction?.command ?? `gozar stop --port ${port}`}`, 'Success: Exposure stopped, with no remaining cleanup failures.');
+    lines.push('Route removal is not confirmed.', `Retry: ${reply.nextAction?.command ?? cliCommand('stop', port)}`, 'Success: Exposure stopped, with no remaining cleanup failures.');
   } else if (!['planned', 'stopped'].includes(snapshot.phase)) {
-    const scope = port ? ` --port ${port}` : '';
-    lines.push(`Status: gozar status${scope}`, `Stop: gozar stop${scope}`);
-    if (snapshot.phase !== 'published-ready') lines.push(`Next: ${reply.nextAction?.command ?? `gozar health${scope}`}`, `Success: ${reply.nextAction?.expectedSuccess ?? 'route checks pass and a validated URL is printed.'}`);
-    else lines.push(`After sleep or network loss: gozar health${scope}; if the route cannot recover, stop it and run expose again.`);
+    lines.push(`Status: ${cliCommand('status', port)}`, `Stop: ${cliCommand('stop', port)}`);
+    if (snapshot.phase !== 'published-ready') lines.push(`Next: ${reply.nextAction?.command ?? cliCommand('health', port)}`, `Success: ${reply.nextAction?.expectedSuccess ?? 'route checks pass and a validated URL is printed.'}`);
+    else lines.push(`After sleep or network loss: ${cliCommand('health', port)}; if the route cannot recover, stop it and run expose again.`);
   }
   return lines.join('\n');
 }

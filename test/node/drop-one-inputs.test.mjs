@@ -1,3 +1,4 @@
+import { cliCommand } from '../../packages/gozar-node/cli-command.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { networkInterfaces } from 'node:os';
@@ -42,7 +43,7 @@ test('supplied install template is encoded, persisted-profile data is rendered a
   const output = render({ snapshot: { phase: 'published-ready', published: 'https://service.example' }, connectionProfile: { installLinkTemplate: template } }, [], { port: 3000 });
   assert.match(output, /Install link: https:\/\/client.example\/install\?endpoint=https%3A%2F%2Fservice.example%2Fmcp/);
   assert.match(output, /"mcpServers"/); assert.match(output, /tool call still need checking/);
-  assert.match(output, /gozar health --port 3000/);
+  assert.ok(output.includes(cliCommand('health', 3000)));
 });
 
 test('interface and firewall require exact scoped approval without claiming client reach', async t => {
@@ -107,7 +108,7 @@ test('own-origin setup shows exact live gate before probing, status retains acti
   assert.equal(probes, 0);
   assert.equal(pending.action.kind, 'external'); assert.equal(pending.action.target, pending.gateTarget);
   assert.equal(pending.connectionProfile.installLinkTemplate, adapter.clientProfile.installLinkTemplate);
-  assert.match(pending.action.instruction, /gozar health --port 18765/);
+  assert.ok(pending.action.instruction.includes(cliCommand('health', 18765)));
   assert.equal(pending.snapshot.published, null);
   const gateIdentity = await fetch(`${pending.gateTarget}${running.gate.challenge().identityPath}`);
   assert.equal(gateIdentity.status, 200);

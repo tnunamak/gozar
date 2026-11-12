@@ -14,9 +14,9 @@ import { render, renderDetection, exposeSnapshot, installLink } from '../package
 import { validateLifetimeMs } from '../packages/gozar-node/gate.mjs';
 import { selectedInterfaceAddress } from '../packages/gozar-node/interfaces.mjs';
 
+import { cliCommand } from '../packages/gozar-node/cli-command.mjs';
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const shellQuote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
-const cliCommand = (command, port) => [process.execPath, fileURLToPath(import.meta.url), command, '--port', String(port)].map(shellQuote).join(' ');
 const reaches = ['internet', 'tailnet', 'lan', 'this-device', 'unknown'];
 export function parseArgs(argv) {
   const options = { command: argv[0] ?? 'help', clientReach: 'unknown' };
@@ -171,7 +171,7 @@ export async function main(argv = process.argv.slice(2)) {
     const question = 'Where does the app that will use this run?';
     if (!process.stdin.isTTY) {
       if (options.json) console.log(JSON.stringify({ action: { kind: 'choose', title: question, choices: reaches.slice(0, 4) } }));
-      else console.log(`${question}\n${reaches.slice(0, 4).join(' | ')}\nFor an internet client, run: gozar expose --port ${options.port} --client-reach internet`);
+      else console.log(`${question}\n${reaches.slice(0, 4).join(' | ')}\nFor an internet client, run: ${cliCommand('expose', options.port)} --client-reach internet`);
       process.exitCode = 2; return;
     }
     options.clientReach = await ask(`${question}\n${reaches.slice(0, 4).join(' | ')}\n> `);
@@ -196,7 +196,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (options.installLinkTemplate) selected.clientProfile = { ...selected.clientProfile, installLinkTemplate: options.installLinkTemplate };
   const profileRequirements = clientProfile?.clientRequirements;
   if (profileRequirements) Object.assign(requirements, clientRequirements(options, requirements, profileRequirements));
-  if (requirements.httpsRequired && selected.capabilities?.https === false) throw new Error('This route provides HTTP. Configure a trusted HTTPS listener, then run expose with --origin https://your-service.example.');
+  if (requirements.httpsRequired && selected.capabilities?.https === false) throw new Error(`This route provides HTTP. Configure a trusted HTTPS listener, then run ${cliCommand('expose', options.port)} --origin https://your-service.example.`);
   const interfaceInput = Object.values(selected.bindings ?? {}).some(binding => binding.type === 'selected-interface-address');
   const originInput = Object.values(selected.bindings ?? {}).some(binding => binding.type === 'credential-free-https-origin');
   const requestInput = async action => {
@@ -205,7 +205,7 @@ export async function main(argv = process.argv.slice(2)) {
     process.exitCode = 2;
   };
   if (originInput && !options.origin) {
-    await requestInput({ kind: 'input', field: 'origin', title: 'Choose the existing HTTPS origin', instruction: `Run gozar expose --port ${options.port} --origin https://your-service.example` }); return;
+    await requestInput({ kind: 'input', field: 'origin', title: 'Choose the existing HTTPS origin', instruction: `Run ${cliCommand('expose', options.port)} --origin https://your-service.example` }); return;
   }
   if (interfaceInput) {
     if (options.localName) throw new Error('Local-name routing needs separate DNS proof. Run again with --bind-address IP and omit --local-name.');
@@ -214,9 +214,9 @@ export async function main(argv = process.argv.slice(2)) {
       if (!options.json && process.stdin.isTTY) {
         options.bindAddress = await ask(`Choose the exact interface address: ${addresses.join(', ')}\n> `);
         if (!addresses.includes(options.bindAddress)) throw new Error('Choose a listed interface address with --bind-address IP');
-      } else { await requestInput({ kind: 'input', field: 'bindAddress', title: 'Choose a local network interface', choices: addresses, instruction: `Run gozar expose --port ${options.port} --client-reach ${options.clientReach} --bind-address IP` }); return; }
+      } else { await requestInput({ kind: 'input', field: 'bindAddress', title: 'Choose a local network interface', choices: addresses, instruction: `Run ${cliCommand('expose', options.port)} --client-reach ${options.clientReach} --bind-address IP` }); return; }
     }
-    if (!addresses.includes(options.bindAddress)) throw new Error(`Selected interface is not currently assigned. Run expose --port ${options.port} --client-reach ${options.clientReach} without --bind-address to choose a current interface.`);
+    if (!addresses.includes(options.bindAddress)) throw new Error(`Selected interface is not currently assigned. Run ${cliCommand('expose', options.port)} --client-reach ${options.clientReach} without --bind-address to choose a current interface.`);
     for (const [key, flag, title] of [['firewallAck', '--firewall-ack', 'Approve inbound traffic on this exact interface and an ephemeral HTTP port']]) {
       if (options[key]) continue;
       if (!options.json && process.stdin.isTTY) {

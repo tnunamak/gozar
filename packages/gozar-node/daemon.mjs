@@ -1,4 +1,5 @@
 import net from 'node:net';
+import { cliCommand } from './cli-command.mjs';
 import { chmod, readFile, unlink, open, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -99,7 +100,7 @@ export async function launch(directory, configuration, executable) {
         await new Promise(resolve => setTimeout(resolve, 50));
       }
     }
-    throw new Error('Controller startup still pending; run status before retrying expose');
+    throw new Error(`Controller startup still pending; run ${cliCommand('status', configuration.targetPort)} before retrying expose`);
   } finally { await unlink(lockPath).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
 }
 
@@ -177,7 +178,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   if (operational) await prepareHost(controller.driver, selectedAdapter, { origin: config.origin, gate, probeExecutor, authorities: hostAuthorities });
   let setupPending = Boolean(gate && selectedAdapter?.setup?.requiresProxyTarget);
   const present = output => ({ ...output, ...(gate ? { lifetimeMs: gate.lifetimeMs, expiresAtMs: gate.expiresAtMs } : {}), ...(selectedAdapter?.clientProfile ? { connectionProfile: selectedAdapter.clientProfile } : {}),
-    ...(setupPending && !controller.state?.stopRequested ? { action: { kind: 'external', instruction: `Point the existing origin ${config.origin} at ${gate.target}, then run gozar health --port ${config.targetPort}.`, target: gate.target, recheckCommand: 'health' } } : {}) });
+    ...(setupPending && !controller.state?.stopRequested ? { action: { kind: 'external', instruction: `Point the existing origin ${config.origin} at ${gate.target}, then run ${cliCommand('health', config.targetPort)}.`, target: gate.target, recheckCommand: 'health' } } : {}) });
   const nonce = randomUUID();
   const identity = { pid: process.pid, startIdentity: await processIdentity(process.pid), nonce };
   // Only remove a stale socket after proving the prior daemon identity is gone.
