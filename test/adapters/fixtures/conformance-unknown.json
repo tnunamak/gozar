@@ -1,0 +1,5 @@
+{
+  "providers": [
+    { "id": "fake-wave", "module": "providers/fake-wave/index.mjs", "definition": "providers/fake-wave/definition.json" }
+  ]
+}

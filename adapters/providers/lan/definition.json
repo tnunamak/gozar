@@ -1,0 +1,54 @@
+{
+  "wraps": "../../lan.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "lan",
+    "label": "Local network",
+    "capabilities": {
+      "reach": "lan",
+      "transport": "http",
+      "traffic": {
+        "tlsTermination": "unknown",
+        "providerCanReadPayload": false,
+        "readers": [
+          "the local network path (unencrypted HTTP)"
+        ],
+        "metadataVisibleTo": [],
+        "evidenceRef": "adapters/lan.definition.json"
+      },
+      "address": {
+        "stability": "unknown",
+        "scope": "selected interface address with an OS-assigned port",
+        "conditions": [
+          "firewall and routing are the owner’s prerequisites",
+          "no TLS: HTTPS-required clients cannot use it"
+        ]
+      },
+      "cost": {
+        "kind": "free",
+        "summary": "No provider: an owned local forwarder",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": false,
+      "lifetimes": [
+        "session"
+      ],
+      "supervision": "controller",
+      "protocols": {
+        "sse": false,
+        "streamableHttp": false,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [
+      "session"
+    ],
+    "disclosure": {
+      "revision": "disc-c02f07dea26d",
+      "text": "Expose this service on a selected local network interface over plain HTTP through an owned forwarder. Anyone on that network path can read the traffic.",
+      "links": []
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "wraps": "../../cloudflare-named.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "cloudflare-named",
+    "label": "Cloudflare named tunnel",
+    "capabilities": {
+      "reach": "internet",
+      "transport": "https",
+      "traffic": {
+        "tlsTermination": "provider",
+        "providerCanReadPayload": true,
+        "readers": [
+          "Cloudflare edge"
+        ],
+        "metadataVisibleTo": [
+          "Cloudflare edge"
+        ],
+        "evidenceRef": "adapters/cloudflare-named.definition.json"
+      },
+      "address": {
+        "stability": "stable",
+        "scope": "hostname route in the owner’s Cloudflare account",
+        "conditions": [
+          "no admitted create recipe",
+          "DNS and the tunnel are owner-managed prerequisites"
+        ]
+      },
+      "cost": {
+        "kind": "unknown",
+        "summary": "Pricing is not established by the cited sources",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": true,
+      "lifetimes": [],
+      "supervision": "controller",
+      "protocols": {
+        "sse": false,
+        "streamableHttp": false,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [],
+    "disclosure": {
+      "revision": "disc-dcd687fdcadb",
+      "text": "Cloudflare named tunnel is detected only. Gozar cannot create a route with it yet. The Cloudflare edge terminates TLS and can read payloads.",
+      "links": []
+    }
+  }
+}

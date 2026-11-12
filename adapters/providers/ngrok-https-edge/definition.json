@@ -1,0 +1,56 @@
+{
+  "wraps": "../../ngrok-https-edge.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "ngrok-https-edge",
+    "label": "ngrok HTTPS edge",
+    "capabilities": {
+      "reach": "internet",
+      "transport": "https",
+      "traffic": {
+        "tlsTermination": "provider",
+        "providerCanReadPayload": true,
+        "readers": [
+          "ngrok edge"
+        ],
+        "metadataVisibleTo": [
+          "ngrok edge"
+        ],
+        "evidenceRef": "adapters/ngrok-https-edge.definition.json"
+      },
+      "address": {
+        "stability": "stable",
+        "scope": "reserved domain of your ngrok account",
+        "conditions": [
+          "a reserved domain is a per-user setup value",
+          "the listener lives only while the host process runs"
+        ]
+      },
+      "cost": {
+        "kind": "unknown",
+        "summary": "Pricing is not established by the cited sources",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": true,
+      "lifetimes": [
+        "attached"
+      ],
+      "supervision": "host-supervised",
+      "protocols": {
+        "sse": false,
+        "streamableHttp": false,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [
+      "attached"
+    ],
+    "disclosure": {
+      "revision": "disc-43d91fe6da83",
+      "text": "Serve this app through an ngrok listener on your reserved ngrok domain while the app runs. The ngrok edge terminates TLS and can read payloads. The auth token stays in Gozar’s private store.",
+      "links": []
+    }
+  }
+}

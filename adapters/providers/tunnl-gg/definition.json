@@ -1,0 +1,57 @@
+{
+  "wraps": "../../tunnl-gg.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "tunnl-gg",
+    "label": "tunnl.gg trial",
+    "capabilities": {
+      "reach": "internet",
+      "transport": "https",
+      "traffic": {
+        "tlsTermination": "provider",
+        "providerCanReadPayload": true,
+        "readers": [
+          "tunnl.gg relay"
+        ],
+        "metadataVisibleTo": [
+          "tunnl.gg relay"
+        ],
+        "evidenceRef": "adapters/tunnl-gg.definition.json"
+      },
+      "address": {
+        "stability": "unknown",
+        "scope": "address bound to an installation key",
+        "conditions": [
+          "an announced address change ends the route",
+          "the relay can close quiet streams after about two minutes",
+          "browsers can show a warning page"
+        ]
+      },
+      "cost": {
+        "kind": "unknown",
+        "summary": "Pricing is not established by the cited sources",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": null,
+      "lifetimes": [
+        "session"
+      ],
+      "supervision": "controller",
+      "protocols": {
+        "sse": false,
+        "streamableHttp": false,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [
+      "session"
+    ],
+    "disclosure": {
+      "revision": "disc-6d909da5b275",
+      "text": "Start a public HTTPS trial through the tunnl.gg relay. The relay terminates TLS and can read payloads. Quiet streams can close after two minutes.",
+      "links": []
+    }
+  }
+}

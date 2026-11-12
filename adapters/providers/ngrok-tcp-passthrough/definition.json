@@ -1,0 +1,52 @@
+{
+  "wraps": "../../ngrok-tcp-passthrough.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "ngrok-tcp-passthrough",
+    "label": "ngrok TCP passthrough",
+    "capabilities": {
+      "reach": "internet",
+      "transport": "http",
+      "traffic": {
+        "tlsTermination": "unknown",
+        "providerCanReadPayload": null,
+        "readers": [
+          "the application endpoint (opaque TCP)"
+        ],
+        "metadataVisibleTo": [
+          "unknown"
+        ],
+        "evidenceRef": "adapters/ngrok-tcp-passthrough.definition.json"
+      },
+      "address": {
+        "stability": "unknown",
+        "scope": "assigned TCP address of your ngrok account",
+        "conditions": [
+          "no admitted create recipe",
+          "opaque TCP: no HTTPS origin until a mapping passes a client probe"
+        ]
+      },
+      "cost": {
+        "kind": "unknown",
+        "summary": "Pricing is not established by the cited sources",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": true,
+      "lifetimes": [],
+      "supervision": "controller",
+      "protocols": {
+        "sse": false,
+        "streamableHttp": false,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [],
+    "disclosure": {
+      "revision": "disc-283687cfc6f4",
+      "text": "ngrok TCP passthrough is detected only. Gozar cannot create a route with it yet.",
+      "links": []
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "wraps": "../../localhost-run.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "localhost-run",
+    "label": "localhost.run trial",
+    "capabilities": {
+      "reach": "internet",
+      "transport": "https",
+      "traffic": {
+        "tlsTermination": "provider",
+        "providerCanReadPayload": true,
+        "readers": [
+          "localhost.run relay"
+        ],
+        "metadataVisibleTo": [
+          "localhost.run relay"
+        ],
+        "evidenceRef": "adapters/localhost-run.definition.json"
+      },
+      "address": {
+        "stability": "ephemeral",
+        "scope": "random hostname under lhr.life for one connection",
+        "conditions": [
+          "trial: uptime and URL lifetime are not guaranteed",
+          "a new connection gets a new URL",
+          "the plan limits a session to 15 minutes"
+        ]
+      },
+      "cost": {
+        "kind": "unknown",
+        "summary": "Pricing is not established by the cited sources",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": false,
+      "lifetimes": [
+        "session"
+      ],
+      "supervision": "controller",
+      "protocols": {
+        "sse": false,
+        "streamableHttp": false,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [
+      "session"
+    ],
+    "disclosure": {
+      "revision": "disc-8fd297ce7670",
+      "text": "Start a public HTTPS trial through the localhost.run relay for the requested lifetime (15 minutes by default). The relay terminates TLS and can read payloads.",
+      "links": []
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "wraps": "../../tailscale-funnel.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "tailscale-funnel",
+    "label": "Tailscale Funnel",
+    "capabilities": {
+      "reach": "internet",
+      "transport": "https",
+      "traffic": {
+        "tlsTermination": "endpoint",
+        "providerCanReadPayload": null,
+        "readers": [
+          "this device (local tailscaled)"
+        ],
+        "metadataVisibleTo": [
+          "unknown"
+        ],
+        "evidenceRef": "adapters/evidence/tailscale-serve-funnel-source-facts.md"
+      },
+      "address": {
+        "stability": "stable",
+        "scope": "DNS name of this node plus an unused port",
+        "conditions": [
+          "needs an unused port that the node policy allows for Funnel",
+          "the tailnet administrator must allow Funnel",
+          "node and tailnet identity stay the same"
+        ]
+      },
+      "cost": {
+        "kind": "unknown",
+        "summary": "Pricing is not established by the cited sources",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": true,
+      "lifetimes": [
+        "session",
+        "durable"
+      ],
+      "supervision": "provider-persistent",
+      "protocols": {
+        "sse": false,
+        "streamableHttp": false,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [
+      "session",
+      "durable"
+    ],
+    "disclosure": {
+      "revision": "disc-af382bdc84b0",
+      "text": "Publish this service over HTTPS on an unused Tailscale Funnel port of this device. Existing listeners stay untouched. HTTPS, instance identity and timed SSE must pass before publication.",
+      "links": []
+    }
+  }
+}
