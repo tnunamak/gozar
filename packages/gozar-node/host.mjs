@@ -16,7 +16,8 @@ export async function prepareHost(driver, adapter, { origin, gate, probeExecutor
     host.probe = { nonceRef: gate.nonceRef, verifierRef: gate.verifierRef, expiresAtMs, ...(probeExecutor instanceof PublicRelayVerifier ? { allowPublicRelay:true } : {}) };
   }
   if (probeExecutor) host.features.push('client-vantage-probe');
-  const receipt = value => ({ value, generation, authorityRef: randomUUID(), sessionId: driver.sessionId, observedAtMs: nowMs, expiresAtMs });
+  const receipt = (value, expiry = expiresAtMs) => ({ value, generation, authorityRef: randomUUID(), sessionId: driver.sessionId, observedAtMs: nowMs, expiresAtMs: expiry });
+  const stableBindingExpiry = driver.lifetimeMs !== undefined && Number.isFinite(gate?.expiresAtMs) ? gate.expiresAtMs : expiresAtMs;
   for (const [name, spec] of Object.entries(adapter.bindings ?? {})) {
     if (Object.hasOwn(spec, 'value') || (spec.source && spec.pointer)) continue;
     let value;
@@ -33,7 +34,10 @@ export async function prepareHost(driver, adapter, { origin, gate, probeExecutor
       host.bindings[name] = { ...receipt(undefined), type: spec.type, handleRef: fileHandle, mode: '0600', parentMode: '0700' };
       delete host.bindings[name].value;
     }
-    if (value !== undefined) host.bindings[name] = { ...receipt(value), type: spec.type };
+    if (value !== undefined) {
+      const expiry = ['loopback-port', 'loopback-http-origin', 'credential-free-https-origin'].includes(spec.type) ? stableBindingExpiry : expiresAtMs;
+      host.bindings[name] = { ...receipt(value, expiry), type: spec.type };
+    }
   }
   const exactInterface = driver.bindAddresses.length === 1 && selectedInterfaceAddress(driver.bindAddresses[0]) && Object.values(networkInterfaces()).flat().some(address => address.address === driver.bindAddresses[0] && !address.internal);
   if (exactInterface) host.facts['selected-interface-still-present'] = receipt({ address: driver.bindAddresses[0] });

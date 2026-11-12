@@ -35,6 +35,9 @@ test('daemon gate remains open beyond the default lifetime until the host deadli
   assert.equal(status.lifetimeMs, 1_800_000);
   assert.equal(running.controller.driver.lifetimeMs, 1_800_000);
   assert.ok(Number.isInteger(status.expiresAtMs));
+  running.gate.rotate();
+  assert.equal((await control(directory, { type: 'status' })).expiresAtMs, status.expiresAtMs);
+  assert.equal(running.gate.expiresAtMs, status.expiresAtMs);
   advance(1_800_000);
   const expired = await fetch(`${running.gate.target}${running.gate.challenge().identityPath}`).then(response => response.status, () => 'closed');
   assert.ok(expired === 503 || expired === 'closed');
@@ -75,4 +78,36 @@ test('host lifetime overrides the admitted owned-process timer without changing 
   assert.equal((await driver.execute(effect(recipe, 'create', 'child'))).ok, true);
   assert.deepEqual(delays, [1_800_000]);
   assert.equal(driver.adapters[0].recipes.create.lifetimeMs, 900_000);
+});
+
+test('own-address local origin remains admissible at minute 16 while supplied authority still expires', async t => {
+  const { loadDefinition } = await import('../../packages/gozar-node/catalog.mjs');
+  const { prepareHost } = await import('../../packages/gozar-node/host.mjs');
+  const { admitPlanEffect, expandPlan } = await import('../../packages/gozar-node/plan.mjs');
+  const { fileURLToPath } = await import('node:url');
+  const adapter = await loadDefinition(fileURLToPath(new URL('../../', import.meta.url)), 'own-address');
+  const { driver } = await fixture(t, {});
+  let now = 1_000_000;
+  driver.nowMs = () => now;
+  driver.lifetimeMs = 1_800_000;
+  const gate = { nonceRef: 'nonce', verifierRef: 'verifier', expiresAtMs: now + 1_800_000 };
+  const prepare = authorities => prepareHost(driver, adapter, { origin: 'https://owner.example', gate, probeExecutor: {}, authorities });
+  const host = await prepare({});
+  const makeEffect = binding => {
+    const bindings = { externalOrigin: binding };
+    const recipe = Object.fromEntries(Object.entries(adapter.recipes.detect).filter(([key]) => key !== 'parser'));
+    return { ...expandPlan(recipe, bindings), id: 'detect', sessionId: 'test', generation: 1, adapterId: adapter.id,
+      operation: 'detect', recipeRef: 'detect/execute', stepId: 'execute', stage: 'execute', bindings, bindingRefs: { externalOrigin: binding.authorityRef } };
+  };
+  const context = host => ({ adapters: [adapter], sessionId: 'test', targetPort: driver.targetPort, features: host.features, host, nowMs: now });
+  const localEffect = makeEffect(host.bindings.externalOrigin);
+  assert.doesNotThrow(() => admitPlanEffect(localEffect, context(host)));
+  const supplied = { ...host.bindings.externalOrigin, authorityRef: 'supplied', expiresAtMs: now + 900_000 };
+  const suppliedFact = { value: true, sessionId: 'test', generation: 1, authorityRef: 'supplied-fact', observedAtMs: now, expiresAtMs: now + 900_000 };
+  const suppliedHost = await prepare({ bindings: { externalOrigin: supplied }, facts: { externalProof: suppliedFact } });
+  assert.equal(suppliedHost.facts.externalProof.expiresAtMs, suppliedFact.expiresAtMs);
+  now += 960_000;
+  assert.doesNotThrow(() => admitPlanEffect(localEffect, context(host)));
+  assert.throws(() => admitPlanEffect(makeEffect(supplied), context(suppliedHost)), /stale/);
+  assert.equal(host.probe.expiresAtMs, 1_900_000);
 });
