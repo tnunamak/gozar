@@ -27,8 +27,8 @@
         ]
       },
       "cost": {
-        "kind": "unknown",
-        "summary": "Pricing is not established by the cited sources",
+        "kind": "free",
+        "summary": "Gozar charges nothing; your own domain, hosting and certificate cost whatever you pay for them.",
         "currency": null,
         "amount": null,
         "period": null
@@ -39,9 +39,9 @@
       ],
       "supervision": "controller",
       "protocols": {
-        "sse": false,
-        "streamableHttp": false,
-        "oauthDcr": false
+        "sse": true,
+        "streamableHttp": true,
+        "oauthDcr": true
       }
     },
     "supportedKinds": [
@@ -51,6 +51,14 @@
       "revision": "disc-6046ee9650c1",
       "text": "Validate an existing owner-managed HTTPS origin against this instance. The address, route and certificate stay under the owner’s control; Gozar creates and deletes nothing.",
       "links": []
+    }
+  },
+  "evidence": {
+    "accessed": "2026-11-12",
+    "sources": [],
+    "protocols": {
+      "sse/streamableHttp": "true. Backed by validation.sse (timed incremental event delivery when required) and validation.publish (exact-origin approval only after all required probes) in the wrapped recipe definition, with admission.requiredFeatures probe-assertions and client-vantage-probe.",
+      "oauthDcr": "oauthDcr: the owner-managed HTTPS origin is stable by definition of this adapter, and the configured authority is preserved."
     }
   }
 }

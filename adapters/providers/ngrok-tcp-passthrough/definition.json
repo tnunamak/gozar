@@ -16,7 +16,7 @@
         "metadataVisibleTo": [
           "unknown"
         ],
-        "evidenceRef": "adapters/ngrok-tcp-passthrough.definition.json"
+        "evidenceRef": "https://ngrok.com/pricing (accessed 2026-11-12)"
       },
       "address": {
         "stability": "unknown",
@@ -28,7 +28,7 @@
       },
       "cost": {
         "kind": "unknown",
-        "summary": "Pricing is not established by the cited sources",
+        "summary": "The ngrok pricing page does not settle the cost of TCP passthrough.",
         "currency": null,
         "amount": null,
         "period": null
@@ -46,7 +46,28 @@
     "disclosure": {
       "revision": "disc-283687cfc6f4",
       "text": "ngrok TCP passthrough is detected only. Gozar cannot create a route with it yet.",
-      "links": []
+      "links": [
+        {
+          "rel": "terms",
+          "label": "Terms",
+          "href": "https://ngrok.com/tos"
+        },
+        {
+          "rel": "privacy",
+          "label": "Privacy",
+          "href": "https://ngrok.com/privacy"
+        }
+      ]
+    }
+  },
+  "evidence": {
+    "accessed": "2026-11-12",
+    "sources": [
+      "https://ngrok.com/pricing"
+    ],
+    "protocols": {
+      "sse/streamableHttp": "false. no admitted recipe: this adapter creates no route, so no timed stream probe gates a publication",
+      "oauthDcr": "Detected only: no kind, nothing is published."
     }
   }
 }

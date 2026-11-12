@@ -26,7 +26,7 @@
       },
       "cost": {
         "kind": "free",
-        "summary": "No provider: an owned local forwarder",
+        "summary": "Gozar charges nothing and there is no provider; the owned local forwarder uses your own network.",
         "currency": null,
         "amount": null,
         "period": null
@@ -37,8 +37,8 @@
       ],
       "supervision": "controller",
       "protocols": {
-        "sse": false,
-        "streamableHttp": false,
+        "sse": true,
+        "streamableHttp": true,
         "oauthDcr": false
       }
     },
@@ -49,6 +49,14 @@
       "revision": "disc-c02f07dea26d",
       "text": "Expose this service on a selected local network interface over plain HTTP through an owned forwarder. Anyone on that network path can read the traffic.",
       "links": []
+    }
+  },
+  "evidence": {
+    "accessed": "2026-11-12",
+    "sources": [],
+    "protocols": {
+      "sse/streamableHttp": "true. Backed by validation.sse (timed incremental event delivery when required) and validation.publish (exact-origin approval only after all required probes) in the wrapped recipe definition, with admission.requiredFeatures probe-assertions and client-vantage-probe.",
+      "oauthDcr": "oauthDcr false: the origin is plain HTTP on a local address, not a stable HTTPS origin."
     }
   }
 }

@@ -16,7 +16,7 @@
         "metadataVisibleTo": [
           "Cloudflare edge"
         ],
-        "evidenceRef": "adapters/cloudflare-named.definition.json"
+        "evidenceRef": "https://www.cloudflare.com/plans/sase-zero-trust.md (accessed 2026-11-12) ; https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/ (accessed 2026-11-12)"
       },
       "address": {
         "stability": "stable",
@@ -28,7 +28,7 @@
       },
       "cost": {
         "kind": "unknown",
-        "summary": "Pricing is not established by the cited sources",
+        "summary": "Cloudflare lists a $0 Free Zero Trust plan with connector software included, but no page names Cloudflare Tunnel.",
         "currency": null,
         "amount": null,
         "period": null
@@ -46,7 +46,29 @@
     "disclosure": {
       "revision": "disc-dcd687fdcadb",
       "text": "Cloudflare named tunnel is detected only. Gozar cannot create a route with it yet. The Cloudflare edge terminates TLS and can read payloads.",
-      "links": []
+      "links": [
+        {
+          "rel": "terms",
+          "label": "Terms",
+          "href": "https://www.cloudflare.com/terms/"
+        },
+        {
+          "rel": "privacy",
+          "label": "Privacy",
+          "href": "https://www.cloudflare.com/privacypolicy/"
+        }
+      ]
+    }
+  },
+  "evidence": {
+    "accessed": "2026-11-12",
+    "sources": [
+      "https://www.cloudflare.com/plans/sase-zero-trust.md",
+      "https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/"
+    ],
+    "protocols": {
+      "sse/streamableHttp": "false. no admitted recipe: this adapter creates no route, so no timed stream probe gates a publication",
+      "oauthDcr": "Detected only: no kind, nothing is published."
     }
   }
 }

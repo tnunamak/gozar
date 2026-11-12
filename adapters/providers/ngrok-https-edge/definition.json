@@ -16,7 +16,7 @@
         "metadataVisibleTo": [
           "ngrok edge"
         ],
-        "evidenceRef": "adapters/ngrok-https-edge.definition.json"
+        "evidenceRef": "https://ngrok.com/pricing (accessed 2026-11-12) ; https://ngrok.com/tos (accessed 2026-11-12) ; https://ngrok.com/privacy (accessed 2026-11-12)"
       },
       "address": {
         "stability": "stable",
@@ -28,7 +28,7 @@
       },
       "cost": {
         "kind": "unknown",
-        "summary": "Pricing is not established by the cited sources",
+        "summary": "ngrok has a $0 Free plan with one development domain, but its pricing page says custom domains need Pay-as-you-go ($20 base).",
         "currency": null,
         "amount": null,
         "period": null
@@ -41,7 +41,7 @@
       "protocols": {
         "sse": false,
         "streamableHttp": false,
-        "oauthDcr": false
+        "oauthDcr": true
       }
     },
     "supportedKinds": [
@@ -50,7 +50,30 @@
     "disclosure": {
       "revision": "disc-43d91fe6da83",
       "text": "Serve this app through an ngrok listener on your reserved ngrok domain while the app runs. The ngrok edge terminates TLS and can read payloads. The auth token stays in Gozar’s private store.",
-      "links": []
+      "links": [
+        {
+          "rel": "terms",
+          "label": "Terms",
+          "href": "https://ngrok.com/tos"
+        },
+        {
+          "rel": "privacy",
+          "label": "Privacy",
+          "href": "https://ngrok.com/privacy"
+        }
+      ]
+    }
+  },
+  "evidence": {
+    "accessed": "2026-11-12",
+    "sources": [
+      "https://ngrok.com/pricing",
+      "https://ngrok.com/tos",
+      "https://ngrok.com/privacy"
+    ],
+    "protocols": {
+      "sse/streamableHttp": "false. no admitted recipe: this adapter runs no recipe probe, so no timed stream probe gates a publication",
+      "oauthDcr": "sse/streamableHttp false: the SDK listener path runs no timed stream probe before publication (recipe-blocked). oauthDcr: the reserved domain is a stable HTTPS origin and the configured authority is preserved."
     }
   }
 }

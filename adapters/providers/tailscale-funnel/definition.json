@@ -9,14 +9,14 @@
       "transport": "https",
       "traffic": {
         "tlsTermination": "endpoint",
-        "providerCanReadPayload": null,
+        "providerCanReadPayload": false,
         "readers": [
           "this device (local tailscaled)"
         ],
         "metadataVisibleTo": [
           "unknown"
         ],
-        "evidenceRef": "adapters/evidence/tailscale-serve-funnel-source-facts.md"
+        "evidenceRef": "https://tailscale.com/kb/1223/funnel (accessed 2026-11-12) ; https://tailscale.com/pricing (accessed 2026-11-12)"
       },
       "address": {
         "stability": "stable",
@@ -28,10 +28,10 @@
         ]
       },
       "cost": {
-        "kind": "unknown",
-        "summary": "Pricing is not established by the cited sources",
-        "currency": null,
-        "amount": null,
+        "kind": "free",
+        "summary": "Free on the Personal plan (up to 6 users); Funnel is available on all plans, with non-configurable bandwidth limits.",
+        "currency": "USD",
+        "amount": 0,
         "period": null
       },
       "needsAccount": true,
@@ -41,9 +41,9 @@
       ],
       "supervision": "provider-persistent",
       "protocols": {
-        "sse": false,
-        "streamableHttp": false,
-        "oauthDcr": false
+        "sse": true,
+        "streamableHttp": true,
+        "oauthDcr": true
       }
     },
     "supportedKinds": [
@@ -53,7 +53,29 @@
     "disclosure": {
       "revision": "disc-af382bdc84b0",
       "text": "Publish this service over HTTPS on an unused Tailscale Funnel port of this device. Existing listeners stay untouched. HTTPS, instance identity and timed SSE must pass before publication.",
-      "links": []
+      "links": [
+        {
+          "rel": "terms",
+          "label": "Terms",
+          "href": "https://tailscale.com/terms"
+        },
+        {
+          "rel": "privacy",
+          "label": "Privacy",
+          "href": "https://tailscale.com/privacy-policy"
+        }
+      ]
+    }
+  },
+  "evidence": {
+    "accessed": "2026-11-12",
+    "sources": [
+      "https://tailscale.com/kb/1223/funnel",
+      "https://tailscale.com/pricing"
+    ],
+    "protocols": {
+      "sse/streamableHttp": "true. Backed by validation.sse (timed incremental event delivery when required) and validation.publish (exact-origin approval only after all required probes) in the wrapped recipe definition, with admission.requiredFeatures probe-assertions and client-vantage-probe.",
+      "oauthDcr": "oauthDcr: Funnel publishes a stable HTTPS origin on the device's tailnet name and Gozar preserves the configured authority (Ingress.authorityHandling is configured-origin)."
     }
   }
 }

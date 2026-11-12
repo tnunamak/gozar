@@ -16,7 +16,7 @@
         "metadataVisibleTo": [
           "localhost.run relay"
         ],
-        "evidenceRef": "adapters/localhost-run.definition.json"
+        "evidenceRef": "https://localhost.run/ (accessed 2026-11-12) ; https://localhost.run/docs/forever-free (accessed 2026-11-12)"
       },
       "address": {
         "stability": "ephemeral",
@@ -28,10 +28,10 @@
         ]
       },
       "cost": {
-        "kind": "unknown",
-        "summary": "Pricing is not established by the cited sources",
-        "currency": null,
-        "amount": null,
+        "kind": "free",
+        "summary": "The free tier costs nothing and needs no signup; its domains change regularly and have a speed limit.",
+        "currency": "USD",
+        "amount": 0,
         "period": null
       },
       "needsAccount": false,
@@ -40,8 +40,8 @@
       ],
       "supervision": "controller",
       "protocols": {
-        "sse": false,
-        "streamableHttp": false,
+        "sse": true,
+        "streamableHttp": true,
         "oauthDcr": false
       }
     },
@@ -52,6 +52,17 @@
       "revision": "disc-8fd297ce7670",
       "text": "Start a public HTTPS trial through the localhost.run relay for the requested lifetime (15 minutes by default). The relay terminates TLS and can read payloads.",
       "links": []
+    }
+  },
+  "evidence": {
+    "accessed": "2026-11-12",
+    "sources": [
+      "https://localhost.run/",
+      "https://localhost.run/docs/forever-free"
+    ],
+    "protocols": {
+      "sse/streamableHttp": "true. Backed by validation.sse (timed incremental event delivery when required) and validation.publish (exact-origin approval only after all required probes) in the wrapped recipe definition, with admission.requiredFeatures probe-assertions and client-vantage-probe.",
+      "oauthDcr": "oauthDcr false: free domains are ephemeral ('Domain names change regularly'), so no stable HTTPS origin."
     }
   }
 }
