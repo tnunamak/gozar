@@ -134,6 +134,8 @@ test('one installation identity admits one live stable relay route across ports'
   const identities = join(home, 'identities');
   const key = await readFile(join(identities, 'ed25519'));
   const fingerprint = createHash('sha256').update(key).digest('hex');
+  // A simulated dead controller must not react when recovery kills its orphan.
+  next.controller.driver.stopped = true;
   await atomicWrite(join(identities, `.active-route-${fingerprint}.json`), { version:1, leaseId:'stale-owner',
     keyFingerprint:fingerprint, pid:2147483647, startIdentity:'1', sessionId:next.controller.sessionId,
     sessionDirectory:waiting.directory, targetPort:next.controller.servicePort, stopCommand:cliCommand('stop', next.controller.servicePort) });

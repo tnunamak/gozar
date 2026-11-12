@@ -5,7 +5,7 @@ import { safeOrigin } from './catalog.mjs';
 
 // Only core transitions are serialized. Slow effects do not prevent a stop from fencing publication.
 export class Controller {
-  constructor({ step, journal, adapters, requirements, targetPort, servicePort, sessionId = randomUUID(), origin, bindAddresses = [], firewallApproved = false, driver }) {
+  constructor({ step, journal, adapters, requirements, targetPort, servicePort, sessionId = randomUUID(), origin, bindAddresses = [], firewallApproved = false, driver, onAutomaticStop }) {
     Object.assign(this, { step, journal, adapters, requirements, targetPort, servicePort, sessionId, origin });
     this.state = undefined;
     this.last = undefined;
@@ -15,7 +15,10 @@ export class Controller {
     this.hostLimitations = new Set();
     this.keyLease = null;
     this.driver = driver ?? new EffectDriver({ adapters, journal, sessionId, targetPort, origin, bindAddresses, firewallApproved,
-      onExit: () => { if (!this.driver.stopped) this.command({ type: 'stop' }).catch(() => {}); } });
+      onExit: () => { if (!this.driver.stopped) {
+        // Never await finalization from an effect completion that it must drain.
+        setImmediate(() => (onAutomaticStop ? onAutomaticStop() : this.shutdown()).catch(() => {}));
+      } } });
   }
   async advance(command) {
     this.last = this.step({ ...(this.state ? { state: this.state } : {}), command: { sessionId: this.sessionId, ...command },
@@ -104,7 +107,12 @@ export class Controller {
     const { candidate, generation } = this.last.snapshot;
     return this.command({ type: 'approve-origin', origin: candidate, generation });
   }
-  async shutdown() {
+  shutdown() {
+    if (this.shuttingDown) return this.shuttingDown;
+    this.shuttingDown = this.finalize().finally(() => { this.shuttingDown = null; });
+    return this.shuttingDown;
+  }
+  async finalize() {
     await this.command({ type: 'stop' });
     await Promise.allSettled([...this.background]);
     await Promise.allSettled([...this.inFlight]);

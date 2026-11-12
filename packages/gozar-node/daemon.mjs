@@ -131,14 +131,18 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   }
   if (Object.keys(journal.value.owned).length) throw new Error('Cleanup remains pending; stop the recorded session before restarting');
   let controller;
+  let initializedDone = false;
+  let initializationError;
+  let initializedResolve;
+  const initialized = new Promise(resolve => { initializedResolve = resolve; });
   if (!probeExecutor && config.probeDirectory) probeExecutor = new ProbeDirectoryExecutor(config.probeDirectory, { vantages: ['public', 'tailnet', 'lan'], executorRef: config.probeExecutorId, requestPath: config.probeRequest, receiptPath: config.probeReceipt });
   if (!probeExecutor) probeExecutor = new PublicRelayVerifier();
   const selectedAdapter = config.adapters.find(adapter => adapter.id === config.adapterId);
   let routeQueue = Promise.resolve();
   const queuedRouteOrigins = new Set();
   const operational = config.operational === true || selectedAdapter?.planVersion === 1;
-  const gate = operational ? await createGate(config.targetPort, { lifetimeMs: config.lifetimeMs, onExpire: () => { controller?.command({ type: 'stop' }).catch(() => {}); } }) : null;
-  controller = new Controller({ ...config, targetPort: gate?.port ?? config.targetPort, servicePort: config.targetPort, step, journal });
+  const gate = operational ? await createGate(config.targetPort, { lifetimeMs: config.lifetimeMs, onExpire: () => { setImmediate(() => initialized.then(() => finalize()).catch(() => {})); } }) : null;
+  controller = new Controller({ ...config, targetPort: gate?.port ?? config.targetPort, servicePort: config.targetPort, step, journal, onAutomaticStop: () => initialized.then(() => finalize()) });
   controller.driver.lifetimeMs = config.lifetimeMs;
   controller.driver.probeWaitMs = config.probeWaitMs;
   controller.driver.observeProcessOutput = config.observeProcessOutput === true;
@@ -194,11 +198,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
     await unlink(socketPath(directory)).catch(error => { if (error.code !== 'ENOENT') throw error; });
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   let closing = false;
-  let initializedDone = false;
-  let initializationError;
-  let initializedResolve;
   let armMonitor = () => {};
-  const initialized = new Promise(resolve => { initializedResolve = resolve; });
   const server = net.createServer(socket => {
     let input = '', dispatched = false;
     socket.setTimeout((config.probeWaitMs ?? 5000) + 120000, () => socket.destroy());
@@ -223,8 +223,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
         }
         let output;
         if (command.type === 'stop') {
-          output = await controller.shutdown();
-          if (output.snapshot.phase === 'stopped' && !output.localCleanupFailures.length) closing = true;
+          output = await finalize();
         } else {
           if (setupPending && command.type === 'health') {
             setupPending = false;
@@ -265,11 +264,22 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
     // Keep the last controller identity for crash/status auditing. The socket closes here;
     // every status call still proves the process birth identity and authenticates its live socket.
   });
+  let finalizing;
+  const finalize = () => {
+    if (finalizing) return finalizing;
+    finalizing = controller.shutdown().then(output => {
+      if (output.snapshot.phase === 'stopped' && !output.localCleanupFailures.length &&
+          Object.keys(controller.journal.value.owned).length === 0) {
+        closing = true;
+        server.close();
+      }
+      return output;
+    }).finally(() => { finalizing = null; });
+    return finalizing;
+  };
   const terminate = async () => {
     if (closing) return;
-    closing = true;
-    await controller.shutdown().catch(() => {});
-    server.close();
+    try { await finalize(); } finally { closing = true; server.close(); }
   };
   process.once('SIGTERM', terminate); process.once('SIGINT', terminate);
   try {
