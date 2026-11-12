@@ -6409,8 +6409,7 @@
     "nothing_to_dismiss": {
       "target": "invalid_input",
       "source": "durable-route.mjs",
-      "provisional": true,
-      "question": "Plan has no rule; proposed invalid_input (nothing in cleanup debt to dismiss)."
+      "rule": "owner decision"
     },
     "not_handing_back": {
       "target": "route_conflict",
