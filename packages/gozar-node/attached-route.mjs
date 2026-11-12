@@ -1,0 +1,392 @@
+// Attached routes: one provider runtime held by a Gozar controller process, for as long as the process that
+// asked for it holds the lease.
+//
+//   owner (the calling process)  --heartbeat every 5 s, unref'd timer-->  controller (detached child)
+//                                                                          holds adapter.create's runtime
+// The controller removes the route 20 s after the last heartbeat, or at once on closeRoute. A crashed owner
+// therefore costs at most the expiry. A foreground CLI owner can run the controller in its own process and
+// hold the lease on stdin instead (runAttachedController with lease 'stdin'): EOF removes the route at once.
+// openSessionRoute is the same redemption over the existing session machinery.
+import net from 'node:net';
+import { spawn } from 'node:child_process';
+import { readFile, chmod, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { atomicWrite, processIdentity } from './journal.mjs';
+import { canonicalHome, trustedDirectory, privateDirectory, withExclusiveLock } from './service-state.mjs';
+import { CODES, gozarError, normalizeError, projectAttached, projectSession, releasedView, checkRef } from './route-view.mjs';
+import { validateQuery, adapterRequest, readContextFor, loadRuntime } from './route-catalog.mjs';
+
+export const HEARTBEAT_MS = 5_000;
+export const LEASE_EXPIRY_MS = 20_000;
+const idPattern = /^att_[0-9a-f]{16}$/;
+const here = fileURLToPath(import.meta.url);
+
+// --- Redemption, shared by attached and session usage -------------------------------------------
+
+function checkExpose(request, kind) {
+  validateQuery({ ...request, usage: request?.usage });
+  if (request.usage.kind !== kind) throw gozarError(CODES.invalidInput, `This call opens ${kind} usage only`);
+  if (typeof request.approval?.candidateToken !== 'string' || !request.approval.candidateToken || typeof request.approval.disclosureRevision !== 'string' ||
+      !request.approval.disclosureRevision) throw gozarError(CODES.consentRequired, 'Approval is required: pass the candidate token and the disclosure revision the user saw');
+  if (!['allocated', 'verified'].includes(request.wait)) throw gozarError(CODES.invalidInput, "wait must be 'allocated' or 'verified'");
+}
+
+async function adaptersOf(deps) {
+  if (deps.adapters) return deps.adapters;
+  const runtime = await loadRuntime();
+  if (!runtime) throw gozarError(CODES.internalError, 'The adapter registry is not available in this build');
+  return runtime.loadAdapters();
+}
+
+/**
+ * Spends the approval's token (single use, whatever the outcome) and re-observes. A token whose plan digest or
+ * observed resource moved fails with candidate_stale and changes nothing.
+ */
+export async function redeemApproval(request, deps) {
+  const home = await canonicalHome(request.home, true);
+  const tokens = deps.redeem && deps.consentBinding ? null : await import('./consent-token.mjs');
+  const { approval, wait, ...query } = request;
+  const binding = (deps.consentBinding ?? tokens.consentBinding)(query, home, approval.disclosureRevision);
+  const grant = await (deps.redeem ?? tokens.redeemConsentToken)({ home, token: approval.candidateToken, binding });
+  const adapter = (await adaptersOf(deps)).find(item => item.id === grant.adapterId);
+  if (!adapter) throw gozarError(CODES.candidateStale, 'The approved route is no longer available; ask the catalog again');
+  if (!adapter.definition.supportedKinds.includes(request.usage.kind)) throw gozarError(CODES.unsupported, 'This route does not support that usage');
+  const context = await readContextFor(deps, home, deps.platform ?? process.platform);
+  const adapterAsk = adapterRequest(query);
+  const plan = await adapter.plan(context, adapterAsk);
+  const observed = await adapter.observe(context, adapterAsk);
+  if (plan.digest !== grant.planDigest || observed.resourceKey !== grant.observedResource)
+    throw gozarError(CODES.candidateStale, 'The provider changed after the user approved; nothing was changed, ask the catalog again');
+  return { home, adapter, grant, plan, request: adapterAsk, context };
+}
+
+// --- The control channel (owner <-> controller): one JSON line each way, authenticated by a private nonce ---
+
+export function controlAttached(directory, command, timeoutMs = 15_000) {
+  return new Promise((resolve, reject) => {
+    let output = '', settled = false, socket;
+    const finish = (error, value) => { if (settled) return; settled = true; clearTimeout(deadline); socket?.destroy(); error ? reject(error) : resolve(value); };
+    const deadline = setTimeout(() => finish(gozarError(CODES.providerUnavailable, 'The route controller did not answer in time')), timeoutMs);
+    readFile(join(directory, 'control.json'), 'utf8').then(async text => {
+      const identity = JSON.parse(text);
+      if (!identity.startIdentity || await processIdentity(identity.pid) !== identity.startIdentity) throw Object.assign(new Error('The route controller is not running'), { gone: true });
+      socket = net.createConnection(join(directory, 'control.sock'));
+      socket.once('connect', () => socket.write(`${JSON.stringify({ nonce: identity.nonce, command })}\n`));
+      socket.on('data', chunk => {
+        output += chunk;
+        if (output.length > 1_048_576) return finish(gozarError(CODES.internalError, 'The controller reply is too large'));
+        if (!output.includes('\n')) return;
+        try {
+          const reply = JSON.parse(output.split('\n')[0]);
+          reply.error ? finish(gozarError(reply.error.code, reply.error.message)) : finish(null, reply);
+        } catch (error) { finish(error); }
+      });
+      socket.on('error', error => finish(Object.assign(error, { gone: true })));
+      socket.on('end', () => finish(Object.assign(new Error('The controller closed without a reply'), { gone: true })));
+    }).catch(error => finish(Object.assign(error, { gone: error.gone ?? error.code === 'ENOENT' })));
+  });
+}
+
+// --- The owner's side ---------------------------------------------------------------------------
+
+const leases = new Map();
+function holdLease(directory, id, heartbeatMs) {
+  const beat = () => controlAttached(directory, { type: 'heartbeat' }, 5_000).catch(() => {});
+  // Unref'd: the lease never keeps the owner alive. When the owner exits the beats stop and the expiry ends the route.
+  const timer = setInterval(beat, heartbeatMs); timer.unref();
+  leases.set(id, timer); beat();
+}
+function dropLease(id) { clearInterval(leases.get(id)); leases.delete(id); }
+
+async function attachedRoot(home, create = true) {
+  const directory = join(home, 'attached');
+  await trustedDirectory(directory, create);
+  await privateDirectory(directory);
+  return directory;
+}
+// A status or close never creates state: a missing home or directory is simply no such route.
+const routeDirectory = async (home, id) => {
+  if (!idPattern.test(id)) throw gozarError(CODES.routeNotFound, 'Not an attached route id');
+  try { return join(await attachedRoot(await canonicalHome(home), false), id); }
+  catch (error) { throw error.code === 'ENOENT' ? gozarError(CODES.routeNotFound, 'No such attached route') : error; }
+};
+const readJson = async path => { try { return JSON.parse(await readFile(path, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
+
+async function startFailure(directory) {
+  const failure = await readJson(join(directory, 'failure.json'));
+  return failure ? gozarError(failure.code, failure.message) : null;
+}
+
+/** Opens one attached route and returns its RouteView. The calling process holds the lease from here on. */
+export async function openAttachedRoute(request, deps = {}) {
+  try {
+    checkExpose(request, 'attached');
+    if ((deps.platform ?? process.platform) !== 'linux') throw gozarError(CODES.unsupported, 'Gozar 0.2 supports routes on linux only');
+    const adapters = await adaptersOf(deps);
+    const root = await attachedRoot(await canonicalHome(request.home, true));
+    const id = `att_${randomBytes(8).toString('hex')}`, directory = join(root, id);
+    // Redeem, re-observe and start the controller under one reservation, so two opens cannot both win one resource.
+    const childPid = await withExclusiveLock(join(root, '.open.lock'), async () => {
+      const redeemed = await redeemApproval(request, { ...deps, adapters });
+      await trustedDirectory(directory, true);
+      await privateDirectory(directory);
+      await atomicWrite(join(directory, 'bootstrap.json'), { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
+        leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) });
+      const child = spawn(process.execPath, [here, '--controller', directory], { detached: true, stdio: 'ignore',
+        env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
+      child.unref();
+      await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+      return child.pid;
+    }, { waitSeconds: 30 });
+    holdLease(directory, id, deps.heartbeatMs ?? HEARTBEAT_MS);
+    const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
+    try {
+      for (;;) {
+        let reply;
+        try { reply = await controlAttached(directory, { type: 'status', fresh: request.wait === 'verified' }, 30_000); }
+        catch (error) {
+          if (!error.gone && error.code !== CODES.providerUnavailable) throw error;
+          const failure = await startFailure(directory);
+          if (failure) throw failure;
+          if (await processIdentity(childPid) === null) throw gozarError(CODES.providerUnavailable, 'The route controller exited before it started the route');
+        }
+        const view = reply?.view;
+        if (view && ['lost', 'released', 'uncertain'].includes(view.state)) throw (await startFailure(directory)) ?? gozarError(CODES.providerUnavailable, 'The route could not be started');
+        if (view && (request.wait === 'verified' ? view.state === 'usable' : view.state !== 'creating')) return view;
+        if (Date.now() >= deadline) throw gozarError(view?.state === 'unverified' ? CODES.verificationFailed : CODES.providerUnavailable,
+          view?.state === 'unverified' ? 'The route did not pass verification in time' : 'The route did not start in time');
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
+    } catch (error) {
+      dropLease(id);
+      await controlAttached(directory, { type: 'close' }, 60_000).catch(() => {});
+      throw error;
+    }
+  } catch (error) { throw normalizeError(error); }
+}
+
+async function viewFromRecord(directory, handle) {
+  const state = await readJson(join(directory, 'state.json'));
+  if (!state) throw gozarError(CODES.routeNotFound, `No attached route ${handle.id}`);
+  if (state.handle.generation !== handle.generation) throw gozarError(CODES.routeConflict, 'The route was replaced; this handle is stale');
+  return state;
+}
+
+/** Fresh proof from the controller. Without a controller the last record is all there is, and it says so. */
+export async function attachedStatus(request, deps = {}) {
+  const handle = checkRef(request);
+  const directory = await routeDirectory(request.home, handle.id);
+  try { return (await controlAttached(directory, { type: 'status', fresh: true, generation: handle.generation }, 60_000)).view; }
+  catch (error) {
+    if (!error.gone) throw error;
+    const state = await viewFromRecord(directory, handle);
+    if (state.phase === 'released') return releasedView(state.lastView, handle);
+    return { ...state.lastView, state: 'uncertain', published: null, ingress: null,
+      cleanup: { state: 'debt', message: 'The route controller stopped before it removed the route' } };
+  }
+}
+
+/** Ends the lease now: the controller removes the route and answers with the released view. */
+export async function closeAttachedRoute(request, deps = {}) {
+  const handle = checkRef(request);
+  const directory = await routeDirectory(request.home, handle.id);
+  dropLease(handle.id);
+  try { return (await controlAttached(directory, { type: 'close', generation: handle.generation }, 120_000)).view; }
+  catch (error) {
+    if (!error.gone) throw error;
+    const state = await viewFromRecord(directory, handle);
+    if (state.phase === 'released') return releasedView(state.lastView, handle);
+    // The controller died with the route up: remove it from the saved receipt, in this process.
+    const adapters = await adaptersOf(deps);
+    const adapter = adapters.find(item => item.id === state.adapterId);
+    if (!adapter || !state.receipt || !deps.effectContext) return { ...state.lastView, state: 'uncertain', published: null, ingress: null,
+      cleanup: { state: 'debt', message: 'The route controller stopped before it removed the route' } };
+    const read = await readContextFor(deps, await canonicalHome(request.home), deps.platform ?? process.platform);
+    const observed = await adapter.observe(read, state.request);
+    const removal = await adapter.remove({ ...read, generation: state.handle.generation, ...deps.effectContext({ adapter, readContext: read, request: state.request, plan: state.plan, generation: state.handle.generation }) }, state.receipt, observed);
+    return removal.removed && !removal.debt ? releasedView(state.lastView, handle)
+      : { ...releasedView(state.lastView, handle), state: 'uncertain', cleanup: { state: 'debt', message: removal.debt?.message ?? 'The route could not be removed' } };
+  }
+}
+
+// --- The controller -----------------------------------------------------------------------------
+
+const credentialFreeOrigin = value => {
+  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash ? url.origin : null; }
+  catch { return null; }
+};
+// The adapter contract has no origin channel for an address the provider allocates at create time. A planned
+// origin, then an origin the receipt carries, then the ingress authority are read, in that order.
+const originOf = (plan, receipt, facts) => credentialFreeOrigin(plan.origin) ?? credentialFreeOrigin(receipt?.identity?.origin) ??
+  credentialFreeOrigin(receipt?.readback?.origin) ?? (facts?.ingress?.publicAuthority ? credentialFreeOrigin(`https://${facts.ingress.publicAuthority}`) : null);
+
+/**
+ * Runs one attached route to its end and resolves with the last RouteView. `runtime` supplies adapters and the
+ * admitted effect context; `lease` is 'heartbeat' (a detached controller) or { kind: 'stdin', stream } (a foreground CLI owner).
+ */
+export async function runAttachedController(directory, runtime = {}) {
+  const bootstrap = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
+  const adapters = runtime.adapters ?? await (await loadRuntime())?.loadAdapters?.();
+  const adapter = adapters?.find(item => item.id === bootstrap.adapterId);
+  if (!adapter) throw gozarError(CODES.candidateStale, 'The approved route is no longer available');
+  const read = await readContextFor(runtime, bootstrap.home, bootstrap.platform);
+  const now = runtime.now ?? Date.now;
+  const expiryMs = bootstrap.leaseExpiryMs ?? LEASE_EXPIRY_MS;
+  const handle = { kind: 'attached', id: bootstrap.id, generation: 0 };
+  const lease = { state: 'creating', origin: credentialFreeOrigin(bootstrap.plan.origin), properties: adapter.definition.capabilities, ingress: null,
+    limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
+  let receipt = null, lastBeat = now(), releasing = null, failure = null;
+  const nonce = randomBytes(32).toString('hex');
+  const lastView = () => projectAttached(lease, { handle, now: now() });
+  const save = () => atomicWrite(join(directory, 'state.json'), { schemaVersion: 1, adapterId: adapter.id, request: bootstrap.request, plan: bootstrap.plan,
+    receipt, handle, phase: lease.state, lastView: lastView() });
+
+  const admitted = (runtime.effectContext ?? (await loadRuntime())?.createAdmittedContext)?.({ adapter, readContext: read, request: bootstrap.request, plan: bootstrap.plan, generation: 1 });
+  // The effect is admitted for generation 1: a new route. Receipts carry the generation create returns.
+  const context = { ...read, generation: 1, ...(admitted ?? {}) };
+
+  async function verify() {
+    if (!receipt || releasing) return;
+    try {
+      const verification = await adapter.verify(read, receipt);
+      if (!releasing) { lease.state = verification.status === 'verified' ? 'usable' : 'unverified'; lease.checkedAtMs = now(); await save(); }
+    } catch { if (!releasing) { lease.state = 'unverified'; await save(); } }
+  }
+  const creation = (async () => {
+    try {
+      if (!admitted) throw gozarError(CODES.unsupported, 'No admitted effect context is wired for this route');
+      receipt = await adapter.create(context, bootstrap.plan);
+      handle.generation = receipt.generation;
+      const facts = await adapter.runtimeFacts(read, receipt);
+      Object.assign(lease, { properties: facts.properties, ingress: facts.ingress ?? null, limits: facts.limits, origin: originOf(bootstrap.plan, receipt, facts), state: 'unverified' });
+      await save();
+      await verify();
+    } catch (cause) {
+      const error = normalizeError(cause);
+      failure = { code: error.code, message: error.message };
+      lease.state = 'lost';
+      await atomicWrite(join(directory, 'failure.json'), failure);
+      await save().catch(() => {});
+    }
+  })();
+
+  function release() {
+    releasing ??= (async () => {
+      await creation;
+      if (lease.state === 'lost') return;
+      lease.state = 'releasing'; await save().catch(() => {});
+      try {
+        const observed = await adapter.observe(read, bootstrap.request);
+        const removal = await adapter.remove(context, receipt, observed);
+        if (removal.removed && !removal.debt) lease.state = 'released';
+        else { lease.state = 'uncertain'; lease.cleanup = { state: 'debt', message: removal.debt?.message ?? 'The route could not be removed' }; }
+      } catch (cause) { lease.state = 'uncertain'; lease.cleanup = { state: 'debt', message: `Removal failed (${normalizeError(cause).code})` }; }
+      await save();
+    })();
+    return releasing;
+  }
+
+  let finish;
+  const finished = new Promise(resolve => { finish = resolve; });
+  const sockets = new Set();
+  const server = net.createServer(socket => {
+    sockets.add(socket); socket.once('close', () => sockets.delete(socket));
+    let input = '', dispatched = false;
+    socket.setTimeout(150_000, () => socket.destroy());
+    socket.on('error', () => {});
+    socket.on('data', async chunk => {
+      input += chunk;
+      if (input.length > 65_536) return socket.destroy();
+      if (dispatched || !input.includes('\n')) return;
+      dispatched = true;
+      const reply = value => socket.end(`${JSON.stringify(value)}\n`);
+      try {
+        const message = JSON.parse(input.split('\n')[0]);
+        if (message.nonce !== nonce) throw gozarError(CODES.internalError, 'Controller identity mismatch');
+        const command = message.command ?? {};
+        if (command.type === 'heartbeat') { lastBeat = now(); return reply({ ok: true }); }
+        if (command.generation !== undefined && command.generation !== handle.generation) throw gozarError(CODES.routeConflict, 'The route was replaced; this handle is stale');
+        if (command.type === 'status') { if (command.fresh) await verify(); return reply({ view: lastView() }); }
+        if (command.type === 'close') { await release(); reply({ view: lastView() }); return finish(); }
+        throw gozarError(CODES.invalidInput, 'Unsupported controller command');
+      } catch (error) { const normalized = normalizeError(error); reply({ error: { code: normalized.code, message: normalized.message } }); }
+    });
+  });
+  const socketPath = join(directory, 'control.sock');
+  await unlink(socketPath).catch(() => {});
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
+  await chmod(socketPath, 0o600);
+  await atomicWrite(join(directory, 'control.json'), { pid: process.pid, startIdentity: await processIdentity(process.pid), nonce });
+
+  let monitor;
+  const stdin = runtime.lease?.kind === 'stdin' ? runtime.lease.stream : null;
+  if (stdin) {
+    const gone = () => release().then(finish);
+    stdin.once('end', gone); stdin.once('close', gone); stdin.resume();
+  } else {
+    monitor = setInterval(() => { if (!releasing && now() - lastBeat > expiryMs) release().then(finish); }, Math.max(20, Math.min(1_000, Math.floor(expiryMs / 4))));
+  }
+  creation.then(() => { if (failure) finish(); });
+  await finished;
+  clearInterval(monitor);
+  // Let the reply to the last command leave before the socket goes away.
+  await new Promise(resolve => setTimeout(resolve, 50));
+  for (const socket of sockets) socket.destroy();
+  await new Promise(resolve => server.close(resolve));
+  return lastView();
+}
+
+// --- Session usage ------------------------------------------------------------------------------
+
+async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs, origin, requirements }) {
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const { loadCatalog, loadDefinition } = await import('./catalog.mjs');
+  const { launch } = await import('./daemon.mjs');
+  const catalog = await loadCatalog(root, { operational: true });
+  const definition = await loadDefinition(root, adapterId);
+  return launch(directory, { adapters: [...catalog.filter(item => item.id !== definition.id), definition],
+    requirements: { clientReach: requirements.reach, httpsRequired: requirements.transport === 'https', sse: requirements.protocols.includes('sse'),
+      streamableHttp: requirements.protocols.includes('streamable-http'), oauthDcr: requirements.protocols.includes('oauth-dcr') },
+    targetPort: port, adapterId, lifetimeMs, origin: origin ?? undefined, operational: definition.planVersion === 1, consent: true, approveOrigin: true },
+  join(root, 'bin', 'gozar.mjs'));
+}
+
+/**
+ * Session usage over the existing session machinery. The adapter comes from the redeemed grant, never from the
+ * request; the legacy controller (startSession) enforces the lifetime.
+ */
+export async function openSessionRoute(request, deps = {}) {
+  try {
+    checkExpose(request, 'session');
+    if ((deps.platform ?? process.platform) !== 'linux') throw gozarError(CODES.unsupported, 'Gozar 0.2 supports routes on linux only');
+    const adapters = await adaptersOf(deps);
+    const home = await canonicalHome(request.home, true);
+    const port = Number(request.target.slice(request.target.lastIndexOf(':') + 1));
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) throw gozarError(CODES.invalidInput, 'target must end in :PORT');
+    const redeemed = await withExclusiveLock(join(await attachedRoot(home), '.open.lock'), () => redeemApproval(request, { ...deps, adapters }), { waitSeconds: 30 });
+    const directory = join(home, `port-${port}`);
+    const reply = await (deps.startSession ?? legacyStartSession)({ home, directory, adapterId: redeemed.adapter.id, port, lifetimeMs: request.usage.lifetimeMs,
+      origin: request.origin ?? redeemed.plan.origin ?? null, requirements: request.requirements, wait: request.wait });
+    const sessionId = reply.snapshot?.sessionId;
+    const handle = { kind: 'session', id: sessionId ? `port-${port}:${sessionId}` : `port-${port}`, generation: 1 };
+    return projectSession(reply, { handle, properties: redeemed.adapter.definition.capabilities, now: (deps.now ?? Date.now)() });
+  } catch (error) { throw normalizeError(error); }
+}
+
+// --- Detached controller entry ------------------------------------------------------------------
+
+if (process.argv[2] === '--controller' && process.argv[1] === here) {
+  const directory = process.argv[3];
+  try {
+    const { controllerModule } = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
+    const runtime = controllerModule ? await (await import(pathToFileURL(controllerModule).href)).default() : {};
+    await runAttachedController(directory, runtime);
+    process.exit(0);
+  } catch (cause) {
+    const error = normalizeError(cause);
+    await atomicWrite(join(directory, 'failure.json'), { code: error.code, message: error.message }).catch(() => {});
+    process.exit(1);
+  }
+}
