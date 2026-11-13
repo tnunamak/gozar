@@ -1,3 +1,4 @@
+import {configurationFor} from './embedding-state.mjs';
 import {createHash} from 'node:crypto';
 import {inspectAdapter,readContextFor, catalogRevisionOf} from './route-catalog.mjs';
 import {bindConfiguration} from './adapter-configuration.mjs';
@@ -40,7 +41,7 @@ export async function runEmbeddingSetup(request,deps){
   if(!['complete','pending','blocked'].includes(result?.state))fail('internal_error');
   if(result.state==='complete'){if(action.kind==='provide-secret')await tx.bindSecret(inputId,request.secretHandle);else tx.markChanged();}return result;
  },{mutatesConfiguration:!nonMutating});
- return {schemaVersion:1,state:outcome.result.state,nextAction:outcome.result.nextAction??null,configurationRevision:outcome.configuration.revision,scopeId:outcome.configuration.scopeId,catalogRevision:catalogRevisionOf(await Promise.all(deps.adapters.map(a=>inspectAdapter(a,{...read,providerConfiguration:providerId=>services.resolveConfiguration({...request,providerId})},platform))),platform)};
+ return {schemaVersion:1,state:outcome.result.state,nextAction:outcome.result.nextAction??null,configuration:await offeredConfiguration(request,outcome.configuration,deps),configurationRevision:outcome.configuration.revision,scopeId:outcome.configuration.scopeId,catalogRevision:catalogRevisionOf(await Promise.all(deps.adapters.map(a=>inspectAdapter(a,{...read,providerConfiguration:providerId=>services.resolveConfiguration({...request,providerId,draftId:providerId===request.providerId?request.draftId:undefined})},platform))),platform)};
 }
 
 export function clearInputActions(configuration){
@@ -58,5 +59,21 @@ export async function clearConfigurationInput(request,deps){
   const read=await readContextFor(deps,request.home,deps.platform??process.platform);
   const own={...read,providerConfiguration:()=>tx.resolveConfiguration()};const inspection=await inspectAdapter(adapter,own,deps.platform??process.platform);
   await deps.validateSetupApproval?.({request,action,adapter,configuration,inspection,readContext:own});tx.clearInput(request.inputId);
- });return outcome.configuration;
+ });return offeredConfiguration(request,outcome.configuration,deps);
+}
+
+// Rebuild offered actions from the persisted scope; hosts never reconstruct consent metadata.
+export async function offeredConfiguration(request,snapshot,deps){
+ const adapter=deps.adapters.find(a=>a.id===request.providerId);if(!adapter)fail('candidate_stale');
+ const platform=deps.platform??process.platform;const read=await readContextFor(deps,request.home,platform);
+ const inspection=await inspectAdapter(adapter,{...read,providerConfiguration:providerId=>deps.embeddingServices.resolveConfiguration({...request,providerId})},platform);
+ const raw=[...new Map([...inspection.actions,...(inspection.missingActions??[]),...clearInputActions(snapshot)].map(a=>[a.id,a])).values()];
+ const actions=await Promise.all(raw.map(action=>deps.decorateSetupAction?deps.decorateSetupAction({action,adapter,configuration:snapshot,draftId:request.draftId??null,inspection}):action));
+ const configuration={...configurationFor(actions,snapshot),...snapshot,actions};
+ if(adapter.definition.inputRequirements)configuration.inputRequirements=structuredClone(adapter.definition.inputRequirements);
+ return configuration;
+}
+export async function readConfigurationDraft(request,deps){
+ const draft=await deps.embeddingServices.readConfigurationDraft(request);
+ return {...draft,configuration:await offeredConfiguration(request,draft.configuration,deps)};
 }

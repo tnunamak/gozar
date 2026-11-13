@@ -1,3 +1,4 @@
+import type {Configuration} from './route-contract';
 /** Additive host embedding contract for Gozar 0.4.0. Trusted host APIs only. */
 export type Observation<T> = {known:true;value:T}|{known:false;reason:string};
 export type HostCapabilityId = 'installer.execute'|'privilege.elevate'|'secrets.backend'|'runtime.attached'|'runtime.durable'|(string & {});
@@ -11,12 +12,13 @@ export interface SecretBackend {
 }
 export interface ConfigurationSnapshot {revision:string;scopeId:string;values:Record<string,string>;credentials:Record<string,Observation<boolean>>}
 export interface ConfigurationRequest {home:string;owner?:string;providerId:string;expectedConfigurationRevision:string;draftId?:string}
-export interface ConfigurationDraft {draftId:string;scopeId:string;baseRevision:string;configuration:ConfigurationSnapshot}
+export interface ConfigurationDraft {draftId:string;scopeId:string;baseRevision:string;configuration:Configuration}
 export interface HostEmbeddingMethods {
  storeSecret(request:ConfigurationRequest&{inputId:string;scopeId:string;bytes:Uint8Array}):Promise<{handle:string;configurationRevision:string;scopeId:string}>;
- clearConfigurationInput(request:ConfigurationRequest&{draftId:string;inputId:string;approval:{kind:'setup';digest:string;disclosureRevision:string;consentFactsDigest:string}}):Promise<ConfigurationSnapshot>;
+ readConfigurationDraft(request:{home:string;owner?:string;providerId:string;draftId:string}):Promise<ConfigurationDraft>;
+ clearConfigurationInput(request:ConfigurationRequest&{draftId:string;inputId:string;approval:{kind:'setup';digest:string;disclosureRevision:string;consentFactsDigest:string}}):Promise<Configuration>;
  beginConfigurationDraft(request:ConfigurationRequest):Promise<ConfigurationDraft>;
- commitConfigurationDraft(request:ConfigurationRequest&{draftId:string}):Promise<ConfigurationSnapshot>;
+ commitConfigurationDraft(request:ConfigurationRequest&{draftId:string}):Promise<Configuration>;
  discardConfigurationDraft(request:{home:string;owner?:string;providerId:string;draftId:string}):Promise<{discarded:boolean}>;
  discardSecret(request:{home:string;handle:string}):Promise<{discarded:boolean}>;
  listProviders(request:{home:string;owner?:string;hostCapabilities?:HostCapabilities}):Promise<{schemaVersion:number;catalogRevision:string;observedAt:string;providers:ProviderInventory[]}>;

@@ -21,12 +21,12 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   delete:async({handle})=>{await deleteSecret(home,handle);return {deleted:true};},
  };
  const call=async(home,method,...args)=>{try{return await backend(home)[method](...args);}catch(e){throw embeddingError(e?.code==='secret_backend_locked'?'secret_backend_locked':'secret_backend_unavailable');}};
- async function transaction(home,run){
+ async function transaction(home,run,{readOnly=false}={}){
   home=await canonicalHome(home,true);
   return withExclusiveLock(join(home,'.embedding-lock'),async()=>{
    let state;try{const file=await checkedFile(join(home,'embedding-state.json'),constants.O_RDONLY,'embedding state');try{state=JSON.parse(await file.readFile('utf8'));}finally{await file.close();}}catch(e){if(e.code!=='ENOENT')throw e;state={schemaVersion:1,configs:{},secrets:{},instanceId:fresh()};}
    if(state?.schemaVersion!==1||!state.configs||!state.secrets||typeof state.instanceId!=='string')fail('internal_error');
-   const result=await run(state,home);await atomicWrite(join(home,'embedding-state.json'),state);return result;
+   const result=await run(state,home);if(!readOnly)await atomicWrite(join(home,'embedding-state.json'),state);return result;
   },{waitSeconds:30});
  }
  const scope=(home,providerId,owner)=>{if(owner!==undefined&&(typeof owner!=='string'||!owner))fail('invalid_input');if(typeof providerId!=='string'||!providerId)fail('invalid_input');return hash(JSON.stringify([registryId,home,owner??null,providerId]));};
@@ -60,7 +60,8 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
  async function remove(state,home,handle){const ref=state.secrets[handle];if(!ref||ref.registryId!==registryId)return {discarded:false};if(referenced(state,handle))fail('secret_in_use');await call(home,'delete',{scopeId:ref.scopeId,handle});delete state.secrets[handle];return {discarded:true};}
  const api={hostCapabilities,
   readConfiguration:r=>transaction(r.home,async(s,h)=>redacted(h,select(await config(s,h,r.providerId,r.owner),r.draftId))),
-  resolveConfiguration:r=>transaction(r.home,async(s,h)=>{const c=select(await config(s,h,r.providerId,r.owner),r.draftId),values=clone(c.values);for(const[id,handle]of Object.entries(c.bindings))values[id]=await call(h,'withSecret',{scopeId:c.scopeId,handle},async bytes=>new TextDecoder().decode(bytes));return Object.keys(values).length?values:null;}),
+  readConfigurationDraft:r=>transaction(r.home,async(s,h)=>{if(!r.draftId)fail('invalid_input');const c=await config(s,h,r.providerId,r.owner),d=select(c,r.draftId);return {draftId:r.draftId,scopeId:d.scopeId,baseRevision:d.baseRevision,configuration:await redacted(h,d)};},{readOnly:true}),
+  resolveConfiguration:r=>transaction(r.home,async(s,h)=>{const c=select(await config(s,h,r.providerId,r.owner),r.draftId),values=clone(c.values);for(const[id,handle]of Object.entries(c.bindings))values[id]=await call(h,'withSecret',{scopeId:c.scopeId,handle},async bytes=>new TextDecoder().decode(bytes));return Object.keys(values).length?values:null;},{readOnly:true}),
   resolveIdentity:({home,bootId}={})=>transaction(home,async s=>identity?clone(identity):{instanceId:s.instanceId,bootId:bootId??boot}),
   storeSecret:r=>transaction(r.home,async(s,h)=>{
    const c=select(await config(s,h,r.providerId,r.owner),r.draftId);compare(c,r.expectedConfigurationRevision);if(c.scopeId!==r.scopeId||typeof r.inputId!=='string'||!r.inputId)fail('invalid_input');
