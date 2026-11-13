@@ -52,7 +52,7 @@ export function createRouteApi(deps = {}) {
     closeRoute: request => guard(async () => viewClose(request, { adapters: await adapters(), ...deps.view })),
     watchRoutes: request => pollRoutes(request, { routeStatus: async r => viewStatus(r, { adapters: await adapters(), ...deps.view }), ...deps.watch }),
     getRoutePreferences, setRoutePreferences,
-    runSetupAction: request => runSetup(request, { ...deps.setup, ...(deps.adapters ? { adapters: deps.adapters } : {}), platform: platform(), ...(deps.readContext ? { readContext: deps.readContext } : {}) }),
+    runSetupAction: request => guard(async () => runSetup(request, { ...deps.setup, ...await shared() })),
     resolveClientAddress,
   };
   return api;

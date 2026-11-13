@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { canonicalHome } from './service-state.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { supportedPlatform } from './platform.mjs';
+import { bindConfiguration } from './adapter-configuration.mjs';
 
 const sha = text => createHash('sha256').update(text).digest('hex');
 /** Stable opaque handles for an adapter; apps store the preferenceRef and show the label. */
@@ -72,7 +73,7 @@ export async function inspectAdapter(adapter, context, platform) {
   const base = { adapter, properties: adapter.definition.capabilities, actions: [] };
   if (!supportedPlatform(platform)) return { ...base, state: 'unsupported', facts: null, probed: false };
   let detected;
-  try { detected = await adapter.detect(context); }
+  try { detected = await adapter.detect(bindConfiguration(context, adapter.id)); }
   catch { return { ...base, state: 'unknown', facts: null, probed: true }; }
   const state = ['ready', 'action-required', 'unsupported', 'unknown'].includes(detected?.state) ? detected.state : 'unknown';
   let properties = base.properties, actions = [];
@@ -143,8 +144,9 @@ async function collect(query, deps) {
             grant = { adapterId: adapter.id, planDigest: plan.planDigest, observedResource: plan.observedResource };
           } else {
             const request = adapterRequest(query);
-            const plan = await adapter.plan(context, request);
-            const observed = await adapter.observe(context, request);
+            const own = bindConfiguration(context, adapter.id);
+            const plan = await adapter.plan(own, request);
+            const observed = await adapter.observe(own, request);
             grant = { adapterId: adapter.id, planDigest: plan.digest, observedResource: observed.resourceKey };
           }
         } catch (error) {

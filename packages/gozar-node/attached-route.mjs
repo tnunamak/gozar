@@ -20,6 +20,7 @@ import { createGate } from './gate.mjs';
 import { projectAttached, projectSession, releasedView, checkRef } from './route-view.mjs';
 import { validateQuery, adapterRequest, readContextFor, loadRuntime } from './route-catalog.mjs';
 import { supportedPlatform } from './platform.mjs';
+import { bindConfiguration } from './adapter-configuration.mjs';
 import { recordController, controllerAlive, stopController, withCleanupOutcome } from './controller-start.mjs';
 
 export const HEARTBEAT_MS = 5_000;
@@ -57,7 +58,7 @@ export async function redeemApproval(request, deps) {
   const adapter = (await adaptersOf(deps)).find(item => item.id === grant.adapterId);
   if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available; ask the catalog again');
   if (!adapter.definition.supportedKinds.includes(request.usage.kind)) throw gozarError('unsupported', 'This route does not support that usage');
-  const context = await readContextFor(deps, home, deps.platform ?? process.platform);
+  const context = bindConfiguration(await readContextFor(deps, home, deps.platform ?? process.platform), adapter.id);
   const adapterAsk = adapterRequest(query);
   const plan = await adapter.plan(context, adapterAsk);
   const observed = await adapter.observe(context, adapterAsk);
@@ -208,9 +209,9 @@ export async function closeAttachedRoute(request, deps = {}) {
     const adapter = adapters.find(item => item.id === state.adapterId);
     if (!adapter || !state.receipt || !deps.effectContext) return { ...state.lastView, state: 'uncertain', published: null, ingress: null,
       cleanup: { state: 'debt', message: 'The route controller stopped before it removed the route' } };
-    const read = await readContextFor(deps, await canonicalHome(request.home), deps.platform ?? process.platform);
+    const read = bindConfiguration(await readContextFor(deps, await canonicalHome(request.home), deps.platform ?? process.platform), adapter.id);
     const observed = await adapter.observe(read, state.request);
-    const removal = await adapter.remove({ ...read, generation: state.handle.generation, ...deps.effectContext({ adapter, readContext: read, request: state.request, plan: state.plan, generation: state.handle.generation }) }, state.receipt, observed);
+    const removal = await adapter.remove(bindConfiguration({ ...read, generation: state.handle.generation, ...deps.effectContext({ adapter, readContext: read, request: state.request, plan: state.plan, generation: state.handle.generation }) }, adapter.id), state.receipt, observed);
     return removal.removed && !removal.debt ? releasedView(state.lastView, handle)
       : { ...releasedView(state.lastView, handle), state: 'uncertain', cleanup: { state: 'debt', message: removal.debt?.message ?? 'The route could not be removed' } };
   }
@@ -236,7 +237,7 @@ export async function runAttachedController(directory, runtime = {}) {
   const adapters = runtime.adapters ?? await (await loadRuntime())?.loadAdapters?.();
   const adapter = adapters?.find(item => item.id === bootstrap.adapterId);
   if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available');
-  const read = { ...await readContextFor(runtime, bootstrap.home, bootstrap.platform) };
+  const read = bindConfiguration(await readContextFor(runtime, bootstrap.home, bootstrap.platform), adapter.id);
   const now = runtime.now ?? Date.now;
   const expiryMs = bootstrap.leaseExpiryMs ?? LEASE_EXPIRY_MS;
   const handle = { kind: 'attached', id: bootstrap.id, generation: 0 };
@@ -250,7 +251,7 @@ export async function runAttachedController(directory, runtime = {}) {
 
   const admitted = (runtime.effectContext ?? (await loadRuntime())?.createAttachedEffectContext)?.({ adapter, readContext: read, request: bootstrap.request, plan: bootstrap.plan, generation: 1 });
   // The effect is admitted for generation 1: a new route. Receipts carry the generation create returns.
-  const context = { ...read, generation: 1, ...(admitted ?? {}) };
+  const context = bindConfiguration({ ...read, generation: 1, ...(admitted ?? {}) }, adapter.id);
 
   // Publication validation. The provider forwards to a gate this controller runs in front of the app (the same
   // gate recipe routes use). Through the public origin the gate proves the origin reaches this instance and,
