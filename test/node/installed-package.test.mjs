@@ -32,6 +32,7 @@ test('installed package: root and /service import, exports equal the contract, c
   const probe = join(project, 'probe.mjs');
   await writeFile(probe, `import * as root from '@tnunamak/gozar';
 import * as service from '@tnunamak/gozar/service';
+import * as testing from '@tnunamak/gozar/testing';
 import { readFile } from 'node:fs/promises';
 const dts = await readFile(new URL('./node_modules/@tnunamak/gozar/packages/gozar-node/route-contract.d.ts', import.meta.url), 'utf8');
 const pkg = JSON.parse(await readFile(new URL('./node_modules/@tnunamak/gozar/package.json', import.meta.url), 'utf8'));
@@ -39,7 +40,12 @@ const manifest = JSON.parse(await readFile(new URL('./node_modules/@tnunamak/goz
 const declared = [...dts.matchAll(/^export function (\\w+)/gm)].map(match => match[1]);
 const catalog = await root.catalogRoutes({ schemaVersion: 1, owner: 'example-app', target: '127.0.0.1:9', home: ${JSON.stringify(stateHome)},
   usage: { kind: 'attached' }, requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] } });
-console.log(JSON.stringify({ rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
+const registry = await testing.fakeRegistry({ id: 'fake-0a1b2c3d', kinds: ['session'], reach: 'internet' });
+const fake = testing.createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: testing.fakeReadContext({ home: ${JSON.stringify(stateHome)} }) });
+const fakeCatalog = await fake.catalogRoutes({ schemaVersion: 1, owner: 'example-app', target: '127.0.0.1:9', home: ${JSON.stringify(stateHome)}, usage: { kind: 'session', lifetimeMs: 60000 },
+  requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] } });
+await registry.cleanup();
+console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
   types: pkg.types, exportsTypes: pkg.exports['.'].types, engines: pkg.engines.node, providers: manifest.providers.map(item => item.id),
   candidates: catalog.candidates.length, observedAt: typeof catalog.observedAt, tokens: catalog.candidates.filter(item => item.candidateToken).length }));
 `);
@@ -47,6 +53,9 @@ console.log(JSON.stringify({ rootExports: Object.keys(root).sort(), serviceExpor
   const seen = JSON.parse(stdout);
   assert.deepEqual(seen.rootExports, seen.declared, 'the root exports exactly the functions route-contract.d.ts declares');
   assert.deepEqual(seen.serviceExports, ['addService', 'cancelHandBack', 'confirmHandBack', 'createServiceVerifier', 'releaseRoute', 'removeService', 'statusServices']);
+  assert.deepEqual(seen.testingExports, ['createReadContext', 'createRouteApi', 'fakeReadContext', 'fakeRegistry'], 'the testing export is in the archive and names its four helpers');
+  assert.deepEqual(seen.fakeIds, ['fake-0a1b2c3d']);
+  assert.deepEqual(seen.fakeEligible, [true], 'the fake provider is listed from the installed bytes');
   assert.equal(seen.types, './packages/gozar-node/route-contract.d.ts');
   assert.equal(seen.exportsTypes, seen.types);
   assert.equal(seen.engines, '>=22.13');

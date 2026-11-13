@@ -1,6 +1,6 @@
 {
   "name": "@tnunamak/gozar",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Give a local MCP server an address its client can reach",
   "type": "module",
   "exports": {
@@ -9,6 +9,7 @@
       "default": "./packages/gozar-node/api.mjs"
     },
     "./service": "./packages/gozar-node/service.mjs",
+    "./testing": "./packages/gozar-node/testing.mjs",
     "./bin/gozar.mjs": "./bin/gozar.mjs",
     "./package.json": "./package.json"
   },
