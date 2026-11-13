@@ -11,7 +11,7 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { readFile, chmod, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { atomicWrite, processIdentity } from './journal.mjs';
 import { canonicalHome, trustedDirectory, privateDirectory, withExclusiveLock } from './service-state.mjs';
@@ -23,6 +23,10 @@ import { validateQuery, adapterRequest, readContextFor, loadRuntime, consentDisc
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { recordController, controllerAlive, stopController, withCleanupOutcome } from './controller-start.mjs';
+import { routeConsentReview } from './consent-facts.mjs';
+import { completeProperties, checksFor } from './route-view.mjs';
+import { registryIdentity } from './registry-identity.mjs';
+import { startEmbeddingBroker, connectEmbeddingBroker } from './embedding-broker.mjs';
 
 export const HEARTBEAT_MS = 5_000;
 export const LEASE_EXPIRY_MS = 20_000;
@@ -54,19 +58,29 @@ export async function redeemApproval(request, deps) {
   const home = await canonicalHome(request.home, true);
   const tokens = deps.redeem && deps.consentBinding ? null : await import('./consent-token.mjs');
   const { approval, wait, ...query } = request;
-  const binding = (deps.consentBinding ?? tokens.consentBinding)(query, home, approval.disclosureRevision);
+  const binding = (deps.consentBinding ?? tokens.consentBinding)(query, home, approval.disclosureRevision,approval.consentFactsDigest);
   const grant = await (deps.redeem ?? tokens.redeemConsentToken)({ home, token: approval.candidateToken, binding, providerId: query.providerId });
   const adapter = (await adaptersOf(deps)).find(item => item.id === grant.adapterId);
   if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available; ask the catalog again');
   if (approval.disclosureRevision !== consentDisclosureRevision(adapter.definition, query.intent)) throw gozarError('candidate_stale', 'Consent-relevant facts changed after approval; ask the catalog again');
   if (!adapter.definition.supportedKinds.includes(request.usage.kind)) throw gozarError('unsupported', 'This route does not support that usage');
-  const context = bindConfiguration(await readContextFor(deps, home, deps.platform ?? process.platform), adapter.id);
+  const context = bindConfiguration(await readContextFor(deps, home, deps.platform ?? process.platform,query.owner), adapter.id);
+  let consentReview;
+  if(deps.embeddingServices){
+    const configuration=await deps.embeddingServices.readConfiguration({home,owner:query.owner,providerId:adapter.id});
+    const detected=await adapter.detect(context);
+    const declared=completeProperties(adapter.properties(detected.facts),adapter.definition,query.usage.kind);
+    const properties={...declared,proof:{...declared.proof,checks:checksFor(declared.proof.checks,{sse:query.requirements.protocols.includes('sse')})}};
+    consentReview=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration,target:query.target,origin:query.origin,properties,
+      disclosure:{...adapter.definition.disclosure,revision:approval.disclosureRevision},facts:adapter.definition.facts??[]});
+    if(approval.kind!=='route'||approval.consentFactsDigest!==consentReview.consentFactsDigest||grant.consentFactsDigest!==consentReview.consentFactsDigest)throw gozarError('consent_mismatch','Route consent changed; review the current candidate again');
+  }
   const adapterAsk = adapterRequest(query);
   const plan = await adapter.plan(context, adapterAsk);
   const observed = await adapter.observe(context, adapterAsk);
   if (plan.digest !== grant.planDigest || observed.resourceKey !== grant.observedResource)
     throw gozarError('candidate_stale', 'The provider changed after the user approved; nothing was changed, ask the catalog again');
-  return { home, adapter, grant, plan, request: adapterAsk, context };
+  return { home, adapter, grant, plan, request: adapterAsk, context, consentReview };
 }
 
 // --- The control channel (owner <-> controller): one JSON line each way, authenticated by a private nonce ---
@@ -99,6 +113,7 @@ export function controlAttached(directory, command, timeoutMs = 15_000) {
 // --- The owner's side ---------------------------------------------------------------------------
 
 const leases = new Map();
+const brokers = new Map();
 function holdLease(directory, id, heartbeatMs) {
   const beat = () => controlAttached(directory, { type: 'heartbeat' }, 5_000).catch(() => {});
   // Unref'd: the lease never keeps the owner alive. When the owner exits the beats stop and the expiry ends the route.
@@ -106,6 +121,7 @@ function holdLease(directory, id, heartbeatMs) {
   leases.set(id, timer); beat();
 }
 function dropLease(id) { clearInterval(leases.get(id)); leases.delete(id); }
+async function dropBroker(id){const broker=brokers.get(id);brokers.delete(id);await broker?.close();}
 
 async function attachedRoot(home, create = true) {
   const directory = join(home, 'attached');
@@ -139,7 +155,18 @@ export async function openAttachedRoute(request, deps = {}) {
       const redeemed = await redeemApproval(request, { ...deps, adapters });
       await trustedDirectory(directory, true);
       await privateDirectory(directory);
+      let broker,identity;
+      if(deps.embeddingServices){
+        const hostIdentity=await deps.embeddingServices.resolveIdentity({home:redeemed.home});
+        identity={instanceId:hostIdentity.instanceId,bootId:randomUUID()};
+        broker=await startEmbeddingBroker({services:deps.embeddingServices,home:redeemed.home,identity,
+          dispatchEffect:deps.dispatchEffect,onLoss:()=>{if(brokers.has(id))void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
+        brokers.set(id,broker);
+        try{await deps.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle:{kind:'attached',id,generation:1}});}
+        catch(error){await dropBroker(id);throw error;}
+      }
       await atomicWrite(join(directory, 'bootstrap.json'), { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
+        ...(broker?{resolver:broker.descriptor,identity,registryId:deps.registryId,owner:request.owner,consentReview:redeemed.consentReview}:{}),
         ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) });
       const child = spawn(process.execPath, [here, '--controller', directory], { detached: true, stdio: 'ignore',
         env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
@@ -171,7 +198,8 @@ export async function openAttachedRoute(request, deps = {}) {
       dropLease(id);
       await controlAttached(directory, { type: 'close' }, 60_000).catch(() => {});
       // A failed start must not leave the detached controller running (it would hold the provider resource).
-      throw withCleanupOutcome(error, await stopController(controller));
+      const stopped=await stopController(controller);await dropBroker(id);
+      throw withCleanupOutcome(error, stopped);
     }
   } catch (error) { throw normalizeError(error); }
 }
@@ -202,7 +230,7 @@ export async function closeAttachedRoute(request, deps = {}) {
   const handle = checkRef(request);
   const directory = await routeDirectory(request.home, handle.id);
   dropLease(handle.id);
-  try { return (await controlAttached(directory, { type: 'close', generation: handle.generation }, 120_000)).view; }
+  try { const result=(await controlAttached(directory, { type: 'close', generation: handle.generation }, 120_000)).view;if(result.cleanup.state==='confirmed')await dropBroker(handle.id);return result; }
   catch (error) {
     if (!error.gone) throw error;
     const state = await viewFromRecord(directory, handle);
@@ -239,6 +267,10 @@ const GATE_LIFETIME_MS = 2_147_483_647;
  */
 export async function runAttachedController(directory, runtime = {}) {
   const bootstrap = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
+  if(bootstrap.registryId&&await registryIdentity(bootstrap.registry)!==bootstrap.registryId)throw gozarError('artifact_integrity_failed','The controller registry content changed');
+  let resolverLost=false;
+  const resolver=bootstrap.resolver?await connectEmbeddingBroker({descriptor:bootstrap.resolver,identity:bootstrap.identity,onLoss:()=>{resolverLost=true;}}):null;
+  if(resolver)runtime={...runtime,embeddingServices:resolver,owner:bootstrap.owner,dispatchEffect:resolver.dispatchEffect?.bind(resolver)};
   const adapters = runtime.adapters ?? await (await loadRuntime())?.loadAdapters?.(bootstrap.registry);
   const adapter = adapters?.find(item => item.id === bootstrap.adapterId);
   if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available');
@@ -246,7 +278,7 @@ export async function runAttachedController(directory, runtime = {}) {
   const now = runtime.now ?? Date.now;
   const expiryMs = bootstrap.leaseExpiryMs ?? LEASE_EXPIRY_MS;
   const handle = { kind: 'attached', id: bootstrap.id, generation: 0 };
-  const lease = { target: bootstrap.request.target, state: 'creating', origin: null, properties: adapter.definition.capabilities, ingress: null,
+  const lease = { target: bootstrap.request.target, state: 'creating', origin: null, properties: adapter.definition.capabilities, ingress: null, identity:bootstrap.identity??null,
     limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
   let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null, proofSession = null;
   const nonce = randomBytes(32).toString('hex');
@@ -272,6 +304,7 @@ export async function runAttachedController(directory, runtime = {}) {
   const gated = runtime.validation !== 'none';
   const proofAbort = new AbortController();
   const attempt = { id: bootstrap.id, nonce: randomBytes(32).toString('hex'), deadlineMs: now() + 120_000, signal: proofAbort.signal };
+  Object.assign(context,{signal:attempt.signal,deadlineMs:attempt.deadlineMs,attemptId:attempt.id,assertGeneration:async()=>{if(attempt.signal.aborted||resolverLost||releasing)throw gozarError('route_conflict','This runtime attempt is no longer current');}});
 
   async function checkProof(sse) {
     const endpoint = lease.origin ?? receipt.origin;
@@ -284,6 +317,8 @@ export async function runAttachedController(directory, runtime = {}) {
       lease.proof = checked;
       lease.facts = [...new Map([...(adapter.definition.facts ?? []), ...(lease.facts ?? []), ...(checked.facts ?? [])].map(fact => [fact.id, fact])).values()];
     }
+    if(resolverLost||attempt.signal.aborted||releasing||now()>=attempt.deadlineMs)return {...checked,status:'unverified'};
+    lease.proofSubject=bootstrap.identity?{origin:endpoint,target:bootstrap.request.target,...bootstrap.identity,handleGeneration:handle.generation}:null;
     return checked;
   }
 
@@ -381,6 +416,7 @@ export async function runAttachedController(directory, runtime = {}) {
         if (message.nonce !== nonce) throw gozarError('internal_error', 'Controller identity mismatch');
         const command = message.command ?? {};
         if (command.type === 'heartbeat') { lastBeat = now(); return reply({ ok: true }); }
+        if(command.type==='resolver-lost'){resolverLost=true;lease.state='unverified';proofAbort.abort();await save();return reply({ok:true});}
         if (command.generation !== undefined && command.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
         if (command.type === 'status') { if (command.fresh) await verify(); return reply({ view: lastView() }); }
         if (command.type === 'close') { await release(); reply({ view: lastView() }); return finish(); }
@@ -409,6 +445,7 @@ export async function runAttachedController(directory, runtime = {}) {
   await new Promise(resolve => setTimeout(resolve, 50));
   await gate?.close().catch(() => {});
   await proofSession?.close().catch(() => {});
+  resolver?.close();
   for (const socket of sockets) socket.destroy();
   await new Promise(resolve => server.close(resolve));
   return lastView();

@@ -11,6 +11,7 @@ import { bindConfiguration } from './adapter-configuration.mjs';
 import { loopbackTarget } from './durable-route.mjs';
 import { checksFor, completeProperties, needsFor } from './route-view.mjs';
 import { adoptDisclosureRevision, consentDisclosureRevision } from './adopt-disclosure.mjs';
+import { routeConsentReview, setupConsentReview } from './consent-facts.mjs';
 
 export { adoptDisclosureRevision } from './adopt-disclosure.mjs';
 export { consentDisclosureRevision } from './adopt-disclosure.mjs';
@@ -70,8 +71,10 @@ export async function defaultReadContext() {
  * The read context for one call: an injected or default base, with the caller's canonical state home and the
  * injected host platform stamped on it (amendment 1). Adapters never read process.platform themselves.
  */
-export async function readContextFor(deps, home, platform) {
-  return { ...(deps.readContext ?? await defaultReadContext()), home, platform };
+export async function readContextFor(deps, home, platform, owner = deps.owner) {
+  return { ...(deps.readContext ?? await defaultReadContext()), home, platform,
+    ...(deps.embeddingServices ? {providerConfiguration: providerId => deps.embeddingServices.resolveConfiguration({home,owner,providerId})} : {}),
+    ...(deps.dispatchEffect ? {dispatchEffect: deps.dispatchEffect} : {}) };
 }
 
 /** `providerId` picks exactly one adapter by the id its definition declares; an unknown id lists every id on offer, in registry order. */
@@ -148,7 +151,7 @@ async function collect(query, deps) {
   const consentBinding = deps.consentBinding ?? (await import('./consent-token.mjs')).consentBinding;
   const home = await canonicalHome(query.home, true);
   // The origin the app named is part of what an adapter reads: an owner-run address is judged by it.
-  const context = { ...await readContextFor(deps, home, platform), origin: query.origin ?? null };
+  const context = { ...await readContextFor(deps, home, platform, query.owner), origin: query.origin ?? null };
   // An unknown named route is an error before any provider is asked.
   if (query.route !== undefined && supportedPlatform(platform)) await context.configuration(query.route);
   const inspections = await Promise.all(selectAdapters(adapters, query.providerId).map(adapter => inspectAdapter(adapter, context, platform)));
@@ -196,11 +199,19 @@ async function collect(query, deps) {
     if (supportedPlatform(platform) && availability[query.usage.kind].state === 'detect-only') setupState = 'detect-only';
     const eligible = unmet.length === 0 && availability[query.usage.kind].state === 'available';
     const observedAt = new Date(context.now()).toISOString();
-    const configuration = configurationFor([...new Map([...actions, ...(inspection.missingActions ?? [])].map(action => [action.id, action])).values()], await readConfiguration({ home, adapterId: adapter.id }));
+    const saved = deps.embeddingServices ? await deps.embeddingServices.readConfiguration({home,owner:query.owner,providerId:adapter.id,draftId:query.draftId}) : await readConfiguration({ home, adapterId: adapter.id });
+    const offered = [...new Map([...actions, ...(inspection.missingActions ?? [])].map(action => [action.id, action])).values()];
+    const decorate = action => {
+      if (!deps.registryId || !saved.revision) return action;
+      const review = setupConsentReview({registryId:deps.registryId,providerId:adapter.id,configuration:saved,draftId:query.draftId??null,action,facts:definition.facts??[]});
+      return {...action,consent:{scope:review.canonicalInput.scope,consentFactsDigest:review.consentFactsDigest},review:{canonicalInput:review.canonicalInput}};
+    };
+    const decorated = offered.map(decorate);
+    const configuration = configurationFor(decorated, saved);
     const candidate = { providerId: adapter.id, name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
       display: { label: definition.label, description: describe(definition, properties), needs: needsFor(definition, query.usage.kind) }, properties,
       availability, prerequisites: prerequisitesFor(inspection, observedAt), configuration, facts: structuredClone(definition.facts ?? []),
-      setup: { state: setupState, actions: setupState === 'action-required' ? inspection.missingActions ?? actions : [] }, disclosure: { ...definition.disclosure, revision: consentDisclosureRevision(definition) },
+      setup: { state: setupState, actions: setupState === 'action-required' ? (inspection.missingActions ?? actions).map(decorate) : [] }, disclosure: { ...definition.disclosure, revision: consentDisclosureRevision(definition) },
       candidateToken: null, expiresAt: null };
     if (query.usage.kind === 'durable' && query.intent === 'adopt') {
       const takeover = 'Gozar takes over the existing rule and removes it when the route is released or stopped.';
@@ -208,8 +219,14 @@ async function collect(query, deps) {
       candidate.disclosure = { ...definition.disclosure, revision: consentDisclosureRevision(definition, 'adopt'),
         text: `${definition.disclosure.text} ${takeover}` };
     }
+    if (deps.registryId && saved.revision) {
+      const review=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration:saved,target:query.target,origin:query.origin,properties,disclosure:candidate.disclosure,facts:candidate.facts});
+      candidate.consentFactsDigest=review.consentFactsDigest;
+      candidate.review={canonicalInput:review.canonicalInput};
+      if(grant)grant={...grant,consentFactsDigest:review.consentFactsDigest,configurationRevision:saved.revision,scopeId:saved.scopeId};
+    }
     if (eligible && setupState === 'ready' && grant) {
-      const issued = await issue({ home, binding: consentBinding(query, home, candidate.disclosure.revision), grant });
+      const issued = await issue({ home, binding: consentBinding(query, home, candidate.disclosure.revision,candidate.consentFactsDigest), grant });
       candidate.candidateToken = issued.token; candidate.expiresAt = issued.expiresAt;
     }
     return candidate;

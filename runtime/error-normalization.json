@@ -22,7 +22,16 @@
     "unsupported",
     "ambiguous_route",
     "busy",
-    "internal_error"
+    "internal_error",
+    "configuration_stale",
+    "configuration_in_use",
+    "secret_in_use",
+    "secret_backend_locked",
+    "secret_backend_unavailable",
+    "host_policy_denied",
+    "artifact_integrity_failed",
+    "configuration_migration_required",
+    "proof_refresh_unsupported"
   ],
   "map": {
     "invalid_input": "invalid_input",
