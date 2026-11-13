@@ -21,7 +21,7 @@ export interface Adapter {
   setupActions(facts: unknown): Action[];
   configurationActions?(): Action[];
   /** Prepares this attempt's protocol-specific challenge before provider creation. */
-  prepareProof?(ctx: ReadContext, request: AdapterRequest): Promise<AdapterProofSession>;
+  prepareProof?(ctx: ReadContext, request: AdapterRequest, attempt: ProofAttempt): Promise<AdapterProofSession>;
   setup(ctx: SetupContext, actionId: string, secretHandle?: string): Promise<SetupResult>;
   plan(ctx: ReadContext, request: AdapterRequest): Promise<AdapterPlan>;
   create(ctx: AdmittedEffectContext, plan: AdapterPlan): Promise<Receipt>;
@@ -48,12 +48,14 @@ export type AdapterDefinition = {
 /** The adapter binds verification to the fresh challenge and this attempt's endpoint. */
 export type AdapterProofSession = {
   target: string;
-  verify(input: {origin: string; receipt: Receipt}): Promise<{
+  verify(input: {origin: string; receipt: Receipt; attempt: ProofAttempt}): Promise<{
+    attemptId: string; endpoint: string;
     status: 'verified' | 'unverified'; checkedAt: string | null; validUntil?: string;
     vantage: RouteView['verification']['vantage']; checks: RouteView['verification']['checks']; facts?: Fact[];
   }>;
   close(): Promise<void>;
 };
+export type ProofAttempt = { id: string; nonce: string; deadlineMs: number; signal: AbortSignal };
 
 export type AdapterRequest = {
   target: string;

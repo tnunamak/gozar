@@ -268,11 +268,17 @@ export async function runAttachedController(directory, runtime = {}) {
     finally { clearTimeout(timer); }
   };
   const gated = runtime.validation !== 'none';
+  const proofAbort = new AbortController();
+  const attempt = { id: bootstrap.id, nonce: randomBytes(32).toString('hex'), deadlineMs: now() + 120_000, signal: proofAbort.signal };
 
   async function checkProof(sse) {
-    const checked = proofSession ? await proofSession.verify({ origin: lease.origin ?? receipt.origin, receipt })
+    const endpoint = lease.origin ?? receipt.origin;
+    const checked = proofSession ? await proofSession.verify({ origin: endpoint, receipt, attempt })
       : await adapter.verify(gated ? { ...read, verifyChallenge: gateChecked(sse) } : read, receipt);
     if (proofSession) {
+      if (checked.attemptId !== attempt.id || checked.endpoint !== endpoint || attempt.signal.aborted || now() >= attempt.deadlineMs || releasing) {
+        return { ...checked, status: 'unverified' };
+      }
       lease.proof = checked;
       lease.facts = [...(adapter.definition.facts ?? []), ...(checked.facts ?? [])];
     }
@@ -296,7 +302,7 @@ export async function runAttachedController(directory, runtime = {}) {
       if (!admitted) throw gozarError('unsupported', 'No admitted effect context is wired for this route');
       let plan = bootstrap.plan;
       if (gated && adapter.prepareProof) {
-        proofSession = await adapter.prepareProof(read, bootstrap.request);
+        proofSession = await adapter.prepareProof(read, bootstrap.request, attempt);
         plan = retarget(plan, bootstrap.request.target, proofSession.target);
       } else if (gated) {
         gate = await createGate(portOf(bootstrap.request.target), { lifetimeMs: GATE_LIFETIME_MS, onExpire: () => release().then(finish) });
@@ -328,6 +334,7 @@ export async function runAttachedController(directory, runtime = {}) {
   })();
 
   function release() {
+    proofAbort.abort();
     releasing ??= (async () => {
       await creation;
       if (lease.state === 'lost') return;
