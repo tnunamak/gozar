@@ -20,6 +20,28 @@ import { enrichRoute } from './embedding-state.mjs';
 
 export { createReadContext };
 
+/** Explicit fixture effects for the shipped trusted adapters. No ambient switch enables this. */
+export async function createTestingGozar({effects,...options}={}){
+  if(!Array.isArray(effects))throw gozarError('invalid_input','Testing effects must be an explicit mapping array');
+  const handlers=new Map(),events=[],active=new Map(),abort=new AbortController();let closing;
+  for(const effect of effects){
+    if(typeof effect?.kind!=='string'||!effect.kind||typeof effect.operation!=='string'||!effect.operation||typeof effect.handle!=='function')throw gozarError('invalid_input','A testing effect needs kind, operation and handler');
+    const key=JSON.stringify([effect.kind,effect.operation]);if(handlers.has(key))throw gozarError('invalid_input','Duplicate testing effect mapping');handlers.set(key,effect.handle);
+  }
+  const dispatchEffect=async request=>{
+    const key=JSON.stringify([request?.kind,request?.operation]),handler=handlers.get(key);
+    if(abort.signal.aborted||!handler)throw gozarError('unsupported','No matching testing effect is declared');
+    const event={sequence:events.length,kind:request.kind,operation:request.operation,state:'requested',fixture:true};events.push(event);
+    try{const result=await handler(structuredClone(request.input),{signal:abort.signal,fixture:true});event.state='completed';return structuredClone(result);}
+    catch{event.state='failed';throw gozarError('provider_unavailable','The testing effect failed');}
+  };
+  const api=createCoreRouteApi({...options,dispatchEffect});
+  const gozar={...api};
+  for(const method of ['expose','ensureRoute','adoptRoute'])gozar[method]=async request=>{try{const route=await api[method](request);active.set(JSON.stringify(route.handle),{home:request.home,handle:route.handle,mode:'remove'});return route;}catch(error){if(error.route)active.set(JSON.stringify(error.route.handle),{home:request.home,handle:error.route.handle,mode:'remove'});throw error;}};
+  gozar.closeRoute=async request=>{const route=await api.closeRoute(request);if(route.cleanup.state==='confirmed')active.delete(JSON.stringify(route.handle));return route;};
+  return {gozar,events,close:()=>closing??=(async()=>{for(const request of active.values())await gozar.closeRoute(request);abort.abort();})()};
+}
+
 /** Deterministic lifecycle projections for every admitted usage kind; no provider or process is started. */
 export function fakeRouteScenarios({ target = '127.0.0.1:18765', now = Date.parse('2026-11-13T12:00:00Z') } = {}) {
   const properties = { reach: 'internet', transport: 'https', traffic: { tlsTermination: 'endpoint', providerCanReadPayload: false, readers: [], metadataVisibleTo: [], evidenceRef: 'testing' },
@@ -215,7 +237,7 @@ export async function fakeRegistry({ id, label, kinds, reach, transport = 'https
     schemaVersion: 1, id, label: label ?? `Fake ${id}`, needs: 'Needs nothing: this is a test fake.',
     capabilities: {
       reach, transport,
-      traffic: { tlsTermination: transport === 'https' ? 'provider' : 'unknown', providerCanReadPayload: false, readers: [], metadataVisibleTo: [], evidenceRef: 'testing' },
+      traffic: { tlsTermination: transport === 'https' ? 'provider' : 'unknown', providerCanReadPayload: ['tcp','tls'].includes(transport) ? null : false, readers: [], metadataVisibleTo: [], evidenceRef: 'testing' },
       address: { stability: 'unknown', scope: 'a fake address that exists only in memory', conditions: [], ports: null },
       cost: { kind: 'free', summary: 'A fake costs nothing.', currency: null, amount: null, period: null },
       needsAccount: false, lifetimes: [...kinds], supervision: 'controller',

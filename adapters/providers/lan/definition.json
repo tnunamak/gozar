@@ -337,6 +337,186 @@
         "affectsConsent": false,
         "source": "adapter-definition",
         "asOf": "2026-11-13"
+      },
+      {
+        "id": "remote-termination",
+        "label": "Effective remote TLS termination",
+        "value": "not-applicable",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-logging",
+        "label": "Account-selected logging and retention",
+        "value": "not-applicable",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-name-ownership",
+        "label": "Current reserved name ownership",
+        "value": "not-applicable",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-setup-completion",
+        "label": "Provider consent or remote setup completion",
+        "value": "not-applicable",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "provider-status",
+        "label": "Current provider dashboard status",
+        "value": "not-applicable",
+        "known": true,
+        "group": "runtime",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "browser-warning-applicability",
+        "label": "Account-specific browser warning applicability",
+        "value": "not-applicable",
+        "known": true,
+        "group": "access",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-collision",
+        "label": "Current remote endpoint collision",
+        "value": "not-applicable",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "revocation-state",
+        "label": "Actual credential revocation and remaining connectors",
+        "value": "not-applicable",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-control-authority",
+        "label": "Current remote binding and controller authority",
+        "value": "not-applicable",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "provider-depletion",
+        "label": "Current provider depletion or license expiry",
+        "value": "not-applicable",
+        "known": true,
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-domain-options",
+        "label": "Account reserved-domain choices",
+        "value": "not-applicable",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "account-domain-suggestion",
+        "label": "Current account-assigned suggested domain",
+        "value": "not-applicable",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-issuance",
+        "label": "Provider credential issuance or refresh outcome",
+        "value": "not-applicable",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-job-completion",
+        "label": "Provider provisioning job completion",
+        "value": "not-applicable",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-identity",
+        "label": "Authenticated remote account or tunnel identity",
+        "value": "not-applicable",
+        "known": true,
+        "group": "account",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-rotation",
+        "label": "Remote credential rotation outcome",
+        "value": "not-applicable",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-deletion-proof",
+        "label": "Remote revocation and deletion proof",
+        "value": "not-applicable",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "retained-configuration",
+        "label": "Retained configuration",
+        "value": "Stopping a route keeps saved input values and credentials. Local rotation does not revoke a credential at the provider.",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "adapter-configuration",
+        "asOf": "2026-11-13"
       }
     ]
   },

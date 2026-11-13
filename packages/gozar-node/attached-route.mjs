@@ -23,10 +23,11 @@ import { validateQuery, adapterRequest, readContextFor, loadRuntime, consentDisc
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { recordController, controllerAlive, stopController, withCleanupOutcome } from './controller-start.mjs';
-import { routeConsentReview } from './consent-facts.mjs';
+import { routeConsentReview,consentSnapshot } from './consent-facts.mjs';
 import { completeProperties, checksFor } from './route-view.mjs';
 import { registryIdentity } from './registry-identity.mjs';
 import { startEmbeddingBroker, connectEmbeddingBroker } from './embedding-broker.mjs';
+import {testingFetch} from './testing-network.mjs';
 
 export const HEARTBEAT_MS = 5_000;
 export const LEASE_EXPIRY_MS = 20_000;
@@ -158,15 +159,16 @@ export async function openAttachedRoute(request, deps = {}) {
       let broker,identity;
       if(deps.embeddingServices){
         const hostIdentity=await deps.embeddingServices.resolveIdentity({home:redeemed.home});
-        identity={instanceId:hostIdentity.instanceId,bootId:randomUUID()};
-        broker=await startEmbeddingBroker({services:deps.embeddingServices,home:redeemed.home,identity,
+        broker=await startEmbeddingBroker({services:deps.embeddingServices,home:redeemed.home,identity:hostIdentity,
           dispatchEffect:deps.dispatchEffect,onLoss:()=>{if(brokers.has(id))void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
+        const descriptor=await broker.registerController();
+        identity={instanceId:descriptor.instanceId,bootId:descriptor.bootId};
         brokers.set(id,broker);
         try{await deps.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle:{kind:'attached',id,generation:1}});}
         catch(error){await dropBroker(id);throw error;}
       }
       await atomicWrite(join(directory, 'bootstrap.json'), { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
-        ...(broker?{resolver:broker.descriptor,identity,registryId:deps.registryId,owner:request.owner,consentReview:redeemed.consentReview}:{}),
+        ...(broker?{resolver:broker.descriptor,identity,registryId:deps.registryId,owner:request.owner,consentReview:redeemed.consentReview,fixtureEffects:!!deps.dispatchEffect}:{}),
         ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) });
       const child = spawn(process.execPath, [here, '--controller', directory], { detached: true, stdio: 'ignore',
         env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
@@ -196,8 +198,16 @@ export async function openAttachedRoute(request, deps = {}) {
       }
     } catch (error) {
       dropLease(id);
-      await controlAttached(directory, { type: 'close' }, 60_000).catch(() => {});
-      // A failed start must not leave the detached controller running (it would hold the provider resource).
+      const cleanup=await controlAttached(directory, { type: 'close' }, 60_000).catch(() => null);
+      if(cleanup?.view?.cleanup.state==='unconfirmed'){
+        error.route=cleanup.view;
+        throw error;
+      }
+      const recorded=await readJson(join(directory,'state.json'));
+      if(!cleanup&&recorded?.lastView?.cleanup.state==='unconfirmed'){
+        error.route=recorded.lastView;
+        throw error;
+      }
       const stopped=await stopController(controller);await dropBroker(id);
       throw withCleanupOutcome(error, stopped);
     }
@@ -248,6 +258,9 @@ export async function closeAttachedRoute(request, deps = {}) {
   }
 }
 
+export async function reviewAttachedConsent(request){const handle=checkRef(request);return (await controlAttached(await routeDirectory(request.home,handle.id),{type:'review-consent',generation:handle.generation})).review;}
+export async function approveAttachedConsent(request){const handle=checkRef(request);return (await controlAttached(await routeDirectory(request.home,handle.id),{type:'approve-consent',generation:handle.generation,approvalToken:request.approvalToken,consentFactsDigest:request.consentFactsDigest},60000)).view;}
+
 // --- The controller -----------------------------------------------------------------------------
 
 const credentialFreeOrigin = (value, properties, schemes) => {
@@ -270,7 +283,8 @@ export async function runAttachedController(directory, runtime = {}) {
   if(bootstrap.registryId&&await registryIdentity(bootstrap.registry)!==bootstrap.registryId)throw gozarError('artifact_integrity_failed','The controller registry content changed');
   let resolverLost=false;
   const resolver=bootstrap.resolver?await connectEmbeddingBroker({descriptor:bootstrap.resolver,identity:bootstrap.identity,onLoss:()=>{resolverLost=true;}}):null;
-  if(resolver)runtime={...runtime,embeddingServices:resolver,owner:bootstrap.owner,dispatchEffect:resolver.dispatchEffect?.bind(resolver)};
+  if(resolver)runtime={...runtime,embeddingServices:resolver,owner:bootstrap.owner,...(bootstrap.fixtureEffects?{dispatchEffect:resolver.dispatchEffect.bind(resolver)}:{})};
+  if(bootstrap.fixtureEffects)runtime.fetch=testingFetch(runtime.dispatchEffect);
   const adapters = runtime.adapters ?? await (await loadRuntime())?.loadAdapters?.(bootstrap.registry);
   const adapter = adapters?.find(item => item.id === bootstrap.adapterId);
   if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available');
@@ -282,7 +296,7 @@ export async function runAttachedController(directory, runtime = {}) {
     limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
   let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null, proofSession = null;
   const nonce = randomBytes(32).toString('hex');
-  const lastView = () => projectAttached(lease, { handle, now: now() });
+  const lastView = () => ({...projectAttached(lease, { handle, now: now() }),...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
   const save = () => atomicWrite(join(directory, 'state.json'), { schemaVersion: 1, adapterId: adapter.id, request: bootstrap.request, plan: bootstrap.plan,
     receipt, handle, phase: lease.state, lastView: lastView() });
 
@@ -304,7 +318,31 @@ export async function runAttachedController(directory, runtime = {}) {
   const gated = runtime.validation !== 'none';
   const proofAbort = new AbortController();
   const attempt = { id: bootstrap.id, nonce: randomBytes(32).toString('hex'), deadlineMs: now() + 120_000, signal: proofAbort.signal };
-  Object.assign(context,{signal:attempt.signal,deadlineMs:attempt.deadlineMs,attemptId:attempt.id,assertGeneration:async()=>{if(attempt.signal.aborted||resolverLost||releasing)throw gozarError('route_conflict','This runtime attempt is no longer current');}});
+  Object.assign(context,{signal:attempt.signal,deadlineMs:attempt.deadlineMs,attemptId:attempt.id});
+  lease.approvedReview=bootstrap.consentReview??null;
+  const reviewTokens=new Map();
+  const safeRefresh=()=>!proofSession||typeof proofSession.refresh==='function';
+  async function currentConsent(){
+    if(!lease.approvedReview)return null;
+    const original=lease.approvedReview.canonicalInput;
+    const configuration=await resolver.readConfiguration({owner:bootstrap.owner,providerId:adapter.id});
+    return routeConsentReview({registryId:bootstrap.registryId,providerId:adapter.id,usage:bootstrap.request.usage,configuration,
+      target:bootstrap.request.target,origin:original.scope.query.expectedOrigin,
+      properties:completeProperties(lease.properties,adapter.definition,bootstrap.request.usage.kind),disclosure:original.typedDisclosures.disclosure,
+      facts:lease.facts??adapter.definition.facts??[]});
+  }
+  async function enforceConsent(){
+    if(resolverLost){lease.state='unverified';return false;}
+    const current=await currentConsent();
+    if(current&&current.consentFactsDigest!==lease.approvedReview.consentFactsDigest){
+      lease.state='unverified';lease.consentChange={oldDigest:lease.approvedReview.consentFactsDigest,newDigest:current.consentFactsDigest,
+        nextAction:safeRefresh()?instructionAction('review-route-consent','Review changed route consent','Call reviewRouteConsent with this route handle, show the returned review and approveRouteConsent after approval.'):null,
+        reason:safeRefresh()?'consent-changed':'proof-refresh-unsupported'};
+      await save();return false;
+    }
+    if(lease.consentChange){lease.state='unverified';return false;}
+    return true;
+  }
 
   async function checkProof(sse) {
     const endpoint = lease.origin ?? receipt.origin;
@@ -315,7 +353,7 @@ export async function runAttachedController(directory, runtime = {}) {
         return { ...checked, status: 'unverified' };
       }
       lease.proof = checked;
-      lease.facts = [...new Map([...(adapter.definition.facts ?? []), ...(lease.facts ?? []), ...(checked.facts ?? [])].map(fact => [fact.id, fact])).values()];
+      lease.facts = [...new Map([...(adapter.definition.facts ?? []), ...(lease.runtimeFacts ?? []), ...(checked.facts ?? [])].map(fact => [fact.id, fact])).values()];
     }
     if(resolverLost||attempt.signal.aborted||releasing||now()>=attempt.deadlineMs)return {...checked,status:'unverified'};
     lease.proofSubject=bootstrap.identity?{origin:endpoint,target:bootstrap.request.target,...bootstrap.identity,handleGeneration:handle.generation}:null;
@@ -324,6 +362,9 @@ export async function runAttachedController(directory, runtime = {}) {
 
   async function verify() {
     if (!receipt || releasing) return;
+    const facts=await adapter.runtimeFacts(read,receipt);
+    Object.assign(lease,{properties:facts.properties,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
+    if(!await enforceConsent())return;
     if (proofSession && !proofSession.refresh) return;
     try {
       attempt.deadlineMs = now() + 120_000;
@@ -335,7 +376,7 @@ export async function runAttachedController(directory, runtime = {}) {
         lease.proof = verification;
         lease.facts = [...(adapter.definition.facts ?? []), ...(verification.facts ?? [])];
       }
-      if (!releasing) { lease.state = verification.status === 'verified' ? 'usable' : 'unverified'; lease.checkedAtMs = now(); lease.sseChecked = false; await save(); }
+      if (!releasing&&await enforceConsent()) { lease.state = verification.status === 'verified' ? 'usable' : 'unverified'; lease.checkedAtMs = Date.parse(verification.checkedAt); lease.sseChecked = false; await save(); }
     } catch { if (!releasing) { lease.state = 'unverified'; await save(); } }
   }
   async function removeRoute() {
@@ -346,6 +387,7 @@ export async function runAttachedController(directory, runtime = {}) {
   const creation = (async () => {
     try {
       if (!admitted) throw gozarError('unsupported', 'No admitted effect context is wired for this route');
+      if(!await enforceConsent())throw gozarError('consent_mismatch','Consent changed before route creation');
       let plan = bootstrap.plan;
       if (gated && adapter.prepareProof) {
         proofSession = await adapter.prepareProof(read, bootstrap.request, attempt);
@@ -361,19 +403,22 @@ export async function runAttachedController(directory, runtime = {}) {
       const facts = await adapter.runtimeFacts(read, receipt);
       const origin = credentialFreeOrigin(receipt.origin, facts.properties, adapter.definition.originSchemes);
       if (!origin) throw gozarError('provider_unavailable', 'The provider returned no usable origin');
-      Object.assign(lease, { properties: facts.properties, ingress: facts.ingress ?? null, limits: facts.limits, facts: [...(adapter.definition.facts ?? []), ...(facts.facts ?? [])], origin, state: 'unverified' });
+      Object.assign(lease, { properties: facts.properties, ingress: facts.ingress ?? null, limits: facts.limits,runtimeFacts:facts.facts??[], facts: [...new Map([...(adapter.definition.facts ?? []), ...(facts.facts ?? [])].map(f=>[f.id,f])).values()], origin, state: 'unverified' });
       await save();
+      if(!await enforceConsent())return;
       // Nothing is reported published until the validation passes; a failed check withdraws the route.
       const checked = await checkProof(claimsSse);
       if (checked.status !== 'verified') throw gozarError('verification_failed', 'The route did not pass publication validation and was withdrawn');
-      lease.state = 'usable'; lease.checkedAtMs = now(); lease.sseChecked = gated && claimsSse;
+      if(!await enforceConsent())return;
+      lease.state = 'usable'; lease.checkedAtMs = Date.parse(checked.checkedAt); lease.sseChecked = gated && claimsSse;
       await save();
     } catch (cause) {
+      if(!receipt&&cause.cleanupReceipt){receipt=cause.cleanupReceipt;handle.generation=receipt.generation;}
       const error = normalizeError(cause);
       failure = { code: error.code, message: error.message };
       lease.state = 'lost';
       if (receipt) {
-        try { const removal = await removeRoute(); if (!removal.removed || removal.debt) Object.assign(lease, { state: 'uncertain', cleanup: debtOf(removal) }); else lease.cleanup = {state:'confirmed'}; }
+        try { const removal = await removeRoute(); if (!removal.removed || removal.debt) Object.assign(lease, { state: 'uncertain', cleanup: debtOf(removal) }); else {lease.cleanup = {state:'confirmed'};await releaseUse();} }
         catch { Object.assign(lease, { state: 'uncertain', cleanup: { state: 'unconfirmed', message: 'The route could not be withdrawn; close it again' } }); }
       } else { lease.state = 'uncertain'; lease.cleanup = {state:'unconfirmed',message:'Startup failed before an owned runtime receipt was returned'}; }
       await atomicWrite(join(directory, 'failure.json'), failure);
@@ -381,19 +426,22 @@ export async function runAttachedController(directory, runtime = {}) {
     }
   })();
 
+  async function releaseUse(){if(resolver&&bootstrap.owner)await resolver.releaseConfigurationUse({owner:bootstrap.owner,providerId:adapter.id,handle:{kind:'attached',id:bootstrap.id,generation:1}});}
+
   function release() {
     proofAbort.abort();
     releasing ??= (async () => {
       await creation;
-      if (lease.state === 'lost') return;
+      if (lease.cleanup.state === 'confirmed') return;
       lease.state = 'releasing'; await save().catch(() => {});
       try {
+        if(!receipt)throw gozarError('cleanup_debt','Startup outcome remains unknown; retain this recovery handle');
         const removal = await removeRoute();
-        if (removal.removed && !removal.debt) { lease.state = 'released'; lease.cleanup = { state: 'confirmed' }; }
+        if (removal.removed && !removal.debt) { lease.state = 'released'; lease.cleanup = { state: 'confirmed' };await releaseUse(); }
         else { lease.state = 'uncertain'; lease.cleanup = debtOf(removal); }
       } catch (cause) { lease.state = 'uncertain'; lease.cleanup = { state: 'unconfirmed', message: `Removal failed (${normalizeError(cause).code})` }; }
       await save();
-    })();
+    })().finally(()=>{if(lease.cleanup.state==='unconfirmed')releasing=null;});
     return releasing;
   }
 
@@ -419,7 +467,26 @@ export async function runAttachedController(directory, runtime = {}) {
         if(command.type==='resolver-lost'){resolverLost=true;lease.state='unverified';proofAbort.abort();await save();return reply({ok:true});}
         if (command.generation !== undefined && command.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
         if (command.type === 'status') { if (command.fresh) await verify(); return reply({ view: lastView() }); }
-        if (command.type === 'close') { await release(); reply({ view: lastView() }); return finish(); }
+        if(command.type==='review-consent'){
+          lease.state='unverified';await save();
+          if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
+          const current=await currentConsent();if(!current)throw gozarError('unsupported','This route has no current consent snapshot');
+          const scope={...current.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation};
+          const {consentReview}=await import('./consent-facts.mjs');
+          const review=consentReview({...current.canonicalInput,scope,typedDisclosures:current.canonicalInput.typedDisclosures,facts:lease.facts??adapter.definition.facts??[]});
+          const token=randomBytes(32).toString('base64url'),expiresAt=new Date(now()+600000).toISOString();
+          const snapshot={...consentSnapshot(review),subject:lease.proofSubject??null,approvalToken:token,expiresAt};
+          reviewTokens.set(token,{snapshot,current});return reply({review:snapshot});
+        }
+        if(command.type==='approve-consent'){
+          lease.state='unverified';await save();
+          if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
+          const stored=reviewTokens.get(command.approvalToken);reviewTokens.delete(command.approvalToken);
+          const current=await currentConsent();
+          if(!stored||Date.parse(stored.snapshot.expiresAt)<=now()||stored.snapshot.consentFactsDigest!==command.consentFactsDigest||stored.current.consentFactsDigest!==current?.consentFactsDigest||JSON.stringify(stored.snapshot.subject)!==JSON.stringify(lease.proofSubject??null))throw gozarError('consent_mismatch','The runtime review changed; request a new review');
+          lease.approvedReview=current;delete lease.consentChange;await verify();return reply({view:lastView()});
+        }
+        if (command.type === 'close') { await release(); reply({ view: lastView() }); if(lease.cleanup.state==='confirmed')finish();return; }
         throw gozarError('invalid_input', 'Unsupported controller command');
       } catch (error) { const normalized = normalizeError(error); reply({ error: { code: normalized.code, message: normalized.message } }); }
     });
@@ -433,12 +500,12 @@ export async function runAttachedController(directory, runtime = {}) {
   let monitor;
   const stdin = runtime.lease?.kind === 'stdin' ? runtime.lease.stream : null;
   if (stdin) {
-    const gone = () => release().then(finish);
+    const gone = () => release().then(()=>{if(lease.cleanup.state==='confirmed')finish();});
     stdin.once('end', gone); stdin.once('close', gone); stdin.resume();
   } else {
-    monitor = setInterval(() => { if (!releasing && now() - lastBeat > expiryMs) release().then(finish); }, Math.max(20, Math.min(1_000, Math.floor(expiryMs / 4))));
+    monitor = setInterval(() => { if (!releasing && now() - lastBeat > expiryMs) {lastBeat=now();release().then(()=>{if(lease.cleanup.state==='confirmed')finish();});} }, Math.max(20, Math.min(1_000, Math.floor(expiryMs / 4))));
   }
-  creation.then(() => { if (failure) finish(); });
+  creation.then(() => { if (failure&&lease.cleanup.state==='confirmed') finish(); });
   await finished;
   clearInterval(monitor);
   // Let the reply to the last command leave before the socket goes away.

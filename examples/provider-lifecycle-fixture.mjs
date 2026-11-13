@@ -52,12 +52,12 @@ try {
   const before = JSON.parse((await runCli(['catalog', '--query-file', queryFile, '--json', ...flags])).stdout);
   if (before.candidates[0].candidateToken !== null) throw new Error('Missing required input did not block consent');
   const action = before.candidates[0].configuration.actions[0];
-  await writeFile(approvalFile, JSON.stringify({ digest: action.digest, disclosureRevision: action.disclosure.revision }), { mode: 0o600 });
-  const setup = await runCli(['setup', action.id, '--prompt', '--query-file', queryFile, '--approval-file', approvalFile, '--home', home, '--json', ...flags], `${secret}\n`);
+  await writeFile(approvalFile, JSON.stringify({kind:'setup',consentFactsDigest:action.consent.consentFactsDigest,digest:action.digest,disclosureRevision:action.disclosure.revision}), { mode: 0o600 });
+  const setup = await runCli(['setup', action.id, '--prompt', '--query-file', queryFile, '--provider-id',before.candidates[0].providerId,'--approval-file', approvalFile, '--home', home, '--json', ...flags], `${secret}\n`);
   api = createGozar({ manifest, root: registry.root });
   const catalog = await api.catalogRoutes(query), choice = catalog.candidates[0];
   const screen = renderScreen(catalog);
-  route = await api.expose({ ...query, wait: 'verified', approval: { candidateToken: choice.candidateToken, disclosureRevision: choice.disclosure.revision } });
+  route = await api.expose({ ...query, wait: 'verified', approval: {kind:'route',consentFactsDigest:choice.consentFactsDigest,candidateToken:choice.candidateToken,disclosureRevision:choice.disclosure.revision} });
   const bytes = Buffer.from([0, 255, 13, 10, 128, 65]);
   if (!(await exchange(route.origin, bytes)).equals(bytes)) throw new Error('Post-proof forwarding changed bytes');
   const status = await api.routeStatus({ home, handle: route.handle });

@@ -1,0 +1,50 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import net from 'node:net';
+import tls from 'node:tls';
+import {X509Certificate} from 'node:crypto';
+import {createTestingGozar} from '@tnunamak/gozar/testing';
+import {scratch,query} from './route-schema-check.mjs';
+for(const transport of ['https','tcp','tls'])test(`public testing harness runs shipped ${transport} adapter through controller and witnessed proof`,async t=>{
+ const home=await scratch(t),owner='fixture-owner',ledger=new Map();let serial=0;
+ const effects=[
+  {kind:'recipe',operation:'probe',handle:async()=>({ok:false})},
+  {kind:'sdk-listener',operation:'detect',handle:async()=>({available:true})},
+  {kind:'sdk-listener',operation:'open',handle:async({options})=>{const handle=`owned-${++serial}`,url=options.proto==='tls'?`tls://${options.domain}:443`:options.proto==='tcp'?'tcp://isolated.invalid:12345':`https://${options.domain}`;ledger.set(handle,{url,target:options.addr});return {handle,url};}},
+  {kind:'sdk-listener',operation:'read',handle:async({handle})=>ledger.has(handle)?{present:true,url:ledger.get(handle).url}:{present:false}},
+  {kind:'sdk-listener',operation:'close',handle:async({handle})=>{ledger.delete(handle);return {closed:true};}},
+  {kind:'network',operation:'fetch',handle:async request=>{
+    const parsed=new URL(request.url),resource=[...ledger.values()].find(r=>r.url===parsed.origin);assert.ok(resource);
+    const response=await fetch('http://'+resource.target+parsed.pathname+parsed.search,{method:request.method,headers:request.headers});
+    const chunks=[];let last=Date.now();for await(const chunk of response.body){const at=Date.now();chunks.push({data:Buffer.from(chunk).toString('base64'),delayMs:at-last});last=at;}
+    return {status:response.status,headers:Object.fromEntries(response.headers),chunks};
+  }},
+  {kind:'network',operation:'exchange',handle:async request=>{
+   const resource=[...ledger.values()].find(r=>r.url===request.endpoint);assert.ok(resource);
+   const target=new URL('tcp://'+resource.target);
+   return new Promise((resolve,reject)=>{let bytes=Buffer.alloc(0),certificate;const connected=()=>{if(request.transport==='tls')certificate=new X509Certificate(socket.getPeerCertificate().raw).toString();socket.end(Buffer.from(request.bytes,'base64'));};
+    const options={host:target.hostname,port:Number(target.port)};const socket=request.transport==='tls'?tls.connect({...options,rejectUnauthorized:false},connected):net.connect(options,connected);
+    socket.setTimeout(2000,()=>socket.destroy(new Error('fixture deadline')));socket.on('data',chunk=>bytes=Buffer.concat([bytes,chunk]));socket.on('error',reject);socket.on('end',()=>resolve({bytes:bytes.toString('base64'),...(certificate?{certificate}:{})}));
+   });
+  }},
+ ];
+ const harness=await createTestingGozar({effects});t.after(harness.close);const api=harness.gozar;
+ const inventory=await api.listProviders({home,owner});const provider=inventory.providers.find(p=>p.transport===transport&&p.availability.attached.state!=='unsupported');assert.ok(provider);
+ let config=provider.configuration;
+ for(const requirement of config.inputRequirements){const action=config.actions.find(a=>a.id===requirement.actionId);let input;
+  if(requirement.secret){const {handle}=await api.storeSecret({home,owner,providerId:provider.providerId,inputId:requirement.id,scopeId:config.scopeId,expectedConfigurationRevision:config.revision,bytes:new TextEncoder().encode('synthetic-canary')});input={secretHandle:handle};}else input={value:'fixture.example.invalid'};
+  config=(await api.runSetupAction({home,owner,providerId:provider.providerId,expectedConfigurationRevision:config.revision,actionId:action.id,...input,approval:{kind:'setup',digest:action.digest,disclosureRevision:action.disclosure.revision,consentFactsDigest:action.consent.consentFactsDigest}})).configuration;
+ }
+ const q=query({home,owner,providerId:provider.providerId,usage:{kind:'attached'},target:'127.0.0.1:1',requirements:{reach:provider.reach,transport,payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}});
+ const candidate=(await api.catalogRoutes(q)).candidates[0];assert.equal(candidate.eligible,true);assert.ok(candidate.candidateToken);
+ assert.equal(candidate.consentFactsDigest,candidate.consent.consentFactsDigest);assert.deepEqual(candidate.consent.scope,candidate.review.canonicalInput.scope);assert.deepEqual(candidate.consent.disclosures,candidate.review.canonicalInput.typedDisclosures);
+ const route=await api.expose({...q,wait:'verified',approval:{kind:'route',consentFactsDigest:candidate.consentFactsDigest,candidateToken:candidate.candidateToken,disclosureRevision:candidate.disclosure.revision}});
+ assert.equal(route.verification.status,'verified');assert.equal(route.verification.subject.target,q.target);assert.equal(ledger.size,1);
+ const before=route.verification.observedAt;
+ if(transport!=='https')assert.equal((await api.routeStatus({home,handle:route.handle})).verification.observedAt,before);
+ if(transport!=='https'){await assert.rejects(api.reviewRouteConsent({home,handle:route.handle}),{code:'proof_refresh_unsupported'});assert.equal((await api.routeStatus({home,handle:route.handle})).published,null);}
+ assert.equal((await api.closeRoute({home,handle:route.handle,mode:'remove'})).cleanup.state,'confirmed');assert.equal(ledger.size,0);
+ assert.equal((await api.closeRoute({home,handle:route.handle,mode:'remove'})).cleanup.state,'confirmed');
+ assert.doesNotMatch(JSON.stringify(harness.events),/synthetic-canary/);
+ assert.ok(harness.events.some(e=>e.kind==='network'&&e.operation===(transport==='https'?'fetch':'exchange')));
+});

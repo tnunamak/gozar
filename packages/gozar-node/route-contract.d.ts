@@ -60,7 +60,10 @@ export type Disclosure = {
 
 export type Action = {
   id: string;
-  kind: 'open-url' | 'instructions' | 'provide-secret' | 'provide-value' | 'gozar-runs';
+  kind: 'open-url' | 'instructions' | 'provide-secret' | 'provide-value' | 'gozar-runs'|'clear-input'|'install-artifact';
+  inputId?:string;
+  consent?:ConsentSnapshot;
+  review?:{canonicalInput:unknown};
   label: string;
   digest: string;
   disclosure: Disclosure;
@@ -115,7 +118,12 @@ export type Observation<T> = { known: true; value: T } | { known: false; reason:
 /** Open display data. Show every affectsConsent row before approval. Groups and ids are open strings. */
 export type Fact = { id: string; label: string; value: string | number | boolean | null; group: string;
   affectsConsent: boolean; source: string; asOf: string | null } &
-  ({ known: true; reason?: string } | { known: false; reason: string });
+  ({ known: true; reason?: string|null } | { known: false; reason: string });
+export type SetupConsentScope={kind:'setup';registryId:string;scopeId:string;providerId:string;configurationRevision:string;draftId:string|null;actionId:string;disclosureRevision:string;actionDigest:string};
+export type RouteConsentScope={kind:'route';registryId:string;scopeId:string;providerId:string;configurationRevision:string;query:{usage:Usage;reach:Reach;transport:Properties['transport'];target:string;expectedOrigin:string|null};reviewHandle?:string;handleGeneration?:number};
+/** The actual typed canonical input. Setup includes the full trusted action, including artifact/effect disclosures. */
+export type ConsentDisclosures={action:Omit<Action,'consent'|'review'>}|{reach:Reach;transport:Properties['transport'];traffic:Properties['traffic'];address:Properties['address'];cost:{kind:Properties['cost']['kind']};lifetimes:Properties['lifetimes'];supervision:Properties['supervision'];protocols:Properties['protocols'];disclosure:Disclosure};
+export type ConsentSnapshot={scope:SetupConsentScope|RouteConsentScope;consentFactsDigest:string;facts:Fact[];disclosures:ConsentDisclosures};
 export type Availability = Record<Usage['kind'], { state: 'available' | 'detect-only' | 'unsupported'; reason: string }>;
 export type Prerequisite = { id: string; label: string; state: 'present' | 'missing' | 'unknown' | 'denied';
   observedAt: string; version: Observation<string>; remedy: Action | null };
@@ -125,6 +133,7 @@ export type Configuration = { revision:string;scopeId:string;inputRequirements: 
   credentials: Record<string,Observation<boolean>>; actions: Action[] };
 
 export type Candidate = {
+  consent:ConsentSnapshot;
   consentFactsDigest:string;
   review:{canonicalInput:unknown};
   availability: Availability;
@@ -202,6 +211,7 @@ export type Ingress = {
 };
 
 export type RouteView = {
+  binding:import('./embedding-contract').RouteBinding;
   schemaVersion: 2;
   routeState: 'detected' | 'verified' | 'expired' | 'cleanup-unconfirmed' | 'inactive' | 'unknown';
   expiresAt: Observation<string>;
@@ -216,10 +226,11 @@ export type RouteView = {
   properties: Properties;
   ingress: Ingress | null;
   /** `vantage` is where the last check actually ran from; a check made from this computer is 'this-device'. `checks` lists what that check made. */
-  verification: { status: 'verified' | 'unverified'; checkedAt: string | null; vantage: ProofVantage; checks: ProofCheck[]; validUntil: Observation<string>; results: {check: ProofCheck; status: 'passed' | 'failed' | 'unknown'}[] };
+  verification: { status: 'verified' | 'unverified'; observedAt:string|null;subject:ProofSubject|null;checkedAt: string | null; vantage: ProofVantage; checks: ProofCheck[]; validUntil: Observation<string>; results: {check: ProofCheck; status: 'passed' | 'failed' | 'unknown'}[] };
   limits: { recommendedPollIntervalMs: number; idleTimeoutMs: number | null };
-  cleanup: { state: 'none' | 'unconfirmed' | 'confirmed'; message?: string };
+  cleanup: { state: 'none' | 'unconfirmed' | 'confirmed'; message?: string;nextAction:Action|null };
 };
+export type ProofSubject={origin:string;target:string;instanceId:string;handleGeneration:number;bootId:string};
 
 export type Approval = { kind:'route';consentFactsDigest:string;candidateToken: string; disclosureRevision: string };
 
@@ -236,7 +247,7 @@ export type GozarErrorCode =
 export type GozarError = { schemaVersion: 1; error: { code: GozarErrorCode; message: string; nextAction: Action | null } };
 
 /** What JS callers catch: `.code` and `.nextAction` carry the same data as the CLI GozarError envelope. */
-export interface GozarThrownError extends Error { code: GozarErrorCode; nextAction: Action | null }
+export interface GozarThrownError extends Error { code: GozarErrorCode; nextAction: Action | null;route?:RouteView }
 
 // --- Results and records ------------------------------------------------------------------------
 
@@ -250,6 +261,7 @@ export type PreferenceRecord = {
 };
 
 export type SetupActionResult = {
+  configuration:Configuration;configurationRevision:string;scopeId:string;
   schemaVersion: 1;
   state: 'complete' | 'pending' | 'blocked';
   nextAction: Action | null;
@@ -259,7 +271,8 @@ export type SetupActionResult = {
 export type WatchEvent = {
   schemaVersion: 1;
   sequence: number;
-  type: 'snapshot' | 'changed' | 'terminal';
+  type: 'snapshot' | 'changed' | 'terminal'|'consent_changed';
+  oldDigest?:string;newDigest?:string;nextAction?:Action|null;reason?:string;
   route: RouteView;
 };
 
@@ -426,6 +439,10 @@ export const beginConfigurationDraft:import('./embedding-contract').HostEmbeddin
 export const commitConfigurationDraft:import('./embedding-contract').HostEmbeddingMethods['commitConfigurationDraft'];
 export const discardConfigurationDraft:import('./embedding-contract').HostEmbeddingMethods['discardConfigurationDraft'];
 export const listProviders:import('./embedding-contract').HostEmbeddingMethods['listProviders'];
+export const readConfigurationDraft:import('./embedding-contract').HostEmbeddingMethods['readConfigurationDraft'];
+export const clearConfigurationInput:import('./embedding-contract').HostEmbeddingMethods['clearConfigurationInput'];
+export function reviewRouteConsent(request:RouteRef):Promise<ConsentSnapshot&{subject:ProofSubject|null;approvalToken:string;expiresAt:string}>;
+export function approveRouteConsent(request:RouteRef&{approvalToken:string;consentFactsDigest:string}):Promise<RouteView>;
 export type {SecretBackend,HostCapabilities,HostCapabilityId,HostIdentity,ConfigurationDraft,ProviderInventory} from './embedding-contract';
 
 /** Trusted executable extension registry. Relative provider paths resolve under root/providers. */
@@ -437,4 +454,5 @@ export function createGozar(options?: GozarOptions): import('./embedding-contrac
  runSetupAction: typeof runSetupAction; inspectLegacyRoute: typeof inspectLegacyRoute;
  getRoutePreferences: typeof getRoutePreferences; setRoutePreferences: typeof setRoutePreferences;
  resolveClientAddress: typeof resolveClientAddress;
+ reviewRouteConsent:typeof reviewRouteConsent;approveRouteConsent:typeof approveRouteConsent;
 };

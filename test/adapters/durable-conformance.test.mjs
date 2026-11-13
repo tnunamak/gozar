@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { loadAdapters } from '../../packages/gozar-node/adapter-runtime.mjs';
 import { ensureRoute, releaseRoute, statusRoutes, durablePlanFacts, durableAdapters, setVerifierForTest, casAttempts } from '../../packages/gozar-node/durable-route.mjs';
 import { issueConsentToken, consentBinding } from '../../packages/gozar-node/consent-token.mjs';
+import { consentDisclosureRevision } from '../../packages/gozar-node/adopt-disclosure.mjs';
 import { canonicalHome } from '../../packages/gozar-node/service-state.mjs';
 import { store } from './fixtures/providers/fake-durable/index.mjs';
 
@@ -35,9 +36,10 @@ const query = (extra = {}) => ({ schemaVersion: 1, owner: 'example-app', target,
 async function approved(extra = {}) {
   const q = query(extra);
   const facts = await durablePlanFacts({ home, adapterId, target, origin: q.origin ?? null, adapters });
-  const binding = consentBinding({ ...q, intent: 'create' }, await canonicalHome(home, true), 'disclosure-1');
+  const disclosureRevision = consentDisclosureRevision(adapters.find(adapter=>adapter.id===adapterId).definition);
+  const binding = consentBinding({ ...q, intent: 'create' }, await canonicalHome(home, true), disclosureRevision);
   const { token } = await issueConsentToken({ home, binding, grant: { adapterId, planDigest: facts.planDigest, observedResource: facts.observedResource } });
-  return { ...q, approval: { candidateToken: token, disclosureRevision: 'disclosure-1' } };
+  return { ...q, approval: { candidateToken: token, disclosureRevision } };
 }
 const status = async () => (await statusRoutes({ home }, deps)).routes[0];
 const release = () => releaseRoute({ routeId: 'coordinator', home }, deps);

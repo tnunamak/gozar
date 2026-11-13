@@ -130,6 +130,10 @@ export async function launch(directory, configuration, executable, options = {})
 export async function serve(directory, { step: suppliedStep, probeExecutor, hostAuthorities, processOutputObserver } = {}) {
   const config = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
   if (config.lifetimeMs !== undefined) validateLifetimeMs(config.lifetimeMs);
+  const publishingAdapter = config.adapters?.find(adapter => adapter.id === config.adapterId);
+  if (config.consent === true && publishingAdapter && publishingAdapter.planVersion !== 1) {
+    throw gozarError('unsupported', 'Legacy recipe publication is not supported in 0.4. Stop the old session, then expose again with an admitted operational plan.');
+  }
   const journal = new Journal(directory);
   await journal.load();
   // A crashed prior controller never restores readiness from disk. Only remove attributable local children.

@@ -215,6 +215,25 @@
           "items": {
             "type": "string"
           }
+        },
+        "effectOperations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "operation"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "operation": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false

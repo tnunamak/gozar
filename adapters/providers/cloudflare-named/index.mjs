@@ -21,7 +21,7 @@ function settings(config) {
 // EOF on the parent pipe stops exactly this child, including when the controller dies.
 const supervisor = `
 const {spawn}=require('node:child_process');
-const child=spawn('cloudflared',['tunnel','--no-autoupdate','run'],{env:process.env,stdio:'ignore'});
+const child=spawn('cloudflared',['tunnel','--no-autoupdate','--metrics','127.0.0.1:0','run'],{env:process.env,stdio:'ignore'});
 let stopping=false,timer;
 const stop=()=>{if(stopping)return;stopping=true;child.kill('SIGTERM');timer=setTimeout(()=>child.kill('SIGKILL'),3000);};
 process.stdin.resume();process.stdin.on('end',stop);process.on('SIGTERM',stop);process.on('SIGINT',stop);
@@ -122,9 +122,13 @@ export function createNamedAdapter({ detectBinary = async () => findOnPath('clou
         await ctx.assertGeneration();
         if (removed.has(receipt.resourceKey)) return { removed: true, debt: null };
         const owned = runtimes.get(receipt.resourceKey);
-        if (!owned || owned.generation !== receipt.generation) return { removed: false, debt: { code: 'runtime-ownership-unconfirmed' } };
-        try { await owned.runtime.close(); runtimes.delete(receipt.resourceKey); removed.add(receipt.resourceKey); return { removed: true, debt: null }; }
-        catch { return { removed: false, debt: { code: 'connector-stop-unconfirmed' } }; }
+        if (!owned || owned.generation !== receipt.generation) return { removed: false, debt: { reason: 'runtime-ownership-unconfirmed' } };
+        try {
+          await owned.runtime.close();
+          if (owned.runtime.alive()) return { removed: false, debt: { reason: 'connector-stop-unconfirmed' } };
+          runtimes.delete(receipt.resourceKey); removed.add(receipt.resourceKey); return { removed: true, debt: null };
+        }
+        catch { return { removed: false, debt: { reason: 'connector-stop-unconfirmed' } }; }
       },
       async runtimeFacts(ctx, receipt) {
         return { ...await base.runtimeFacts(ctx, receipt), facts: [{ id: 'connector-state', label: 'Connector process', value: runtimes.get(receipt.resourceKey)?.runtime.alive() ? 'running' : 'stopped',

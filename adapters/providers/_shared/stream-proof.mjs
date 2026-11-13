@@ -122,6 +122,15 @@ export async function prepareStreamProof(ctx, request, initialAttempt, { transpo
           timer = setTimeout(cancel, Math.max(1, Math.min(5000, attempt.deadlineMs - ctx.now())));
           abort = cancel;
           attempt.signal?.addEventListener('abort', abort, { once: true });
+          if(ctx.dispatchEffect){
+            ctx.dispatchEffect({kind:'network',operation:'exchange',input:{endpoint:origin,transport,bytes:expected.toString('base64'),pinnedCertificate:pinned,deadlineMs:attempt.deadlineMs}}).then(reply=>{
+              if(transport==='tls'){
+                try{const cert=new X509Certificate(reply.certificate);peer={fingerprint256:cert.fingerprint256,subject:cert.subject,issuer:cert.issuer};if(peer.fingerprint256!==pinned)return finish(false);}catch{return finish(false);}
+              }
+              finish(typeof reply?.bytes==='string'&&Buffer.from(reply.bytes,'base64').equals(expected)&&witnessed);
+            },cancel);
+            return;
+          }
           const connected = () => {
             if (transport === 'tls') {
               peer = socket.getPeerCertificate();
@@ -155,7 +164,10 @@ export async function prepareStreamProof(ctx, request, initialAttempt, { transpo
         { id: 'proof-certificate-issuer', label: 'Synthetic proof certificate issuer', value: JSON.stringify(peer.issuer), known: true, group: 'verification', affectsConsent: false, source: 'initial-route-proof' },
         { id: 'identityTrusted', label: 'Application certificate identity trusted', value: false, known: true, group: 'verification', affectsConsent: false, source: 'initial-route-proof' },
       ] : [];
-      return result(passed, facts.map(fact => ({ ...fact, asOf: checkedAt() })));
+      if(ctx.dispatchEffect)facts.push({id:'fixture-transport',label:'Isolated fixture transport',value:true,known:true,group:'verification',affectsConsent:false,source:'testing-effects'});
+      const checked=result(passed, facts.map(fact => ({ ...fact, asOf: checkedAt() })));
+      if(ctx.dispatchEffect)checked.vantage='this-device';
+      return checked;
     },
   };
 }

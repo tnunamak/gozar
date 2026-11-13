@@ -10,7 +10,10 @@
       "default": "./packages/gozar-node/api.mjs"
     },
     "./service": "./packages/gozar-node/service.mjs",
-    "./testing": "./packages/gozar-node/testing.mjs",
+    "./testing": {
+      "types": "./packages/gozar-node/testing-contract.d.ts",
+      "default": "./packages/gozar-node/testing.mjs"
+    },
     "./bin/gozar.mjs": "./bin/gozar.mjs",
     "./package.json": "./package.json"
   },
@@ -33,7 +36,8 @@
     "docs/release-0.4-license-audit.md",
     "docs/live-provider-walk.md",
     "docs/ngrok-stream-protocols.md",
-    "docs/design/0.4.0-state-contract.md"
+    "docs/design/0.4.0-state-contract.md",
+    "docs/testing-effects.md"
   ],
   "repository": {
     "type": "git",

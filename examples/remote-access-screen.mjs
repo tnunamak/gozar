@@ -1,4 +1,4 @@
-import { catalogRoutes, storeSecret } from '@tnunamak/gozar';
+import { catalogRoutes } from '@tnunamak/gozar';
 import { createRouteApi, fakeReadContext, fakeRegistry, fakeRouteScenarios } from '@tnunamak/gozar/testing';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -49,12 +49,15 @@ export async function main(flag) {
       try {
         const api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home }), profileHome: join(home, 'profile') });
         const initial = await api.catalogRoutes(query);
-        for (const action of initial.candidates[0].configuration.actions) {
-          const approval = { digest: action.digest, disclosureRevision: action.disclosure.revision };
-          if (action.kind === 'provide-secret') {
-            const { handle } = await storeSecret({ home, value: 'fixture-credential-value' });
-            await api.runSetupAction({ home, actionId: action.id, secretHandle: handle, approval });
-          } else await api.runSetupAction({ home, actionId: action.id, value: 'screen.example.invalid', approval });
+        for (const offered of initial.candidates[0].configuration.actions) {
+          const candidate=(await api.catalogRoutes(query)).candidates[0],configuration=candidate.configuration;
+          const action=configuration.actions.find(a=>a.id===offered.id);
+          const approval={kind:'setup',digest:action.digest,disclosureRevision:action.disclosure.revision,consentFactsDigest:action.consent.consentFactsDigest};
+          const scope={home,owner:query.owner,providerId:candidate.providerId,expectedConfigurationRevision:configuration.revision};
+          if(action.kind==='provide-secret'){
+            const {handle}=await api.storeSecret({...scope,inputId:configuration.inputRequirements.find(i=>i.actionId===action.id).id,scopeId:configuration.scopeId,bytes:new TextEncoder().encode('fixture-credential-value')});
+            await api.runSetupAction({...scope,actionId:action.id,secretHandle:handle,approval});
+          }else await api.runSetupAction({...scope,actionId:action.id,value:'screen.example.invalid',approval});
         }
         console.log(renderScreen(await api.catalogRoutes(query), fakeRouteScenarios({ target: query.target })));
       } finally { await registry.cleanup(); }

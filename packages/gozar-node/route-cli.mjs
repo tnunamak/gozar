@@ -106,15 +106,19 @@ const commandsRun = {
     err(`Input requirements: ${candidate.display.label}`);
     for (const fact of candidate.facts) if (fact.affectsConsent) err(`${fact.label}: ${fact.known ? JSON.stringify(fact.value) : `unknown (${fact.reason})`}`);
     for (const descriptor of candidate.configuration.inputRequirements) {
-      const action = candidate.configuration.actions.find(action => action.id === descriptor.id);
-      if (!action) throw gozarError('internal_error', 'An input requirement has no approved intake action');
+      const selected=(await api.catalogRoutes({...query,home})).candidates[0];
+      const configuration=selected.configuration;
+      const action=configuration.actions.find(action=>action.id===descriptor.actionId);
+      if(!action?.consent)throw gozarError('internal_error','The input action has no current consent snapshot');
       err(action.disclosure.text);
-      const input = await prompt(descriptor);
-      if (!input.trim() && !descriptor.required) continue;
-      if (!input.trim()) throw gozarError('invalid_input', `Required input is missing: ${descriptor.id}`);
-      const approval = { digest: action.digest, disclosureRevision: action.disclosure.revision };
-      const request = descriptor.secret ? { secretHandle: (await storeSecret({ home, value: input })).handle } : { value: input };
-      await api.runSetupAction({ home, actionId: descriptor.id, approval, ...request });
+      for(const fact of action.consent.facts)err(`${fact.label}: ${fact.known?JSON.stringify(fact.value):`unknown (${fact.reason})`}`);
+      const input=await prompt(descriptor);
+      if(!input.trim()&&!descriptor.required)continue;
+      if(!input.trim())throw gozarError('invalid_input',`Required input is missing: ${descriptor.id}`);
+      const scope={home,owner:query.owner,providerId:selected.providerId,expectedConfigurationRevision:configuration.revision};
+      const approval={kind:'setup',digest:action.digest,disclosureRevision:action.disclosure.revision,consentFactsDigest:action.consent.consentFactsDigest};
+      const request=descriptor.secret?{secretHandle:(await storeSecret({...scope,inputId:descriptor.id,scopeId:configuration.scopeId,bytes:new TextEncoder().encode(input)})).handle}:{value:input};
+      await api.runSetupAction({...scope,actionId:action.id,approval,...request});
     }
     const current = await api.catalogRoutes({ ...query, home }), selected = current.candidates[0];
     const complete = selected.setup.state === 'ready';
@@ -163,29 +167,32 @@ const commandsRun = {
   },
 
   async setup({ options, positional, api, out, err, storeSecret, prompt }) {
+    if (options['provider-id'] !== undefined && !options.prompt) throw gozarError('invalid_input', '--provider-id on setup requires --prompt and --query-file');
     if (options.value !== undefined && options['secret-file'] !== undefined) throw gozarError('invalid_input', '--value and --secret-file cannot be used together');
     const home = options.home ?? defaultHome();
     const approval = await readApproval(options, { needed: true });
-    let secretHandle;
-    let value = options.value;
-    if (options.prompt) {
-      if (options.value !== undefined || options['secret-file']) throw gozarError('invalid_input', 'Prompt takes input interactively; omit --value and --secret-file');
-      const catalog = await api.catalogRoutes(await readQuery({ ...options, home }));
-      const configuration = catalog.candidates.map(candidate => candidate.configuration).find(config =>
-        config.actions.some(action => action.id === positional && action.digest === approval.digest && action.disclosure.revision === approval.disclosureRevision));
-      const descriptor = configuration?.inputRequirements.find(input => input.id === positional);
-      if (!descriptor) throw gozarError('candidate_stale', 'No input requirement matches that approved action');
-      const input = await prompt(descriptor);
-      if (descriptor.required && !input.trim()) throw gozarError('invalid_input', `Required input is missing: ${descriptor.id}`);
-      if (descriptor.secret) secretHandle = (await storeSecret({ home, value: input })).handle;
-      else value = input;
+    const query=await readQuery({...options,home});
+    const catalog=await api.catalogRoutes(query);
+    const candidate=catalog.candidates.find(c=>c.providerId===options['provider-id']&&c.configuration.actions.some(a=>a.id===positional));
+    if(!candidate)throw gozarError('candidate_stale','Select exactly one provider and current offered action');
+    const configuration=candidate.configuration,action=configuration.actions.find(a=>a.id===positional);
+    const descriptor=configuration.inputRequirements.find(i=>i.actionId===positional);
+    if(approval.kind!=='setup'||approval.consentFactsDigest!==action.consent?.consentFactsDigest||approval.digest!==action.digest||approval.disclosureRevision!==action.disclosure.revision)throw gozarError('consent_mismatch','Setup approval changed; review the current action');
+    let secretHandle,value=options.value;
+    const scope={home,owner:query.owner,providerId:candidate.providerId,expectedConfigurationRevision:configuration.revision};
+    const intake=async input=>(await storeSecret({...scope,inputId:descriptor.id,scopeId:configuration.scopeId,bytes:new TextEncoder().encode(input)})).handle;
+    if(options.prompt){
+      if(options.value!==undefined||options['secret-file'])throw gozarError('invalid_input','Prompt takes input interactively; omit --value and --secret-file');
+      if(!descriptor)throw gozarError('invalid_input','This action has no input requirement');
+      const input=await prompt(descriptor);if(descriptor.required&&!input.trim())throw gozarError('invalid_input',`Required input is missing: ${descriptor.id}`);
+      if(descriptor.secret)secretHandle=await intake(input);else value=input;
     }
-    if (options['secret-file']) {
-      const text = await readFileChecked(options['secret-file'], 'The secret file', { privateFile: true });
-      secretHandle = (await storeSecret({ home, value: text.replace(/\r?\n$/, '') })).handle;
-      err('The secret is in Gozar\'s private store');
+    if(options['secret-file']){
+      if(!descriptor?.secret)throw gozarError('invalid_input','This action does not accept a secret');
+      secretHandle=await intake((await readFileChecked(options['secret-file'],'The secret file',{privateFile:true})).replace(/\r?\n$/,''));
+      err("The secret is in Gozar's configured private backend");
     }
-    const result = await api.runSetupAction({ home, actionId: positional, approval, ...(secretHandle ? { secretHandle } : {}), ...(value === undefined ? {} : { value }) });
+    const result=await api.runSetupAction({...scope,actionId:action.id,approval,...(secretHandle?{secretHandle}:{}),...(value===undefined?{}:{value})});
     out(result);
     return result.state === 'complete' ? 0 : 2;
   },
@@ -250,13 +257,13 @@ export async function routeMain(argv, deps = {}) {
     const { options, positional } = parse(command, rest);
     const rootApi = deps.api ?? await import('./api.mjs');
     const api = options['registry-file'] ? rootApi.createGozar({ manifest: options['registry-file'], root: options['registry-root'] }) : rootApi;
-    const storeSecret = deps.storeSecret ?? (await import('./route-setup.mjs')).storeSecret;
+    const storeSecret = deps.storeSecret ?? api.storeSecret;
     const stdin = deps.stdin ?? process.stdin;
     const prompt = deps.prompt ?? (descriptor => promptInputRequirement(descriptor, { stdin, stderr }));
     return await commandsRun[command]({ options, positional, api, out, outLine, err, stdin, storeSecret, prompt });
   } catch (cause) {
     const error = normalizeError(cause);
-    const envelope = { schemaVersion: 1, error: { code: error.code, message: error.message, nextAction: error.nextAction ?? null } };
+    const envelope = { schemaVersion: 1, error: { code: error.code, message: error.message, nextAction: error.nextAction ?? null },...(error.route?{route:error.route}:{}) };
     if (json) outLine(envelope);
     else err(`Gozar: ${error.message}${error.nextAction?.instructions ? `\nNext: ${error.nextAction.instructions}` : ''}`);
     return exitCodeFor(error.code);

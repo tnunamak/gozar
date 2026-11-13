@@ -17,7 +17,7 @@ export async function registryIdentity({ manifest, root, adapters } = {}) {
     for (const entry of entries.sort((a,b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
       const name = relative ? `${relative}/${entry.name}` : entry.name;
       if (entry.isDirectory()) await walk(join(directory, entry.name), name);
-      else if (entry.isFile() && /\.(mjs|json)$/.test(name)) files.push([`providers/${name}`, digest(await readFile(join(directory, entry.name)))]);
+      else if (entry.isFile() && /\.mjs$/.test(name)) files.push([`providers/${name}`, digest(await readFile(join(directory, entry.name)))]);
       else if (entry.isSymbolicLink()) throw Object.assign(new Error('Registry identity requires regular provider files'), {code:'artifact_integrity_failed'});
     }
   }
@@ -25,6 +25,7 @@ export async function registryIdentity({ manifest, root, adapters } = {}) {
   for (const entry of data.providers) {
     const definitionPath = resolve(base, entry.definition);
     const definition = JSON.parse(await readFile(definitionPath, 'utf8'));
+    files.push([entry.definition,digest(await readFile(definitionPath))]);
     if (definition.wraps) files.push([`wrapped:${entry.id}`, digest(await readFile(resolve(dirname(definitionPath), definition.wraps)))]);
   }
   return `registry-v1:${digest(JSON.stringify(canonicalConsentValue({ manifest: data, files })))}`;

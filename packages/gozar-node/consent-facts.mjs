@@ -64,3 +64,9 @@ export function setupConsentReview({ registryId, providerId, configuration, draf
     disclosureRevision: action.disclosure.revision, actionDigest: action.digest },
     typedDisclosures: { action }, facts });
 }
+
+/** Display exactly the redacted authority-bearing values; timestamps carry no approval. */
+export function consentSnapshot(review){
+  return structuredClone({scope:review.canonicalInput.scope,consentFactsDigest:review.consentFactsDigest,
+    facts:review.canonicalInput.facts.map(row=>({...row,asOf:null})),disclosures:review.canonicalInput.typedDisclosures});
+}

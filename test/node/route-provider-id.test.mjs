@@ -75,6 +75,13 @@ test('ports and proof of every shipped candidate equal the mapping of its plan d
 async function provesTheMapping(t, protocols) {
   const { candidates } = await catalog(await withHome(t, { requirements: { ...query().requirements, protocols } }));
   for (const candidate of candidates) {
+    const declared = JSON.parse(readFileSync(new URL(`../../adapters/providers/${candidate.providerId}/definition.json`, import.meta.url), 'utf8'));
+    if (!declared.wraps) {
+      const proof = declared.adapter.capabilities.proof;
+      assert.deepEqual(candidate.properties.proof, {...proof,checks:proof.checks.filter(check=>check!=='sse'||protocols.includes('sse'))});
+      assert.deepEqual(candidate.properties.address.ports, declared.adapter.capabilities.address.ports);
+      continue;
+    }
     const plan = wrapped(candidate.providerId);
     const expectedPorts = plan.bindings?.port?.candidates ?? null;
     const v = plan.validation ?? {};

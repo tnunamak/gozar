@@ -11,7 +11,7 @@ import { bindConfiguration } from './adapter-configuration.mjs';
 import { loopbackTarget } from './durable-route.mjs';
 import { checksFor, completeProperties, needsFor } from './route-view.mjs';
 import { adoptDisclosureRevision, consentDisclosureRevision } from './adopt-disclosure.mjs';
-import { routeConsentReview, setupConsentReview } from './consent-facts.mjs';
+import { routeConsentReview, setupConsentReview,consentSnapshot } from './consent-facts.mjs';
 
 export { adoptDisclosureRevision } from './adopt-disclosure.mjs';
 export { consentDisclosureRevision } from './adopt-disclosure.mjs';
@@ -74,7 +74,7 @@ export async function defaultReadContext() {
 export async function readContextFor(deps, home, platform, owner = deps.owner) {
   return { ...(deps.readContext ?? await defaultReadContext()), home, platform,
     ...(deps.embeddingServices ? {providerConfiguration: providerId => deps.embeddingServices.resolveConfiguration({home,owner,providerId})} : {}),
-    ...(deps.dispatchEffect ? {dispatchEffect: deps.dispatchEffect} : {}) };
+    ...(deps.dispatchEffect ? {dispatchEffect: deps.dispatchEffect,probe:recipe=>deps.dispatchEffect({kind:'recipe',operation:'probe',input:{recipe}})} : {}) };
 }
 
 /** `providerId` picks exactly one adapter by the id its definition declares; an unknown id lists every id on offer, in registry order. */
@@ -204,7 +204,7 @@ async function collect(query, deps) {
     const decorate = action => {
       if (!deps.registryId || !saved.revision) return action;
       const review = setupConsentReview({registryId:deps.registryId,providerId:adapter.id,configuration:saved,draftId:query.draftId??null,action,facts:definition.facts??[]});
-      return {...action,consent:{scope:review.canonicalInput.scope,consentFactsDigest:review.consentFactsDigest},review:{canonicalInput:review.canonicalInput}};
+      return {...action,consent:consentSnapshot(review),review:{canonicalInput:review.canonicalInput}};
     };
     const decorated = offered.map(decorate);
     const configuration = configurationFor(decorated, saved);
@@ -222,6 +222,7 @@ async function collect(query, deps) {
     if (deps.registryId && saved.revision) {
       const review=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration:saved,target:query.target,origin:query.origin,properties,disclosure:candidate.disclosure,facts:candidate.facts});
       candidate.consentFactsDigest=review.consentFactsDigest;
+      candidate.consent=consentSnapshot(review);
       candidate.review={canonicalInput:review.canonicalInput};
       if(grant)grant={...grant,consentFactsDigest:review.consentFactsDigest,configurationRevision:saved.revision,scopeId:saved.scopeId};
     }

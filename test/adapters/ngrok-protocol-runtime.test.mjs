@@ -78,7 +78,7 @@ test('cancellation while SDK is opening closes late listener instead of resurrec
   const pending = adapter.create(ctx, { ...plan, effects: plan.effects.map(e => ({ ...e, target: proof.target })) });
   await entered; controller.abort();
   await assert.rejects(pending, error => error.code === 'provider_unavailable');
-  resolveOpen({ url: () => 'tcp://127.0.0.1:9999', close: async () => { lateClosed = true; } });
+  resolveOpen({ get closed(){return lateClosed;},url: () => 'tcp://127.0.0.1:9999', close: async () => { lateClosed = true; } });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(lateClosed, true); assert.equal((await adapter.observe(ctx, request)).present, false);
 });
@@ -139,8 +139,8 @@ test('TLS does not erase forbidden SDK URL components while inserting default po
 });
 
 test('failed SDK removal reports debt and closes the forwarding gate; retry can finish cleanup', async t => {
-  let fail = true;
-  const adapter = createNgrokTcpAdapter({ loadSdk: async () => ({ forward: async () => ({ url: () => 'tcp://127.0.0.1:9999', close: async () => { if (fail) throw new Error('synthetic-secret'); } }) }) });
+  let fail = true, absent=false;
+  const adapter = createNgrokTcpAdapter({ loadSdk: async () => ({ forward: async () => ({ get closed(){return absent;},url: () => 'tcp://127.0.0.1:9999', close: async () => { if (fail) throw new Error('synthetic-secret'); absent=true; } }) }) });
   const proof = await adapter.prepareProof(ctx, request, attempt()); t.after(() => proof.close());
   const plan = await adapter.plan(ctx, request), receipt = await adapter.create(ctx, { ...plan, effects: plan.effects.map(e => ({ ...e, target: proof.target })) });
   const removal = await adapter.remove(ctx, receipt);

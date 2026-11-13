@@ -81,8 +81,8 @@ test('red: when every candidate is taken the session stops before it changes any
 async function openFailed(t, w, deps = {}) {
   const daemon = await w.start(18903), tokens = tokenStubs();
   const q = query({ home: w.home, target: '127.0.0.1:18902', usage: { kind: 'session', lifetimeMs: 60_000 } });
-  const { token } = await tokens.issue({ home: w.home, binding: tokens.consentBinding(q, w.home, 'disc-stub-b'), grant: { adapterId: 'tailscale-funnel', planDigest: `plan-tailscale-funnel-${q.target}`, observedResource: 'res-tailscale-funnel' } });
-  const request = { ...q, approval: { candidateToken: token, disclosureRevision: 'disc-stub-b' }, wait: 'verified' };
+  const { token } = await tokens.issue({ home: w.home, binding: tokens.consentBinding(q, w.home, 'disc-tailscale-funnel'), grant: { adapterId: 'tailscale-funnel', planDigest: `plan-tailscale-funnel-${q.target}`, observedResource: 'res-tailscale-funnel' } });
+  const request = { ...q, approval: { candidateToken: token, disclosureRevision: 'disc-tailscale-funnel' }, wait: 'verified' };
   return openSessionRoute(request, { adapters: [stubAdapter('tailscale-funnel')], redeem: tokens.redeem, consentBinding: tokens.consentBinding, platform: 'linux',
     readContext: { now: () => Date.now(), configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified' }) },
     startSession: async () => ({ snapshot: daemon.controller.state }), stopSession: async () => ({ snapshot: { phase: 'stopped' } }), pollMs: 20, ...deps }).then(() => null, error => error);

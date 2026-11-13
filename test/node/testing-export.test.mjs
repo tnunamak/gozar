@@ -102,7 +102,7 @@ test('a durable fake answers the check as told: an unverified answer leaves the 
 });
 
 test('fakeRegistry checks its input, writes only under its own directory and removes it on cleanup', async () => {
-  for (const bad of [{ id: 'Bad Id', kinds: ['session'], reach: 'internet' }, { id: fakeId(), kinds: [], reach: 'internet' }, { id: fakeId(), kinds: ['session'], reach: 'moon' }, { id: fakeId(), kinds: ['session'], reach: 'lan', transport: 'ftp' }, { id: fakeId(), kinds: ['session', 'attached'], reach: 'tailnet' }]) {
+  for (const bad of [{ id: 'Bad Id', kinds: ['session'], reach: 'internet' }, { id: fakeId(), kinds: [], reach: 'internet' }, { id: fakeId(), kinds: ['session'], reach: 'moon' }, { id: fakeId(), kinds: ['session'], reach: 'lan', transport: 'ftp' }, { id: fakeId(), kinds: ['session', 'external'], reach: 'tailnet' }]) {
     assert.equal((await fakeRegistry(bad).then(() => null, e => e))?.code, 'invalid_input', JSON.stringify(bad));
   }
   const registry = await fakeRegistry({ id: fakeId(), kinds: ['session', 'durable'], reach: 'tailnet' });

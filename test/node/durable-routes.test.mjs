@@ -41,7 +41,7 @@ import { issueConsentToken, consentBinding } from ${JSON.stringify(packageUrl('c
 import { inspectLegacyRoute } from ${JSON.stringify(packageUrl('legacy-import.mjs'))};
 import { canonicalHome } from ${JSON.stringify(packageUrl('service-state.mjs'))};
 import { loadAdapters } from ${JSON.stringify(packageUrl('adapter-runtime.mjs'))};
-import { adoptDisclosureRevision } from ${JSON.stringify(packageUrl('adopt-disclosure.mjs'))};
+import { adoptDisclosureRevision, consentDisclosureRevision } from ${JSON.stringify(packageUrl('adopt-disclosure.mjs'))};
 const [operation, input] = process.argv.slice(2);
 const args = JSON.parse(input);
 try {
@@ -56,7 +56,7 @@ try {
   } else if (operation === 'facts') result = await durablePlanFacts(args);
   else if (operation === 'adoptRevision') {
     const adapters = await loadAdapters();
-    result = adoptDisclosureRevision(adapters.find(item => item.id === args.adapterId).definition);
+    result = consentDisclosureRevision(adapters.find(item => item.id === args.adapterId).definition, args.intent ?? 'adopt');
   }
   else if (operation === 'inspect') result = await inspectLegacyRoute(args);
   else throw Object.assign(new Error(operation + ' is not implemented'), { code: 'not_implemented' });
@@ -122,7 +122,7 @@ async function world(t, provider = {}) {
   // What the catalog does: observe, then issue a single-use token whose grant names the adapter.
   const mint = async (extra = {}, { adapterId = 'tailscale-funnel', intent = 'create', disclosureRevision, grant, ttlMs } = {}) => {
     const q = query(extra);
-    disclosureRevision ??= intent === 'adopt' ? (await run('adoptRevision', { adapterId })).result : 'disclosure-1';
+    disclosureRevision ??= (await run('adoptRevision', { adapterId, intent })).result;
     const reply = await run('issue', { query: q, adapterId, intent, disclosureRevision, grant, ttlMs });
     if (reply.error) throw Object.assign(new Error(reply.error.message), reply.error);
     return { query: q, approval: { candidateToken: reply.result.token, disclosureRevision }, grant: reply.result.grant };
@@ -615,7 +615,7 @@ test('adopt refuses an approval for the old disclosure before spending its token
     'the stale revision check did not spend the token');
 
   const current = await w.mint({ origin: w.origin }, { intent: 'adopt' });
-  assert.match(current.approval.disclosureRevision, /^disc-[a-f0-9]+:adopt-removal-1$/);
+  assert.match(current.approval.disclosureRevision, /^disc-[a-f0-9]+:adopt-removal-1(?:-facts-[a-f0-9]{12})?$/);
   const adopted = await w.run('adopt', { ...current.query, approval: current.approval, handover });
   assert.equal(adopted.error, undefined, JSON.stringify(adopted.error));
   assert.equal(adopted.result.route.provenance, 'adopted');
