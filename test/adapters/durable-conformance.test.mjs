@@ -93,6 +93,15 @@ test('a foreign rule in the store survives create and release byte-identical', a
   assert.deepEqual([...store.entries.keys()], ['a']);
 });
 
+test('a slot another program holds without a rule is skipped, and nothing is written there', async () => {
+  store.foreignClaim('a');
+  const created = await ensureRoute(await approved(), deps);
+  assert.equal(created.route.allocatedOrigin, 'https://b.fake.test', 'the claimed slot is skipped');
+  assert.equal(store.entries.has('a'), false);
+  assert.equal((await release()).removed, true);
+  assert.deepEqual([...store.entries.keys()], []);
+});
+
 test('a changed rule becomes cleanup debt and is not deleted', async () => {
   await ensureRoute(await approved(), deps);
   store.edit('a', { forward: '127.0.0.1:9' });

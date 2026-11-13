@@ -6,10 +6,12 @@ import { isDeepStrictEqual } from 'node:util';
 
 export const store = {
   identity: 'store-1', version: 1, entries: new Map(), leaseMs: null, writes: [],
-  alwaysConflict: false, crashOnPut: false, failRenew: false, renewals: 0, putCalls: 0,
-  reset() { Object.assign(this, { identity: 'store-1', version: 1, entries: new Map(), leaseMs: null, writes: [], alwaysConflict: false, crashOnPut: false, failRenew: false, renewals: 0, putCalls: 0 }); },
+  alwaysConflict: false, crashOnPut: false, failRenew: false, renewals: 0, putCalls: 0, claims: new Set(),
+  reset() { Object.assign(this, { identity: 'store-1', version: 1, entries: new Map(), leaseMs: null, writes: [], claims: new Set(), alwaysConflict: false, crashOnPut: false, failRenew: false, renewals: 0, putCalls: 0 }); },
   // What another program does: write without the facet. It bumps the version, as any write would.
   foreignWrite(slot, rule, extra = {}) { this.entries.set(slot, { rule, foreign: true, ...extra }); this.version += 1; },
+  // Another program holds the slot without a rule in the store, as a foreground session does: foreign, not occupied.
+  foreignClaim(slot) { this.claims.add(slot); this.version += 1; },
   edit(slot, rule) { this.entries.get(slot).rule = rule; this.version += 1; },
   view() { return JSON.parse(JSON.stringify([...this.entries])); },
 };
@@ -22,12 +24,12 @@ function durableFacet(definition) {
     family: 'fake',
     definition,
     async observe() {
-      return { identity: store.identity, snapshot: { identity: store.identity, entries: Object.fromEntries(structuredClone([...store.entries])) }, version: String(store.version) };
+      return { identity: store.identity, snapshot: { identity: store.identity, entries: Object.fromEntries(structuredClone([...store.entries])), claims: [...store.claims] }, version: String(store.version) };
     },
     slots: snapshot => slotIds.map(slot => ({ slot, origin: `https://${slot}.fake.test`, permitted: true })),
     // Every rule lives under the one store identity, so a rule pinned to another identity is not here.
     read: (snapshot, slot, identity = snapshot.identity) => identity === snapshot.identity ? snapshot.entries[slot]?.rule ?? null : null,
-    foreign: (snapshot, slot) => snapshot.entries[slot]?.foreign === true,
+    foreign: (snapshot, slot) => snapshot.entries[slot]?.foreign === true || snapshot.claims.includes(slot),
     occupied: (snapshot, slot) => snapshot.entries[slot] !== undefined,
     expand: target => ({ forward: target }),
     expiresAt: (snapshot, slot) => snapshot.entries[slot]?.expiresAt ?? null,
