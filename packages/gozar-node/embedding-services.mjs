@@ -29,7 +29,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
    const result=await run(state,home);await atomicWrite(join(home,'embedding-state.json'),state);return result;
   },{waitSeconds:30});
  }
- const scope=(home,providerId,owner)=>{if(typeof providerId!=='string'||!providerId)fail('invalid_input');return hash(JSON.stringify([registryId,home,owner??null,providerId]));};
+ const scope=(home,providerId,owner)=>{if(owner!==undefined&&(typeof owner!=='string'||!owner))fail('invalid_input');if(typeof providerId!=='string'||!providerId)fail('invalid_input');return hash(JSON.stringify([registryId,home,owner??null,providerId]));};
  const config=async(state,home,providerId,owner)=>{
   const scopeId=scope(home,providerId,owner);if(state.configs[scopeId])return state.configs[scopeId];
   const c={scopeId,revision:fresh(),bindings:{},values:{},drafts:{},uses:[]};
@@ -60,7 +60,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
  async function remove(state,home,handle){const ref=state.secrets[handle];if(!ref||ref.registryId!==registryId)return {discarded:false};if(referenced(state,handle))fail('secret_in_use');await call(home,'delete',{scopeId:ref.scopeId,handle});delete state.secrets[handle];return {discarded:true};}
  const api={hostCapabilities,
   readConfiguration:r=>transaction(r.home,async(s,h)=>redacted(h,select(await config(s,h,r.providerId,r.owner),r.draftId))),
-  resolveConfiguration:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner),values=clone(c.values);for(const[id,handle]of Object.entries(c.bindings))values[id]=await call(h,'withSecret',{scopeId:c.scopeId,handle},async bytes=>new TextDecoder().decode(bytes));return Object.keys(values).length?values:null;}),
+  resolveConfiguration:r=>transaction(r.home,async(s,h)=>{const c=select(await config(s,h,r.providerId,r.owner),r.draftId),values=clone(c.values);for(const[id,handle]of Object.entries(c.bindings))values[id]=await call(h,'withSecret',{scopeId:c.scopeId,handle},async bytes=>new TextDecoder().decode(bytes));return Object.keys(values).length?values:null;}),
   resolveIdentity:({home,bootId}={})=>transaction(home,async s=>identity?clone(identity):{instanceId:s.instanceId,bootId:bootId??boot}),
   storeSecret:r=>transaction(r.home,async(s,h)=>{
    const c=select(await config(s,h,r.providerId,r.owner),r.draftId);compare(c,r.expectedConfigurationRevision);if(c.scopeId!==r.scopeId||typeof r.inputId!=='string'||!r.inputId)fail('invalid_input');

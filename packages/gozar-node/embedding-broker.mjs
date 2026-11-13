@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {canonicalHome} from './service-state.mjs';
 import {embeddingError} from './embedding-services.mjs';
 const allowed=new Set(['ping','dispatchEffect','readConfiguration','resolveConfiguration','registerConfigurationUse','releaseConfigurationUse']);
-const same=(a,b)=>typeof a==='string'&&typeof b==='string'&&a.length===b.length&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
+const same=(a,b)=>{if(typeof a!=='string'||typeof b!=='string')return false;const left=Buffer.from(a),right=Buffer.from(b);return left.length===right.length&&timingSafeEqual(left,right);};
 export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{},dispatchEffect}){
  home=await canonicalHome(home,true);identity??=await services.resolveIdentity({home});
  const descriptor={socketPath:join(home,`resolver-${randomBytes(6).toString('hex')}.sock`),token:randomBytes(32).toString('hex'),...identity};
