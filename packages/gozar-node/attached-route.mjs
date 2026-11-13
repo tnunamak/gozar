@@ -150,7 +150,7 @@ export async function openAttachedRoute(request, deps = {}) {
     if (!supportedPlatform(deps.platform ?? process.platform)) throw gozarError('unsupported', 'Gozar 0.2 does not support routes on this platform');
     const adapters = await adaptersOf(deps);
     const root = await attachedRoot(await canonicalHome(request.home, true));
-    const id = `att_${randomBytes(8).toString('hex')}`, directory = join(root, id);
+    const id = deps.reservedHandle?.id??`att_${randomBytes(8).toString('hex')}`, directory = join(root, id);
     // Redeem, re-observe and start the controller under one reservation, so two opens cannot both win one resource.
     const controller = await withExclusiveLock(join(root, '.open.lock'), async () => {
       const redeemed = await redeemApproval(request, { ...deps, adapters });
@@ -168,6 +168,7 @@ export async function openAttachedRoute(request, deps = {}) {
         catch(error){await dropBroker(id);throw error;}
       }
       await atomicWrite(join(directory, 'bootstrap.json'), { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
+        operationId:request.operationId??null,
         ...(broker?{resolver:broker.descriptor,identity,registryId:deps.registryId,owner:request.owner,consentReview:redeemed.consentReview,fixtureEffects:!!deps.dispatchEffect}:{}),
         ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) });
       const child = spawn(process.execPath, [here, '--controller', directory], { detached: true, stdio: 'ignore',
@@ -189,9 +190,9 @@ export async function openAttachedRoute(request, deps = {}) {
           if (!await controllerAlive(controller)) throw gozarError('provider_unavailable', 'The route controller exited before it started the route');
         }
         const view = reply?.view;
-        if (view && ['lost', 'released', 'uncertain'].includes(view.state)) throw (await startFailure(directory)) ?? gozarError('provider_unavailable', 'The route could not be started');
+        if (view && reply.startupComplete!==false && ['lost', 'released', 'uncertain'].includes(view.state)) throw (await startFailure(directory)) ?? gozarError('provider_unavailable', 'The route could not be started');
         if (view?.routeState === 'expired') throw gozarError('verification_failed', 'The route proof expired before publication');
-        if (view && (request.wait === 'verified' ? view.state === 'usable' && view.verification.status === 'verified' && view.published !== null : view.state !== 'creating')) return view;
+        if (view && reply.startupComplete!==false && (request.wait === 'verified' ? view.state === 'usable' && view.verification.status === 'verified' && view.published !== null : view.state !== 'creating')) return view;
         if (Date.now() >= deadline) throw gozarError(view?.state === 'unverified' ? 'verification_failed' : 'provider_unavailable',
           view?.state === 'unverified' ? 'The route did not pass verification in time' : 'The route did not start in time');
         await new Promise(resolve => setTimeout(resolve, 150));
@@ -260,6 +261,12 @@ export async function closeAttachedRoute(request, deps = {}) {
 
 export async function reviewAttachedConsent(request){const handle=checkRef(request);return (await controlAttached(await routeDirectory(request.home,handle.id),{type:'review-consent',generation:handle.generation})).review;}
 export async function approveAttachedConsent(request){const handle=checkRef(request);return (await controlAttached(await routeDirectory(request.home,handle.id),{type:'approve-consent',generation:handle.generation,approvalToken:request.approvalToken,consentFactsDigest:request.consentFactsDigest},60000)).view;}
+export async function releaseAttachedConfiguration(request,{embeddingServices,registryId}){
+  const handle=checkRef(request),directory=await routeDirectory(request.home,handle.id);
+  const bootstrap=await readJson(join(directory,'bootstrap.json'));
+  if(bootstrap?.registryId!==registryId)throw gozarError('route_conflict','The recovery handle belongs to a different registry');
+  await embeddingServices.releaseConfigurationUse({home:request.home,owner:bootstrap.owner,providerId:bootstrap.adapterId,handle:{...handle,generation:1}});
+}
 
 // --- The controller -----------------------------------------------------------------------------
 
@@ -294,9 +301,9 @@ export async function runAttachedController(directory, runtime = {}) {
   const handle = { kind: 'attached', id: bootstrap.id, generation: 0 };
   const lease = { target: bootstrap.request.target, state: 'creating', origin: null, properties: adapter.definition.capabilities, ingress: null, identity:bootstrap.identity??null,
     limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
-  let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null, proofSession = null;
+  let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null, proofSession = null,initialSettled=false;
   const nonce = randomBytes(32).toString('hex');
-  const lastView = () => ({...projectAttached(lease, { handle, now: now() }),...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
+  const lastView = () => ({...projectAttached(lease, { handle, now: now() }),operationId:bootstrap.operationId??null,...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
   const save = () => atomicWrite(join(directory, 'state.json'), { schemaVersion: 1, adapterId: adapter.id, request: bootstrap.request, plan: bootstrap.plan,
     receipt, handle, phase: lease.state, lastView: lastView() });
 
@@ -361,7 +368,7 @@ export async function runAttachedController(directory, runtime = {}) {
   }
 
   async function verify() {
-    if (!receipt || releasing) return;
+    if (!receipt || releasing || !initialSettled) return;
     const facts=await adapter.runtimeFacts(read,receipt);
     Object.assign(lease,{properties:facts.properties,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
     if(!await enforceConsent())return;
@@ -424,15 +431,15 @@ export async function runAttachedController(directory, runtime = {}) {
       await atomicWrite(join(directory, 'failure.json'), failure);
       await save().catch(() => {});
     }
-  })();
+  })().finally(()=>{initialSettled=true;});
 
-  async function releaseUse(){if(resolver&&bootstrap.owner)await resolver.releaseConfigurationUse({owner:bootstrap.owner,providerId:adapter.id,handle:{kind:'attached',id:bootstrap.id,generation:1}});}
+  async function releaseUse(){if(resolver&&bootstrap.owner&&!resolverLost)await resolver.releaseConfigurationUse({owner:bootstrap.owner,providerId:adapter.id,handle:{kind:'attached',id:bootstrap.id,generation:1}});}
 
   function release() {
     proofAbort.abort();
     releasing ??= (async () => {
       await creation;
-      if (lease.cleanup.state === 'confirmed') return;
+      if (lease.cleanup.state === 'confirmed') {lease.state='released';await save();return;}
       lease.state = 'releasing'; await save().catch(() => {});
       try {
         if(!receipt)throw gozarError('cleanup_debt','Startup outcome remains unknown; retain this recovery handle');
@@ -466,7 +473,7 @@ export async function runAttachedController(directory, runtime = {}) {
         if (command.type === 'heartbeat') { lastBeat = now(); return reply({ ok: true }); }
         if(command.type==='resolver-lost'){resolverLost=true;lease.state='unverified';proofAbort.abort();await save();return reply({ok:true});}
         if (command.generation !== undefined && command.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
-        if (command.type === 'status') { if (command.fresh) await verify(); return reply({ view: lastView() }); }
+        if (command.type === 'status') { if (command.fresh) await verify(); return reply({ view: lastView(),startupComplete:initialSettled }); }
         if(command.type==='review-consent'){
           lease.state='unverified';await save();
           if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
@@ -520,7 +527,7 @@ export async function runAttachedController(directory, runtime = {}) {
 
 // --- Session usage ------------------------------------------------------------------------------
 
-async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs, origin, requirements }) {
+async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs, origin, requirements,owner,operationId,sessionId }) {
   const root = fileURLToPath(new URL('../../', import.meta.url));
   const { loadCatalog, loadDefinition } = await import('./catalog.mjs');
   const { launch } = await import('./daemon.mjs');
@@ -529,7 +536,7 @@ async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs
   return launch(directory, { adapters: [...catalog.filter(item => item.id !== definition.id), definition],
     requirements: { clientReach: requirements.reach, httpsRequired: requirements.transport === 'https', sse: requirements.protocols.includes('sse'),
       streamableHttp: requirements.protocols.includes('streamable-http'), oauthDcr: requirements.protocols.includes('oauth-dcr') },
-    targetPort: port, adapterId, lifetimeMs, origin: origin ?? undefined, operational: definition.planVersion === 1, consent: true, approveOrigin: true },
+    targetPort: port, adapterId, lifetimeMs,owner,operationId:operationId??null,...(sessionId?{sessionId}:{}),origin: origin ?? undefined, operational: definition.planVersion === 1, consent: true, approveOrigin: true },
   join(root, 'bin', 'gozar.mjs'));
 }
 
@@ -548,6 +555,7 @@ export async function openSessionRoute(request, deps = {}) {
     const redeemed = await withExclusiveLock(join(await attachedRoot(home), '.open.lock'), () => redeemApproval(request, { ...deps, adapters }), { waitSeconds: 30 });
     const directory = join(home, `port-${port}`);
     let reply = await (deps.startSession ?? legacyStartSession)({ home, directory, adapterId: redeemed.adapter.id, port, lifetimeMs: request.usage.lifetimeMs,
+      owner:request.owner,operationId:request.operationId,sessionId:deps.reservedHandle?.id.split(':').slice(1).join(':'),
       origin: request.origin ?? redeemed.plan.origin ?? null, requirements: request.requirements, wait: request.wait });
     const sessionId = reply.snapshot?.sessionId;
     const handle = { kind: 'session', id: sessionId ? `port-${port}:${sessionId}` : `port-${port}`, generation: 1 };

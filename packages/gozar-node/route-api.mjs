@@ -9,7 +9,7 @@ import { routeStatus as viewStatus, closeRoute as viewClose, suspendRoute as vie
 import { watchRoutes as pollRoutes } from './route-watch.mjs';
 import { getRoutePreferences, setRoutePreferences } from './route-preferences.mjs';
 import { runSetupAction as runSetup } from './route-setup.mjs';
-import { openAttachedRoute, openSessionRoute, redeemApproval,reviewAttachedConsent,approveAttachedConsent } from './attached-route.mjs';
+import { openAttachedRoute, openSessionRoute, redeemApproval,reviewAttachedConsent,approveAttachedConsent,releaseAttachedConfiguration } from './attached-route.mjs';
 import { peekConsentGrant } from './consent-token.mjs';
 import { projectExternal } from './route-view.mjs';
 import { resolveClientAddress } from './ingress.mjs';
@@ -19,6 +19,7 @@ import { createEmbeddingServices } from './embedding-services.mjs';
 import { listProviders as inventory } from './embedding-inventory.mjs';
 import { setupConsentReview,consentSnapshot } from './consent-facts.mjs';
 import {offeredConfiguration,readConfigurationDraft,clearConfigurationInput} from './embedding-setup.mjs';
+import {withRouteOperation,listRecordedRoutes,recordOperationView} from './route-operations.mjs';
 
 const lazy = loader => { let loaded; return () => (loaded ??= loader()); };
 const engine = lazy(() => import('./durable-route.mjs'));
@@ -84,24 +85,25 @@ export function createRouteApi(deps = {}) {
     inspectLegacyRoute: request => guard(async () => (await legacy()).inspectLegacyRoute(request)),
 
     // The loaded adapters go to every durable engine call as an optional second argument; an engine that does not use it ignores it.
-    ensureRoute: request => guard(() => verified(async () => (await ownerKept(request)) ?? durableView((await (await engine()).ensureRoute(request, { adapters: await adapters() })).route))),
+    ensureRoute: request => guard(async()=>withRouteOperation(request,{...await shared(request),status:api.routeStatus,run:()=>verified(async () => (await ownerKept(request)) ?? durableView((await (await engine()).ensureRoute(request, { adapters: await adapters() })).route))})),
     adoptRoute: request => guard(() => verified(async () => durableView((await (await engine()).adoptRoute(request, { adapters: await adapters() })).route))),
 
     /** A request with schemaVersion 1 is the route API; anything else is the legacy session call (handled by the caller). */
     expose: request => guard(async () => {
       const options = { ...await shared(request), ...deps.expose };
-      if (request?.usage?.kind === 'attached') return openAttachedRoute(request, options);
-      if (request?.usage?.kind === 'session') return openSessionRoute(request, options);
+      if (request?.usage?.kind === 'attached') return withRouteOperation(request,{...options,status:api.routeStatus,run:reservedHandle=>openAttachedRoute(request,{...options,reservedHandle})});
+      if (request?.usage?.kind === 'session') return withRouteOperation(request,{...options,status:api.routeStatus,run:reservedHandle=>openSessionRoute(request,{...options,reservedHandle})});
       throw gozarError('invalid_input', "expose needs usage 'session' or 'attached'");
     }),
 
     routeStatus: request => guard(() => verified(async () => viewStatus(request, { adapters: await adapters(), ...deps.view }))),
-    closeRoute: request => guard(() => verified(async () => viewClose(request, { adapters: await adapters(), ...deps.view }))),
+    closeRoute: request => guard(() => verified(async () => {const view=await viewClose(request, { adapters: await adapters(), ...deps.view });if(request.handle.kind==='attached'&&view.cleanup.state==='confirmed')await releaseAttachedConfiguration(request,await services());return recordOperationView({home:request.home,view});})),
     suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }))),
     watchRoutes: request => pollRoutes(request, { routeStatus: r => verified(async () => viewStatus(r, { adapters: await adapters(), ...deps.view })), ...deps.watch }),
     getRoutePreferences, setRoutePreferences,
     runSetupAction: request => guard(async () => runSetup(request,await setupDeps(request))),
     listProviders: request => guard(async()=>inventory(request,await shared(request))),
+    listRoutes:request=>guard(()=>listRecordedRoutes(request)),
     ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft'].map(method=>[method,request=>guard(async()=> (await services()).embeddingServices[method](request))])),
     beginConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const draft=await context.embeddingServices.beginConfigurationDraft(request);return {...draft,configuration:await offeredConfiguration({...request,draftId:draft.draftId},draft.configuration,context)};}),
     readConfigurationDraft:request=>guard(async()=>readConfigurationDraft(request,await shared(request))),

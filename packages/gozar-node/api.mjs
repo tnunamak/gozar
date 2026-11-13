@@ -10,7 +10,7 @@ const routes = createRouteApi();
 export function createGozar({ manifest, root, secretBackend, hostCapabilities, identity } = {}) { return createRouteApi({ manifest, root, secretBackend, hostCapabilities, identity }); }
 export const { catalogRoutes, inspectLegacyRoute, ensureRoute, adoptRoute, routeStatus, closeRoute, suspendRoute, watchRoutes,
   getRoutePreferences, setRoutePreferences, runSetupAction, resolveClientAddress, listProviders, storeSecret, discardSecret,
-  beginConfigurationDraft,commitConfigurationDraft,discardConfigurationDraft,readConfigurationDraft,clearConfigurationInput,reviewRouteConsent,approveRouteConsent } = routes;
+  beginConfigurationDraft,commitConfigurationDraft,discardConfigurationDraft,readConfigurationDraft,clearConfigurationInput,reviewRouteConsent,approveRouteConsent,listRoutes } = routes;
 /** Alias of catalogRoutes. */
 export const detect = catalogRoutes;
 

@@ -55,7 +55,7 @@ export function enrichRoute(route, { target, bindTarget, expiresAt, validUntil, 
     results: route.verification.checks.map(check => ({ check, status: verified ? 'passed' : 'unknown' })) };
   let localPort = unknown();
   try { const url = new URL(target.includes('://') ? target : `http://${target}`); localPort = known(Number(url.port || (url.protocol === 'https:' ? 443 : 80))); } catch { /* no recorded target */ }
-  return { ...route, schemaVersion: 2, published: expired ? null : route.published, verification, expiresAt: expiry,
+  return { ...route, schemaVersion: 2,operationId:route.operationId??null,published: expired ? null : route.published, verification, expiresAt: expiry,
     binding:route.binding??bindingFor({observedTarget:undefined,authority:route.ownership==='external-owned'?'owner':'unknown',remedy:null}),
     cleanup:cleanupRecovery(route.cleanup,route.handle),
     routeState: route.cleanup.state === 'unconfirmed' ? 'cleanup-unconfirmed' : expired ? 'expired' : verified ? 'verified'

@@ -31,6 +31,7 @@ export type Requirements = {
 };
 
 export type Query = {
+  operationId?:string;
   schemaVersion: 1;
   owner: string;
   target: string;
@@ -211,6 +212,7 @@ export type Ingress = {
 };
 
 export type RouteView = {
+  operationId:string|null;
   binding:import('./embedding-contract').RouteBinding;
   schemaVersion: 2;
   routeState: 'detected' | 'verified' | 'expired' | 'cleanup-unconfirmed' | 'inactive' | 'unknown';
@@ -241,7 +243,7 @@ export type GozarErrorCode =
   | 'route_conflict' | 'address_changed' | 'stopped_by_user' | 'handing_back' | 'verification_failed'
   | 'provider_unavailable' | 'cleanup_debt' | 'unsupported' | 'ambiguous_route' | 'busy' | 'internal_error'
   | 'configuration_stale'|'configuration_in_use'|'secret_in_use'|'secret_backend_locked'|'secret_backend_unavailable'
-  | 'host_policy_denied'|'artifact_integrity_failed'|'configuration_migration_required'|'proof_refresh_unsupported';
+  | 'host_policy_denied'|'artifact_integrity_failed'|'configuration_migration_required'|'proof_refresh_unsupported'|'operation_conflict';
 // 'busy': a lock is held; retry after a pause. 'internal_error': an unexpected Gozar fault.
 
 export type GozarError = { schemaVersion: 1; error: { code: GozarErrorCode; message: string; nextAction: Action | null } };
@@ -443,6 +445,7 @@ export const readConfigurationDraft:import('./embedding-contract').HostEmbedding
 export const clearConfigurationInput:import('./embedding-contract').HostEmbeddingMethods['clearConfigurationInput'];
 export function reviewRouteConsent(request:RouteRef):Promise<ConsentSnapshot&{subject:ProofSubject|null;approvalToken:string;expiresAt:string}>;
 export function approveRouteConsent(request:RouteRef&{approvalToken:string;consentFactsDigest:string}):Promise<RouteView>;
+export function listRoutes(request:{home:string;owner?:string}):Promise<{routes:RouteView[]}>;
 export type {SecretBackend,HostCapabilities,HostCapabilityId,HostIdentity,ConfigurationDraft,ProviderInventory} from './embedding-contract';
 
 /** Trusted executable extension registry. Relative provider paths resolve under root/providers. */
@@ -455,4 +458,5 @@ export function createGozar(options?: GozarOptions): import('./embedding-contrac
  getRoutePreferences: typeof getRoutePreferences; setRoutePreferences: typeof setRoutePreferences;
  resolveClientAddress: typeof resolveClientAddress;
  reviewRouteConsent:typeof reviewRouteConsent;approveRouteConsent:typeof approveRouteConsent;
+ listRoutes:typeof listRoutes;
 };

@@ -1,0 +1,27 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {readFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {createGozar} from '@tnunamak/gozar';
+import {fakeRegistry} from '@tnunamak/gozar/testing';
+import {scratch,query} from './route-schema-check.mjs';
+test('host crash before saving its handle recovers by operation enumeration and exact close',async t=>{
+ const home=await scratch(t),owner='crashed-host',operationId='saved-before-call';
+ const registry=await fakeRegistry({id:'crash-recovery',dir:join(home,'registry'),kinds:['attached'],reach:'this-device',transport:'tcp',proofProtocol:'echo'});t.after(registry.cleanup);
+ const q=query({home,owner,operationId,usage:{kind:'attached'},target:'127.0.0.1:1',requirements:{reach:'this-device',transport:'tcp',payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}});
+ const source=`import {createGozar} from '@tnunamak/gozar';\nconst api=createGozar(${JSON.stringify({manifest:registry.manifest,root:registry.root})});const q=${JSON.stringify(q)};const choice=(await api.catalogRoutes(q)).candidates[0];await api.expose({...q,wait:'verified',approval:{kind:'route',candidateToken:choice.candidateToken,disclosureRevision:choice.disclosure.revision,consentFactsDigest:choice.consentFactsDigest}});process.stdout.write('allocated\\n');setInterval(()=>{},1000);\n`;
+ const child=spawn(process.execPath,['--input-type=module','--eval',source],{cwd:fileURLToPath(new URL('../../',import.meta.url)),stdio:['ignore','pipe','pipe']});let stderr='';child.stderr.on('data',chunk=>stderr+=chunk);
+ const exited=new Promise(resolve=>child.once('exit',resolve));
+ t.after(()=>{if(child.exitCode===null)child.kill('SIGKILL');});
+ await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('fixture host deadline '+stderr)),10000);child.stdout.once('data',()=>{clearTimeout(timer);resolve();});child.once('exit',()=>{clearTimeout(timer);reject(new Error('fixture host exited '+stderr));});});
+ child.kill('SIGKILL');await exited;
+ const api=createGozar({manifest:registry.manifest,root:registry.root});
+ const recovered=await api.listRoutes({home,owner});assert.equal(recovered.routes.length,1);const route=recovered.routes[0];assert.equal(route.operationId,operationId);
+ assert.equal((await api.listRoutes({home,owner:'other'})).routes.length,0);
+ assert.equal((await api.closeRoute({home,handle:route.handle,mode:'remove'})).cleanup.state,'confirmed');
+ const events=(await readFile(join(registry.root,'providers','crash-recovery','events.jsonl'),'utf8')).trim().split('\n').map(v=>JSON.parse(v).event);
+ assert.equal(events.filter(v=>v==='start').length,1);assert.ok(events.includes('cleanup'));
+ await assert.rejects(api.listRoutes({home:join(home,'missing')}));
+});

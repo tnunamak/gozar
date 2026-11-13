@@ -31,7 +31,8 @@
     "host_policy_denied",
     "artifact_integrity_failed",
     "configuration_migration_required",
-    "proof_refresh_unsupported"
+    "proof_refresh_unsupported",
+    "operation_conflict"
   ],
   "map": {
     "invalid_input": "invalid_input",

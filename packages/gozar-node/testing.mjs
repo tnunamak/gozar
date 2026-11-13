@@ -37,7 +37,7 @@ export async function createTestingGozar({effects,...options}={}){
   };
   const api=createCoreRouteApi({...options,dispatchEffect});
   const gozar={...api};
-  for(const method of ['expose','ensureRoute','adoptRoute'])gozar[method]=async request=>{try{const route=await api[method](request);active.set(JSON.stringify(route.handle),{home:request.home,handle:route.handle,mode:'remove'});return route;}catch(error){if(error.route)active.set(JSON.stringify(error.route.handle),{home:request.home,handle:error.route.handle,mode:'remove'});throw error;}};
+  for(const method of ['expose','ensureRoute','adoptRoute'])gozar[method]=async request=>{try{const route=await api[method](request);if(route.cleanup.state!=='confirmed')active.set(JSON.stringify(route.handle),{home:request.home,handle:route.handle,mode:'remove'});return route;}catch(error){if(error.route&&error.route.cleanup.state!=='confirmed')active.set(JSON.stringify(error.route.handle),{home:request.home,handle:error.route.handle,mode:'remove'});throw error;}};
   gozar.closeRoute=async request=>{const route=await api.closeRoute(request);if(route.cleanup.state==='confirmed')active.delete(JSON.stringify(route.handle));return route;};
   return {gozar,events,close:()=>closing??=(async()=>{for(const request of active.values())await gozar.closeRoute(request);abort.abort();})()};
 }
