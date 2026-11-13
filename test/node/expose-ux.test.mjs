@@ -9,9 +9,9 @@ import { render as oldRender } from './fixtures/render-033.mjs';
 const options = { port: 18765, clientReach: 'internet' };
 const banned = /intended-vantage|source-shaped|cleanup debt|immutable process identity|instance proof|capability-port|readback|fail safely|fails closed|precondition|admitted|unknown\.|\bready\b|Ctrl-C/i;
 const count = text => text.split('\n').filter(s => s.trim()).length;
-test('first expose screen fits eleven lines including the prompt and keeps other providers quiet', () => {
+test('first expose screen fits twelve lines including the prompt and keeps other providers quiet', () => {
   const text = render(planned, adapters, options);
-  assert.ok(count(text) + 1 <= 11, text);
+  assert.ok(count(text) + 1 <= 12, text);
   for (const phrase of ['reachable from the internet', 'Tailscale Funnel', 'http://127.0.0.1:18765', 'Lasts', 'up to 15 minutes', 'Other ways:']) assert.ok(text.includes(phrase), phrase);
   assert.doesNotMatch(text, banned);
   assert.doesNotMatch(text, /warning page|isolated known_hosts|ngrok|Cloudflare/);
@@ -145,4 +145,29 @@ test('stop reports confirmed cleanup only with explicit host confirmation, even 
 test('owner-managed proxy setup names the actual gate when it is known', () => {
   const text = render({ ...planned, gateTarget: 'http://127.0.0.1:41817' }, adapters, { ...options, alternatives: true });
   assert.match(text, /own-address.*--origin https:\/\/your.domain.*Gozar's local proxy port.*http:\/\/127.0.0.1:41817/);
+});
+
+test('traffic readers are shown before consent and beside each alternative only when declared', () => {
+  const funnel = render(planned, adapters, options);
+  assert.match(funnel, /The relay cannot read the traffic; TLS ends on this computer\./);
+  const trial = { ...planned, snapshot: { ...planned.snapshot, adapterId: 'localhost-run' } };
+  assert.match(render(trial, adapters, options), /The localhost.run relay can read the traffic\./);
+  const alternatives = render(planned, adapters, { ...options, alternatives: true });
+  assert.match(alternatives, /Tailscale Funnel.*The relay cannot read the traffic/);
+  assert.match(alternatives, /localhost.run trial.*The localhost.run relay can read the traffic/);
+  const ownRow = alternatives.split('\n').find(line => line.includes('(own-address)'));
+  assert.doesNotMatch(ownRow, /can read the traffic|cannot read the traffic/);
+});
+test('plan promises reach only after checks pass for the requested audience', () => {
+  assert.match(render(planned, adapters, options), /^Gozar will make http:\/\/127.0.0.1:18765 reachable from the internet after its checks pass\./);
+  assert.match(render(planned, adapters, { ...options, clientReach: 'tailnet' }), /from your Tailscale network after its checks pass\./);
+});
+test('own-address plan and available or unconfigured rows retain owner responsibilities', () => {
+  const own = { ...planned, snapshot: { ...planned.snapshot, adapterId: 'own-address' } };
+  const sentence = 'You run the proxy, DNS and TLS; Gozar does not create or remove them. You also handle their cleanup.';
+  assert.ok(render(own, adapters, options).includes(sentence));
+  for (const catalog of [adapters, adapters.map(a => a.id === 'own-address' ? { ...a, endpoint: 'https://your.domain' } : a)]) {
+    const row = render(planned, catalog, { ...options, alternatives: true }).split('\n').find(line => line.includes('(own-address)'));
+    assert.ok(row.includes(sentence), row);
+  }
 });

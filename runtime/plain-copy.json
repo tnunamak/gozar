@@ -1294,6 +1294,11 @@
       "plain": "Gozar creates its own route and removes only what it created.",
       "decision": false,
       "kind": "note"
+    },
+    "Validate this exact owner-managed HTTPS origin against this instance and requested protocols. The address remains under its owner\u2019s control.": {
+      "plain": "You run the proxy, DNS and TLS; Gozar does not create or remove them. You also handle their cleanup.",
+      "decision": false,
+      "kind": "note"
     }
   },
   "patterns": [

@@ -40,13 +40,15 @@ test('one screen leads with the URL, prints recovery and validates install link 
   const output = render({ snapshot: { phase: 'published-ready', recommendations: ['a', 'b'], published: 'https://one.example' }, journalPath: '/private/session.json' }, adapters, { port: 3000 });
   assert.match(output, /Public URL: https:\/\/one.example/);
   assert.match(output, /URL: https:\/\/one.example/);
-  assert.match(output, /Add to MCP client/);
-  assert.match(output, /Install link: https:\/\/client.example/);
+  assert.doesNotMatch(output, /Add to MCP client|Install link:/);
+  const verbose = render({ snapshot: { phase: 'published-ready', recommendations: ['a', 'b'], published: 'https://one.example' } }, adapters, { port: 3000, verbose: true });
+  assert.match(verbose, /Add to MCP client/);
+  assert.match(verbose, /Install link: https:\/\/client.example/);
   assert.doesNotMatch(output, /Local state:/);
   assert.equal(installLink('javascript:alert({url})', 'https://one.example'), null);
   assert.equal(installLink('https://password@client.example/{url}', 'https://one.example'), null);
   const pending = render({ snapshot: { phase: 'cleanup-pending' } }, [], { port: 3000 });
-  assert.ok(pending.includes(`Retry: ${cliCommand('stop', 3000)}`));
+  assert.ok(pending.includes(`Stop: ${cliCommand('stop', 3000)}`));
 });
 
 test('private daemon exposes fake loopback target, status works across invocations, stop owns exact mapping', async t => {

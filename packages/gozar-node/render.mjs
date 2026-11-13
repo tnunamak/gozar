@@ -1,6 +1,6 @@
 import { cliCommand } from './cli-command.mjs';
 import { safeOrigin } from './catalog.mjs';
-import { ways } from './expose-copy.mjs';
+import { ways, trafficFacts } from './expose-copy.mjs';
 import { plainCaveat, reachWords } from './plain-copy.mjs';
 
 export function installLink(template, endpoint) {
@@ -103,7 +103,8 @@ function wayStatus(snapshot, adapter) {
 function alternativeRows(snapshot, adapters, selected, reach, target) {
   return [`Ways to make this reachable from ${reachWords[reach]}:`, ...usableWays(snapshot, adapters).map(a => {
     const way = ways[a.id], status = wayStatus(snapshot, a);
-    return `  ${a.id === selected?.id ? '●' : '○'} ${adapterName(a)} (${way.name})  ${status}  ${status === 'available' ? `checked after you approve; ${way.summary}` : way.setup.replaceAll('{target}', target)}`;
+    const details = [trafficFacts[a.id], a.ownership === 'external-owned' ? plainCaveat(a.copy?.consent).plain : undefined].filter(Boolean);
+    return `  ${a.id === selected?.id ? '●' : '○'} ${adapterName(a)} (${way.name})  ${status}  ${status === 'available' ? `checked after you approve; ${way.summary}` : way.setup.replaceAll('{target}', target)}${details.length ? `; ${details.join(' ')}` : ''}`;
   }), 'Pick one with --via <name>.'];
 }
 function lifetime(reply, selected, port, options) {
@@ -144,11 +145,12 @@ export function render(reply, adapters, options = {}) {
     if (failure) lines.push(inspect, retry);
   } else if (snapshot.phase === 'planned') {
     if (alternatives) lines.push(...alternativeRows(snapshot, adapters, selected, options.clientReach ?? 'unknown', reply.gateTarget ?? target), '');
-    lines.push(`Gozar will make ${target} reachable from ${reachWords[options.clientReach ?? 'unknown']}.`,
+    lines.push(`Gozar will make ${target} reachable from ${reachWords[options.clientReach ?? 'unknown']} after its checks pass.`,
       `${['internet', 'unknown'].includes(options.clientReach ?? 'unknown') ? 'Anyone' : `Anyone on ${reachWords[options.clientReach]}`} with the address can reach it; Gozar adds no sign-in.`, '',
       `  Using    ${name}${snapshot.observations?.[selected?.id] === 'present' ? ' (set up on this computer; checked after you approve)' : ''}`,
       `  Address  ${selected?.endpoint ?? `assigned after you approve (${ways[selected?.id]?.address ?? 'address not known yet'})`}`,
       `  Lasts    ${lifetime(reply, selected, port, options)}${selected?.planVersion === 1 ? '; the stop command below ends it sooner' : ''}`);
+    if (trafficFacts[selected?.id]) lines.push(trafficFacts[selected.id]);
     const ownership = plainCaveat(selected?.copy?.consent).plain;
     if (ownership) lines.push(ownership);
     lines.push(`Stop: ${cliCommand('stop', port)}`);

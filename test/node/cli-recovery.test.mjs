@@ -76,7 +76,7 @@ test('packed local recovery action executes without global gozar, including quot
   const env = {...process.env, HOME:home, GOZAR_HOME:home, PATH:bin};
   const reply = JSON.parse((await run(process.execPath,[installedCli,'status','--port',String(port),'--json'],{env,timeout:10000})).stdout);
   const stopped = await run('/bin/sh',['-c',reply.nextAction.command],{env,timeout:10000});
-  assert.match(stopped.stdout,/Exposure stopped/);
+  assert.match(stopped.stdout,/Cleanup confirmed: nothing Gozar created is still published/);
   assert.deepEqual(commands,['status','stop']);
   healthy = true;
   const human = (await run(process.execPath,[installedCli,'status','--port',String(port)],{env,timeout:10000})).stdout;
