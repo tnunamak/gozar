@@ -77,3 +77,9 @@ for (const version of VERSIONS) test(`red: catalog says not ready exactly when t
     assert.notEqual(await catalogState(t, 'tailscale-funnel', fixture.status), 'ready', `${name}: the catalog must not say ready`);
   }
 });
+
+test('the Funnel disclosure names the port the plan will use', () => {
+  const planned = records.find(item => item.id === 'tailscale-funnel').bindings.port.value;
+  const { disclosure } = adapters.find(item => item.id === 'tailscale-funnel').definition;
+  assert.ok(disclosure.text.includes(`port ${planned}`), disclosure.text);
+});
