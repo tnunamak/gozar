@@ -172,6 +172,10 @@ For active sessions, repeatedly read `status`: `snapshot.published` is the curre
 
 Use CLI `health` to recheck a route and `stop` for cleanup. A passing route check is not proof of authentication or of a successful application-level MCP call. For owner-operated persistent HTTPS, see [service routes](docs/service-routes.md).
 
+### Which versions to accept
+
+Depend on `^0.3.0`. Within one 0.N line, Gozar keeps the route contract an app codes against: the public error codes, the query fields an app must send, and every field a candidate or route already has. New providers and new optional fields ship as 0.3.x releases, so an app with `^0.3.0` offers a new provider without a code change, because it reads every choice from the catalog. A change that breaks the contract starts a new line (0.4.0), which an app adopts on purpose. A wider range such as `<1.0.0` would also accept those breaking lines. Gozar 1.0 will follow standard semantic versioning.
+
 ## JavaScript API
 
 Install into your Node.js 22.13+ project:

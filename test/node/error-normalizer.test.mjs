@@ -49,3 +49,13 @@ test('unsafe_state_path becomes setup_required with an instructions action that 
   assert.equal(error.nextAction.id, 'fix-state-permissions');
   assertShape('Action', error.nextAction);
 });
+
+// Apps match on these codes and accept every 0.3.x release (README, "Which versions to accept"). Adding, removing or
+// renaming one breaks them, so it starts a new 0.N line: change this list only together with the minor version.
+test('the public error codes are the ones the 0.3 line promises', () => {
+  const shipped = JSON.parse(readFileSync(here('../../runtime/error-normalization.json'), 'utf8'));
+  assert.deepEqual(shipped.frozenErrorCodes, ['invalid_input', 'requirements_unsatisfied', 'setup_required', 'consent_required', 'consent_unknown',
+    'consent_expired', 'consent_mismatch', 'candidate_stale', 'preference_conflict', 'route_not_found', 'route_conflict', 'address_changed',
+    'stopped_by_user', 'handing_back', 'verification_failed', 'provider_unavailable', 'cleanup_debt', 'unsupported', 'ambiguous_route', 'busy',
+    'internal_error']);
+});
