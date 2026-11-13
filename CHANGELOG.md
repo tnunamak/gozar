@@ -22,6 +22,7 @@
 - `gozar status` shows a live target check for each session (`listening` or `nothing listening`), as it does for durable routes. A dead target does not change the session state.
 - Tailscale sessions work on Tailscale 1.102.5: the node is identified by its node ID and tailnet DNS suffix, and the catalog says `ready` only when the session's own status checks pass. The Funnel disclosure names port 8443.
 - A second session that needs the installation key held by another route fails with `route_conflict` and a `nextAction` that carries the stop command, instead of `internal_error`.
+- **Setup values reach the adapter.** A value the user supplies through a `provide-secret` setup action (for example the ngrok auth token or reserved domain) is recorded for that adapter in the Gozar home, and the adapter reads it in every later call, so the ngrok HTTPS edge can become ready once its setup is complete. A secret stored for an action that did not complete is deleted.
 
 ### Breaking
 
@@ -30,7 +31,6 @@
 
 ### Known limits
 
-- The ngrok HTTPS edge lists its setup steps (auth token, reserved domain), but Gozar does not yet keep the values those steps collect where the adapter reads them, so the provider stays `action-required`.
 - A session route through a provider that has no older recipe record cannot start yet.
 - An attached route sits behind Gozar's validation gate, so it reports no client address and lasts at most about 24 days per open.
 - The tunnl.gg stability claim has no live check yet.
