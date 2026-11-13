@@ -67,5 +67,57 @@
     "httpsRequired": true,
     "sse": true
   },
-  "operationalAcceptance": "Manifest inclusion admits test/integration selection only; live intended-vantage and ownership evidence are still required per route."
+  "operationalAcceptance": "Manifest inclusion admits test/integration selection only; live intended-vantage and ownership evidence are still required per route.",
+  "providers": [
+    {
+      "id": "tailscale-funnel",
+      "module": "providers/tailscale-funnel/index.mjs",
+      "definition": "providers/tailscale-funnel/definition.json"
+    },
+    {
+      "id": "tailscale-private",
+      "module": "providers/tailscale-private/index.mjs",
+      "definition": "providers/tailscale-private/definition.json"
+    },
+    {
+      "id": "localhost-run",
+      "module": "providers/localhost-run/index.mjs",
+      "definition": "providers/localhost-run/definition.json"
+    },
+    {
+      "id": "lan",
+      "module": "providers/lan/index.mjs",
+      "definition": "providers/lan/definition.json"
+    },
+    {
+      "id": "own-address",
+      "module": "providers/own-address/index.mjs",
+      "definition": "providers/own-address/definition.json"
+    },
+    {
+      "id": "ngrok-https-edge",
+      "module": "providers/ngrok-https-edge/index.mjs",
+      "definition": "providers/ngrok-https-edge/definition.json"
+    },
+    {
+      "id": "ngrok-tls-passthrough",
+      "module": "providers/ngrok-tls-passthrough/index.mjs",
+      "definition": "providers/ngrok-tls-passthrough/definition.json"
+    },
+    {
+      "id": "ngrok-tcp-passthrough",
+      "module": "providers/ngrok-tcp-passthrough/index.mjs",
+      "definition": "providers/ngrok-tcp-passthrough/definition.json"
+    },
+    {
+      "id": "cloudflare-named",
+      "module": "providers/cloudflare-named/index.mjs",
+      "definition": "providers/cloudflare-named/definition.json"
+    },
+    {
+      "id": "tunnl-gg",
+      "module": "providers/tunnl-gg/index.mjs",
+      "definition": "providers/tunnl-gg/definition.json"
+    }
+  ]
 }
