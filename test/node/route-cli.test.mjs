@@ -165,6 +165,20 @@ test('setup refuses a world-readable secret file and never prints the secret', a
   assert.doesNotMatch(stale.stdout + stale.stderr, /synthetic-secret-value/);
 });
 
+test('red: setup --value answers a provide-value action, and --value with --secret-file is refused', async t => {
+  const w = await durableWorld(world, t);
+  const approval = await privateFile(await files(w, 'value-approval.json'), { digest: 'sha256:none', disclosureRevision: 'disc-none' });
+  const seen = [];
+  const api = { runSetupAction: async request => { seen.push(request); return { schemaVersion: 1, state: 'complete' }; } };
+  const run = args => routeMain(['setup', 'origin', '--approval-file', approval, '--home', w.home, ...args, '--json'], { api, stdout: { write() {} }, stderr: { write() {} } });
+  assert.equal(await run(['--value', 'https://app.example.test']), 0);
+  assert.equal(seen[0].value, 'https://app.example.test');
+  assert.equal(seen[0].secretHandle, undefined);
+  const secret = await privateFile(await files(w, 'value-secret.txt'), 'synthetic-secret-value');
+  assert.equal(await run(['--value', 'https://app.example.test', '--secret-file', secret]), 1);
+  assert.equal(seen.length, 1, 'nothing ran');
+});
+
 test('every frozen error code has one exit code, and every failure envelope validates', async t => {
   const expected = { requirements_unsatisfied: 2, setup_required: 2, unsupported: 2, consent_required: 3, consent_unknown: 3, consent_expired: 3, consent_mismatch: 3,
     candidate_stale: 3, route_not_found: 3 };

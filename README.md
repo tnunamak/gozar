@@ -150,7 +150,7 @@ The same requests run from the command line. Each command reads its request from
 | `gozar ensure --query-file FILE [--approval-file FILE] [--reconsent] --json` | Creates or confirms a durable route. |
 | `gozar adopt --query-file FILE --approval-file FILE --handover-file FILE --json` | Takes over an existing rule. |
 | `gozar expose --query-file FILE --approval-file FILE [--wait verified] --json` | Opens a session or attached route. `--wait verified`, the default, returns once the route is verified; `--wait allocated` returns as soon as the provider has allocated the address. For an attached route this process holds it; close stdin to end it. |
-| `gozar setup ACTION_ID --approval-file FILE [--secret-file FILE] --json` | Runs one approved setup action. |
+| `gozar setup ACTION_ID --approval-file FILE [--secret-file FILE] [--value VALUE] --json` | Runs one approved setup action. A `provide-value` action takes `--value`; a secret takes `--secret-file`. |
 | `gozar preference show [--profile-home DIR] --json` | Reads the user's provider order and its revision. |
 | `gozar preference set --expected-revision N [--prefer REF ...] [--profile-home DIR] --json` | Replaces the provider order. N is the revision `show` returned. |
 | `gozar watch --handle-file FILE --json` | Streams route changes until the route is gone. |

@@ -23,7 +23,7 @@ const specs = {
   ensure: { values: ['query-file', 'approval-file', 'route', 'provider-id', 'home'], flags: ['json', 'reconsent'] },
   adopt: { values: ['query-file', 'approval-file', 'handover-file', 'route', 'provider-id', 'home'], flags: ['json', 'reconsent'] },
   expose: { values: ['query-file', 'approval-file', 'wait', 'route', 'provider-id', 'home'], flags: ['json'] },
-  setup: { values: ['approval-file', 'secret-file', 'home'], flags: ['json'], positional: 'action id' },
+  setup: { values: ['approval-file', 'secret-file', 'value', 'home'], flags: ['json'], positional: 'action id' },
   preference: { values: ['profile-home', 'expected-revision', 'on-unavailable'], multi: ['prefer'], flags: ['json'], positional: 'show or set' },
   watch: { values: ['handle-file', 'home', 'interval-ms'], flags: ['json'] },
 };
@@ -137,6 +137,7 @@ const commandsRun = {
   },
 
   async setup({ options, positional, api, out, err, storeSecret }) {
+    if (options.value !== undefined && options['secret-file'] !== undefined) throw gozarError('invalid_input', '--value and --secret-file cannot be used together');
     const home = options.home ?? defaultHome();
     const approval = await readApproval(options, { needed: true });
     let secretHandle;
@@ -145,7 +146,7 @@ const commandsRun = {
       secretHandle = (await storeSecret({ home, value: text.replace(/\r?\n$/, '') })).handle;
       err('The secret is in Gozar\'s private store');
     }
-    const result = await api.runSetupAction({ home, actionId: positional, approval, ...(secretHandle ? { secretHandle } : {}) });
+    const result = await api.runSetupAction({ home, actionId: positional, approval, ...(secretHandle ? { secretHandle } : {}), ...(options.value === undefined ? {} : { value: options.value }) });
     out(result);
     return result.state === 'complete' ? 0 : 2;
   },
