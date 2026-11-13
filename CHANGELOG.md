@@ -17,6 +17,10 @@
 - **Durable routes run through an adapter facet.** The lifecycle of a durable route (observe, choose a slot, write with compare-and-set, renew, remove) now goes through an optional `durable` facet on the provider's adapter. A new durable provider is one directory and one registry entry; it needs no change to Gozar's core. The Tailscale code moved to `adapters/providers/_shared/`, including `check-tailscale-app.mjs`. Behavior for apps is unchanged.
 - **A durable consent token issued by 0.2 for a free slot fails once.** The fingerprint of an unoccupied slot (the `observedResource` a token carries) is computed differently, so a token issued by 0.2.x before the upgrade and spent after it is refused with `claim_mismatch`. Ask the catalog again for a fresh token. A token for an occupied slot is unaffected.
 
+### Fixed
+
+- **A session whose folder path is too long no longer hangs the process.** A Unix control socket path must fit in about 104 bytes. With a longer Gozar home, the session's socket failed to open with a bare `EINVAL`, and the port gate Gozar had already opened stayed open, so the calling process never exited. Gozar now closes the gate and fails with `invalid_input`, naming the folder and its length.
+
 ## 0.2.1
 
 ### Fixed

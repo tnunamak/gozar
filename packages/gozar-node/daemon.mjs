@@ -273,7 +273,17 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
     });
   });
   // First listen, then publish identity. A status response always names this running controller.
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath(directory), resolve); });
+  try {
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath(directory), resolve); });
+  } catch (error) {
+    // The gate already listens on a port and holds a lifetime timer; left open, it keeps the process alive.
+    server.close(); await gate?.close();
+    // A Unix socket path is limited to about 104 bytes (macOS) or 108 (Linux); a longer one fails as EINVAL.
+    if (error.code === 'EINVAL' && Buffer.byteLength(socketPath(directory)) > 103) {
+      throw gozarError('invalid_input', `The session folder path is too long for its control socket (${Buffer.byteLength(socketPath(directory))} bytes, limit 103): ${directory}. Use a shorter Gozar home.`);
+    }
+    throw error;
+  }
   await chmod(socketPath(directory), 0o600);
   await atomicWrite(join(directory, 'control.json'), identity);
   let monitor;
