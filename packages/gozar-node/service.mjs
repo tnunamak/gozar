@@ -5,37 +5,39 @@ import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import { atomicWrite } from './journal.mjs';
 import { statusRoutes, durableRouteAt } from './durable-route.mjs';
+import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { noncePattern, trustedDirectory, canonicalHome, privateDirectory, readRecord, withExclusiveLock,
   canonicalAuthority, transcript, verification } from './service-state.mjs';
 
+const refuse = (code, message) => Object.assign(new Error(message), { code });
 const defaultHome = () => process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
 function originValue(value) {
-  if (typeof value !== 'string') throw new Error('Invalid service origin');
+  if (typeof value !== 'string') throw refuse('invalid_input', 'Invalid service origin');
   let url;
-  try { url = new URL(value); } catch { throw new Error('Invalid service origin'); }
+  try { url = new URL(value); } catch { throw refuse('invalid_input', 'Invalid service origin'); }
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash ||
       !url.hostname || (value !== url.origin && value !== url.origin + '/'))
-    throw new Error('Invalid service origin');
+    throw refuse('invalid_input', 'Invalid service origin');
   return url.origin;
 }
 function targetValue(value) {
-  if (typeof value !== 'string') throw new Error('Invalid service target');
+  if (typeof value !== 'string') throw refuse('invalid_input', 'Invalid service target');
   const match = /^(\[[^\]]+\]|[a-zA-Z0-9.-]+):([0-9]+)$/.exec(value);
   if (!match || Number(match[2]) < 1 || Number(match[2]) > 65535 ||
-      !Number.isInteger(Number(match[2]))) throw new Error('Invalid service target');
+      !Number.isInteger(Number(match[2]))) throw refuse('invalid_input', 'Invalid service target');
   const host = match[1];
-  if (host.startsWith('[') && isIP(host.slice(1, -1)) !== 6) throw new Error('Invalid service target');
+  if (host.startsWith('[') && isIP(host.slice(1, -1)) !== 6) throw refuse('invalid_input', 'Invalid service target');
   if (!host.startsWith('[') && !isIP(host) && (host.length > 253 ||
       /^[0-9.]+$/.test(host) || !host.replace(/\.$/, '').split('.').every(label =>
-        /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(label)))) throw new Error('Invalid service target');
+        /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(label)))) throw refuse('invalid_input', 'Invalid service target');
   return value;
 }
 function config({ origin, target, verifyCmd = null }) {
   if (verifyCmd !== null && (typeof verifyCmd !== 'string' || !verifyCmd.trim() || verifyCmd.includes('\0')))
-    throw new Error('Invalid verification command');
+    throw refuse('invalid_input', 'Invalid verification command');
   const route = { schemaVersion: 1, origin: originValue(origin), target: targetValue(target),
     adapterId: 'own-address', ownership: 'external-owned', verifyCmd };
-  if (Buffer.byteLength(JSON.stringify(route)) > 65536) throw new Error('Service record exceeds size limit');
+  if (Buffer.byteLength(JSON.stringify(route)) > 65536) throw refuse('invalid_input', 'Service record exceeds size limit');
   return route;
 }
 const hash = origin => createHash('sha256').update(origin).digest('hex');
@@ -61,13 +63,13 @@ async function mutate(home, origin, action) {
   return withExclusiveLock(join(locks, hash(origin)), () => action(dir));
 }
 async function present(route) { return { ...route, verification: await verification(route) }; }
-export async function addService({ origin, target, verifyCmd = null, home = defaultHome() }) {
+async function addServiceUnguarded({ origin, target, verifyCmd = null, home = defaultHome() }) {
   const route = config({ origin, target, verifyCmd });
   await mutate(home, route.origin, async dir => {
     const name = filename(route.origin), path = join(dir, name);
     try {
       const existing = await stored(path, name);
-      if (JSON.stringify(existing) !== JSON.stringify(route)) throw new Error('Service ownership conflict');
+      if (JSON.stringify(existing) !== JSON.stringify(route)) throw refuse('route_conflict', 'Service ownership conflict');
       return;
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const staging = join(dir, hash(route.origin) + '.' + randomUUID() + '.pending');
@@ -81,7 +83,7 @@ export async function addService({ origin, target, verifyCmd = null, home = defa
   });
   return { schemaVersion: 1, route: await present(route) };
 }
-export async function statusServices({ origin, home = defaultHome() } = {}) {
+async function statusServicesUnguarded({ origin, home = defaultHome() } = {}) {
   const normalized = origin === undefined ? null : originValue(origin);
   // Resolve the home once; a missing home has no routes of either kind.
   try { home = await canonicalHome(home); }
@@ -102,7 +104,7 @@ export async function statusServices({ origin, home = defaultHome() } = {}) {
   const durable = (await statusRoutes({ home, canonical: true })).routes.filter(route => !normalized || route.origin === normalized);
   return { schemaVersion: 1, routes: [...await Promise.all(routes.map(present)), ...durable] };
 }
-export async function removeService({ origin, home = defaultHome() }) {
+async function removeServiceUnguarded({ origin, home = defaultHome() }) {
   origin = originValue(origin);
   const removed = await mutate(home, origin, async dir => {
     // A Gozar-owned record must never be deleted while its provider route stays live.
@@ -139,4 +141,19 @@ export function createServiceVerifier() {
   };
 }
 
-export { ensureRoute, adoptRoute, releaseRoute, statusRoutes, confirmHandBack, cancelHandBack, durableConsentText } from './durable-route.mjs';
+// The kept hand-back and release exports. They leave through the normaliser, like every public export.
+import * as durable from './durable-route.mjs';
+const guarded = action => async (...args) => { try { return await action(...args); } catch (error) { throw normalizeError(error); } };
+export const releaseRoute = guarded(durable.releaseRoute);
+export const confirmHandBack = guarded(durable.confirmHandBack);
+export const cancelHandBack = guarded(durable.cancelHandBack);
+// Service state errors that carry no code are Gozar's own messages about the user's own paths and records (a dangling
+// alias, a record over the size limit, a lock file with the wrong mode). They keep their message and get the closed
+// code `internal_error`; the lock code that raises some of them belongs to another change and is not recoded here.
+const guardedService = action => guarded(async (...args) => {
+  try { return await action(...args); }
+  catch (error) { throw error instanceof Error && error.code === undefined ? gozarError('internal_error', error.message, null, error) : error; }
+});
+export const addService = guardedService(addServiceUnguarded);
+export const statusServices = guardedService(statusServicesUnguarded);
+export const removeService = guardedService(removeServiceUnguarded);
