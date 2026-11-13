@@ -7,6 +7,7 @@ const fail=code=>{throw embeddingError(code);};
 export async function runEmbeddingSetup(request,deps){
  const {embeddingServices:services}=deps;
  if(typeof request?.providerId!=='string'||!request.providerId||typeof request.expectedConfigurationRevision!=='string'||!request.actionId)fail('invalid_input');
+ if(request.approval?.kind!=='setup')fail('consent_required');
  if(!request.approval?.digest||!request.approval?.disclosureRevision)fail('consent_required');
  const adapter=deps.adapters?.find(a=>a.id===request.providerId);if(!adapter)fail('candidate_stale');
  const platform=deps.platform??process.platform;const read=await readContextFor(deps,request.home,platform);
@@ -15,7 +16,7 @@ export async function runEmbeddingSetup(request,deps){
   const item=await inspectAdapter(adapter,own,platform);
   const action=item.actions.find(a=>a.id===request.actionId);
   if(!action||action.digest!==request.approval.digest||action.disclosure.revision!==request.approval.disclosureRevision)fail('candidate_stale');
-  await deps.validateSetupApproval?.({request,action,adapter,configuration:await tx.configuration()});
+  await deps.validateSetupApproval?.({request,action,adapter,inspection:item,readContext:own,configuration:await tx.configuration()});
   if(['open-url','instructions'].includes(action.kind))return {state:'pending',nextAction:action};
   const inputId=(adapter.definition.inputRequirements??[]).find(i=>i.actionId===action.id)?.id??action.id;
   if(action.kind==='provide-value'){
@@ -34,5 +35,5 @@ export async function runEmbeddingSetup(request,deps){
   if(!['complete','pending','blocked'].includes(result?.state))fail('internal_error');
   if(result.state==='complete'){if(action.kind==='provide-secret')await tx.bindSecret(inputId,request.secretHandle);else tx.markChanged();}return result;
  });
- return {schemaVersion:1,...outcome.result,configurationRevision:outcome.configuration.revision,scopeId:outcome.configuration.scopeId,catalogRevision:catalogRevisionOf(await Promise.all(deps.adapters.map(a=>inspectAdapter(a,{...read,providerConfiguration:providerId=>services.resolveConfiguration({...request,providerId})},platform))),platform)};
+ return {schemaVersion:1,state:outcome.result.state,nextAction:outcome.result.nextAction??null,configurationRevision:outcome.configuration.revision,scopeId:outcome.configuration.scopeId,catalogRevision:catalogRevisionOf(await Promise.all(deps.adapters.map(a=>inspectAdapter(a,{...read,providerConfiguration:providerId=>services.resolveConfiguration({...request,providerId})},platform))),platform)};
 }

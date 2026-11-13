@@ -8,11 +8,14 @@ export async function listProviders(request,deps={}){
  const read=await readContextFor(deps,request.home,platform);
  const inspections=await Promise.all(deps.adapters.map(a=>inspectAdapter(a,read,platform)));
  const providers=await Promise.all(inspections.map(async item=>{
-  const {adapter,properties}=item;const actions=[...new Map([...item.actions,...(item.missingActions??[])].map(a=>[a.id,a])).values()];
+  const {adapter,properties}=item;let actions=[...new Map([...item.actions,...(item.missingActions??[])].map(a=>[a.id,a])).values()];
   const saved=await deps.embeddingServices.readConfiguration({...request,providerId:adapter.id});
+  const decorate=action=>deps.decorateSetupAction?deps.decorateSetupAction({action,adapter,configuration:saved,draftId:null,inspection:item}):action;
+  actions=await Promise.all(actions.map(decorate));
   const configuration={...configurationFor(actions,saved),revision:saved.revision,scopeId:saved.scopeId};
   configuration.inputRequirements=(adapter.definition.inputRequirements??configuration.inputRequirements).map(i=>({...i,actionId:i.actionId??i.id}));
   const prerequisites=[...prerequisitesFor(item,observedAt),...capabilityPrerequisites(adapter.definition,request.hostCapabilities??deps.hostCapabilities??{})];
+  for(const prerequisite of prerequisites)if(prerequisite.remedy)prerequisite.remedy=await decorate(prerequisite.remedy);
   const availability=availabilityFor(adapter.definition);
   for(const kind of Object.keys(availability))if(availability[kind].state==='available'){
    const denied=prerequisites.find(p=>['denied','unsupported','unknown'].includes(p.state)&& (adapter.definition.requiredCapabilities??[]).includes(p.id));

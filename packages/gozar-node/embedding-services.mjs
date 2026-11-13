@@ -2,7 +2,7 @@
 import {randomUUID,createHash} from 'node:crypto';
 import {constants} from 'node:fs';
 import {join} from 'node:path';
-import {canonicalHome,withExclusiveLock,checkedFile} from './service-state.mjs';
+import {canonicalHome,withExclusiveLock,checkedFile,trustedDirectory,privateDirectory} from './service-state.mjs';
 import {atomicWrite} from './journal.mjs';
 import {storeSecret,withSecret,deleteSecret,handlePattern} from './secret-store.mjs';
 
@@ -35,7 +35,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   const c={scopeId,revision:fresh(),bindings:{},values:{},drafts:{},uses:[]};
   // Legacy records have home/provider scope only. Never claim them for a named owner.
   if(!secretBackend&&/^[a-z0-9][a-z0-9._-]{0,127}$/.test(providerId)){
-   let file;try{file=await checkedFile(join(home,'setup',`${providerId}.json`),constants.O_RDONLY,'legacy setup record');}
+   let file;try{await trustedDirectory(join(home,'setup'),false);await privateDirectory(join(home,'setup'));file=await checkedFile(join(home,'setup',`${providerId}.json`),constants.O_RDONLY,'legacy setup record');}
    catch(e){if(!['ENOENT','ENOTDIR'].includes(e.code))throw e;}
    if(file){let legacy;try{legacy=JSON.parse(await file.readFile('utf8'));}finally{await file.close();}
     if(owner!==undefined)fail('configuration_migration_required');
@@ -87,4 +87,3 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
  };
  const boot=fresh();return api;
 }
-export const defaultEmbeddingServices=createEmbeddingServices({registryId:'cli-default'});
