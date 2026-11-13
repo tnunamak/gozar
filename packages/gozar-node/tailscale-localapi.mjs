@@ -69,8 +69,21 @@ async function locate() {
   throw unavailable();
 }
 
-function request(path, { method = 'GET', headers = {}, body = null } = {}) {
-  return locate().then(where => new Promise((resolve, reject) => {
+async function request(path, options = {}) {
+  const where = await locate();
+  try { return await send(where, path, options); }
+  catch (error) {
+    // A socket file left behind by a stopped tailscaled refuses connections. On macOS the user may have moved
+    // to the Tailscale app since, so try the app's loopback port before giving up (never with an override).
+    if (!where.socket || error.refused !== true || process.env.GOZAR_TAILSCALED_SOCKET || platformNow() !== 'darwin') throw error;
+    const app = await discoverAppLocalApi(overrides);
+    if (!app) throw error;
+    return send(app, path, options);
+  }
+}
+
+function send(where, path, { method = 'GET', headers = {}, body = null } = {}) {
+  return Promise.resolve(where).then(where => new Promise((resolve, reject) => {
     const payload = body === null ? null : Buffer.from(JSON.stringify(body));
     // Basic auth as in tailscale client/local DoLocalRequest: SetBasicAuth("", token).
     const route = where.socket ? { socketPath: where.socket } : { host: '127.0.0.1', port: where.port };
@@ -87,7 +100,8 @@ function request(path, { method = 'GET', headers = {}, body = null } = {}) {
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8'), app: !where.socket }));
     });
     req.on('timeout', () => req.destroy(typed('ETIMEDOUT', 'timeout', 'retry')));
-    req.on('error', error => reject(['EACCES', 'EPERM'].includes(error.code) ? denied() : unavailable()));
+    req.on('error', error => reject(['EACCES', 'EPERM'].includes(error.code) ? denied()
+      : ['ECONNREFUSED', 'ENOENT'].includes(error.code) ? Object.assign(unavailable(), { refused: true }) : unavailable()));
     req.end(payload ?? undefined);
   }));
 }

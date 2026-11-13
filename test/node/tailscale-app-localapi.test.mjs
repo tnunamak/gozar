@@ -1,3 +1,6 @@
+import net from 'node:net';
+import { once } from 'node:events';
+import { link } from 'node:fs/promises';
 // The Tailscale macOS apps (Mac App Store and standalone) expose the LocalAPI as a loopback TCP port plus a token.
 // These tests run that path on any host: the platform, the files, lsof and the port probe are injected, and the
 // LocalAPI is a fake HTTP server on loopback that rejects a wrong token.
@@ -184,6 +187,22 @@ test('stale app files (nothing listens on the port) are provider_unavailable', a
   await withEffects(mac({ symlink: '61578', tokenFile: token, ports: { open: false } }), async () => {
     await assert.rejects(getNode(), error => error.code === 'provider_unavailable');
   });
+});
+
+test('red: a stale socket file left by a stopped tailscaled falls through to the app on macOS', async t => {
+  const dir = await mkdtemp(join(process.env.GOZAR_TEST_TMPDIR ?? tmpdir(), 'gozar-app-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  // A hard link keeps the socket inode after its listener closes: a socket file nobody answers on.
+  const live = join(dir, 'live.socket'), stale = join(dir, 'tailscaled.socket');
+  const server = net.createServer().listen(live);
+  await once(server, 'listening');
+  await link(live, stale);
+  server.close(); await once(server, 'close');
+  const app = await startAppLocalApi(t);
+  await withEffects(mac({ lsof: lsofOutput(app.port), sockets: [stale] }), async () => {
+    assert.equal((await getNode()).dnsName, 'node.tailnet.test');
+  });
+  assert.ok(app.seen.length >= 1 && app.seen.every(request => request.authenticated));
 });
 
 test('a unix socket comes first, and GOZAR_TAILSCALED_SOCKET overrides the app', async t => {
