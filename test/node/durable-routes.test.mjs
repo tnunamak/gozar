@@ -198,6 +198,32 @@ test('3. a pinned origin with a different node DNS name gives address_changed an
   assert.equal((await w.run('status', {})).result.routes[0].state, 'address_changed');
 });
 
+test('3b. after a node rename, release removes the rule under the recorded name', async t => {
+  const w = await world(t);
+  await w.ensure();
+  w.state.dnsName = 'renamed.tailnet.test';
+  const released = await w.run('release', { routeId: 'coordinator' });
+  assert.deepEqual(released.result, { schemaVersion: 1, routeId: 'coordinator', removed: true, providerRemoved: true, cleanupDebt: null });
+  assert.deepEqual((await w.provider()).config, {});
+  assert.deepEqual(await w.records(), []);
+});
+
+test('3c. after a node rename, an equal rule another program wrote under the new name survives release', async t => {
+  const w = await world(t);
+  await w.ensure();
+  const port = Number(new URL(w.origin).port || 443);
+  w.edit(state => {
+    state.dnsName = 'renamed.tailnet.test';
+    state.config.Web[`renamed.tailnet.test:${port}`] = structuredClone(state.config.Web[`${dnsName}:${port}`]);
+  });
+  const theirs = structuredClone(w.state.config.Web[`renamed.tailnet.test:${port}`]);
+  const released = await w.run('release', { routeId: 'coordinator' });
+  assert.equal(released.result.providerRemoved, true);
+  const config = (await w.provider()).config;
+  assert.equal(config.Web?.[`${dnsName}:${port}`], undefined, 'our rule under the recorded name is gone');
+  assert.deepEqual(config.Web[`renamed.tailnet.test:${port}`], theirs, 'their equal rule under the new name is untouched');
+});
+
 test('4. a readback mismatch after creation leaves the listener in place as cleanup debt and publishes nothing', async t => {
   // The listener on the pinned port differs after our write: another program may have replaced
   // it, so Gozar cannot attribute it and must not remove it.

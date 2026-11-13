@@ -91,7 +91,11 @@ export function definitionErrors(definition) {
 
 // --- Loading -------------------------------------------------------------------------------------------
 
-/** The optional `durable` facet: provider I/O for durable routes. Core owns state; see durable-route.mjs. */
+/**
+ * The optional `durable` facet: provider I/O for durable routes. Core owns state; see durable-route.mjs.
+ * `read(snapshot, slot, identity?)` and `delete(ctx, { snapshot, slot, rule, identity?, version })` take the
+ * identity the rule was written under when core knows it (removal); without it they use the observed identity.
+ */
 export const durableFacetMethods = ['observe', 'slots', 'read', 'foreign', 'occupied', 'put', 'delete', 'expand'];
 function durableFacetErrors(facet) {
   if (facet === undefined) return [];

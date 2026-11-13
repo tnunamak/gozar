@@ -24,8 +24,9 @@ const expandRule = (recipe, target) => JSON.parse(JSON.stringify(recipe.listener
  */
 export function tailscaleDurable(definition, { transport = localapi } = {}) {
   const recipe = definition.durableRecipe;
-  const read = (snapshot, slot) => {
-    const rule = ruleAt(snapshot.config, snapshot.dnsName, slot);
+  // `identity` is the DNS name a rule was written under; it differs from the node's name after a rename.
+  const read = (snapshot, slot, identity = snapshot.dnsName) => {
+    const rule = ruleAt(snapshot.config, identity, slot);
     return absent(rule) ? null : rule;
   };
   const checkName = dnsName => { if (!validateBinding('dns-name', dnsName)) throw new Error('Durable DNS name is invalid'); };
@@ -52,8 +53,8 @@ export function tailscaleDurable(definition, { transport = localapi } = {}) {
       checkName(snapshot.dnsName);
       return await transport.setServeConfig(withListener(snapshot.config, snapshot.dnsName, slot, rule), version) ? 'written' : 'conflict';
     },
-    async delete(ctx, { snapshot, slot, version }) {
-      return await transport.setServeConfig(without(snapshot.config, snapshot.dnsName, slot), version) ? 'written' : 'conflict';
+    async delete(ctx, { snapshot, slot, identity = snapshot.dnsName, version }) {
+      return await transport.setServeConfig(without(snapshot.config, identity, slot), version) ? 'written' : 'conflict';
     },
 
     // Read-only state of the listener at `origin`, for the adapter's own plan and observe (one config read).

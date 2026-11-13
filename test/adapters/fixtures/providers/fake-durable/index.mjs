@@ -22,14 +22,15 @@ function durableFacet(definition) {
     family: 'fake',
     definition,
     async observe() {
-      return { identity: store.identity, snapshot: Object.fromEntries(structuredClone([...store.entries])), version: String(store.version) };
+      return { identity: store.identity, snapshot: { identity: store.identity, entries: Object.fromEntries(structuredClone([...store.entries])) }, version: String(store.version) };
     },
     slots: snapshot => slotIds.map(slot => ({ slot, origin: `https://${slot}.fake.test`, permitted: true })),
-    read: (snapshot, slot) => snapshot[slot]?.rule ?? null,
-    foreign: (snapshot, slot) => snapshot[slot]?.foreign === true,
-    occupied: (snapshot, slot) => snapshot[slot] !== undefined,
+    // Every rule lives under the one store identity, so a rule pinned to another identity is not here.
+    read: (snapshot, slot, identity = snapshot.identity) => identity === snapshot.identity ? snapshot.entries[slot]?.rule ?? null : null,
+    foreign: (snapshot, slot) => snapshot.entries[slot]?.foreign === true,
+    occupied: (snapshot, slot) => snapshot.entries[slot] !== undefined,
     expand: target => ({ forward: target }),
-    expiresAt: (snapshot, slot) => snapshot[slot]?.expiresAt ?? null,
+    expiresAt: (snapshot, slot) => snapshot.entries[slot]?.expiresAt ?? null,
     async put(ctx, { slot, rule, version }) {
       store.putCalls += 1;
       if (store.alwaysConflict || version !== String(store.version)) return 'conflict';

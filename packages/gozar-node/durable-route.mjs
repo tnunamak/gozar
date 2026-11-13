@@ -353,8 +353,8 @@ async function compareAndSet(facet, ctx, decide) {
     const observed = await facet.observe(ctx);
     const decision = await decide(observed);
     if (!decision.write) return { observed, decision, written: false };
-    const { op, slot, rule } = decision.write;
-    const outcome = await facet[op === 'put' ? 'put' : 'delete'](ctx, { snapshot: observed.snapshot, slot, rule, version: observed.version });
+    const { op, slot, rule, identity } = decision.write;
+    const outcome = await facet[op === 'put' ? 'put' : 'delete'](ctx, { snapshot: observed.snapshot, slot, rule, identity, version: observed.version });
     if (outcome === 'written') return { observed, decision, written: true };
     if (outcome !== 'conflict') throw refuse('provider_failed', 'The provider returned an unknown write outcome; nothing else was changed', { provider: facet.family ?? null });
   }
@@ -562,23 +562,26 @@ async function removeListener(dir, record, adapters, ctx) {
     return { removed: false, providerRemoved, cleanupDebt };
   };
   if (!pin) { await drop(dir, record.routeId); return { removed: true, providerRemoved: false, cleanupDebt: null }; }
-  const { facet } = durableEntry(adapters, record.adapterId);
+  // The adapter that wrote the rule may be gone (removed from the registry in a later version). Without its
+  // facet nothing can be read or removed, so the record stays as cleanup debt instead of failing the release.
+  const entry = adapters.find(item => item.id === record.adapterId && item.durable);
+  if (!entry) return keep('adapter-unavailable');
+  const facet = entry.durable;
   const { decision, written } = await compareAndSet(facet, ctx, async observed => {
-    // A slot belongs to the identity it was written under. Under a new identity, the pinned rule is gone,
-    // and an equal rule at the same slot belongs to someone else.
-    if (observed.identity !== pin.dnsName) return { result: 'absent' };
-    const current = facet.read(observed.snapshot, pin.port);
+    // Read at the identity the rule was written under, not the provider's current one: after a rename the
+    // receipted rule may still sit under the old identity, and an equal rule under the new one is not ours.
+    const current = facet.read(observed.snapshot, pin.port, pin.dnsName);
     if (current === null) return { result: 'absent' };
     if (!record.receipt) return { result: 'unattributed-rule' };
     if (!isDeepStrictEqual(current, record.receipt.rule)) return { result: 'rule-changed' };
-    return { write: { op: 'delete', slot: pin.port, rule: record.receipt.rule } };
+    return { write: { op: 'delete', slot: pin.port, rule: record.receipt.rule, identity: pin.dnsName } };
   });
   if (!written) {
     if (decision.result === 'absent') { await drop(dir, record.routeId); return { removed: true, providerRemoved: false, cleanupDebt: null }; }
     return keep(decision.result);
   }
   const after = await facet.observe(ctx);
-  if (facet.read(after.snapshot, pin.port) !== null) return keep('post-removal-mismatch', true);
+  if (facet.read(after.snapshot, pin.port, pin.dnsName) !== null) return keep('post-removal-mismatch', true);
   await drop(dir, record.routeId);
   return { removed: true, providerRemoved: true, cleanupDebt: null };
 }

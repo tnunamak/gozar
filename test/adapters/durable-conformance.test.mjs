@@ -118,6 +118,17 @@ test('after the provider identity changes, release leaves an equal rule at the n
   assert.equal(store.writes.length, writes, 'no delete was issued');
 });
 
+test('release with the adapter gone keeps the record as cleanup debt, and dismiss drops it', async () => {
+  await ensureRoute(await approved(), deps);
+  const before = JSON.stringify(store.view());
+  const released = await releaseRoute({ routeId: 'coordinator', home }, { adapters: [] });
+  assert.deepEqual(released, { schemaVersion: 1, routeId: 'coordinator', removed: false, providerRemoved: false, cleanupDebt: { reason: 'adapter-unavailable', port: 'a' } });
+  assert.equal(JSON.stringify(store.view()), before, 'nothing was removed without the adapter');
+  const dismissed = await releaseRoute({ routeId: 'coordinator', home, mode: 'dismiss' }, { adapters: [] });
+  assert.equal(dismissed.removed, true);
+  assert.deepEqual((await statusRoutes({ home }, deps)).routes, []);
+});
+
 test('a crash between the intent write and put is reconciled on the next status', async () => {
   store.crashOnPut = true;
   await assert.rejects(ensureRoute(await approved(), deps), /simulated crash/);
@@ -138,7 +149,8 @@ test('a conflict on every attempt ends in provider_conflict after the bound, wit
     assert.doesNotMatch(error.message, /fake/i, 'core names no provider');
     return true;
   });
-  assert.equal(store.putCalls, casAttempts);
+  assert.equal(casAttempts, 3, 'the contract bound');
+  assert.equal(store.putCalls, 3);
   assert.deepEqual(store.writes, []);
   assert.equal(store.entries.size, 0);
   assert.deepEqual((await statusRoutes({ home }, deps)).routes, [], 'the intent of the failed first allocation was dropped');
