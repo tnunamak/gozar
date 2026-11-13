@@ -242,7 +242,7 @@ The reference for request shapes and the `If-Match`/412 behaviour is the officia
 
 **Version range.** The tested tailscaled version is recorded here when the live contract test first runs: tailscaled 1.104.6 (Linux). The request shapes and status codes are cited from the Go client at tag v1.104.6. The ETag is a hash of the config content, so an edit that restores the same bytes between our read and write (ABA) is invisible; this is inside the attribution limit above. The serve-config endpoint with ETag has existed since the 2022 serve redesign; a tailscaled without it (404 or no `Etag`) gets `provider_unsupported`, never a fallback.
 
-Port choice uses the node's `funnel-ports` capability (candidates 443, 8443, 10000; only 443/8443/10000 can be Funnel ports), and occupied ports are refused, never replaced. Removal works after Funnel permission is revoked, because it only deletes the listener from the config. Continuity across restarts compares the node DNS name and the exact rule. Gozar does not claim stronger node identity than that. The current session recipes (foreground, :8443) stay as they are.
+Port choice uses the node's `funnel-ports` capability (candidates 443, 8443, 10000; only 443/8443/10000 can be Funnel ports), and occupied ports are refused, never replaced. Removal works after Funnel permission is revoked, because it only deletes the listener from the config. Continuity across restarts compares the node DNS name and the exact rule. Gozar does not claim stronger node identity than that. Session recipes stay foreground; since 0.2.1 a Funnel session takes 8443, or 10000 when 8443 is in use, and never 443.
 
 ### Error codes
 

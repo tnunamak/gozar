@@ -48,6 +48,16 @@ test('red: a session starts on 10000 when a durable route holds 8443, and never 
   assert.equal(daemon.controller.state.plans[0]?.origin ?? daemon.controller.state.published, 'https://device.example-tailnet.ts.net:10000');
 });
 
+test('red: a second session starts on 10000 while a first session in the same home still holds 8443', async t => {
+  const w = await world(t);
+  const first = await w.start(18906);
+  assert.equal(first.controller.state.published, 'https://device.example-tailnet.ts.net:8443');
+  const second = await w.start(18907);
+  assert.equal(second.controller.state.phase, 'published-ready', JSON.stringify(second.controller.state.limitations));
+  assert.equal(second.controller.state.published, 'https://device.example-tailnet.ts.net:10000');
+  assert.deepEqual(await w.fake.funnelPorts(), [8443, 10000], 'the first session kept 8443; nothing asked for it twice');
+});
+
 test('a session still takes 8443 when it is free', async t => {
   const w = await world(t, { config: persistentRule(10000) });
   const daemon = await w.start(18901);
