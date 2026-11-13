@@ -709,6 +709,9 @@
         },
         "funnel": null
       }
-    }
+    },
+    "durableAdoptOnlyPorts": [
+      9443
+    ]
   }
 }

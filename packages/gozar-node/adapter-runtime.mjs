@@ -96,6 +96,8 @@ export function definitionErrors(definition) {
  * The optional `durable` facet: provider I/O for durable routes. Core owns state; see durable-route.mjs.
  * `read(snapshot, slot, identity?)` and `delete(ctx, { snapshot, slot, rule, identity?, version })` take the
  * identity the rule was written under when core knows it (removal); without it they use the observed identity.
+ * `slots(snapshot, { target })` lists `{ slot, origin, permitted, forwards, adoptOnly? }`. A slot with `adoptOnly: true` can
+ * hold an adopted rule but is never allocated or restored.
  */
 export const durableFacetMethods = ['observe', 'slots', 'read', 'foreign', 'occupied', 'put', 'delete', 'expand'];
 function durableFacetErrors(facet) {

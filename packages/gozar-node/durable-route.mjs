@@ -108,7 +108,8 @@ async function observeStores(adapters, ctx, { tolerant = false } = {}) {
 // The slot a first allocation takes: with an origin, only the slot that serves that origin (it must be permitted,
 // free and unreserved); without one, the first such slot in the facet's order.
 function allocatableSlot(facet, capability, observed, table, { routeId, origin, target }) {
-  const slots = facet.slots(observed.snapshot, { target });
+  // An adopt-only slot is for taking over an existing rule; Gozar never writes a new one there.
+  const slots = facet.slots(observed.snapshot, { target }).filter(item => !item.adoptOnly);
   const free = item => item.permitted && !facet.occupied(observed.snapshot, item.slot) && !facet.foreign(observed.snapshot, item.slot) &&
     !heldBy(table, { routeId, resource: capability.providerResource, port: item.slot });
   if (origin === null) return { slot: slots.find(free)?.slot };
@@ -528,6 +529,8 @@ export async function ensureRoute(request, deps) {
       // user approved: a changed durable recipe would publish a different rule.
       if (record.planDigest && record.planDigest !== planDigestOf(record.adapterId, capability, record.target, pinned))
         throw refuse('adapter_changed', 'The pinned adapter now describes a different listener; release the route and create a new one with new approval');
+      if (entry.facet.slots(observed.snapshot, { target: record.target }).find(item => item.slot === record.intent.port)?.adoptOnly)
+        throw refuse('address_changed', 'The adopted rule is gone and Gozar does not create rules on this adopt-only port; release the route and create a new one with new approval');
       const table = await reservationTable(await canonicalHome(home), dir);
       if (heldBy(table, { routeId, listener: record.target, resource: capability.providerResource, port: record.intent.port })) throw reservedError();
       record = { ...record, state: 'creating', receipt: null, cleanupDebt: null, generation: record.generation + 1 };

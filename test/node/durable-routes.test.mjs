@@ -78,7 +78,8 @@ async function world(t, provider = {}) {
   const app = http.createServer((req, res) => { if (!verifier(req, res)) res.end('app'); });
   await listen(app); t.after(() => close(app));
   const routes = {};
-  for (const port of [443, 8443, 10000]) {
+  // 9443 is the private Serve adapter's adopt-only legacy slot (test 32).
+  for (const port of [443, 8443, 9443, 10000]) {
     const ingress = https.createServer({ cert: await readFile(certificate.cert), key: await readFile(certificate.key) }, (req, res) => {
       const proxy = forwardTarget(state.config, state.dnsName, port);
       if (!proxy) { res.writeHead(404); res.end(); return; }
@@ -1160,4 +1161,38 @@ test('31. another app\'s path on the route\'s port blocks removal, and its handl
   assert.equal(released.result.removed, false);
   assert.equal(released.result.cleanupDebt.reason, 'rule-changed');
   assert.deepEqual(w.state.config, changed);
+});
+
+// An adopt-only slot: the private Serve adapter can take over an app's existing rule on its legacy port 9443 with no
+// teardown, so an upgrade keeps that address. Gozar never writes a rule there.
+test('32. an exact private rule on the adopt-only port 9443 is adopted with no write; Gozar never creates or restores a rule there, and release removes it', async t => {
+  const w = await world(t, { funnelPorts: [] });
+  const legacy = `https://${dnsName}:9443`;
+  const private_ = { adapterId: 'tailscale-private' };
+  // Never created: with 443, 8443 and 10000 held by other programs, a new route is refused and 9443 stays empty.
+  w.edit(state => { for (const port of [443, 8443, 10000]) foreignRule(port, 'http://127.0.0.1:9')(state); });
+  assert.equal((await w.ensure({}, private_)).error.code, 'port_occupied');
+  // A create pinned to the legacy origin is refused as an address Gozar cannot create.
+  assert.equal((await w.ensure({ origin: legacy }, private_)).error.code, 'address_changed');
+  assert.equal(w.state.config.Web[`${dnsName}:9443`], undefined);
+  assert.deepEqual(w.writes(), []);
+  // The app's own tailnet-only rule on 9443 is adopted exactly, with no provider write.
+  w.edit(state => { state.config = {}; foreignRule(9443, `http://${w.target}`)(state); });
+  const adopted = await w.adopt({ origin: legacy }, private_);
+  assert.equal(adopted.error, undefined, JSON.stringify(adopted));
+  assert.equal(adopted.result.route.state, 'usable');
+  assert.equal(adopted.result.route.origin, legacy);
+  assert.equal(adopted.result.route.adapterId, 'tailscale-private');
+  assert.deepEqual(w.writes(), []);
+  assert.equal((await w.run('ensure', w.request)).result.route.origin, legacy, 'a restart resumes at the legacy origin');
+  // Lost: the rule is gone. Gozar does not write a new one on 9443.
+  w.edit(state => { state.config = {}; });
+  assert.equal((await w.run('ensure', w.request)).error.code, 'address_changed');
+  assert.deepEqual(w.state.config, {});
+  assert.deepEqual(w.writes(), []);
+  // Back again (the app restored it): release removes exactly that rule.
+  w.edit(state => { foreignRule(9443, `http://${w.target}`)(state); });
+  const released = await w.run('release', { routeId: 'coordinator' });
+  assert.equal(released.result?.providerRemoved, true, JSON.stringify(released));
+  assert.equal(w.state.config.Web?.[`${dnsName}:9443`], undefined);
 });

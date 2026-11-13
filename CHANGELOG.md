@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2
+
+### Added
+
+- **Adopt an app's rule on a legacy port.** A durable provider can name adopt-only ports. Gozar can adopt an existing exact rule on one of them with no teardown, so an app that upgrades to Gozar keeps that address. Gozar never creates a rule there: a new route skips the port, a route pinned to its origin is refused with `address_changed`, and an adopted route whose rule is gone is not restored there (`address_changed`). Release removes the adopted rule as usual. Tailscale private Serve has one adopt-only port, 9443. Candidate ports and plan digests are unchanged, so existing routes and approvals are unaffected.
+
 ## 0.3.1
 
 0.3.0 was never published to npm. Its changes below ship first in 0.3.1, with this fix.

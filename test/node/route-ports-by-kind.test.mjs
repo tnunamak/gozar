@@ -29,7 +29,8 @@ const catalogQuery = (home, providerId, usage) => query({ home, providerId, usag
 for (const adapter of durable) {
   test(`${adapter.id}: a durable candidate lists the ports the durable engine tries, in its order, and its needs name them`, async t => {
     const home = await scratch(t);
-    const tried = adapter.durable.slots(IDLE[adapter.id]).map(item => item.slot);
+    // An adopt-only slot is never tried for a new route, so it is not a candidate port.
+    const tried = adapter.durable.slots(IDLE[adapter.id]).filter(item => !item.adoptOnly).map(item => item.slot);
     assert.ok(tried.length > 0 && tried.every(Number.isInteger), 'this facet\'s slots are ports');
     const api = createRouteApi({ readContext: fakeReadContext({ home }) });
     const [candidate] = (await api.catalogRoutes(catalogQuery(home, adapter.id, { kind: 'durable', routeId: 'ports-check' }))).candidates;

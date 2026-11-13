@@ -19,7 +19,8 @@ const expandRule = (recipe, target) => JSON.parse(JSON.stringify(recipe.listener
 
 /**
  * `definition` is the adapter's durable recipe definition: { id, addressStability, durableLifetime, providerResource,
- * idleTimeoutMs, durableRecipe: { mode, candidatePorts, portsFromCapability, listener } }.
+ * idleTimeoutMs, durableRecipe: { mode, candidatePorts, portsFromCapability, listener }, durableAdoptOnlyPorts? }. The adopt-only ports
+ * sit outside the recipe so that adding one leaves every route's plan digest unchanged.
  * `transport` replaces the LocalAPI module (tests).
  */
 export function tailscaleDurable(definition, { transport = localapi } = {}) {
@@ -39,11 +40,14 @@ export function tailscaleDurable(definition, { transport = localapi } = {}) {
       const { config, etag } = await transport.getServeConfig();
       return { identity: node.dnsName, snapshot: { dnsName: node.dnsName, funnelPorts: node.funnelPorts, config }, version: etag };
     },
+    // The recipe's candidate ports, then any adopt-only legacy ports: an existing exact rule there can be adopted,
+    // but core never allocates or restores one there.
     slots(snapshot, { target } = {}) {
-      return recipe.candidatePorts.map(port => ({
-        slot: port, origin: originOf(snapshot.dnsName, port),
+      const slot = (port, adoptOnly) => ({
+        slot: port, origin: originOf(snapshot.dnsName, port), adoptOnly,
         permitted: recipe.portsFromCapability ? snapshot.funnelPorts.includes(port) : true,
-        forwards: target !== undefined && forwardsTo(read(snapshot, port), target) }));
+        forwards: target !== undefined && forwardsTo(read(snapshot, port), target) });
+      return [...recipe.candidatePorts.map(port => slot(port, false)), ...(definition.durableAdoptOnlyPorts ?? []).map(port => slot(port, true))];
     },
     read,
     foreign: (snapshot, slot) => Boolean(foreground(snapshot.config, snapshot.dnsName, slot)),
