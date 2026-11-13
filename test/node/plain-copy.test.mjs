@@ -5,7 +5,7 @@ import { plainCaveat } from '../../packages/gozar-node/plain-copy.mjs';
 import { ways } from '../../packages/gozar-node/expose-copy.mjs';
 const root = new URL('../../', import.meta.url);
 const read = path => readFile(new URL(path, root), 'utf8');
-const banned = /intended-vantage|source-shaped|cleanup debt|immutable process identity|instance proof|capability-port|readback|fail safely|fails closed|precondition|admitted|unknown\./i;
+const banned = /intended-vantage|source-shaped|cleanup debt|immutable process identity|instance proof|capability-port|readback|fail safely|fails closed|precondition|admitted|unknown\.|\bready\b|Ctrl-C/i;
 export async function presentationStrings() {
   const strings = new Set();
   for (const file of await readdir(new URL('adapters/', root))) {

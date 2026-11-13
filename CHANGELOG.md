@@ -4,7 +4,7 @@
 
 ### Fixes
 
-- The default `expose` output says what will happen in a few plain lines. `--alternatives` lists usable ways with their setup status; `--via` picks one by name. `--verbose` prints the full engineering detail. `--json` is unchanged.
+- `expose` now states that sessions run in the background, labels planned addresses as patterns, and separates detected routes from verified connections. The plan names who can reach the service and what Gozar owns. Published output starts with the URL and reports only recorded route checks; MCP instructions require `--verbose`. Failures state whether cleanup is confirmed and suggest inspection before retrying. `--alternatives` lists usable ways for the requested audience; `--via` picks one by name. `--json` is unchanged.
 
 - Suspend of a user-stopped durable route now reports `stopped_by_user` where 0.3.3 reported `route_not_found`. Removing a route the user already stopped succeeds without a provider call; an interrupted stop finishes the normal compare-and-set removal.
 - An invalid owner-run query origin is named in the unmet setup entry's `actual` value, without throwing or adding error codes.

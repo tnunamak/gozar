@@ -105,7 +105,7 @@
         "name": "own-address",
         "address": "supply your HTTPS address with --origin URL",
         "summary": "use your existing HTTPS proxy",
-        "setup": "Point your HTTPS proxy here; use --origin URL"
+        "setup": "Use --origin https://your.domain; point that HTTPS proxy at Gozar's local proxy port printed after approval (forwarding to {target})"
       }
     },
     "setup": {

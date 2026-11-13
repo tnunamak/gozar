@@ -349,8 +349,8 @@ if (process.argv[1] && await realpath(resolve(process.argv[1])).catch(() => null
     const next = cliCommand('detect', /^\d+$/.test(port ?? '') ? port : 'N');
     if (argv.includes('--json')) console.log(JSON.stringify({ error: error.message, action: { kind: 'repair', instruction: `Run ${next} to inspect prerequisites.`, command: next, expectedSuccess: 'Detection lists route prerequisites for this service port.' } }));
     else {
-      const message = error.userInput ? error.message : plainCaveat(error.message).plain ?? 'Setup check failed: the command could not finish. Use --verbose for details.';
-      const recovery = error.exposureAttempt ? `A route or background process may still be in place.\nStop: ${cliCommand('stop', /^\d+$/.test(port ?? '') ? port : 'N')}` : `Next: ${next}`;
+      const message = error.userInput ? error.message : plainCaveat(error.message).plain ?? 'The command could not finish. The cause was not recorded. Use --verbose for details.';
+      const recovery = error.exposureAttempt ? `Public access or a background process may remain. Cleanup is not confirmed.\nStop: ${cliCommand('stop', /^\d+$/.test(port ?? '') ? port : 'N')}\nInspect first: ${cliCommand('health', /^\d+$/.test(port ?? '') ? port : 'N')}` : `Next: ${next}`;
       console.error(`Gozar: ${message}\n${recovery}${argv.includes('--verbose') ? `\nFull detail: ${error.message}` : ''}`);
     }
     process.exitCode = 1;

@@ -42,8 +42,8 @@ else process.exit(99);
     assert.equal(code, 0, stdout + stderr);
     assert.ok(declined, stdout);
     const plan = stdout.slice(stdout.indexOf('Gozar will make'));
-    if (!flags.includes('--verbose')) assert.ok(plan.split('\n').filter(line => line.trim()).length <= 9, stdout);
-    assert.match(stdout, /Address\s+https:\/\/<machine>\.<tailnet>\.ts\.net/);
+    if (!flags.includes('--verbose')) assert.ok(plan.split('\n').filter(line => line.trim()).length <= 11, stdout);
+    assert.match(stdout, /Address\s+assigned after you approve \(https:\/\/<machine>\.<tailnet>\.ts\.net/);
     assert.doesNotMatch(stdout, /Public URL:/);
   }
   const invocations = (await readFile(calls, 'utf8')).trim().split('\n').map(JSON.parse);
@@ -73,7 +73,7 @@ test('JSON from a fake controller is byte-identical to the frozen 0.3.3 projecti
     const failed = await run(process.execPath, [cli, 'expose', '--port', '18765', '--client-reach', 'internet', '--via', 'tailscale-funnel', '--yes', ...flags],
       { env: { ...process.env, GOZAR_HOME: home, PATH: '/missing-fixture-binaries' } }).catch(error => error);
     assert.equal(failed.code, 1);
-    assert.match(failed.stderr, /may still be in place/);
+    assert.match(failed.stderr, /Public access or a background process may remain\. Cleanup is not confirmed\./);
     assert.match(failed.stderr, /'stop' '--port' '18765'/);
     assert.doesNotMatch(failed.stderr, /Nothing was published/);
     if (flags.length) assert.match(failed.stderr, /Full detail: Fixture immutable process identity readback failed/);

@@ -16,7 +16,7 @@ Then, in a second terminal, expose it to the public internet (or replace `18765`
 npx --package=@tnunamak/gozar@0.3.4 gozar expose --port 18765 --client-reach internet
 ```
 
-Gozar finds eligible routes, shows the provider it chose and the exact local target, and asks for approval before making the service reachable. To compare usable ways before approval, add `--alternatives` to that `expose` command. It lists their setup status, then shows the same plan and prompt. Provider setup or an outside-network verification step may still be required. Only share an address once Gozar verifies it; the address can change or expire. **Gozar does not add authentication to your app.**
+Gozar finds eligible routes, shows the provider it chose and the exact local target, and asks for approval before making the service reachable. To compare usable ways before approval, add `--alternatives` to that `expose` command. It lists their setup status, then shows the same plan and prompt. Detected routes are shown as available and checked after approval. The plan labels an unassigned address as a pattern, says who can reach it, and states that Gozar adds no sign-in. Provider setup or an outside-network verification step may still be required. Only share an address once Gozar verifies it; the address can change or expire. **Gozar does not add authentication to your app.** The published block starts with the public URL and says which route checks passed; these checks do not test your app's sign-in or requests. MCP configuration is available in `--verbose` for services that support `/mcp`.
 
 There are three paths. **A quick session:** `expose` above, a temporary address that lasts 15 minutes by default. **A persistent service:** a [service route](#keep-an-existing-service-address) behind your own HTTPS proxy, with no expiry. **Gozar inside an app:** [Route by requirement](#route-by-requirement), where the app states what it needs and Gozar lists the providers that meet it, or the shorter session commands in [Embed Gozar in your app](#embed-gozar-in-your-app). MCP is supported, but not required.
 
@@ -58,7 +58,7 @@ npx --package=@tnunamak/gozar@0.3.4 gozar health --port 3000
 npx --package=@tnunamak/gozar@0.3.4 gozar stop --port 3000
 ```
 
-Status tells you what is currently published. Health rechecks it. Stop attempts to close the temporary exposure and reports unresolved cleanup. Sessions default to 15 minutes, but a provider can remove or rename an address earlier—especially the anonymous localhost.run relay, which can change its URL within minutes. Do not keep sharing a previous URL when status stops publishing it.
+Status tells you what is currently published. Health rechecks it. Stop attempts to close the temporary exposure and reports unresolved cleanup. Sessions run in the background and default to 15 minutes; returning to the shell does not stop them. Use the printed stop command to end a session sooner. A provider can remove or rename an address earlier—especially the anonymous localhost.run relay, which can change its URL within minutes. Do not keep sharing a previous URL when status stops publishing it.
 
 ## Providers
 

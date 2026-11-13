@@ -56,9 +56,8 @@ function renderEngineering(reply, adapters, { alternatives = false, port } = {})
     try { endpoint = safeOrigin(snapshot.published); } catch { endpoint = null; }
     if (endpoint) {
       const mcpUrl = `${endpoint}/mcp`;
-      lines.push('Route checks passed. Connect your MCP client.', 'Add to MCP client', `URL: ${mcpUrl}`,
-        "Authentication: use your service's configured method.",
-        'For gozar demo-server only, select no authentication.');
+      lines.push('MCP setup (if your service supports /mcp):', 'Add to MCP client', `URL: ${mcpUrl}`,
+        "Authentication: use your service's configured method.");
       lines.push('Your client connection and tool call still need checking.',
         'Keep this device and service awake. Route validation expires; sleep or network loss can interrupt access.');
       if (selected?.planVersion === 1) lines.push(`Instance proxy lifetime: up to ${(reply.lifetimeMs ?? 900_000) / 60_000} minutes. After expiry, run stop, then expose again.`);
@@ -99,16 +98,16 @@ function usableWays(snapshot, adapters) {
 }
 function wayStatus(snapshot, adapter) {
   if (adapter.ownership === 'external-owned' && !adapter.endpoint) return 'needs setup';
-  return ({ present: 'ready', absent: 'not set up', 'signed-out': 'needs setup', blocked: 'needs setup' })[snapshot.observations?.[adapter.id]] ?? 'needs setup';
+  return ({ present: 'available', absent: 'needs setup', 'signed-out': 'needs setup', blocked: 'needs setup' })[snapshot.observations?.[adapter.id]] ?? 'needs setup';
 }
-function alternativeRows(snapshot, adapters, selected) {
-  return ['Ways to reach this computer:', ...usableWays(snapshot, adapters).map(a => {
+function alternativeRows(snapshot, adapters, selected, reach, target) {
+  return [`Ways to make this reachable from ${reachWords[reach]}:`, ...usableWays(snapshot, adapters).map(a => {
     const way = ways[a.id], status = wayStatus(snapshot, a);
-    return `  ${a.id === selected?.id ? '●' : '○'} ${adapterName(a)} (${way.name})  ${status}  ${status === 'ready' ? way.summary : way.setup}`;
+    return `  ${a.id === selected?.id ? '●' : '○'} ${adapterName(a)} (${way.name})  ${status}  ${status === 'available' ? `checked after you approve; ${way.summary}` : way.setup.replaceAll('{target}', target)}`;
   }), 'Pick one with --via <name>.'];
 }
 function lifetime(reply, selected, port, options) {
-  if (selected?.planVersion === 1) return `up to ${(reply.lifetimeMs ?? options.lifetimeMs ?? 900_000) / 60_000} minutes; you can stop it sooner`;
+  if (selected?.planVersion === 1) return `up to ${(reply.lifetimeMs ?? options.lifetimeMs ?? 900_000) / 60_000} minutes in the background`;
   return selected?.ownership === 'external-owned' ? `your address stays under your control; stop checking with ${cliCommand('stop', port)}` : `until you run ${cliCommand('stop', port)}`;
 }
 function chosenCaveats(snapshot, adapters, selected) {
@@ -126,48 +125,54 @@ export function render(reply, adapters, options = {}) {
   const name = adapterName(selected), target = `http://127.0.0.1:${port ?? 'N'}`;
   const caveats = chosenCaveats(snapshot, adapters, selected);
   const failure = caveats.find(item => item.kind === 'failure');
+  const failureText = failure?.plain ?? 'The route could not be verified. The cause was not recorded.';
+  const inspect = `Inspect first: ${cliCommand('health', port)}`;
+  const retry = `Then retry: ${cliCommand('expose', port)} --client-reach ${options.clientReach ?? 'internet'}`;
+  const cleanupWarning = 'Public access or a background process may remain. Cleanup is not confirmed.';
+  const cleanupDone = "Cleanup confirmed: nothing Gozar created is still published. Your server's settings were not changed.";
   const cleanupConfirmed = snapshot.phase === 'stopped' && Array.isArray(reply.localCleanupFailures) && !reply.localCleanupFailures.length &&
     (snapshot.resources ?? []).every(resource => resource.ownership !== 'owned' || resource.cleanup === 'removed');
   const cleanupPending = ['cleanup-pending', 'stopping'].includes(snapshot.phase) || Boolean(reply.localCleanupFailures?.length);
   const lines = [];
   if (cleanupPending) {
-    lines.push(failure ? `✗ ${failure.plain}` : 'Route removal is not confirmed.',
-      'A route or background process may still be in place.', `Retry: ${cliCommand('stop', port)}`);
+    if (failure) lines.push(`✗ ${failureText}`);
+    lines.push(cleanupWarning, `Stop: ${cliCommand('stop', port)}`, inspect);
   } else if (snapshot.phase === 'stopped') {
-    if (failure && cleanupConfirmed) lines.push(`✗ ${failure.plain}`, 'No address is published now, and your server is unchanged.', `Next: ${cliCommand('expose', port)} --client-reach ${options.clientReach ?? 'internet'}`);
-    else if (failure) lines.push(`✗ ${failure.plain}`, 'A route or background process may still be in place.', `Stop: ${cliCommand('stop', port)}`);
-    else lines.push('Gozar · stopped', 'Exposure stopped.');
+    if (failure) lines.push(`✗ ${failureText}`);
+    if (cleanupConfirmed) lines.push(cleanupDone);
+    else lines.push(cleanupWarning, `Stop: ${cliCommand('stop', port)}`);
+    if (failure) lines.push(inspect, retry);
   } else if (snapshot.phase === 'planned') {
-    if (alternatives) lines.push(...alternativeRows(snapshot, adapters, selected), '');
-    lines.push(`Gozar will make ${target} reachable from ${reachWords[options.clientReach ?? 'unknown']}.`, '',
-      `  Using    ${name}${snapshot.observations?.[selected?.id] === 'present' ? ' (already set up on this computer)' : ''}`,
-      `  Address  ${selected?.endpoint ?? ways[selected?.id]?.address ?? 'assigned when it starts'}`,
-      `  Lasts    ${lifetime(reply, selected, port, options)}`);
+    if (alternatives) lines.push(...alternativeRows(snapshot, adapters, selected, options.clientReach ?? 'unknown', reply.gateTarget ?? target), '');
+    lines.push(`Gozar will make ${target} reachable from ${reachWords[options.clientReach ?? 'unknown']}.`,
+      `${['internet', 'unknown'].includes(options.clientReach ?? 'unknown') ? 'Anyone' : `Anyone on ${reachWords[options.clientReach]}`} with the address can reach it; Gozar adds no sign-in.`, '',
+      `  Using    ${name}${snapshot.observations?.[selected?.id] === 'present' ? ' (set up on this computer; checked after you approve)' : ''}`,
+      `  Address  ${selected?.endpoint ?? `assigned after you approve (${ways[selected?.id]?.address ?? 'address not known yet'})`}`,
+      `  Lasts    ${lifetime(reply, selected, port, options)}${selected?.planVersion === 1 ? '; the stop command below ends it sooner' : ''}`);
+    const ownership = plainCaveat(selected?.copy?.consent).plain;
+    if (ownership) lines.push(ownership);
+    lines.push(`Stop: ${cliCommand('stop', port)}`);
     const note = caveats.find(item => item.decision);
     if (note) lines.push('', `  Note: ${note.plain}`);
     const others = usableWays(snapshot, adapters).filter(a => a.id !== selected?.id);
-    if (others.length) lines.push('', `Other ways: ${others.map(a => `${adapterName(a)} (${wayStatus(snapshot, a) === 'ready' ? ways[a.id].summary : 'needs setup'})`).join('; ')}. See --alternatives.`);
+    if (!alternatives && others.length) lines.push('', `Other ways: ${others.map(a => `${adapterName(a).replace(/^Your /, 'your ')}`).join(', ')}. See --alternatives.`);
   } else if (snapshot.phase === 'published-ready' && snapshot.published) {
     let endpoint;
     try { endpoint = safeOrigin(snapshot.published); } catch { endpoint = null; }
     if (endpoint) {
       const receipt = reply.validation?.probeReceipt;
-      if (receipt?.tls && receipt?.vantage === 'public') lines.push('✓ Reachable from the internet over HTTPS');
-      else if (receipt?.tls) lines.push('✓ HTTPS connection checked');
-      if (receipt?.sse) lines.push('✓ Streaming works');
-      lines.push(`Public URL: ${endpoint}`, `Forwarding to ${target}. Stop: ${cliCommand('stop', port)}`,
-        `Lasts: ${lifetime(reply, selected, port, options)}`, '', 'Add to MCP client', `URL: ${endpoint}/mcp`,
-        "Authentication: use your service's configured method.", 'For gozar demo-server only, select no authentication.',
-        'Your client connection and tool call still need checking.',
-        JSON.stringify({ mcpServers: { service: { url: `${endpoint}/mcp` } } }));
-      const template = reply.connectionProfile?.installLinkTemplate ?? selected?.clientProfile?.installLinkTemplate ?? selected?.profile?.installLinkTemplate;
-      const link = installLink(template, `${endpoint}/mcp`);
-      if (link) lines.push(`Install link: ${link}`);
+      const checks = [];
+      if (receipt?.tls === true) checks.push(receipt.vantage === 'public' ? 'HTTPS answers from the internet' : 'HTTPS answers');
+      if (receipt?.instanceMatched === true) checks.push('the address reaches this instance');
+      if (receipt?.sse === true) checks.push('streaming works');
+      lines.push(`Public URL: ${endpoint}`,
+        `Checked: ${checks.length ? checks.join('; ') : 'no check results were recorded'}. Your app's own sign-in and requests are not checked.`,
+        `Forwarding to ${target}`,
+        `Lasts: ${lifetime(reply, selected, port, options)}. Stop sooner: ${cliCommand('stop', port)}`);
       lines.push(`After sleep or network loss: ${cliCommand('health', port)}`);
     } else lines.push('The saved address is invalid. Recheck the route.', `Next: ${cliCommand('health', port)}`);
   } else if (['failed', 'blocked', 'degraded'].includes(snapshot.phase)) {
-    lines.push(`✗ ${failure?.plain ?? 'Route check failed: Gozar could not verify the address and requested connections.'}`,
-      'A route or background process may still be in place.', `Stop: ${cliCommand('stop', port)}`);
+    lines.push(`✗ ${failureText}`, cleanupWarning, `Stop: ${cliCommand('stop', port)}`, inspect, retry);
   } else if (snapshot.phase === 'unknown') {
     lines.push('The background controller could not be reached.', `Next: ${cliCommand('status', port)}`);
   } else {

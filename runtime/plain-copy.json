@@ -181,7 +181,7 @@
       "kind": "setup"
     },
     "Current origin health proof failed or expired; external owner action required": {
-      "plain": "Connection check failed or expired: Gozar could not verify the address and requested connections.",
+      "plain": "The route could not be verified. The cause was not recorded.",
       "decision": false,
       "kind": "failure"
     },
@@ -1026,7 +1026,7 @@
       "kind": "setup"
     },
     "Some clients reject :8443; client compatibility is not implied by local status.": {
-      "plain": "Funnel uses port 8443 or 10000; some apps cannot connect to those ports.",
+      "plain": "some apps cannot connect to ports 8443 or 10000.",
       "decision": true,
       "kind": "note"
     },
@@ -1281,9 +1281,19 @@
       "kind": "failure"
     },
     "Owned resources remain recorded; restart reconciliation is required.": {
-      "plain": "A route or background process may still be in place.",
+      "plain": "Public access or a background process may remain. Cleanup is not confirmed.",
       "decision": true,
       "kind": "failure"
+    },
+    "Start an owned foreground HTTPS Funnel on port 8443, or on port 10000 when 8443 is in use, and on no other port. Existing listeners remain untouched. HTTPS, instance identity and timed SSE must pass before publication.": {
+      "plain": "Gozar creates its own route and removes only what it created.",
+      "decision": false,
+      "kind": "note"
+    },
+    "Start an owned foreground private HTTPS listener on an unused 9444 or 9445 only. Existing listeners stay untouched. Verify TLS, instance identity and requested protocols from a tailnet client before publication.": {
+      "plain": "Gozar creates its own route and removes only what it created.",
+      "decision": false,
+      "kind": "note"
     }
   },
   "patterns": [
