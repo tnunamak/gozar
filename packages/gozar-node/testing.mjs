@@ -15,8 +15,27 @@ import { createRouteApi as createCoreRouteApi } from './route-api.mjs';
 import { createReadContext } from './adapter-runtime.mjs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { gozarError } from './error-normalizer.mjs';
+import { projectSession, projectDurable, projectAttached } from './route-view.mjs';
+import { enrichRoute } from './embedding-state.mjs';
 
 export { createReadContext };
+
+/** Deterministic lifecycle projections for every admitted usage kind; no provider or process is started. */
+export function fakeRouteScenarios({ target = '127.0.0.1:18765', now = Date.parse('2026-11-13T12:00:00Z') } = {}) {
+  const properties = { reach: 'internet', transport: 'https', traffic: { tlsTermination: 'endpoint', providerCanReadPayload: false, readers: [], metadataVisibleTo: [], evidenceRef: 'testing' },
+    address: { stability: 'stable', scope: 'fixture', conditions: [], ports: null }, cost: { kind: 'free', summary: 'Fixture', currency: null, amount: null, period: null },
+    needsAccount: false, lifetimes: ['session', 'attached', 'durable'], supervision: 'controller', protocols: { sse: true, streamableHttp: true, oauthDcr: true }, proof: { vantage: 'this-device', checks: ['nonce', 'tls'] } };
+  const origin = 'https://screen.example.invalid', checkedAt = new Date(now).toISOString(), future = new Date(now + 60_000).toISOString();
+  return ['session', 'attached', 'durable'].flatMap(kind => ['detected', 'verified', 'expired', 'cleanup-unconfirmed'].map(state => {
+    const handle = { kind, id: `fixture-${kind}`, generation: 1 }, verified = state !== 'detected';
+    const expiry = state === 'expired' ? new Date(now - 1).toISOString() : future;
+    const options = { handle, properties, now };
+    const route = kind === 'durable' ? projectDurable({ state: verified ? 'usable' : 'unverified', origin, target, verification: { status: verified ? 'verified' : 'unverified', checkedAt, validUntil: expiry }, expiresAt: expiry }, options)
+      : kind === 'attached' ? projectAttached({ state: verified ? 'usable' : 'unverified', origin, target, properties, checkedAtMs: now, expiresAt: expiry }, options)
+      : projectSession({ snapshot: { phase: verified ? 'published-ready' : 'candidate-ready', candidate: origin, published: verified ? origin : null, target, expiresAt: expiry } }, options);
+    return enrichRoute({ ...route, cleanup: { state: state === 'cleanup-unconfirmed' ? 'unconfirmed' : 'none' } }, { target, expiresAt: expiry, validUntil: expiry, now });
+  }));
+}
 
 /**
  * A read context whose probe and verification answer as told. `probeOk` is the detect verdict (default true);
@@ -49,7 +68,7 @@ export function createRouteApi(deps = {}) {
 const KINDS = ['session', 'durable'];
 const REACHES = ['internet', 'tailnet', 'lan', 'this-device'];
 
-const moduleSource = () => `// A fake provider written by @tnunamak/gozar/testing. It does nothing outside memory.
+const moduleSource = (actions = []) => `// A fake provider written by @tnunamak/gozar/testing. It does nothing outside memory.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 const definition = JSON.parse(readFileSync(new URL('./definition.json', import.meta.url), 'utf8')).adapter;
@@ -59,7 +78,7 @@ export default {
   definition,
   async detect(ctx) { const seen = await ctx.probe({ fake: true }); return { state: seen?.ok === true ? 'ready' : 'unknown', facts: { fake: true, setupNeeded: false } }; },
   properties: () => structuredClone(definition.capabilities),
-  setupActions: () => [],
+  setupActions: () => ${JSON.stringify(actions)},
   async setup() { return { state: 'complete', nextAction: null }; },
   async plan(ctx, request) {
     const resourceKey = definition.id + ':' + sha({ target: request.target }).slice(0, 16);
@@ -141,7 +160,7 @@ const runtimeUrl = pathToFileURL(fileURLToPath(new URL('./adapter-runtime.mjs', 
  * `protocols` uses the Query's words ('sse', 'streamable-http', 'oauth-dcr'); a fake carries all three unless a test narrows it,
  * so an app's protocol requirements do not make its own fake ineligible.
  */
-export async function fakeRegistry({ id, label, kinds, reach, transport = 'https', protocols = PROTOCOLS, dir } = {}) {
+export async function fakeRegistry({ id, label, kinds, reach, transport = 'https', protocols = PROTOCOLS, dir, facts = [], setupActions = [] } = {}) {
   if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) throw gozarError('invalid_input', 'fakeRegistry needs an id of lowercase letters, digits and hyphens');
   // An attached fake would make expose start a real controller process, so only session and durable fakes exist.
   if (!Array.isArray(kinds) || !kinds.length || kinds.some(kind => !KINDS.includes(kind))) throw gozarError('invalid_input', `fakeRegistry kinds must be a non-empty list of ${KINDS.join(' and ')}: only session and durable fakes are supported`);
@@ -163,7 +182,7 @@ export async function fakeRegistry({ id, label, kinds, reach, transport = 'https
       protocols: { sse: protocols.includes('sse'), streamableHttp: protocols.includes('streamable-http'), oauthDcr: protocols.includes('oauth-dcr') },
       proof: { vantage: 'this-device', checks: ['nonce'] },
     },
-    supportedKinds: [...kinds],
+    supportedKinds: [...kinds], facts,
     disclosure: { revision: `disc-${id}`, text: 'A fake provider used in tests. Nothing leaves this process.', links: [] },
     ownership: 'gozar-owned',
   };
@@ -176,10 +195,10 @@ export async function fakeRegistry({ id, label, kinds, reach, transport = 'https
       id, planVersion: 1, idleTimeoutMs: null, providerResource: `${id}-slot`, addressStability: 'stable', durableLifetime: 'provider-persistent',
       actions: [], recipes: {}, durableRecipe: { mode: 'fake', slots: ['a', 'b', 'c'], listener: { forward: '{target}' } } } }, null, 2));
     await writeFile(join(folder, 'store.json'), JSON.stringify({ identity: `store-${id}`, version: 1, entries: {} }));
-    await writeFile(join(folder, 'plain.mjs'), moduleSource());
+    await writeFile(join(folder, 'plain.mjs'), moduleSource(setupActions));
     await writeFile(join(folder, 'index.mjs'), durableModuleSource(runtimeUrl));
   } else {
-    await writeFile(join(folder, 'index.mjs'), moduleSource());
+    await writeFile(join(folder, 'index.mjs'), moduleSource(setupActions));
   }
   return {
     manifest: { providers: [{ id, module: `providers/${id}/index.mjs`, definition: `providers/${id}/definition.json` }] },

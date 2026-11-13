@@ -63,6 +63,152 @@
             "gozar-owned",
             "external-owned"
           ]
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "value",
+              "known",
+              "group",
+              "affectsConsent",
+              "source",
+              "asOf"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "known": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "group": {
+                "type": "string"
+              },
+              "affectsConsent": {
+                "type": "boolean"
+              },
+              "source": {
+                "type": "string"
+              },
+              "asOf": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "availability": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "object",
+              "required": [
+                "state",
+                "reason"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "available",
+                    "detect-only",
+                    "unsupported"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "attached": {
+              "type": "object",
+              "required": [
+                "state",
+                "reason"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "available",
+                    "detect-only",
+                    "unsupported"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "durable": {
+              "type": "object",
+              "required": [
+                "state",
+                "reason"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "available",
+                    "detect-only",
+                    "unsupported"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "prerequisites": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "observation"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "observation": {
+                "type": "string"
+              },
+              "actionId": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false

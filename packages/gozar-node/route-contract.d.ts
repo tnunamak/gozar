@@ -1,4 +1,4 @@
-// Gozar consumer contract, version 1 (frozen in C0).
+// Gozar consumer contract: query version 1, catalog and route response version 2.
 //
 // Types only: this file declares the consumer boundary and implements nothing. The JSON Schemas in
 // runtime/route-catalog.schema.json and the fixtures in test/fixtures/route-contract.json are the
@@ -67,6 +67,7 @@ export type Action = {
   href?: string;
   instructions?: string;
   secretLabel?: string;
+  obtainUrl?: string;
   /** For 'provide-value' only: a plain, non-secret input (a domain, an address). Answer it with runSetupAction `value`. */
   valueLabel?: string;
   valuePlaceholder?: string;
@@ -107,7 +108,26 @@ export type ProofCheck = 'tls' | 'nonce' | 'sse';
 export type UnmetRequirement = 'reach' | 'transport' | 'payloadAccess' | 'address' | 'setup' | 'protocols' | 'usage' | 'platform';
 export type UnmetReason = 'not_met' | 'unknown' | 'unsupported_platform';
 
+
+/** An observation, never a guessed default. */
+export type Observation<T> = { known: true; value: T } | { known: false; reason: string };
+/** Open display data. Show every affectsConsent row before approval. Groups and ids are open strings. */
+export type Fact = { id: string; label: string; value: string | number | boolean | null; group: string;
+  affectsConsent: boolean; source: string; asOf: string | null } &
+  ({ known: true; reason?: string } | { known: false; reason: string });
+export type Availability = Record<Usage['kind'], { state: 'available' | 'detect-only' | 'unsupported'; reason: string }>;
+export type Prerequisite = { id: string; label: string; state: 'present' | 'missing' | 'unknown' | 'denied';
+  observedAt: string; version: Observation<string>; remedy: Action | null };
+export type ConfigurationField = { id: string; label: string; kind: 'secret' | 'value'; format: 'text' | 'domain' | 'https-origin';
+  required: boolean; obtainUrl: string | null; validation: 'syntax-only' };
+export type Configuration = { fields: ConfigurationField[]; values: Record<string,string>;
+  credentials: Record<string,Observation<boolean>>; actions: Action[] };
+
 export type Candidate = {
+  availability: Availability;
+  prerequisites: Prerequisite[];
+  facts: Fact[];
+  configuration: Configuration;
   /** The adapter's own stable id, the value `Query.providerId` takes. Pass-through data: show it, store it, send it back. */
   providerId: string;
   /** Opaque to apps. */
@@ -128,7 +148,7 @@ export type Candidate = {
    * setup.state 'unsupported', eligible false and the unmet entry
    * `{requirement:'platform', reasonCode:'unsupported_platform'}` (revision 3; amendment 3).
    */
-  setup: { state: 'ready' | 'action-required' | 'unsupported' | 'unknown'; actions: Action[] };
+  setup: { state: 'ready' | 'action-required' | 'unsupported' | 'unknown' | 'detect-only'; actions: Action[] };
   disclosure: Disclosure;
   /**
    * Set only when `eligible` is true AND `setup.state` is 'ready'. An 'action-required' candidate has
@@ -140,7 +160,8 @@ export type Candidate = {
 };
 
 export type Catalog = {
-  schemaVersion: 1;
+  schemaVersion: 2;
+  features: string[];
   catalogRevision: string;
   observedAt: string;
   preferenceRevision: number;
@@ -178,7 +199,12 @@ export type Ingress = {
 };
 
 export type RouteView = {
-  schemaVersion: 1;
+  schemaVersion: 2;
+  routeState: 'detected' | 'verified' | 'expired' | 'cleanup-unconfirmed' | 'inactive' | 'unknown';
+  expiresAt: Observation<string>;
+  hostConfiguration: { target: Observation<string>; localPort: Observation<number>; bindTarget: Observation<string>; origin: Observation<string> };
+  facts: Fact[];
+  actions: ('stop' | 'edit' | 'rotate')[];
   handle: Handle;
   origin: string | null;
   published: string | null;
@@ -187,9 +213,9 @@ export type RouteView = {
   properties: Properties;
   ingress: Ingress | null;
   /** `vantage` is where the last check actually ran from; a check made from this computer is 'this-device'. `checks` lists what that check made. */
-  verification: { status: 'verified' | 'unverified'; checkedAt: string | null; vantage: ProofVantage; checks: ProofCheck[] };
+  verification: { status: 'verified' | 'unverified'; checkedAt: string | null; vantage: ProofVantage; checks: ProofCheck[]; validUntil: Observation<string>; results: {check: ProofCheck; status: 'passed' | 'failed' | 'unknown'}[] };
   limits: { recommendedPollIntervalMs: number; idleTimeoutMs: number | null };
-  cleanup: { state: 'none' | 'debt'; message?: string };
+  cleanup: { state: 'none' | 'unconfirmed' | 'confirmed'; message?: string };
 };
 
 export type Approval = { candidateToken: string; disclosureRevision: string };
@@ -386,3 +412,6 @@ export function releaseRoute(request: { routeId: string; mode: 'hand-back'; home
 export function releaseRoute(request: { routeId: string; mode?: 'remove' | 'dismiss'; home?: string }): Promise<ReleaseRouteResult>;
 export function confirmHandBack(request: { routeId: string; transfer: string; home?: string }): Promise<{ schemaVersion: 1; routeId: string; handedBack: true; claim: unknown }>;
 export function cancelHandBack(request: { routeId: string; transfer: string; home?: string }): Promise<{ schemaVersion: 1; route: ServiceRoute }>;
+
+/** Stores secret bytes privately; returns an opaque handle only. */
+export function storeSecret(request: {home: string; value: string | Uint8Array}): Promise<{handle: string}>;

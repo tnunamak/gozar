@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+- Add per-kind availability, explicit detect-only choices, observed prerequisites,
+  descriptor-driven configuration and a typed secret intake export.
+- Add extensible fact rows, including consent, sources and explicit unknown reasons.
+- Add route proof/expiry state, recorded host configuration and cleanup confirmation.
+- Return schemaVersion 2 for Catalog and RouteView; setup adds detect-only and
+  cleanup replaces debt with unconfirmed/confirmed. See docs/migration-0.4.md.
+- Ship a provider-neutral remote access screen example with --fakes and --detect.
+
 ## 0.3.4
 
 ### Fixes

@@ -627,7 +627,29 @@
           ]
         },
         "candidateToken": "tok_synthetic_eligible_1",
-        "expiresAt": "2026-11-12T12:10:00.000Z"
+        "expiresAt": "2026-11-12T12:10:00.000Z",
+        "availability": {
+          "session": {
+            "state": "available",
+            "reason": "fixture"
+          },
+          "attached": {
+            "state": "available",
+            "reason": "fixture"
+          },
+          "durable": {
+            "state": "available",
+            "reason": "fixture"
+          }
+        },
+        "prerequisites": [],
+        "facts": [],
+        "configuration": {
+          "fields": [],
+          "values": {},
+          "credentials": {},
+          "actions": []
+        }
       }
     },
     {
@@ -722,7 +744,29 @@
           ]
         },
         "candidateToken": null,
-        "expiresAt": null
+        "expiresAt": null,
+        "availability": {
+          "session": {
+            "state": "available",
+            "reason": "fixture"
+          },
+          "attached": {
+            "state": "available",
+            "reason": "fixture"
+          },
+          "durable": {
+            "state": "available",
+            "reason": "fixture"
+          }
+        },
+        "prerequisites": [],
+        "facts": [],
+        "configuration": {
+          "fields": [],
+          "values": {},
+          "credentials": {},
+          "actions": []
+        }
       }
     },
     {
@@ -817,7 +861,29 @@
           ]
         },
         "candidateToken": null,
-        "expiresAt": null
+        "expiresAt": null,
+        "availability": {
+          "session": {
+            "state": "available",
+            "reason": "fixture"
+          },
+          "attached": {
+            "state": "available",
+            "reason": "fixture"
+          },
+          "durable": {
+            "state": "available",
+            "reason": "fixture"
+          }
+        },
+        "prerequisites": [],
+        "facts": [],
+        "configuration": {
+          "fields": [],
+          "values": {},
+          "credentials": {},
+          "actions": []
+        }
       }
     },
     {
@@ -930,7 +996,29 @@
           ]
         },
         "candidateToken": null,
-        "expiresAt": null
+        "expiresAt": null,
+        "availability": {
+          "session": {
+            "state": "available",
+            "reason": "fixture"
+          },
+          "attached": {
+            "state": "available",
+            "reason": "fixture"
+          },
+          "durable": {
+            "state": "available",
+            "reason": "fixture"
+          }
+        },
+        "prerequisites": [],
+        "facts": [],
+        "configuration": {
+          "fields": [],
+          "values": {},
+          "credentials": {},
+          "actions": []
+        }
       }
     },
     {
@@ -1019,7 +1107,29 @@
           ]
         },
         "candidateToken": null,
-        "expiresAt": null
+        "expiresAt": null,
+        "availability": {
+          "session": {
+            "state": "available",
+            "reason": "fixture"
+          },
+          "attached": {
+            "state": "available",
+            "reason": "fixture"
+          },
+          "durable": {
+            "state": "available",
+            "reason": "fixture"
+          }
+        },
+        "prerequisites": [],
+        "facts": [],
+        "configuration": {
+          "fields": [],
+          "values": {},
+          "credentials": {},
+          "actions": []
+        }
       }
     },
     {
@@ -1027,7 +1137,7 @@
       "shape": "Catalog",
       "name": "five candidates of every kind",
       "value": {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "catalogRevision": "catrev_synthetic_1",
         "observedAt": "2026-11-12T12:00:00.000Z",
         "preferenceRevision": 3,
@@ -1114,7 +1224,29 @@
               ]
             },
             "candidateToken": "tok_synthetic_eligible_1",
-            "expiresAt": "2026-11-12T12:10:00.000Z"
+            "expiresAt": "2026-11-12T12:10:00.000Z",
+            "availability": {
+              "session": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "attached": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "durable": {
+                "state": "available",
+                "reason": "fixture"
+              }
+            },
+            "prerequisites": [],
+            "facts": [],
+            "configuration": {
+              "fields": [],
+              "values": {},
+              "credentials": {},
+              "actions": []
+            }
           },
           {
             "providerId": "example-32",
@@ -1204,7 +1336,29 @@
               ]
             },
             "candidateToken": null,
-            "expiresAt": null
+            "expiresAt": null,
+            "availability": {
+              "session": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "attached": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "durable": {
+                "state": "available",
+                "reason": "fixture"
+              }
+            },
+            "prerequisites": [],
+            "facts": [],
+            "configuration": {
+              "fields": [],
+              "values": {},
+              "credentials": {},
+              "actions": []
+            }
           },
           {
             "providerId": "example-51",
@@ -1294,7 +1448,29 @@
               ]
             },
             "candidateToken": null,
-            "expiresAt": null
+            "expiresAt": null,
+            "availability": {
+              "session": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "attached": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "durable": {
+                "state": "available",
+                "reason": "fixture"
+              }
+            },
+            "prerequisites": [],
+            "facts": [],
+            "configuration": {
+              "fields": [],
+              "values": {},
+              "credentials": {},
+              "actions": []
+            }
           },
           {
             "providerId": "example-39",
@@ -1402,7 +1578,29 @@
               ]
             },
             "candidateToken": null,
-            "expiresAt": null
+            "expiresAt": null,
+            "availability": {
+              "session": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "attached": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "durable": {
+                "state": "available",
+                "reason": "fixture"
+              }
+            },
+            "prerequisites": [],
+            "facts": [],
+            "configuration": {
+              "fields": [],
+              "values": {},
+              "credentials": {},
+              "actions": []
+            }
           },
           {
             "providerId": "example-82",
@@ -1486,10 +1684,38 @@
               ]
             },
             "candidateToken": null,
-            "expiresAt": null
+            "expiresAt": null,
+            "availability": {
+              "session": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "attached": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "durable": {
+                "state": "available",
+                "reason": "fixture"
+              }
+            },
+            "prerequisites": [],
+            "facts": [],
+            "configuration": {
+              "fields": [],
+              "values": {},
+              "credentials": {},
+              "actions": []
+            }
           }
         ],
-        "noMatch": null
+        "noMatch": null,
+        "features": [
+          "structured-state",
+          "open-facts",
+          "configuration-fields",
+          "secret-intake"
+        ]
       }
     },
     {
@@ -1497,7 +1723,7 @@
       "shape": "Catalog",
       "name": "no match",
       "value": {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "catalogRevision": "catrev_synthetic_2",
         "observedAt": "2026-11-12T12:00:00.000Z",
         "preferenceRevision": 0,
@@ -1508,7 +1734,13 @@
             "address",
             "payloadAccess"
           ]
-        }
+        },
+        "features": [
+          "structured-state",
+          "open-facts",
+          "configuration-fields",
+          "secret-intake"
+        ]
       }
     },
     {
@@ -1681,7 +1913,7 @@
       "shape": "RouteView",
       "name": "durable usable with ingress",
       "value": {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "handle": {
           "kind": "durable",
           "id": "example-main",
@@ -1772,7 +2004,12 @@
           "vantage": "this-device",
           "checks": [
             "nonce"
-          ]
+          ],
+          "validUntil": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "results": []
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
@@ -1780,7 +2017,36 @@
         },
         "cleanup": {
           "state": "none"
-        }
+        },
+        "routeState": "verified",
+        "expiresAt": {
+          "known": false,
+          "reason": "not-observed"
+        },
+        "hostConfiguration": {
+          "target": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "localPort": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "bindTarget": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "origin": {
+            "known": false,
+            "reason": "not-observed"
+          }
+        },
+        "facts": [],
+        "actions": [
+          "stop",
+          "edit",
+          "rotate"
+        ]
       }
     },
     {
@@ -1788,7 +2054,7 @@
       "shape": "RouteView",
       "name": "external-owned, unknown privacy",
       "value": {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "handle": {
           "kind": "external",
           "id": "ext-synthetic-1",
@@ -1846,7 +2112,12 @@
           "status": "unverified",
           "checkedAt": null,
           "vantage": "none",
-          "checks": []
+          "checks": [],
+          "validUntil": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "results": []
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
@@ -1854,7 +2125,36 @@
         },
         "cleanup": {
           "state": "none"
-        }
+        },
+        "routeState": "detected",
+        "expiresAt": {
+          "known": false,
+          "reason": "not-observed"
+        },
+        "hostConfiguration": {
+          "target": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "localPort": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "bindTarget": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "origin": {
+            "known": false,
+            "reason": "not-observed"
+          }
+        },
+        "facts": [],
+        "actions": [
+          "stop",
+          "edit",
+          "rotate"
+        ]
       }
     },
     {
@@ -1862,7 +2162,7 @@
       "shape": "RouteView",
       "name": "handing-back: published null",
       "value": {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "handle": {
           "kind": "durable",
           "id": "example-main",
@@ -1928,7 +2228,12 @@
           "vantage": "this-device",
           "checks": [
             "nonce"
-          ]
+          ],
+          "validUntil": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "results": []
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
@@ -1936,7 +2241,36 @@
         },
         "cleanup": {
           "state": "none"
-        }
+        },
+        "routeState": "verified",
+        "expiresAt": {
+          "known": false,
+          "reason": "not-observed"
+        },
+        "hostConfiguration": {
+          "target": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "localPort": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "bindTarget": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "origin": {
+            "known": false,
+            "reason": "not-observed"
+          }
+        },
+        "facts": [],
+        "actions": [
+          "stop",
+          "edit",
+          "rotate"
+        ]
       }
     },
     {
@@ -1944,7 +2278,7 @@
       "shape": "RouteView",
       "name": "released terminal, cleanup debt",
       "value": {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "handle": {
           "kind": "durable",
           "id": "example-main",
@@ -2010,16 +2344,50 @@
           "vantage": "this-device",
           "checks": [
             "nonce"
-          ]
+          ],
+          "validUntil": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "results": []
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
           "idleTimeoutMs": null
         },
         "cleanup": {
-          "state": "debt",
+          "state": "unconfirmed",
           "message": "Provider rule not removed."
-        }
+        },
+        "routeState": "verified",
+        "expiresAt": {
+          "known": false,
+          "reason": "not-observed"
+        },
+        "hostConfiguration": {
+          "target": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "localPort": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "bindTarget": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "origin": {
+            "known": false,
+            "reason": "not-observed"
+          }
+        },
+        "facts": [],
+        "actions": [
+          "stop",
+          "edit",
+          "rotate"
+        ]
       }
     },
     {
@@ -2165,7 +2533,7 @@
         "sequence": 0,
         "type": "snapshot",
         "route": {
-          "schemaVersion": 1,
+          "schemaVersion": 2,
           "handle": {
             "kind": "durable",
             "id": "example-main",
@@ -2231,7 +2599,12 @@
             "vantage": "this-device",
             "checks": [
               "nonce"
-            ]
+            ],
+            "validUntil": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "results": []
           },
           "limits": {
             "recommendedPollIntervalMs": 60000,
@@ -2239,7 +2612,36 @@
           },
           "cleanup": {
             "state": "none"
-          }
+          },
+          "routeState": "verified",
+          "expiresAt": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "hostConfiguration": {
+            "target": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "localPort": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "bindTarget": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "origin": {
+              "known": false,
+              "reason": "not-observed"
+            }
+          },
+          "facts": [],
+          "actions": [
+            "stop",
+            "edit",
+            "rotate"
+          ]
         }
       }
     },
@@ -2252,7 +2654,7 @@
         "sequence": 1,
         "type": "changed",
         "route": {
-          "schemaVersion": 1,
+          "schemaVersion": 2,
           "handle": {
             "kind": "durable",
             "id": "example-main",
@@ -2318,7 +2720,12 @@
             "vantage": "this-device",
             "checks": [
               "nonce"
-            ]
+            ],
+            "validUntil": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "results": []
           },
           "limits": {
             "recommendedPollIntervalMs": 60000,
@@ -2326,7 +2733,36 @@
           },
           "cleanup": {
             "state": "none"
-          }
+          },
+          "routeState": "verified",
+          "expiresAt": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "hostConfiguration": {
+            "target": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "localPort": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "bindTarget": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "origin": {
+              "known": false,
+              "reason": "not-observed"
+            }
+          },
+          "facts": [],
+          "actions": [
+            "stop",
+            "edit",
+            "rotate"
+          ]
         }
       }
     },
@@ -2339,7 +2775,7 @@
         "sequence": 1,
         "type": "terminal",
         "route": {
-          "schemaVersion": 1,
+          "schemaVersion": 2,
           "handle": {
             "kind": "durable",
             "id": "example-main",
@@ -2405,7 +2841,12 @@
             "vantage": "this-device",
             "checks": [
               "nonce"
-            ]
+            ],
+            "validUntil": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "results": []
           },
           "limits": {
             "recommendedPollIntervalMs": 60000,
@@ -2413,7 +2854,36 @@
           },
           "cleanup": {
             "state": "none"
-          }
+          },
+          "routeState": "verified",
+          "expiresAt": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "hostConfiguration": {
+            "target": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "localPort": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "bindTarget": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "origin": {
+              "known": false,
+              "reason": "not-observed"
+            }
+          },
+          "facts": [],
+          "actions": [
+            "stop",
+            "edit",
+            "rotate"
+          ]
         }
       }
     },
@@ -3304,7 +3774,7 @@
       "shape": "RouteView",
       "name": "suspending: published null",
       "value": {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "handle": {
           "kind": "durable",
           "id": "example-main",
@@ -3370,7 +3840,12 @@
           "vantage": "this-device",
           "checks": [
             "nonce"
-          ]
+          ],
+          "validUntil": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "results": []
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
@@ -3378,7 +3853,36 @@
         },
         "cleanup": {
           "state": "none"
-        }
+        },
+        "routeState": "verified",
+        "expiresAt": {
+          "known": false,
+          "reason": "not-observed"
+        },
+        "hostConfiguration": {
+          "target": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "localPort": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "bindTarget": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "origin": {
+            "known": false,
+            "reason": "not-observed"
+          }
+        },
+        "facts": [],
+        "actions": [
+          "stop",
+          "edit",
+          "rotate"
+        ]
       }
     },
     {
@@ -3386,7 +3890,7 @@
       "shape": "RouteView",
       "name": "suspended: published null",
       "value": {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "handle": {
           "kind": "durable",
           "id": "example-main",
@@ -3452,7 +3956,12 @@
           "vantage": "this-device",
           "checks": [
             "nonce"
-          ]
+          ],
+          "validUntil": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "results": []
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
@@ -3460,7 +3969,36 @@
         },
         "cleanup": {
           "state": "none"
-        }
+        },
+        "routeState": "verified",
+        "expiresAt": {
+          "known": false,
+          "reason": "not-observed"
+        },
+        "hostConfiguration": {
+          "target": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "localPort": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "bindTarget": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "origin": {
+            "known": false,
+            "reason": "not-observed"
+          }
+        },
+        "facts": [],
+        "actions": [
+          "stop",
+          "edit",
+          "rotate"
+        ]
       }
     }
   ],

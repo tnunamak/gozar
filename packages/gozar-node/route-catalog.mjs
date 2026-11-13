@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { canonicalHome } from './service-state.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { supportedPlatform } from './platform.mjs';
+import { availabilityFor, prerequisitesFor, configurationFor, features } from './embedding-state.mjs';
+import { readConfiguration } from './adapter-configuration.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { loopbackTarget } from './durable-route.mjs';
 import { checksFor, completeProperties, needsFor } from './route-view.mjs';
@@ -94,13 +96,16 @@ export async function inspectAdapter(adapter, context, platform) {
   const state = ['ready', 'action-required', 'unsupported', 'unknown'].includes(detected?.state) ? detected.state : 'unknown';
   let properties = base.properties, actions = [];
   try { properties = adapter.properties(detected.facts); } catch { /* keep the declared capabilities */ }
-  if (state === 'action-required') { try { actions = adapter.setupActions(detected.facts); } catch { /* no usable actions */ } }
-  return { ...base, state, facts: detected.facts, properties, actions, probed: true };
+  if (state !== 'unsupported') { try { actions = adapter.configurationActions ? adapter.configurationActions() : adapter.setupActions({ ...detected.facts, setupNeeded: true }); } catch { /* no usable actions */ } }
+  let missingActions = [];
+  try { missingActions = adapter.setupActions(detected.facts); } catch {}
+  return { ...base, state, facts: detected.facts, properties, actions, missingActions, probed: true };
 }
 
 /** One revision for the provider-side state: it changes when a setup state, an action or a property changes. */
 export function catalogRevisionOf(inspections, platform) {
   const view = inspections.map(item => ({ id: item.adapter.id, state: item.state, properties: item.properties,
+    facts: item.adapter.definition.facts ?? [], availability: availabilityFor(item.adapter.definition),
     actions: item.actions.map(action => [action.id, action.digest, action.disclosure.revision]), disclosure: item.adapter.definition.disclosure.revision }));
   return `catrev_${sha(JSON.stringify([platform, view])).slice(0, 32)}`;
 }
@@ -186,10 +191,15 @@ async function collect(query, deps) {
       }
     } else unmet.push({ requirement: 'platform', actual: platform, reasonCode: 'unsupported_platform' });
 
-    const eligible = unmet.length === 0;
+    const availability = availabilityFor(definition);
+    if (supportedPlatform(platform) && availability[query.usage.kind].state === 'detect-only') setupState = 'detect-only';
+    const eligible = unmet.length === 0 && availability[query.usage.kind].state === 'available';
+    const observedAt = new Date(context.now()).toISOString();
+    const configuration = configurationFor([...new Map([...actions, ...(inspection.missingActions ?? [])].map(action => [action.id, action])).values()], await readConfiguration({ home, adapterId: adapter.id }));
     const candidate = { providerId: adapter.id, name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
       display: { label: definition.label, description: describe(definition, properties), needs: needsFor(definition, query.usage.kind) }, properties,
-      setup: { state: setupState, actions: setupState === 'action-required' ? actions : [] }, disclosure: definition.disclosure,
+      availability, prerequisites: prerequisitesFor(inspection, observedAt), configuration, facts: structuredClone(definition.facts ?? []),
+      setup: { state: setupState, actions: setupState === 'action-required' ? inspection.missingActions ?? actions : [] }, disclosure: definition.disclosure,
       candidateToken: null, expiresAt: null };
     if (query.usage.kind === 'durable' && query.intent === 'adopt') {
       const takeover = 'Gozar takes over the existing rule and removes it when the route is released or stopped.';
@@ -237,7 +247,7 @@ export async function catalogRoutes(query, deps = {}) {
     const adapters = deps.adapters ?? await runtime.loadAdapters();
     const { candidates, inspections } = await collect(query, { ...deps, adapters, platform, issue, durablePlanFacts, preferences: preferenceRecord.adapterPreference });
     const unmetNames = [...new Set(candidates.flatMap(candidate => candidate.unmet.map(item => item.requirement)))].sort();
-    return { schemaVersion: 1, catalogRevision: catalogRevisionOf(inspections, platform), observedAt: new Date((deps.now ?? Date.now)()).toISOString(),
+    return { schemaVersion: 2, features: [...features], catalogRevision: catalogRevisionOf(inspections, platform), observedAt: new Date((deps.now ?? Date.now)()).toISOString(),
       preferenceRevision: preferenceRecord.revision, candidates,
       noMatch: candidates.some(candidate => candidate.eligible) ? null : { code: 'requirements_unsatisfied', requirements: unmetNames } };
   } catch (error) { throw normalizeError(error); }

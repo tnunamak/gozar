@@ -84,7 +84,7 @@ test('both schemas parse, use only supported keywords and resolve every $ref', (
 
 test('schemaVersion is const 1 wherever a shape carries it', () => {
   for (const shape of ['Query', 'Catalog', 'RouteView', 'GozarError', 'PreferenceRecord', 'SetupActionResult', 'WatchEvent', 'InspectLegacyRouteResult']) {
-    assert.deepEqual(catalogSchema.$defs[shape].properties.schemaVersion, { const: 1 }, shape);
+    assert.deepEqual(catalogSchema.$defs[shape].properties.schemaVersion, { const: ['Catalog','RouteView'].includes(shape) ? 2 : 1 }, shape);
   }
   assert.deepEqual(adapterSchema.$defs.AdapterDefinition.properties.schemaVersion, { const: 1 });
 });
@@ -99,7 +99,7 @@ test('adapter.schema.json shares Properties, Reach and Disclosure with the catal
 
 test('closed shapes reject unknown properties', () => {
   for (const [name, schema] of Object.entries(schemas)) {
-    for (const [shape, def] of Object.entries(schema.$defs)) if (def.type === 'object') assert.equal(def.additionalProperties, false, `${name}.${shape}`);
+    for (const [shape, def] of Object.entries(schema.$defs)) if (def.type === 'object' && !['Configuration'].includes(shape)) assert.equal(def.additionalProperties, false, `${name}.${shape}`);
   }
 });
 

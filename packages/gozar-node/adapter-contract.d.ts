@@ -3,7 +3,7 @@
 // One adapter is one directory plus one `{id, module, definition}` entry in adapters/manifest.json
 // `providers`. Types only: no runtime behaviour is declared here. Opaque effect, readback and
 // identity bodies stay provider-specific; core validates the envelope and the admission.
-import type { Action, Properties, RouteView, Ingress, Usage, Requirements, Disclosure } from './route-contract.js';
+import type { Action, Fact, Availability, Properties, RouteView, Ingress, Usage, Requirements, Disclosure } from './route-contract.js';
 
 export type AdapterState = 'ready' | 'action-required' | 'unsupported' | 'unknown';
 
@@ -19,6 +19,7 @@ export interface Adapter {
   detect(ctx: ReadContext): Promise<{ state: AdapterState; facts: unknown }>;
   properties(facts: unknown): Properties;
   setupActions(facts: unknown): Action[];
+  configurationActions?(): Action[];
   setup(ctx: SetupContext, actionId: string, secretHandle?: string): Promise<SetupResult>;
   plan(ctx: ReadContext, request: AdapterRequest): Promise<AdapterPlan>;
   create(ctx: AdmittedEffectContext, plan: AdapterPlan): Promise<Receipt>;
@@ -33,6 +34,9 @@ export type AdapterDefinition = {
   id: string;
   label: string;
   capabilities: Properties;
+  facts?: Fact[];
+  availability?: Availability;
+  prerequisites?: {id: string; label: string; observation: string; actionId?: string}[];
   supportedKinds: ('session' | 'attached' | 'durable')[];
   disclosure: Disclosure;
 };

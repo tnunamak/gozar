@@ -63,7 +63,146 @@
       "text": "Start a public HTTPS trial through the localhost.run relay for the requested lifetime (15 minutes by default). The relay terminates TLS and can read payloads.",
       "links": []
     },
-    "ownership": "gozar-owned"
+    "ownership": "gozar-owned",
+    "availability": {
+      "session": {
+        "state": "available",
+        "reason": "admitted"
+      },
+      "attached": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      },
+      "durable": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      }
+    },
+    "prerequisites": [
+      {
+        "id": "local-setup",
+        "label": "Local prerequisites",
+        "observation": "detected"
+      }
+    ],
+    "facts": [
+      {
+        "id": "cost-detail",
+        "label": "Cost details",
+        "value": "The free tier costs nothing and needs no signup; its domains change regularly and have a speed limit.",
+        "known": true,
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "https://localhost.run/, https://localhost.run/docs/forever-free",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "entitlement",
+        "label": "Account entitlement",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "https://localhost.run/, https://localhost.run/docs/forever-free",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "quota",
+        "label": "Remaining quota",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "https://localhost.run/, https://localhost.run/docs/forever-free",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "mapping",
+        "label": "Effective provider mapping",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "https://localhost.run/, https://localhost.run/docs/forever-free",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-0",
+        "label": "Address condition",
+        "value": "trial: uptime and URL lifetime are not guaranteed",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://localhost.run/, https://localhost.run/docs/forever-free",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-1",
+        "label": "Address condition",
+        "value": "a new connection gets a new URL",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://localhost.run/, https://localhost.run/docs/forever-free",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-2",
+        "label": "Address condition",
+        "value": "the plan limits a session to 15 minutes",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://localhost.run/, https://localhost.run/docs/forever-free",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "public-names",
+        "label": "Public names",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://localhost.run/, https://localhost.run/docs/forever-free",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-logs",
+        "label": "Certificate logs",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://localhost.run/, https://localhost.run/docs/forever-free",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "browser-warning",
+        "label": "Browser warning",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "https://localhost.run/, https://localhost.run/docs/forever-free",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "payload-readers",
+        "label": "Payload readers",
+        "value": "The localhost.run relay can read the traffic.",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "https://localhost.run/ (accessed 2026-11-12) ; https://localhost.run/docs/forever-free (accessed 2026-11-12)",
+        "asOf": "2026-11-12"
+      }
+    ]
   },
   "evidence": {
     "accessed": "2026-11-12",

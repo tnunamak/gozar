@@ -21,7 +21,7 @@
       },
       "address": {
         "stability": "stable",
-        "scope": "hostname route in the owner’s Cloudflare account",
+        "scope": "hostname route in the owner\u2019s Cloudflare account",
         "conditions": [
           "no admitted create recipe",
           "DNS and the tunnel are owner-managed prerequisites"
@@ -69,7 +69,156 @@
         }
       ]
     },
-    "ownership": "gozar-owned"
+    "ownership": "gozar-owned",
+    "availability": {
+      "session": {
+        "state": "detect-only",
+        "reason": "execution-not-implemented"
+      },
+      "attached": {
+        "state": "detect-only",
+        "reason": "execution-not-implemented"
+      },
+      "durable": {
+        "state": "detect-only",
+        "reason": "execution-not-implemented"
+      }
+    },
+    "prerequisites": [
+      {
+        "id": "local-setup",
+        "label": "Local prerequisites",
+        "observation": "detected"
+      }
+    ],
+    "facts": [
+      {
+        "id": "cost-detail",
+        "label": "Cost details",
+        "value": "Cloudflare lists a $0 Free Zero Trust plan with connector software included, but no page names Cloudflare Tunnel.",
+        "known": true,
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "entitlement",
+        "label": "Account entitlement",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "quota",
+        "label": "Remaining quota",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "mapping",
+        "label": "Effective provider mapping",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "terms-terms",
+        "label": "Terms",
+        "value": "https://www.cloudflare.com/terms/",
+        "known": true,
+        "group": "terms",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "terms-privacy",
+        "label": "Privacy",
+        "value": "https://www.cloudflare.com/privacypolicy/",
+        "known": true,
+        "group": "terms",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-0",
+        "label": "Address condition",
+        "value": "no admitted create recipe",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-1",
+        "label": "Address condition",
+        "value": "DNS and the tunnel are owner-managed prerequisites",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "public-names",
+        "label": "Public names",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-logs",
+        "label": "Certificate logs",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "browser-warning",
+        "label": "Browser warning",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "payload-readers",
+        "label": "Payload readers",
+        "value": "The Cloudflare edge can read the traffic.",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md (accessed 2026-11-12) ; https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/ (accessed 2026-11-12)",
+        "asOf": "2026-11-12"
+      }
+    ]
   },
   "evidence": {
     "accessed": "2026-11-12",

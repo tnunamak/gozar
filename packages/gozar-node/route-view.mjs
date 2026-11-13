@@ -2,6 +2,7 @@
 // and routeStatus / closeRoute, which dispatch on handle.kind. Apps never learn which provider
 // answered; provider diagnostics stay on error.cause.
 import { join } from 'node:path';
+import { enrichRoute, cleanupForSession } from './embedding-state.mjs';
 
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 export { gozarError, normalizeError };
@@ -62,22 +63,22 @@ const verificationOf = (state, checkedAtMs, checks = []) => proven(state === 'us
 const challengeChecks = origin => (typeof origin === 'string' && origin.startsWith('https://') ? ['nonce', 'tls'] : ['nonce']);
 const debtMessage = debt => typeof debt === 'string' ? debt : debt?.message ?? debt?.reason ?? 'Cleanup is incomplete';
 
-function view({ handle, origin, published, state, ownership, properties, ingress = null, verification, limits, cleanup = { state: 'none' } }) {
-  return { schemaVersion: 1, handle: { kind: handle.kind, id: handle.id, generation: handle.generation }, origin, published, state, ownership,
-    properties, ingress, verification, limits, cleanup };
+function view({ handle, origin, published, state, ownership, properties, ingress = null, verification, limits, cleanup = { state: 'none' }, target, expiresAt, validUntil, now, facts }) {
+  return enrichRoute({ schemaVersion: 2, handle: { kind: handle.kind, id: handle.id, generation: handle.generation }, origin, published, state, ownership,
+    properties, ingress, verification, limits, cleanup }, { target, expiresAt, validUntil, now, facts });
 }
 const limitsOf = (limits, fallbackPollMs, idleTimeoutMs = null) => ({
   recommendedPollIntervalMs: limits?.recommendedPollIntervalMs ?? fallbackPollMs, idleTimeoutMs: limits?.idleTimeoutMs ?? idleTimeoutMs });
 
 /** From the durable engine's reply: a record view that already names its state, origin and verification. */
-export function projectDurable(reply, { handle, properties, ingress = null, limits, now = Date.now() }) {
+export function projectDurable(reply, { handle, properties, ingress = null, limits, facts = [], now = Date.now() }) {
   const state = STATES.has(reply.state) ? reply.state : 'unknown';
   const published = state === 'usable' && typeof reply.origin === 'string' ? reply.origin : null;
   const checkedAt = typeof reply.verification?.checkedAt === 'string' ? Date.parse(reply.verification.checkedAt) : null;
   // RouteView.origin is the route's address, also before verification; `published` is what the app may advertise.
-  return view({ handle, origin: reply.allocatedOrigin ?? reply.origin ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
+  return view({ target: reply.target, expiresAt: reply.expiresAt, validUntil: reply.verification?.validUntil, facts, now, handle, origin: reply.allocatedOrigin ?? reply.origin ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
     verification: proven(reply.verification?.status === 'verified' && state === 'usable' ? 'verified' : 'unverified', Number.isFinite(checkedAt) ? iso(checkedAt) : null, challengeChecks(reply.origin ?? reply.allocatedOrigin)),
-    limits: limitsOf(limits, 60_000, reply.idleTimeoutMs), cleanup: reply.cleanupDebt ? { state: 'debt', message: debtMessage(reply.cleanupDebt) } : { state: 'none' } });
+    limits: limitsOf(limits, 60_000, reply.idleTimeoutMs), cleanup: reply.cleanupDebt ? { state: 'unconfirmed', message: debtMessage(reply.cleanupDebt) } : { state: 'none' } });
 }
 
 const PHASES = { idle: 'creating', detecting: 'creating', planned: 'creating', preflight: 'creating', persisting: 'creating', starting: 'creating',
@@ -85,21 +86,20 @@ const PHASES = { idle: 'creating', detecting: 'creating', planned: 'creating', p
   stopping: 'releasing', 'cleanup-pending': 'uncertain', stopped: 'released', failed: 'lost', blocked: 'unknown', unknown: 'unknown' };
 
 /** From a session snapshot (the controller's status reply). Published only while the core says published-ready. */
-export function projectSession(reply, { handle, properties, ingress = null, limits, now = Date.now() }) {
+export function projectSession(reply, { handle, properties, ingress = null, limits, facts = [], now = Date.now() }) {
   const snapshot = reply.snapshot ?? {};
   const state = PHASES[snapshot.phase] ?? 'unknown';
   const published = state === 'usable' && typeof snapshot.published === 'string' ? snapshot.published : null;
-  const debt = state === 'uncertain' || reply.localCleanupFailures?.length;
-  return view({ handle, origin: snapshot.published ?? snapshot.candidate ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
-    verification: verificationOf(state, state === 'usable' ? now : null, checksFor(properties?.proof?.checks, { sse: reply.sseChecked === true, origin: published })), limits: limitsOf(limits, 5_000),
-    cleanup: debt ? { state: 'debt', message: 'Cleanup is incomplete; stop the route again' } : { state: 'none' } });
+  return view({ target: reply.target ?? snapshot.target, expiresAt: snapshot.expiresAt ?? (Number.isFinite(snapshot.expiresAtMs) ? iso(snapshot.expiresAtMs) : undefined), validUntil: Number.isFinite(reply.validation?.probeReceipt?.expiresAtMs) ? iso(reply.validation.probeReceipt.expiresAtMs) : undefined, facts, now, handle, origin: snapshot.published ?? snapshot.candidate ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
+    verification: verificationOf(state, state === 'usable' ? reply.validation?.probeReceipt?.checkedAtMs ?? now : null, checksFor(properties?.proof?.checks, { sse: reply.sseChecked === true, origin: published })), limits: limitsOf(limits, 5_000),
+    cleanup: cleanupForSession(reply) });
 }
 
 /** From an external service record (owner-managed ingress). Privacy and stability stay unknown. */
 export function projectExternal(record, { handle, now = Date.now() }) {
   const verified = record.verification?.status === 'verified';
   const checkedAt = typeof record.verification?.checkedAt === 'string' ? Date.parse(record.verification.checkedAt) : now;
-  return view({ handle, origin: record.origin, published: verified ? record.origin : null, state: verified ? 'usable' : 'unverified',
+  return view({ target: record.target, validUntil: record.verification?.validUntil, now, handle, origin: record.origin, published: verified ? record.origin : null, state: verified ? 'usable' : 'unverified',
     ownership: 'external-owned', properties: unknownProperties(), verification: proven(verified ? 'verified' : 'unverified', iso(Number.isFinite(checkedAt) ? checkedAt : now), challengeChecks(record.origin)),
     limits: limitsOf(null, 60_000) });
 }
@@ -107,15 +107,15 @@ export function projectExternal(record, { handle, now = Date.now() }) {
 /** From an attached lease record kept by its controller. */
 export function projectAttached(lease, { handle, now = Date.now() }) {
   const state = STATES.has(lease.state) ? lease.state : 'unknown';
-  return view({ handle, origin: lease.origin ?? null, published: state === 'usable' ? lease.origin ?? null : null, state, ownership: 'gozar-owned',
+  return view({ target: lease.target, expiresAt: lease.expiresAt ?? (Number.isFinite(lease.expiresAtMs) ? iso(lease.expiresAtMs) : undefined), validUntil: lease.ingress?.validUntil, now, handle, origin: lease.origin ?? null, published: state === 'usable' ? lease.origin ?? null : null, state, ownership: 'gozar-owned',
     properties: lease.properties ? completeProperties(lease.properties) : lease.properties, ingress: lease.ingress ?? null, verification: verificationOf(state, state === 'usable' ? lease.checkedAtMs ?? now : lease.checkedAtMs ?? null, checksFor(lease.properties?.proof?.checks, { sse: lease.sseChecked === true, origin: lease.origin ?? null })),
-    limits: limitsOf(lease.limits, 5_000), cleanup: lease.cleanup ?? { state: 'none' } });
+    limits: limitsOf(lease.limits, 5_000), cleanup: lease.cleanup?.state === 'debt' ? { ...lease.cleanup, state: 'unconfirmed' } : lease.cleanup ?? { state: 'none' } });
 }
 
 export function releasedView(last, handle) {
   const base = last ?? view({ handle, origin: null, published: null, state: 'released', ownership: handle.kind === 'external' ? 'external-owned' : 'gozar-owned',
     properties: unknownProperties(), verification: proven('unverified', null, []), limits: { recommendedPollIntervalMs: 60_000, idleTimeoutMs: null } });
-  return { ...base, state: 'released', published: null, ingress: null, verification: proven('unverified', base.verification.checkedAt, []) };
+  return enrichRoute({ ...base, state: 'released', published: null, origin: null, ingress: null, cleanup: { state: 'confirmed' }, verification: proven('unverified', base.verification.checkedAt, []) });
 }
 
 // --- Dispatch -----------------------------------------------------------------------------------
@@ -124,7 +124,7 @@ export function releasedView(last, handle) {
 export async function propertiesFor(adapterId, deps, kind) {
   const adapters = deps.adapters ?? await (await import('./adapter-runtime.mjs')).loadAdapters();
   const adapter = adapters.find(item => item.id === adapterId);
-  return adapter ? { properties: completeProperties(adapter.definition.capabilities, adapter.definition, kind) } : { properties: unknownProperties() };
+  return adapter ? { properties: completeProperties(adapter.definition.capabilities, adapter.definition, kind), facts: structuredClone(adapter.definition.facts ?? []) } : { properties: unknownProperties() };
 }
 
 const defaults = {
@@ -208,7 +208,7 @@ export async function closeRoute(request, deps = {}) {
         }
         const reply = await (deps.durable ?? defaults.durable).close(request, { adapters: deps.adapters });
         const debt = reply?.cleanupDebt ?? null;
-        return { ...releasedView(before, handle), state: debt ? 'uncertain' : 'released', cleanup: debt ? { state: 'debt', message: debtMessage(debt) } : { state: 'none' } };
+        return { ...releasedView(before, handle), state: debt ? 'uncertain' : 'released', cleanup: debt ? { state: 'unconfirmed', message: debtMessage(debt) } : { state: 'confirmed' }, routeState: debt ? 'cleanup-unconfirmed' : 'inactive' };
       }
       case 'session': {
         const before = await routeStatus({ home: request.home, handle }, deps);

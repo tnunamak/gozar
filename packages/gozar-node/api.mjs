@@ -10,6 +10,7 @@ export const { catalogRoutes, inspectLegacyRoute, ensureRoute, adoptRoute, route
   getRoutePreferences, setRoutePreferences, runSetupAction, resolveClientAddress } = routes;
 /** Alias of catalogRoutes. */
 export const detect = catalogRoutes;
+export { storeSecret } from './secret-store.mjs';
 
 // Kept service and hand-back exports (also at @tnunamak/gozar/service).
 export { addService, statusServices, removeService, createServiceVerifier, releaseRoute, confirmHandBack, cancelHandBack } from './service.mjs';

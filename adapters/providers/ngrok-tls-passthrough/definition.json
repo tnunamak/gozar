@@ -69,7 +69,156 @@
         }
       ]
     },
-    "ownership": "gozar-owned"
+    "ownership": "gozar-owned",
+    "availability": {
+      "session": {
+        "state": "detect-only",
+        "reason": "execution-not-implemented"
+      },
+      "attached": {
+        "state": "detect-only",
+        "reason": "execution-not-implemented"
+      },
+      "durable": {
+        "state": "detect-only",
+        "reason": "execution-not-implemented"
+      }
+    },
+    "prerequisites": [
+      {
+        "id": "local-setup",
+        "label": "Local prerequisites",
+        "observation": "detected"
+      }
+    ],
+    "facts": [
+      {
+        "id": "cost-detail",
+        "label": "Cost details",
+        "value": "The ngrok pricing page does not settle the cost of TLS passthrough.",
+        "known": true,
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "entitlement",
+        "label": "Account entitlement",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "quota",
+        "label": "Remaining quota",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "mapping",
+        "label": "Effective provider mapping",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "terms-terms",
+        "label": "Terms",
+        "value": "https://ngrok.com/tos",
+        "known": true,
+        "group": "terms",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "terms-privacy",
+        "label": "Privacy",
+        "value": "https://ngrok.com/privacy",
+        "known": true,
+        "group": "terms",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-0",
+        "label": "Address condition",
+        "value": "no admitted create recipe",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-1",
+        "label": "Address condition",
+        "value": "raw TLS may need a paid account",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "public-names",
+        "label": "Public names",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-logs",
+        "label": "Certificate logs",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "browser-warning",
+        "label": "Browser warning",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "payload-readers",
+        "label": "Payload readers",
+        "value": "The relay cannot read the traffic; TLS ends on this computer.",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "https://ngrok.com/pricing (accessed 2026-11-12)",
+        "asOf": "2026-11-12"
+      }
+    ]
   },
   "evidence": {
     "accessed": "2026-11-12",

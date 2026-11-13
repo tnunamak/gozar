@@ -74,7 +74,166 @@
         }
       ]
     },
-    "ownership": "gozar-owned"
+    "ownership": "gozar-owned",
+    "availability": {
+      "session": {
+        "state": "detect-only",
+        "reason": "execution-not-implemented"
+      },
+      "attached": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      },
+      "durable": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      }
+    },
+    "prerequisites": [
+      {
+        "id": "local-setup",
+        "label": "Local prerequisites",
+        "observation": "detected"
+      }
+    ],
+    "facts": [
+      {
+        "id": "cost-detail",
+        "label": "Cost details",
+        "value": "The free tier costs nothing and needs no account; Pro is $6 a month or $60 a year and removes time limits and the warning page.",
+        "known": true,
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "entitlement",
+        "label": "Account entitlement",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "quota",
+        "label": "Remaining quota",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "mapping",
+        "label": "Effective provider mapping",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "terms-terms",
+        "label": "Terms",
+        "value": "https://tunnl.gg/terms.md",
+        "known": true,
+        "group": "terms",
+        "affectsConsent": false,
+        "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "terms-privacy",
+        "label": "Privacy",
+        "value": "https://tunnl.gg/privacy.md",
+        "known": true,
+        "group": "terms",
+        "affectsConsent": false,
+        "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-0",
+        "label": "Address condition",
+        "value": "an announced address change ends the route",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-1",
+        "label": "Address condition",
+        "value": "the relay can close quiet streams after about two minutes",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-2",
+        "label": "Address condition",
+        "value": "browsers can show a warning page",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "public-names",
+        "label": "Public names",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-logs",
+        "label": "Certificate logs",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "browser-warning",
+        "label": "Browser warning",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "payload-readers",
+        "label": "Payload readers",
+        "value": "The tunnl.gg relay can read the traffic.",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "https://tunnl.gg (accessed 2026-11-12) ; https://tunnl.gg/terms.md (accessed 2026-11-12) ; https://tunnl.gg/privacy.md (accessed 2026-11-12)",
+        "asOf": "2026-11-12"
+      }
+    ]
   },
   "evidence": {
     "accessed": "2026-11-12",

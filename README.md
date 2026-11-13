@@ -361,3 +361,27 @@ node crates/gozar-core/tests/public-relay-golden.mjs
 ```
 
 The [live provider harness](harness/README.md) checks a real MCP call, streaming and cleanup. These development tools are not required for npm use.
+
+### Embedding state (0.4)
+
+Catalog and route responses use schemaVersion 2; requests still use 1. Read
+`candidate.availability[usage.kind]` before offering an executable choice:
+`detect-only` means Gozar can inspect it but cannot create it. Prerequisites carry
+observed states and fixes independently of setup and route proof.
+
+Render `candidate.configuration.fields` generically. Its `values` are non-secret
+read-back; `credentials` reports presence only. Import `storeSecret` from
+`@tnunamak/gozar`, pass `{home,value}`, and send the returned handle to the approved
+`runSetupAction`. Configuration actions support edits and rotation while ready.
+
+Render `facts` by group and show every `affectsConsent` row before approval. New
+facts require no app changes. Unknown rows include a reason; `needs-provider-call`
+never means false. Compute with typed reach, traffic, address, cost, availability,
+prerequisites and proof; use fact rows for additional display details.
+
+Route views include `routeState`, verification checks/time/expiry, route expiry,
+recorded host configuration, cleanup state and actions. Expiry can be explicitly
+unknown. A detected address is not a verified route. See the
+[migration guide](docs/migration-0.4.md) and the shipped
+[remote access example](examples/remote-access-screen.mjs), which accepts exactly
+`--fakes` or `--detect` and never creates a real route.

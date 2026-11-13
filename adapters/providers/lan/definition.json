@@ -21,7 +21,7 @@
         "stability": "unknown",
         "scope": "selected interface address with an OS-assigned port",
         "conditions": [
-          "firewall and routing are the owner’s prerequisites",
+          "firewall and routing are the owner\u2019s prerequisites",
           "no TLS: HTTPS-required clients cannot use it"
         ],
         "ports": null
@@ -59,7 +59,136 @@
       "text": "Expose this service on a selected local network interface over plain HTTP through an owned forwarder. Anyone on that network path can read the traffic.",
       "links": []
     },
-    "ownership": "gozar-owned"
+    "ownership": "gozar-owned",
+    "availability": {
+      "session": {
+        "state": "available",
+        "reason": "admitted"
+      },
+      "attached": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      },
+      "durable": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      }
+    },
+    "prerequisites": [
+      {
+        "id": "local-setup",
+        "label": "Local prerequisites",
+        "observation": "detected"
+      }
+    ],
+    "facts": [
+      {
+        "id": "cost-detail",
+        "label": "Cost details",
+        "value": "Gozar charges nothing and there is no provider; the owned local forwarder uses your own network.",
+        "known": true,
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "entitlement",
+        "label": "Account entitlement",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "quota",
+        "label": "Remaining quota",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "mapping",
+        "label": "Effective provider mapping",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-0",
+        "label": "Address condition",
+        "value": "firewall and routing are the owner\u2019s prerequisites",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-1",
+        "label": "Address condition",
+        "value": "no TLS: HTTPS-required clients cannot use it",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "public-names",
+        "label": "Public names",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-logs",
+        "label": "Certificate logs",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "browser-warning",
+        "label": "Browser warning",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "payload-readers",
+        "label": "Payload readers",
+        "value": "Traffic is unencrypted; the local network path (unencrypted HTTP) can read it.",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "adapters/lan.definition.json",
+        "asOf": "2026-11-12"
+      }
+    ]
   },
   "evidence": {
     "accessed": "2026-11-12",

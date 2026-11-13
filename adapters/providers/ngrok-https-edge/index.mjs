@@ -29,13 +29,13 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
     definition: new URL('./definition.json', import.meta.url),
     extend: ({ base, definition, platformOf, unsupported }) => {
       const action = (id, label, secretLabel) => {
-        const body = { id, kind: 'provide-secret', label, secretLabel, disclosure: definition.disclosure };
+        const body = { id, kind: 'provide-secret', label, secretLabel, obtainUrl: 'https://dashboard.ngrok.com/get-started/your-authtoken', disclosure: definition.disclosure };
         return { ...body, digest: sha(body) };
       };
       const authAction = action('auth', 'Provide your ngrok auth token', 'ngrok auth token');
       const domainAction = (() => {
         const body = { id: 'reserved-domain', kind: 'provide-value', label: 'Provide your reserved ngrok domain', valueLabel: 'Reserved ngrok domain',
-          valuePlaceholder: 'example.ngrok.app', valueFormat: 'domain', required: true, disclosure: definition.disclosure };
+          obtainUrl: 'https://dashboard.ngrok.com/domains', valuePlaceholder: 'example.ngrok.app', valueFormat: 'domain', required: true, disclosure: definition.disclosure };
         return { ...body, digest: sha(body) };
       })();
       const installAction = (() => {
@@ -55,6 +55,7 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
             facts: { platform: os, sdk, authSet: values.authToken !== null, domainSet: values.reservedDomain !== null, configured, setupNeeded: !ready } };
         },
 
+        configurationActions: () => [authAction, domainAction],
         setupActions: facts => (!facts?.setupNeeded ? [] : [...(facts.sdk ? [] : [installAction]), ...(facts.authSet ? [] : [authAction]), ...(facts.domainSet ? [] : [domainAction])]),
 
         async setup(ctx, actionId, secretHandle) {

@@ -61,10 +61,129 @@
     ],
     "disclosure": {
       "revision": "disc-6046ee9650c1",
-      "text": "Validate an existing owner-managed HTTPS origin against this instance. The address, route and certificate stay under the owner’s control; Gozar creates and deletes nothing.",
+      "text": "Validate an existing owner-managed HTTPS origin against this instance. The address, route and certificate stay under the owner\u2019s control; Gozar creates and deletes nothing.",
       "links": []
     },
-    "ownership": "external-owned"
+    "ownership": "external-owned",
+    "availability": {
+      "session": {
+        "state": "available",
+        "reason": "admitted"
+      },
+      "attached": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      },
+      "durable": {
+        "state": "available",
+        "reason": "admitted"
+      }
+    },
+    "prerequisites": [
+      {
+        "id": "local-setup",
+        "label": "Local prerequisites",
+        "observation": "detected"
+      }
+    ],
+    "facts": [
+      {
+        "id": "cost-detail",
+        "label": "Cost details",
+        "value": "Gozar charges nothing; your own domain, hosting and certificate cost whatever you pay for them.",
+        "known": true,
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "entitlement",
+        "label": "Account entitlement",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "quota",
+        "label": "Remaining quota",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "mapping",
+        "label": "Effective provider mapping",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-0",
+        "label": "Address condition",
+        "value": "the owner keeps the route and the certificate",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-1",
+        "label": "Address condition",
+        "value": "a successful response alone does not prove the correct application or outside reach",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "public-names",
+        "label": "Public names",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-logs",
+        "label": "Certificate logs",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "browser-warning",
+        "label": "Browser warning",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      }
+    ]
   },
   "evidence": {
     "accessed": "2026-11-12",

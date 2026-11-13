@@ -83,6 +83,7 @@ export const validateShape = (shape, value) => validate(adapterSchema.$defs[shap
 export function definitionErrors(definition) {
   const errors = validateShape('AdapterDefinition', definition);
   if (errors.length) return errors;
+  for (const fact of definition.facts ?? []) if (!fact.known && !fact.reason) errors.push(`fact ${fact.id}: unknown needs a reason`);
   const kindsDeclared = [...definition.supportedKinds].sort(), lifetimes = [...definition.capabilities.lifetimes].sort();
   if (new Set(kindsDeclared).size !== kindsDeclared.length) errors.push('supportedKinds has duplicates');
   if (!isDeepStrictEqual(kindsDeclared, lifetimes)) errors.push('capabilities.lifetimes must equal supportedKinds');

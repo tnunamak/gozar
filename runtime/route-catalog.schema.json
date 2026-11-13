@@ -276,6 +276,9 @@
         },
         "required": {
           "type": "boolean"
+        },
+        "obtainUrl": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -522,7 +525,11 @@
         "setup",
         "disclosure",
         "candidateToken",
-        "expiresAt"
+        "expiresAt",
+        "availability",
+        "prerequisites",
+        "facts",
+        "configuration"
       ],
       "properties": {
         "providerId": {
@@ -612,7 +619,8 @@
                 "ready",
                 "action-required",
                 "unsupported",
-                "unknown"
+                "unknown",
+                "detect-only"
               ]
             },
             "actions": {
@@ -639,6 +647,24 @@
             "null"
           ],
           "pattern": "^(\\d{4}-\\d{2}-\\d{2}T.*)?$"
+        },
+        "availability": {
+          "$ref": "#/$defs/Availability"
+        },
+        "prerequisites": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Prerequisite"
+          }
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fact"
+          }
+        },
+        "configuration": {
+          "$ref": "#/$defs/Configuration"
         }
       },
       "additionalProperties": false,
@@ -685,11 +711,12 @@
         "observedAt",
         "preferenceRevision",
         "candidates",
-        "noMatch"
+        "noMatch",
+        "features"
       ],
       "properties": {
         "schemaVersion": {
-          "const": 1
+          "const": 2
         },
         "catalogRevision": {
           "type": "string"
@@ -733,6 +760,12 @@
               "additionalProperties": false
             }
           ]
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false
@@ -963,11 +996,16 @@
         "ingress",
         "verification",
         "limits",
-        "cleanup"
+        "cleanup",
+        "facts",
+        "routeState",
+        "expiresAt",
+        "hostConfiguration",
+        "actions"
       ],
       "properties": {
         "schemaVersion": {
-          "const": 1
+          "const": 2
         },
         "handle": {
           "$ref": "#/$defs/Handle"
@@ -1027,7 +1065,9 @@
             "status",
             "checkedAt",
             "vantage",
-            "checks"
+            "checks",
+            "validUntil",
+            "results"
           ],
           "properties": {
             "status": {
@@ -1064,6 +1104,69 @@
                   "sse"
                 ]
               }
+            },
+            "validUntil": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": true
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": false
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "results": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "check": {
+                    "enum": [
+                      "tls",
+                      "nonce",
+                      "sse"
+                    ]
+                  },
+                  "status": {
+                    "enum": [
+                      "passed",
+                      "failed",
+                      "unknown"
+                    ]
+                  }
+                },
+                "required": [
+                  "check",
+                  "status"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "additionalProperties": false
@@ -1097,7 +1200,8 @@
               "type": "string",
               "enum": [
                 "none",
-                "debt"
+                "unconfirmed",
+                "confirmed"
               ]
             },
             "message": {
@@ -1105,6 +1209,224 @@
             }
           },
           "additionalProperties": false
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fact"
+          }
+        },
+        "routeState": {
+          "enum": [
+            "detected",
+            "verified",
+            "expired",
+            "cleanup-unconfirmed",
+            "inactive",
+            "unknown"
+          ]
+        },
+        "expiresAt": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "known": {
+                  "const": true
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "known",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "known": {
+                  "const": false
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "known",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "hostConfiguration": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": true
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": false
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "localPort": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": true
+                    },
+                    "value": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": false
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "bindTarget": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": true
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": false
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "origin": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": true
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": false
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "target",
+            "localPort",
+            "bindTarget",
+            "origin"
+          ],
+          "additionalProperties": false
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "stop",
+              "edit",
+              "rotate"
+            ]
+          }
         }
       },
       "additionalProperties": false
@@ -1733,6 +2055,332 @@
           "type": "string"
         }
       },
+      "additionalProperties": false
+    },
+    "Fact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "value": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            "known": {
+              "const": true
+            },
+            "reason": {
+              "type": "string"
+            },
+            "group": {
+              "type": "string"
+            },
+            "affectsConsent": {
+              "type": "boolean"
+            },
+            "source": {
+              "type": "string"
+            },
+            "asOf": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "label",
+            "value",
+            "known",
+            "group",
+            "affectsConsent",
+            "source",
+            "asOf"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "value": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            "known": {
+              "const": false
+            },
+            "reason": {
+              "type": "string"
+            },
+            "group": {
+              "type": "string"
+            },
+            "affectsConsent": {
+              "type": "boolean"
+            },
+            "source": {
+              "type": "string"
+            },
+            "asOf": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "label",
+            "value",
+            "known",
+            "group",
+            "affectsConsent",
+            "source",
+            "asOf",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Availability": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "object",
+          "required": [
+            "state",
+            "reason"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "available",
+                "detect-only",
+                "unsupported"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "attached": {
+          "type": "object",
+          "required": [
+            "state",
+            "reason"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "available",
+                "detect-only",
+                "unsupported"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "durable": {
+          "type": "object",
+          "required": [
+            "state",
+            "reason"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "available",
+                "detect-only",
+                "unsupported"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "Prerequisite": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "present",
+            "missing",
+            "unknown",
+            "denied"
+          ]
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "version": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "known": {
+                  "const": true
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "known",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "known": {
+                  "const": false
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "known",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "remedy": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Action"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "state",
+        "observedAt",
+        "version",
+        "remedy"
+      ],
+      "additionalProperties": false
+    },
+    "ConfigurationField": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "secret",
+            "value"
+          ]
+        },
+        "format": {
+          "enum": [
+            "text",
+            "domain",
+            "https-origin"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "obtainUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "validation": {
+          "const": "syntax-only"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind",
+        "format",
+        "required",
+        "obtainUrl",
+        "validation"
+      ],
+      "additionalProperties": false
+    },
+    "Configuration": {
+      "type": "object",
+      "properties": {
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigurationField"
+          }
+        },
+        "values": {
+          "type": "object"
+        },
+        "credentials": {
+          "type": "object"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Action"
+          }
+        }
+      },
+      "required": [
+        "fields",
+        "values",
+        "credentials",
+        "actions"
+      ],
       "additionalProperties": false
     }
   }

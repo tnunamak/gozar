@@ -59,7 +59,7 @@
     ],
     "disclosure": {
       "revision": "disc-43d91fe6da83",
-      "text": "Serve this app through an ngrok listener on your reserved ngrok domain while the app runs. The ngrok edge terminates TLS and can read payloads. The auth token stays in Gozar’s private store.",
+      "text": "Serve this app through an ngrok listener on your reserved ngrok domain while the app runs. The ngrok edge terminates TLS and can read payloads. The auth token stays in Gozar\u2019s private store.",
       "links": [
         {
           "rel": "terms",
@@ -73,7 +73,179 @@
         }
       ]
     },
-    "ownership": "gozar-owned"
+    "ownership": "gozar-owned",
+    "availability": {
+      "session": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      },
+      "attached": {
+        "state": "available",
+        "reason": "admitted"
+      },
+      "durable": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      }
+    },
+    "prerequisites": [
+      {
+        "id": "runtime",
+        "label": "Runtime module",
+        "observation": "sdk",
+        "actionId": "install-sdk"
+      },
+      {
+        "id": "credential",
+        "label": "Saved credential",
+        "observation": "authSet",
+        "actionId": "auth"
+      },
+      {
+        "id": "domain",
+        "label": "Reserved domain",
+        "observation": "domainSet",
+        "actionId": "reserved-domain"
+      }
+    ],
+    "facts": [
+      {
+        "id": "cost-detail",
+        "label": "Cost details",
+        "value": "ngrok has a $0 Free plan with one development domain, but its pricing page says custom domains need Pay-as-you-go ($20 base).",
+        "known": true,
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing, https://ngrok.com/tos, https://ngrok.com/privacy",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "entitlement",
+        "label": "Account entitlement",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing, https://ngrok.com/tos, https://ngrok.com/privacy",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "quota",
+        "label": "Remaining quota",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing, https://ngrok.com/tos, https://ngrok.com/privacy",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "mapping",
+        "label": "Effective provider mapping",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing, https://ngrok.com/tos, https://ngrok.com/privacy",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "terms-terms",
+        "label": "Terms",
+        "value": "https://ngrok.com/tos",
+        "known": true,
+        "group": "terms",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing, https://ngrok.com/tos, https://ngrok.com/privacy",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "terms-privacy",
+        "label": "Privacy",
+        "value": "https://ngrok.com/privacy",
+        "known": true,
+        "group": "terms",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing, https://ngrok.com/tos, https://ngrok.com/privacy",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-0",
+        "label": "Address condition",
+        "value": "a reserved domain is a per-user setup value",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing, https://ngrok.com/tos, https://ngrok.com/privacy",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-1",
+        "label": "Address condition",
+        "value": "the listener lives only while the host process runs",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing, https://ngrok.com/tos, https://ngrok.com/privacy",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "public-names",
+        "label": "Public names",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing, https://ngrok.com/tos, https://ngrok.com/privacy",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-logs",
+        "label": "Certificate logs",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing, https://ngrok.com/tos, https://ngrok.com/privacy",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "browser-warning",
+        "label": "Browser warning",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing, https://ngrok.com/tos, https://ngrok.com/privacy",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "payload-readers",
+        "label": "Payload readers",
+        "value": "The ngrok edge can read the traffic.",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "https://ngrok.com/pricing (accessed 2026-11-12) ; https://ngrok.com/tos (accessed 2026-11-12) ; https://ngrok.com/privacy (accessed 2026-11-12)",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "reserved-domain",
+        "label": "Reserved domain required",
+        "value": true,
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      }
+    ]
   },
   "evidence": {
     "accessed": "2026-11-12",
