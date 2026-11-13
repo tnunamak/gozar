@@ -1,7 +1,7 @@
 import { after } from 'node:test';
 import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { Journal } from '../../packages/gozar-node/journal.mjs';
 import { EffectDriver } from '../../packages/gozar-node/driver.mjs';
 
@@ -9,7 +9,9 @@ const directories = new Set();
 after(async () => { for (const directory of directories) await rm(directory, { recursive: true, force: true }); });
 
 export async function fixture(t, recipes, options = {}) {
-  const base = (process.env.GOZAR_TEST_TMPDIR ?? join(homedir(), '.cache', 'gozar', 'tests')); await mkdir(base, { recursive: true });
+  // The OS temp directory is root-owned and sticky (Linux) or private to the user (macOS), so it passes Gozar's
+  // unsafe-parent check on any host; a group-writable ~/.cache would not.
+  const base = process.env.GOZAR_TEST_TMPDIR ?? tmpdir(); await mkdir(base, { recursive: true });
   const directory = await mkdtemp(join(base, 'gozar-node-'));
   directories.add(directory);
   const journal = new Journal(directory); await journal.load();
