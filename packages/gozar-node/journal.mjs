@@ -1,6 +1,7 @@
 import { mkdir, open, rename, readFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { processIdentity } from './process-identity.mjs';
 
 // Commit one complete record, then sync the directory before acknowledging durability.
 export async function atomicWrite(path, value) {
@@ -46,19 +47,7 @@ export class Journal {
   async removed(id) { delete this.value.owned[id]; await this.save(); }
 }
 
-export async function processIdentity(pid) {
-  if (!Number.isSafeInteger(pid) || pid < 1) return null;
-  try {
-    // Linux start ticks disambiguate PID reuse, including command names with spaces/parentheses.
-    const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-    if (fields[0] === 'Z') return null;
-    return fields[19];
-  } catch (error) {
-    if (['ENOENT', 'ESRCH'].includes(error.code)) return null;
-    throw error;
-  }
-}
+export { processIdentity };
 
 export async function attributable(resource, sessionId) {
   return resource?.sessionId === sessionId && typeof resource.nonce === 'string' &&

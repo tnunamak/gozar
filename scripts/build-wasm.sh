@@ -17,8 +17,11 @@ if [[ "$("$wasm_bindgen_cli" --version)" != "wasm-bindgen 0.2.105" ]]; then
   echo "wasm-bindgen CLI must match pinned crate version 0.2.105" >&2
   exit 1
 fi
-nice -n 19 ionice -c 3 cargo build -p gozar-core --lib --release --target wasm32-unknown-unknown
-nice -n 19 ionice -c 3 "$wasm_bindgen_cli" "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/gozar_core.wasm" --target nodejs --out-dir packages/gozar-core/generated
+# ionice is Linux-only (util-linux); macOS has no such command.
+ionice=()
+if command -v ionice >/dev/null 2>&1; then ionice=(ionice -c 3); fi
+nice -n 19 ${ionice[@]+"${ionice[@]}"} cargo build -p gozar-core --lib --release --target wasm32-unknown-unknown
+nice -n 19 ${ionice[@]+"${ionice[@]}"} "$wasm_bindgen_cli" "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/gozar_core.wasm" --target nodejs --out-dir packages/gozar-core/generated
 
 # wasm-bindgen's Node target is CommonJS even when the workspace uses ESM.
 printf '{"type":"commonjs"}\n' > packages/gozar-core/generated/package.json

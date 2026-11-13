@@ -1,10 +1,10 @@
 import { constants } from 'node:fs';
 import { mkdir, open, readFile, unlink } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { spawn } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { atomicWrite, Journal, processIdentity } from './journal.mjs';
 import { cliCommand } from './cli-command.mjs';
+import { acquireProcessLock } from './process-lock.mjs';
 
 const leaseFile = (identitiesDirectory, keyFingerprint) =>
   join(identitiesDirectory, `.active-route-${keyFingerprint}.json`);
@@ -13,22 +13,19 @@ const lockFile = (identitiesDirectory, keyFingerprint) =>
 
 async function withLock(path, action) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const lock = await open(path, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  const anchor = await open(path, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
   try {
-    const info = await lock.stat();
+    const info = await anchor.stat();
     if (!info.isFile() || info.uid !== process.getuid() || (info.mode & 0o777) !== 0o600)
       throw new Error('Installation key lease lock ownership or mode mismatch');
-    const holder = spawn('flock', ['--exclusive', '--wait', '120', '3'], {
-      stdio: ['ignore', 'ignore', 'ignore', lock.fd],
-    });
-    await new Promise((resolve, reject) => {
-      holder.once('error', () => reject(new Error('Installation key lease requires flock (util-linux)')));
-      holder.once('close', code => code === 0 ? resolve() : reject(new Error('Installation key lease lock is busy')));
-    });
-    // flock locks the shared open-file description. This descriptor keeps it held
-    // after the helper exits and releases it if this process exits unexpectedly.
-    return await action();
-  } finally { await lock.close(); }
+  } finally { await anchor.close(); }
+  let release;
+  try { release = await acquireProcessLock(path, { waitMs: 120_000 }); }
+  catch (error) {
+    if (error.code === 'busy') throw new Error('Installation key lease lock is busy', { cause: error });
+    throw error;
+  }
+  try { return await action(); } finally { await release(); }
 }
 
 async function readLease(path) {
