@@ -1,13 +1,12 @@
 {
-  "wraps": "../../ngrok-tls-passthrough.definition.json",
   "adapter": {
     "schemaVersion": 1,
     "id": "ngrok-tls-passthrough",
     "label": "ngrok TLS passthrough",
-    "needs": "Needs an ngrok account. This route is not available in this release.",
+    "needs": "Needs the optional ngrok SDK, saved auth token, reserved domain and OpenSSL proof-certificate tool.",
     "capabilities": {
       "reach": "internet",
-      "transport": "https",
+      "transport": "tls",
       "traffic": {
         "tlsTermination": "endpoint",
         "providerCanReadPayload": false,
@@ -20,11 +19,11 @@
         "evidenceRef": "https://ngrok.com/pricing (accessed 2026-11-12)"
       },
       "address": {
-        "stability": "unknown",
+        "stability": "stable",
         "scope": "domain of your ngrok account",
         "conditions": [
-          "no admitted create recipe",
-          "raw TLS may need a paid account"
+          "the listener lives only while the host process runs",
+          "initial proof verifies the tunnel transport, not application identity or readiness"
         ],
         "ports": null
       },
@@ -36,8 +35,10 @@
         "period": null
       },
       "needsAccount": true,
-      "lifetimes": [],
-      "supervision": "controller",
+      "lifetimes": [
+        "attached"
+      ],
+      "supervision": "host-supervised",
       "protocols": {
         "sse": false,
         "streamableHttp": false,
@@ -47,15 +48,16 @@
         "vantage": "public",
         "checks": [
           "tls",
-          "nonce",
-          "sse"
+          "nonce"
         ]
       }
     },
-    "supportedKinds": [],
+    "supportedKinds": [
+      "attached"
+    ],
     "disclosure": {
-      "revision": "disc-cca8dbf3ce74",
-      "text": "ngrok TLS passthrough is detected only. Gozar cannot create a route with it yet.",
+      "revision": "disc-ngrok-tls-040-initial-proof-v1",
+      "text": "Open an attached ngrok TLS passthrough route. Initial nonce proof checks the owned forwarding gate before application traffic starts. Status retains the original proof time; safe automatic reproof is unavailable. Application TLS bytes pass through unchanged. The synthetic proof certificate is not the application certificate and does not establish trusted application identity.",
       "links": [
         {
           "rel": "terms",
@@ -72,23 +74,42 @@
     "ownership": "gozar-owned",
     "availability": {
       "session": {
-        "state": "detect-only",
-        "reason": "execution-not-implemented"
+        "state": "unsupported",
+        "reason": "usage-not-supported"
       },
       "attached": {
-        "state": "detect-only",
-        "reason": "execution-not-implemented"
+        "state": "available",
+        "reason": "admitted"
       },
       "durable": {
-        "state": "detect-only",
-        "reason": "execution-not-implemented"
+        "state": "unsupported",
+        "reason": "usage-not-supported"
       }
     },
     "prerequisites": [
       {
-        "id": "local-setup",
-        "label": "Local prerequisites",
-        "observation": "detected"
+        "id": "runtime",
+        "label": "Runtime module",
+        "observation": "sdk",
+        "actionId": "install-sdk"
+      },
+      {
+        "id": "credential",
+        "label": "Saved credential",
+        "observation": "authSet",
+        "actionId": "auth"
+      },
+      {
+        "id": "domain",
+        "label": "Reserved domain",
+        "observation": "domainSet",
+        "actionId": "reserved-domain"
+      },
+      {
+        "id": "proof-tool",
+        "label": "Synthetic certificate tool",
+        "observation": "proofTool",
+        "actionId": "install-proof-tool"
       }
     ],
     "facts": [
@@ -156,26 +177,6 @@
         "asOf": "2026-11-12"
       },
       {
-        "id": "address-condition-0",
-        "label": "Address condition",
-        "value": "no admitted create recipe",
-        "known": true,
-        "group": "address",
-        "affectsConsent": false,
-        "source": "https://ngrok.com/pricing",
-        "asOf": "2026-11-12"
-      },
-      {
-        "id": "address-condition-1",
-        "label": "Address condition",
-        "value": "raw TLS may need a paid account",
-        "known": true,
-        "group": "address",
-        "affectsConsent": false,
-        "source": "https://ngrok.com/pricing",
-        "asOf": "2026-11-12"
-      },
-      {
         "id": "public-names",
         "label": "Public names",
         "value": null,
@@ -217,7 +218,20 @@
         "affectsConsent": true,
         "source": "https://ngrok.com/pricing (accessed 2026-11-12)",
         "asOf": "2026-11-12"
+      },
+      {
+        "id": "initial-proof-only",
+        "label": "Initial transport proof only",
+        "value": "No automatic reproof: status preserves the original observation time. Restart the route for a new proof. Initial proof temporarily directs new connections to the owned echo listener before publication.",
+        "known": true,
+        "group": "verification",
+        "affectsConsent": true,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
       }
+    ],
+    "originSchemes": [
+      "tls:"
     ]
   },
   "evidence": {
@@ -226,8 +240,8 @@
       "https://ngrok.com/pricing"
     ],
     "protocols": {
-      "sse/streamableHttp": "false. no admitted recipe: this adapter creates no route, so no timed stream probe gates a publication",
-      "oauthDcr": "Detected only: no kind, nothing is published."
+      "sse/streamableHttp": "Not claimed. Raw stream transport proof does not test HTTP application protocols.",
+      "oauthDcr": "Not claimed. Raw stream transport is not an HTTPS application origin."
     }
   }
 }
