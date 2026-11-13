@@ -202,3 +202,25 @@ test('openSessionRoute redeems the grant, takes the adapter from it, and project
   assert.deepEqual([view.handle.kind, view.handle.id], ['session', 'port-8799:sess1']);
   assert.equal(await codeOf(openSessionRoute(request, { adapters: [stubAdapter('stub-b')], redeem: tokens.redeem, consentBinding: tokens.consentBinding, platform: 'linux', readContext, startSession })), 'consent_unknown');
 });
+
+test('URL targets ending in a port remain accepted for session and attached usage', async t => {
+  const home = await scratch(t), controller = await controllerFixture(t);
+  reapControllers(t, home);
+  for (const kind of ['session', 'attached']) {
+    const tokens = tokenStubs();
+    const q = query({ home, target: 'http://127.0.0.1:8799', usage: kind === 'session' ? { kind, lifetimeMs: 60_000 } : { kind } });
+    const { token } = await tokens.issue({ home, binding: tokens.consentBinding(q, home, 'disc-stub-a'), grant: grantFor('stub-a', q) });
+    const request = { ...q, approval: { candidateToken: token, disclosureRevision: 'disc-stub-a' }, wait: 'allocated' };
+    if (kind === 'session') {
+      const view = await openSessionRoute(request, { ...depsFor(tokens, controller.module), startSession: async ({ port }) => {
+        assert.equal(port, 8799);
+        return { snapshot: { sessionId: 'url', phase: 'candidate-ready', candidate: 'https://example.invalid' } };
+      } });
+      assert.equal(view.origin, 'https://example.invalid');
+    } else {
+      const view = await openAttachedRoute(request, depsFor(tokens, controller.module));
+      assert.equal(view.handle.kind, 'attached');
+      await closeAttachedRoute({ home, handle: view.handle, mode: 'remove' });
+    }
+  }
+});

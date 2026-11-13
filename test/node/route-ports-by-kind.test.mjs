@@ -62,3 +62,20 @@ test('a byUsage entry is only for a session or durable kind the provider support
   assert.notDeepEqual(definitionErrors({ ...definition, byUsage: { attached: { ports: [443] } } }), [], 'an attached view reads the declared capabilities');
   assert.notDeepEqual(definitionErrors({ ...definition, byUsage: { durable: { reach: 'internet' } } }), []);
 });
+
+test('durable create catalog rejects adopt-only and nonexistent origins but adopt preserves them', async t => {
+  const home = await scratch(t);
+  const original = adapters.find(item => item.id === 'tailscale-private');
+  const adapter = { ...original, durable: { ...original.durable, observe: async () => ({ identity: 'node.example.ts.net', snapshot: IDLE['tailscale-private'], version: '1' }) } };
+  const api = createRouteApi({ adapters: [adapter], readContext: fakeReadContext({ home }) });
+  for (const intent of ['create', 'adopt']) for (const port of [null, 9443, 7777, 8443]) {
+    const origin = port === null ? undefined : `https://node.example.ts.net:${port}`;
+    const q = query({ home, providerId: adapter.id, usage: { kind: 'durable', routeId: 'origin-check' }, intent,
+      ...(origin ? { origin } : {}), requirements: { ...query().requirements, reach: 'tailnet', address: 'stable' } });
+    const [candidate] = (await api.catalogRoutes(q)).candidates;
+    const eligible = intent === 'adopt' || port === null || port === 8443;
+    assert.equal(candidate.eligible, eligible, `${intent} ${port}`);
+    assert.equal(Boolean(candidate.candidateToken), eligible, `${intent} ${port}`);
+    if (!eligible) assert.deepEqual(candidate.unmet, [{ requirement: 'address', actual: { origin }, reasonCode: 'not_met' }]);
+  }
+});

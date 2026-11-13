@@ -708,7 +708,13 @@
     },
     "displayName": "Tailscale Funnel",
     "copy": {
-      "consent": "Start an owned foreground HTTPS Funnel on port 8443, or on port 10000 when 8443 is in use, and on no other port. Existing listeners remain untouched. HTTPS, instance identity and timed SSE must pass before publication."
+      "consent": "Start an owned foreground HTTPS Funnel on port 8443, or on port 10000 when 8443 is in use, and on no other port. Existing listeners remain untouched. HTTPS, instance identity and timed SSE must pass before publication.",
+      "human": {
+        "name": "tailscale-funnel",
+        "address": "https://<machine>.<tailnet>.ts.net, port 8443 or 10000",
+        "summary": "HTTPS; same machine address",
+        "setup": "Install Tailscale and sign in"
+      }
     },
     "addressStability": "stable",
     "durableLifetime": "provider-persistent",

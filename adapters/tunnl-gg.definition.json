@@ -223,7 +223,13 @@
     "displayName": "tunnl.gg stable trial",
     "drop": "1a",
     "copy": {
-      "consent": "Start a public HTTPS trial. The relay terminates TLS and can read payloads. Quiet streams can close after two minutes."
+      "consent": "Start a public HTTPS trial. The relay terminates TLS and can read payloads. Quiet streams can close after two minutes.",
+      "human": {
+        "name": "tunnl.gg",
+        "address": "assigned when it starts",
+        "summary": "key-based trial; relay can read traffic",
+        "setup": "Install OpenSSH"
+      }
     },
     "originPolicy": "immutable",
     "addressStability": "random",

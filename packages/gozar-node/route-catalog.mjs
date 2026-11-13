@@ -6,7 +6,11 @@ import { canonicalHome } from './service-state.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
+import { loopbackTarget } from './durable-route.mjs';
 import { checksFor, completeProperties, needsFor } from './route-view.mjs';
+import { adoptDisclosureRevision } from './adopt-disclosure.mjs';
+
+export { adoptDisclosureRevision } from './adopt-disclosure.mjs';
 
 const sha = text => createHash('sha256').update(text).digest('hex');
 /** Stable opaque handles for an adapter; apps store the preferenceRef and show the label. */
@@ -25,6 +29,7 @@ export function validateQuery(query) {
   for (const key of ['owner', 'target', 'home']) if (!text(query[key])) bad(`${key} must be a non-empty string`);
   const usage = query.usage;
   if (!USAGE.includes(usage?.kind)) bad('usage.kind must be durable, session or attached');
+  if (usage.kind === 'durable') loopbackTarget(query.target);
   if (usage.kind === 'durable' && !text(usage.routeId)) bad('a durable usage needs routeId');
   if (usage.kind === 'session' && !(Number.isInteger(usage.lifetimeMs) && usage.lifetimeMs > 0)) bad('a session usage needs lifetimeMs');
   const r = query.requirements;
@@ -153,13 +158,19 @@ async function collect(query, deps) {
     const unmet = [];
     if (supportedPlatform(platform)) {
       unmet.push(...unmetRequirements({ requirements: query.requirements, usage: query.usage, definition, properties, setupState }));
+      if (inspection.facts?.invalidOrigin !== undefined) {
+        const setup = unmet.find(item => item.requirement === 'setup');
+        if (setup) setup.actual = { origin: inspection.facts.invalidOrigin, reason: 'invalid_origin' };
+      }
       // A plan exists only for a candidate that could be used now; its digest and resource go into the token.
       if (!unmet.length && setupState === 'ready' && definition.supportedKinds.includes(query.usage.kind)) {
         try {
           // A durable plan comes from the durable engine, except for a route its owner keeps: that adapter plans for itself.
           if (query.usage.kind === 'durable' && definition.ownership !== 'external-owned') {
             const plan = await durablePlanFacts({ home, adapterId: adapter.id, target: query.target, origin: query.origin ?? null, adapters });
-            grant = { adapterId: adapter.id, planDigest: plan.planDigest, observedResource: plan.observedResource };
+            if (query.intent !== 'adopt' && plan.creatableOrigin === false)
+              unmet.push({ requirement: 'address', actual: { origin: query.origin }, reasonCode: 'not_met' });
+            else grant = { adapterId: adapter.id, planDigest: plan.planDigest, observedResource: plan.observedResource };
           } else {
             const request = adapterRequest(query);
             const own = bindConfiguration(context, adapter.id);
@@ -180,8 +191,14 @@ async function collect(query, deps) {
       display: { label: definition.label, description: describe(definition, properties), needs: needsFor(definition, query.usage.kind) }, properties,
       setup: { state: setupState, actions: setupState === 'action-required' ? actions : [] }, disclosure: definition.disclosure,
       candidateToken: null, expiresAt: null };
+    if (query.usage.kind === 'durable' && query.intent === 'adopt') {
+      const takeover = 'Gozar takes over the existing rule and removes it when the route is released or stopped.';
+      candidate.display.description += ` ${takeover}`;
+      candidate.disclosure = { ...definition.disclosure, revision: adoptDisclosureRevision(definition),
+        text: `${definition.disclosure.text} ${takeover}` };
+    }
     if (eligible && setupState === 'ready' && grant) {
-      const issued = await issue({ home, binding: consentBinding(query, home, definition.disclosure.revision), grant });
+      const issued = await issue({ home, binding: consentBinding(query, home, candidate.disclosure.revision), grant });
       candidate.candidateToken = issued.token; candidate.expiresAt = issued.expiresAt;
     }
     return candidate;

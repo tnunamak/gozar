@@ -204,7 +204,13 @@
     "displayName": "localhost.run trial",
     "drop": "1a",
     "copy": {
-      "consent": "Start a public HTTPS trial for the requested lifetime (15 minutes by default). The relay terminates TLS and can read payloads. HTTPS, instance identity and timed SSE must pass before publication."
+      "consent": "Start a public HTTPS trial for the requested lifetime (15 minutes by default). The relay terminates TLS and can read payloads. HTTPS, instance identity and timed SSE must pass before publication.",
+      "human": {
+        "name": "localhost.run",
+        "address": "assigned when it starts",
+        "summary": "free trial; address can change during a run",
+        "setup": "Install OpenSSH"
+      }
     },
     "addressStability": "random",
     "durableLifetime": null,

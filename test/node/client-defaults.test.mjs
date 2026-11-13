@@ -20,10 +20,13 @@ test('optional profiles cannot weaken selected checks or change client reach', (
   assert.deepEqual(requirements, { clientReach: 'internet', httpsRequired: true, sse: true, streamableHttp: true, oauthDcr: true });
 });
 
-test('generic connection block leaves authentication with the service and limits no-auth guidance to the demo', () => {
-  const output = render({ snapshot: { phase: 'published-ready', published: 'https://service.example:8443' } }, []);
-  assert.match(output, /^URL: https:\/\/service\.example:8443\/mcp$/m);
-  assert.match(output, /^Authentication: use your service's configured method\.$/m);
-  assert.match(output, /^For gozar demo-server only, select no authentication\.$/m);
-  assert.doesNotMatch(output, /^Authentication: none/m);
+test('the MCP connection block needs a client profile or --verbose and leaves authentication with the service', () => {
+  const published = { snapshot: { phase: 'published-ready', published: 'https://service.example:8443' } };
+  assert.doesNotMatch(render(published, []), /mcp|Authentication|demo-server/i);
+  const profiled = render({ ...published, connectionProfile: {} }, []);
+  assert.match(profiled, /^MCP client URL: https:\/\/service\.example:8443\/mcp$/m);
+  assert.match(profiled, /^Authentication: use your service's configured method\./m);
+  const verbose = render(published, [], { verbose: true });
+  assert.match(verbose, /^URL: https:\/\/service\.example:8443\/mcp$/m);
+  for (const output of [profiled, verbose]) { assert.doesNotMatch(output, /demo-server/); assert.doesNotMatch(output, /^Authentication: none/m); }
 });

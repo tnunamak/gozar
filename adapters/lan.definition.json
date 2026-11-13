@@ -192,7 +192,13 @@
     "drop": "1",
     "displayName": "Local network (HTTP)",
     "copy": {
-      "consent": "Expose this loopback service on the selected interface through an owned HTTP forwarder. Approve the exact firewall scope and prove the address from the intended LAN client."
+      "consent": "Expose this loopback service on the selected interface through an owned HTTP forwarder. Approve the exact firewall scope and prove the address from the intended LAN client.",
+      "human": {
+        "name": "lan",
+        "address": "assigned on the selected network interface when it starts",
+        "summary": "HTTP on your local network",
+        "setup": "Choose --bind-address IP and approve it with --firewall-ack IP"
+      }
     },
     "addressStability": "unknown",
     "durableLifetime": null,

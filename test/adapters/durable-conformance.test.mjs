@@ -3,7 +3,7 @@
 // against the facet interface, not any real provider. The challenge verifier is faked.
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -127,6 +127,25 @@ test('after the provider identity changes, release leaves an equal rule at the n
   assert.equal(store.writes.length, writes, 'no delete was issued');
 });
 
+test('release preserves a foreign-marked intent rule at its pinned identity after a provider rename', async () => {
+  const facet = adapters.find(a => a.id === adapterId).durable;
+  const put = facet.put;
+  facet.put = async (...args) => { await put(...args); throw new Error('crash after write'); };
+  await assert.rejects(ensureRoute(await approved(), deps), /crash after write/);
+  facet.put = put;
+  const entry = store.entries.get('a');
+  entry.foreign = true;
+  entry.identity = 'store-1';
+  store.identity = 'store-2';
+  const before = JSON.stringify(entry);
+  const writes = store.writes.length;
+  const released = await release();
+  assert.equal(released.providerRemoved, false);
+  assert.deepEqual(released.cleanupDebt, { reason: 'unattributed-rule', port: 'a' });
+  assert.equal(JSON.stringify(store.entries.get('a')), before);
+  assert.equal(store.writes.length, writes);
+});
+
 test('release with the adapter gone keeps the record as cleanup debt, and dismiss drops it', async () => {
   await ensureRoute(await approved(), deps);
   const before = JSON.stringify(store.view());
@@ -164,3 +183,35 @@ test('a conflict on every attempt ends in provider_conflict after the bound, wit
   assert.equal(store.entries.size, 0);
   assert.deepEqual((await statusRoutes({ home }, deps)).routes, [], 'the intent of the failed first allocation was dropped');
 });
+
+for (const variant of ['exact', 'missing-evidence', 'foreign', 'different']) {
+  test(`interrupted fake create attributes only an exact empty-slot intent: ${variant}`, async () => {
+    const facet = adapters.find(a => a.id === adapterId).durable;
+    const put = facet.put;
+    facet.put = async (...args) => {
+      await put(...args);
+      throw new Error('crash after write');
+    };
+    await assert.rejects(ensureRoute(await approved(), deps), /crash after write/);
+    facet.put = put;
+    if (variant === 'missing-evidence') {
+      const dir = join(home, 'routes');
+      const path = join(dir, (await readdir(dir)).find(name => name.endsWith('.json')));
+      const record = JSON.parse(await readFile(path, 'utf8'));
+      delete record.intent.slotWasEmpty;
+      await writeFile(path, JSON.stringify(record));
+    }
+    if (variant === 'foreign') store.entries.get('a').foreign = true;
+    if (variant === 'different') store.edit('a', { forward: '127.0.0.1:9', extra: true });
+    assert.equal((await status()).state, variant === 'exact' ? 'creating' : 'uncertain');
+    const before = store.view();
+    const removed = await release();
+    assert.equal(removed.providerRemoved, variant === 'exact');
+    if (variant !== 'exact') {
+      assert.deepEqual(store.view(), before);
+      assert.ok(removed.cleanupDebt);
+      await releaseRoute({ home, routeId: 'coordinator', mode: 'dismiss' }, deps);
+      assert.deepEqual(store.view(), before);
+    }
+  });
+}

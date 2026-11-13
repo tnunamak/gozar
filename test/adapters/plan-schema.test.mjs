@@ -82,3 +82,10 @@ test('Tailscale readback checks whole raw records before whitelist capture', () 
     assert.equal(record.bindings.profileId, undefined);
   }
 });
+
+test('human facts are presentation data on usable legacy plans; provider schemas stay unchanged', () => {
+  for (const record of records.filter(a => a.admission.state === 'admitted' && (a.recipes.create || a.ownership === 'external-owned'))) {
+    assert.deepEqual(Object.keys(record.copy.human).sort(), ['address', 'name', 'setup', 'summary']);
+    for (const value of Object.values(record.copy.human)) assert.equal(typeof value, 'string');
+  }
+});

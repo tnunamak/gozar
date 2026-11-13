@@ -35,19 +35,20 @@ test('catalog excludes wrapped gated definitions; help remains generic', async (
   assert.doesNotMatch(child.stdout, /Claude|ChatGPT|Anthropic|OpenAI/);
 });
 
-test('one screen folds alternatives, prints local state/recovery and validates install link data', () => {
+test('one screen leads with the URL, prints recovery and validates install link data', () => {
   const adapters = [{ id: 'a', displayName: 'Example', reason: 'Exact route', clientProfile: { installLinkTemplate: 'https://client.example/add?url={url}' } }, { id: 'b' }];
   const output = render({ snapshot: { phase: 'published-ready', recommendations: ['a', 'b'], published: 'https://one.example' }, journalPath: '/private/session.json' }, adapters, { port: 3000 });
-  assert.match(output, /Recommended: Example — Exact route/);
-  assert.match(output, /1 alternatives · use --alternatives/);
+  assert.match(output, /Public URL: https:\/\/one.example/);
   assert.match(output, /URL: https:\/\/one.example/);
-  assert.match(output, /Route checks passed\. Connect your MCP client\./);
-  assert.match(output, /Install link: https:\/\/client.example/);
-  assert.match(output, /Local state: \/private\/session.json/);
+  assert.doesNotMatch(output, /Add to MCP client|Install link:/);
+  const verbose = render({ snapshot: { phase: 'published-ready', recommendations: ['a', 'b'], published: 'https://one.example' } }, adapters, { port: 3000, verbose: true });
+  assert.match(verbose, /Add to MCP client/);
+  assert.match(verbose, /Install link: https:\/\/client.example/);
+  assert.doesNotMatch(output, /Local state:/);
   assert.equal(installLink('javascript:alert({url})', 'https://one.example'), null);
   assert.equal(installLink('https://password@client.example/{url}', 'https://one.example'), null);
   const pending = render({ snapshot: { phase: 'cleanup-pending' } }, [], { port: 3000 });
-  assert.ok(pending.includes(`Retry: ${cliCommand('stop', 3000)}`));
+  assert.ok(pending.includes(`Stop: ${cliCommand('stop', 3000)}`));
 });
 
 test('private daemon exposes fake loopback target, status works across invocations, stop owns exact mapping', async t => {
@@ -178,13 +179,13 @@ test('expose filters next-drop plans and never calls installed active modes abse
   assert.equal(view.observations.next, undefined);
   const output = render({ snapshot: view }, [{ id: 'ready', label: 'Ready CLI' }, { id: 'unknown' }], { port: 3000 });
   assert.doesNotMatch(output, /Install ready|CLI is absent|Sign in|Install next/);
-  assert.match(output, /checks run automatically after approval/);
-  assert.match(output, /capability remains unknown/);
+  assert.match(output, /Gozar will make/);
+  assert.doesNotMatch(output, /capability remains unknown/);
   assert.equal(snapshot.plans[1].preconditionActions.length, 2);
 });
 
 
-test('successful saved snapshot hides stale catalog validation/setup and other routes while retaining core errors', () => {
+test('successful saved snapshot hides unreviewed text and keeps every raw error in verbose output', () => {
   const adapters = [
     { id: 'chosen', label: 'Chosen route', unknowns: ['Chosen catalog capability unknown'] },
     { id: 'other', label: 'Other route', unknowns: ['Other catalog port warning'] },
@@ -194,11 +195,12 @@ test('successful saved snapshot hides stale catalog validation/setup and other r
     limitations: ['Chosen catalog capability unknown','Other catalog port warning','Actual core cleanup failure remains'] };
   const output = render({ snapshot }, adapters, { port: 18765 });
   assert.match(output, /URL: https:\/\/ready.example/);
-  assert.match(output, /Actual core cleanup failure remains/);
+  assert.doesNotMatch(output, /Actual core cleanup failure remains/);
   assert.doesNotMatch(output, /Validation required|Install route|CLI is absent|Chosen catalog capability unknown|Other catalog port warning|Other route: unknown/);
-  const expanded = render({ snapshot }, adapters, { port: 18765, alternatives: true });
+  const expanded = render({ snapshot }, adapters, { port: 18765, verbose: true });
   assert.match(expanded, /Other catalog port warning/);
+  assert.match(expanded, /Actual core cleanup failure remains/);
   const pending = render({ snapshot: { ...snapshot, phase:'validating', published:null } }, adapters, { port:18765 });
-  assert.match(pending, /Chosen catalog capability unknown/);
+  assert.doesNotMatch(pending, /Chosen catalog capability unknown/);
   assert.doesNotMatch(pending, /Other catalog port warning/);
 });

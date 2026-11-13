@@ -15,6 +15,8 @@ import { render, renderDetection, exposeSnapshot, installLink } from '../package
 import { validateLifetimeMs } from '../packages/gozar-node/gate.mjs';
 import { selectedInterfaceAddress } from '../packages/gozar-node/interfaces.mjs';
 
+import { plainCaveat } from '../packages/gozar-node/plain-copy.mjs';
+import { resolveVia } from '../packages/gozar-node/expose-copy.mjs';
 import { cliCommand } from '../packages/gozar-node/cli-command.mjs';
 import { defaultHome } from '../packages/gozar-node/default-home.mjs';
 
@@ -24,11 +26,11 @@ export function parseArgs(argv) {
   const options = { command: argv[0] ?? 'help', clientReach: 'unknown' };
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i];
-    if (['--yes', '--json', '--alternatives', '--operational', '--sse', '--streamable-http', '--oauth-dcr', '--observe-process-output'].includes(flag)) options[flag.slice(2)] = true;
-    else if (['--port', '--client-reach', '--origin', '--adapter', '--bind-address', '--firewall-ack', '--client-profile', '--install-link-template', '--transport', '--local-name', '--probe-directory', '--probe-request', '--probe-receipt', '--probe-executor-id', '--probe-wait-ms', '--lifetime-ms', '--route'].includes(flag)) {
+    if (['--yes', '--json', '--verbose', '--alternatives', '--operational', '--sse', '--streamable-http', '--oauth-dcr', '--observe-process-output'].includes(flag)) options[flag.slice(2)] = true;
+    else if (['--port', '--client-reach', '--origin', '--adapter', '--via', '--bind-address', '--firewall-ack', '--client-profile', '--install-link-template', '--transport', '--local-name', '--probe-directory', '--probe-request', '--probe-receipt', '--probe-executor-id', '--probe-wait-ms', '--lifetime-ms', '--route'].includes(flag)) {
       const value = argv[++i];
       if (!value || value.startsWith('--')) throw new Error(`Missing value for ${flag}`);
-      options[{ '--port': 'port', '--client-reach': 'clientReach', '--origin': 'origin', '--adapter': 'adapterId', '--bind-address': 'bindAddress', '--firewall-ack': 'firewallAck', '--client-profile': 'clientProfileId', '--install-link-template': 'installLinkTemplate', '--transport': 'transport', '--local-name': 'localName', '--probe-directory': 'probeDirectory', '--probe-request': 'probeRequest', '--probe-receipt': 'probeReceipt', '--probe-executor-id': 'probeExecutorId', '--probe-wait-ms': 'probeWaitMs', '--route': 'route', '--lifetime-ms': 'lifetimeMs' }[flag]] = value;
+      options[{ '--port': 'port', '--client-reach': 'clientReach', '--origin': 'origin', '--adapter': 'adapterId', '--via': 'adapterId', '--bind-address': 'bindAddress', '--firewall-ack': 'firewallAck', '--client-profile': 'clientProfileId', '--install-link-template': 'installLinkTemplate', '--transport': 'transport', '--local-name': 'localName', '--probe-directory': 'probeDirectory', '--probe-request': 'probeRequest', '--probe-receipt': 'probeReceipt', '--probe-executor-id': 'probeExecutorId', '--probe-wait-ms': 'probeWaitMs', '--route': 'route', '--lifetime-ms': 'lifetimeMs' }[flag]] = flag === '--via' ? resolveVia(value) : value;
     } else throw new Error(`Unknown option: ${flag}`);
   }
   if (!['expose', 'detect', 'status', 'health', 'update-origin', 'stop', 'allow', 'demo-server', 'help', '--help'].includes(options.command)) throw new Error('Use expose, detect, status, stop, allow or demo-server');
@@ -131,7 +133,8 @@ export async function main(argv = process.argv.slice(2)) {
     catch (error) { await atomicWrite(join(directory, 'failure.json'), failureRecord(error)); process.exitCode = 1; }
     return;
   }
-  const options = parseArgs(argv);
+  let options;
+  try { options = parseArgs(argv); } catch (error) { error.userInput = true; throw error; }
   if (options.command === 'demo-server') {
     const { startDummy } = await import('../harness/dummy-server.mjs');
     const server = await startDummy({ port: options.port ?? 18765, toolName: 'echo' });
@@ -146,7 +149,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (['help', '--help'].includes(options.command)) {
     console.log('Service routes (existing owner-managed ingress):\n  gozar service add --origin URL --target HOST:PORT [--verify-cmd COMMAND] --json\n  gozar service status [--origin URL] --json\n  gozar service remove --origin URL --json\n');
     console.log('Routes by requirement (requests are JSON files; --json prints one envelope, progress goes to stderr):\n  gozar catalog --query-file FILE [--route NAME] --json\n  gozar ensure --query-file FILE [--approval-file FILE] [--reconsent] --json\n  gozar adopt --query-file FILE --approval-file FILE --handover-file FILE --json\n  gozar expose --query-file FILE --approval-file FILE [--wait allocated|verified] --json   (attached: close stdin to end it)\n  gozar setup ACTION_ID --approval-file FILE [--secret-file FILE | --value VALUE] --json\n  gozar preference show|set [--profile-home DIR] [--expected-revision N] [--prefer REF ...]\n  gozar suspend --route ID --json\n  gozar suspend --handle-file FILE --json\n  gozar watch --handle-file FILE --json   (one event per line)\nApproval and secret files must be private (mode 0600). Exit codes: 0 ok; 2 requirements, setup or unsupported; 3 missing or stale approval, or no such route; 1 other errors.\n');
-    console.log('Gozar\n  gozar demo-server [--port N]\n  gozar expose --port N [--client-reach internet|tailnet|lan|this-device|unknown] [--origin URL] [--lifetime-ms N]\n  gozar detect --port N\n  gozar status [--port N | --route ID]\n  gozar health [--port N]\n  gozar update-origin --origin URL [--port N]\n  gozar stop [--port N | --route ID]\n  gozar allow --route ID [--yes]\n\n--yes approves only the displayed selected route and exact loopback target.\n--adapter ID selects a catalog route. --json returns machine-readable status.\n--install-link-template HTTPS_TEMPLATE supplies a client install link using {url}; only the link is printed.\n--alternatives expands the route alternatives. No route is installed automatically.\n--probe-directory PATH selects the private challenge/receipt channel for the trusted outside verifier.\n--sse --streamable-http --oauth-dcr require those protocol checks; no inferred success.\n--operational opts into only the operational plans listed in the adapter manifest.\nLAN: --bind-address IP --firewall-ack IP records your exact-interface firewall approval.\n--transport http|https|tls|tcp and --client-profile ID select catalog data; unsupported modes remain blocked.');
+    console.log('Gozar\n  gozar demo-server [--port N]\n  gozar expose --port N [--client-reach internet|tailnet|lan|this-device|unknown] [--origin URL] [--lifetime-ms N]\n  gozar detect --port N\n  gozar status [--port N | --route ID]\n  gozar health [--port N]\n  gozar update-origin --origin URL [--port N]\n  gozar stop [--port N | --route ID]\n  gozar allow --route ID [--yes]\n\n--yes approves only the displayed selected route and exact loopback target.\n--via NAME selects a way by short name or adapter ID. --adapter ID is also supported.\n--verbose prints full engineering detail. --json returns unchanged machine-readable status.\n--install-link-template HTTPS_TEMPLATE supplies a client install link using {url}; only the link is printed.\n--alternatives lists usable ways with their setup status, then asks for approval. No route is installed automatically.\n--probe-directory PATH selects the private challenge/receipt channel for the trusted outside verifier.\n--sse --streamable-http --oauth-dcr require those protocol checks; no inferred success.\n--operational opts into only the operational plans listed in the adapter manifest.\nLAN: --bind-address IP --firewall-ack IP records your exact-interface firewall approval.\n--transport http|https|tls|tcp and --client-profile ID select catalog data; unsupported modes remain blocked.');
     return;
   }
   const home = defaultHome();
@@ -282,7 +285,6 @@ export async function main(argv = process.argv.slice(2)) {
   if (!selectedId) throw new Error('No eligible route. Check the listed prerequisites and client requirements, then run expose again.');
   const selected = adapters.find(adapter => adapter.id === selectedId);
   if (!selected) throw new Error('Selected route is not in the admitted catalog');
-  if (!options.json) print({ snapshot: { ...planned.snapshot, adapterId: selectedId }, action: planned.action });
   if (selected.ownership !== 'external-owned' && !selected.recipes?.create) throw new Error(`${selected.copy?.fix ?? selected.fix ?? 'This route has detection data only; no admitted create recipe is available.'}`);
   const clientProfile = options.clientProfileId ? selected.clientProfiles?.find(profile => profile.id === options.clientProfileId) : selected.clientProfile ?? selected.profile;
   if (options.clientProfileId && !clientProfile) throw new Error('Client profile is not in this route catalog record');
@@ -319,18 +321,17 @@ export async function main(argv = process.argv.slice(2)) {
       } else { await requestInput({ kind: 'confirm', field: key, title, target: { bindAddress: options.bindAddress, port: 0, targetHost: '127.0.0.1', targetPort: options.port, scheme: 'http' }, instruction: `Repeat this command with ${flag} ${options.bindAddress}` }); return; }
     }
   }
-  if (!options.json) console.log(`Target: http://127.0.0.1:${options.port}`);
-  if (!options.json && selected.copy?.consent) console.log(selected.copy.consent);
+  if (!options.json) print({ snapshot: { ...planned.snapshot, adapterId: selectedId }, action: planned.action });
   if (!options.yes) {
     if (!process.stdin.isTTY) throw new Error('Exposure requires approval. Review the selected route and run again with --yes.');
-    if (!['y', 'yes'].includes((await ask(`Expose http://127.0.0.1:${options.port} using ${selected.displayName ?? selected.label ?? selected.id}? [y/N] `)).toLowerCase())) return;
+    if (!['y', 'yes'].includes((await ask(`Expose it with ${selected.displayName ?? selected.label ?? selected.id}? [y/N] `)).toLowerCase())) return;
   }
   const { reserveSession } = await import('../packages/gozar-node/durable-route.mjs');
   const providerPort = selected.bindings?.port;
   await reserveSession({ home, port: options.port, providerResource: selected.providerResource ?? null,
     providerPorts: providerPort ? (providerPort.value !== undefined ? [providerPort.value] : providerPort.candidates ?? []) : [] });
   const reply = await launch(directory, { adapters, requirements, targetPort: options.port, adapterId: selectedId,
-    lifetimeMs: options.lifetimeMs, origin: options.origin, bindAddresses: options.bindAddress ? [options.bindAddress] : [], firewallApproved: Boolean(options.firewallAck), clientProfileId: options.clientProfileId, operational: selected.planVersion === 1, probeDirectory: options.probeRequest ? dirname(resolve(options.probeRequest)) : options.probeDirectory ?? process.env.GOZAR_PROBE_DIRECTORY, probeRequest: options.probeRequest && resolve(options.probeRequest), probeReceipt: options.probeReceipt && resolve(options.probeReceipt), probeExecutorId: options.probeExecutorId, probeWaitMs: options.probeWaitMs, observeProcessOutput: options['observe-process-output'] === true, consent: true, approveOrigin: true }, fileURLToPath(import.meta.url));
+    lifetimeMs: options.lifetimeMs, origin: options.origin, bindAddresses: options.bindAddress ? [options.bindAddress] : [], firewallApproved: Boolean(options.firewallAck), clientProfileId: options.clientProfileId, operational: selected.planVersion === 1, probeDirectory: options.probeRequest ? dirname(resolve(options.probeRequest)) : options.probeDirectory ?? process.env.GOZAR_PROBE_DIRECTORY, probeRequest: options.probeRequest && resolve(options.probeRequest), probeReceipt: options.probeReceipt && resolve(options.probeReceipt), probeExecutorId: options.probeExecutorId, probeWaitMs: options.probeWaitMs, observeProcessOutput: options['observe-process-output'] === true, consent: true, approveOrigin: true }, fileURLToPath(import.meta.url)).catch(error => { error.exposureAttempt = true; throw error; });
   await atomicWrite(join(home, 'last.json'), { port: options.port });
   print(reply);
   if (['failed', 'blocked', 'unknown', 'degraded', 'cleanup-pending'].includes(reply.snapshot?.phase)) process.exitCode = 1;
@@ -347,7 +348,11 @@ if (process.argv[1] && await realpath(resolve(process.argv[1])).catch(() => null
     }
     const next = cliCommand('detect', /^\d+$/.test(port ?? '') ? port : 'N');
     if (argv.includes('--json')) console.log(JSON.stringify({ error: error.message, action: { kind: 'repair', instruction: `Run ${next} to inspect prerequisites.`, command: next, expectedSuccess: 'Detection lists route prerequisites for this service port.' } }));
-    else console.error(`Gozar: ${error.message}\nNext: ${next}\nSuccess: detection lists route prerequisites for this service port.`);
+    else {
+      const message = error.userInput ? error.message : plainCaveat(error.message).plain ?? 'The command could not finish. The cause was not recorded. Use --verbose for details.';
+      const recovery = error.exposureAttempt ? `Public access or a background process may remain. Cleanup is not confirmed.\nStop: ${cliCommand('stop', /^\d+$/.test(port ?? '') ? port : 'N')}\nInspect first: ${cliCommand('health', /^\d+$/.test(port ?? '') ? port : 'N')}` : `Next: ${next}`;
+      console.error(`Gozar: ${message}\n${recovery}${argv.includes('--verbose') ? `\nFull detail: ${error.message}` : ''}`);
+    }
     process.exitCode = 1;
   });
 }

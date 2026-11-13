@@ -20,15 +20,15 @@ test('installed gozar symlink runs the CLI entrypoint', async t => {
 
 test('stopped CLI reports the result without catalog setup or recommendations', () => {
   const text = render({ snapshot: { phase: 'stopped', recommendations: ['route'], plans: [{ adapterId: 'route', eligibility: 'needs-validation' }], limitations: ['Catalog setup detail'] }, localCleanupFailures: [] }, [{ id: 'route' }]);
-  assert.equal(text, 'Gozar · stopped\nExposure stopped.');
+  assert.equal(text, "Cleanup confirmed: nothing Gozar created is still published. Your server's settings were not changed.");
   assert.doesNotMatch(text, /Recommended|Validation|Catalog/);
 });
 
-test('cleanup failure prints the exact retry scope and expected success', () => {
+test('cleanup failure prints the exact retry scope without claiming removal', () => {
   const output = render({ snapshot: { phase: 'stopped' }, localCleanupFailures: [{ detail: 'Fixture cleanup failed' }], journalPath: '/private/fixture/session.json' }, [], { port: 3000 });
-  assert.ok(output.includes(`Retry: ${cliCommand('stop', 3000)}`));
-  assert.match(output, /Success: Exposure stopped, with no remaining cleanup failures/);
-  assert.match(output, /Local state: \/private\/fixture\/session.json/);
+  assert.ok(output.includes(`Stop: ${cliCommand('stop', 3000)}`));
+  assert.match(output, /Public access or a background process may remain\. Cleanup is not confirmed\./);
+  assert.doesNotMatch(output, /Exposure stopped\.|Fixture cleanup failed/);
 });
 
 test('noninteractive no-flag expose asks one question and gives an exact next command', () => {

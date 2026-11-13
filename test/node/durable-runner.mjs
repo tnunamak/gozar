@@ -5,7 +5,7 @@ import * as api from '../../packages/gozar-node/api.mjs';
 import * as service from '../../packages/gozar-node/service.mjs';
 
 const [operation, input] = process.argv.slice(2);
-const operations = { apiStatus: api.routeStatus, apiSuspend: api.suspendRoute, ensure: durable.ensureRoute, suspend: durable.suspendRoute, release: durable.releaseRoute, stop: durable.stopRoute, status: durable.statusRoutes,
+const operations = { apiClose: api.closeRoute, apiStatus: api.routeStatus, apiSuspend: api.suspendRoute, ensure: durable.ensureRoute, suspend: durable.suspendRoute, release: durable.releaseRoute, stop: durable.stopRoute, status: durable.statusRoutes,
   adopt: durable.adoptRoute, confirmHandBack: durable.confirmHandBack, cancelHandBack: durable.cancelHandBack,
   removeService: service.removeService, statusServices: service.statusServices };
 try {

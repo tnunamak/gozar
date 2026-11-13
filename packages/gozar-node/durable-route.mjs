@@ -20,6 +20,7 @@ import { durableCapability, admitRouteEffect, routeAuthority } from './plan.mjs'
 import { loadAdapters } from './adapter-runtime.mjs';
 import { redeemConsentToken, consentBinding, canonicalDigest } from './consent-token.mjs';
 import { defaultHome } from './default-home.mjs';
+import { adoptDisclosureRevision } from './adopt-disclosure.mjs';
 
 const refuse = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
 const hash = routeId => createHash('sha256').update(routeId).digest('hex');
@@ -50,7 +51,7 @@ function routeIdValue(value) {
   if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(value)) throw refuse('invalid_input', 'Route ID must be 1..63 lowercase letters, digits or hyphens');
   return value;
 }
-function loopbackTarget(value) {
+export function loopbackTarget(value) {
   const match = typeof value === 'string' && /^127\.0\.0\.1:([0-9]{1,5})$/.exec(value);
   if (!match || Number(match[1]) < 1 || Number(match[1]) > 65535) throw refuse('invalid_input', 'Durable route target must be 127.0.0.1:PORT');
   return value;
@@ -148,8 +149,10 @@ export async function durablePlanFacts({ home = defaultHome(), adapterId, target
   target = loopbackTarget(target);
   if (origin !== null && typeof origin !== 'string') throw refuse('invalid_input', 'origin must be a string or null');
   const { facet, capability } = durableEntry(await adaptersOf({ adapters }), adapterId, true);
-  const facts = planFactsFromObservation(await facet.observe(durableContext(home)), { adapterId, facet, capability, target, origin, table: await observedReservations(home) });
-  return { planDigest: facts.planDigest, observedResource: facts.observedResource, origin: facts.origin };
+  const observed = await facet.observe(durableContext(home));
+  const facts = planFactsFromObservation(observed, { adapterId, facet, capability, target, origin, table: await observedReservations(home) });
+  return { planDigest: facts.planDigest, observedResource: facts.observedResource, origin: facts.origin,
+    creatableOrigin: origin === null || facet.slots(observed.snapshot, { target }).some(item => !item.adoptOnly && item.permitted && item.origin === origin) };
 }
 // Read-only: the adapter a durable record pins for this route ID, or null. No lock, no provider call.
 // The catalog ranks the pin first, so a later preference change never moves a route.
@@ -193,6 +196,16 @@ async function drop(dir, routeId) { await removeFile(recordPath(dir, routeId)); 
 async function stopped(dir, routeId) {
   try { await readRecord(tombstonePath(dir, routeId)); return true; }
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+async function refuseUserStop(dir, routeId) {
+  if (await stopped(dir, routeId)) throw refuse('stopped_by_user', 'The user stopped this route');
+}
+// A missing record can still have a user-stop tombstone after completed removal.
+export async function isUserStopped({ home = defaultHome(), routeId }) {
+  routeIdValue(routeId);
+  let dir;
+  try { dir = await routesDirectory(home, false); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  return stopped(dir, routeId);
 }
 async function clearStop(dir, routeId) { if (await removeFile(tombstonePath(dir, routeId))) await syncDirectory(dir); }
 async function allRecords(dir) {
@@ -301,13 +314,22 @@ export async function portHolders({ home = defaultHome(), providerResource, port
 // Derive current state from the record plus a fresh observation. Never trusts saved readiness.
 // While nothing is published, the pinned intent origin is what verification checks.
 // The record's `dnsName` and `port` fields are the provider identity and slot (names kept for stored records).
+// A receipt or a write-ahead intent taken on an empty slot attributes this exact rule.
+// Provider-side foreign ownership (for example a foreground Serve rule) still wins.
+function matchesEmptyIntent(record, facet, observed, current) {
+  const pin = record.receipt ?? record.intent;
+  return record.intent?.slotWasEmpty === true && !facet.foreign(observed.snapshot, record.intent.port, pin.dnsName) &&
+    isDeepStrictEqual(current, record.intent.rule);
+}
+
 async function reconcile(record, facet, observed, { verify = true } = {}) {
   if (['releasing', 'handing-back', 'address_changed'].includes(record.state)) return { state: record.state };
   const pin = record.receipt ?? record.intent;
   if (observed.identity !== pin.dnsName) return { state: 'address_changed' };
   if (record.state === 'suspended') return { state: 'suspended' };
   const current = facet.read(observed.snapshot, pin.port);
-  // Intent without a receipt proves only that Gozar meant to create the rule.
+  // An exact intent match is a recoverable create; publication still requires a receipt and verification.
+  if (!record.receipt && matchesEmptyIntent(record, facet, observed, current)) return { state: 'creating' };
   if (!record.receipt) return current === null ? { state: 'lost' } : { state: 'uncertain', cleanupDebt: { reason: 'unattributed-rule', port: pin.port } };
   if (current === null) return { state: 'lost' };
   if (!isDeepStrictEqual(current, record.receipt.rule)) return { state: 'uncertain', cleanupDebt: { reason: 'rule-changed', port: pin.port } };
@@ -395,11 +417,12 @@ async function createListener(dir, record, entry, { table, firstAllocation, expe
       // to another slot during a retry makes that approval stale; it never publishes elsewhere.
       if (expectedOrigin !== undefined && expectedOrigin !== candidate) return { result: 'stale' };
       record = { ...record, planDigest: planDigestOf(record.adapterId, capability, record.target, candidate),
-        intent: { dnsName: observed.identity, port: slot, mode: capability.mode, origin: candidate, rule: intendedRule } };
+        intent: { dnsName: observed.identity, port: slot, mode: capability.mode, origin: candidate, rule: intendedRule, slotWasEmpty: true } };
     } else {
       if (observed.identity !== record.intent.dnsName) return { result: 'address_changed' };
       slot = record.intent.port;
       if (facet.occupied(observed.snapshot, slot) || facet.foreign(observed.snapshot, slot)) return { result: 'occupied' };
+      record = { ...record, intent: { ...record.intent, slotWasEmpty: true } };
     }
     const admitted = effectFor(record, entry, observed.snapshot, 'create');
     // Intent is durable before the provider write.
@@ -421,6 +444,10 @@ async function createListener(dir, record, entry, { table, firstAllocation, expe
   }
   const { dnsName, port, rule } = record.intent;
   const readback = await facet.observe(ctx);
+  if (readback.identity !== dnsName) {
+    await save(dir, { ...record, state: 'address_changed' });
+    throw refuse('address_changed', 'Provider identity changed during readback; nothing was published');
+  }
   const current = facet.read(readback.snapshot, port);
   if (!isDeepStrictEqual(current, rule)) {
     if (current === null) {
@@ -522,6 +549,16 @@ export async function ensureRoute(request, deps) {
       }
       const observed = await entry.facet.observe(ctx);
       const current = await reconcile(record, entry.facet, observed);
+      if (current.state === 'creating' && !record.receipt) {
+        const pin = record.intent;
+        // Reconcile just read the exact rule at this identity and slot. Finish the interrupted create.
+        record = { ...record, state: 'creating', cleanupDebt: null,
+          receipt: { dnsName: pin.dnsName, port: pin.port, mode: pin.mode, origin: pin.origin,
+            rule: entry.facet.read(observed.snapshot, pin.port), observedAt: new Date().toISOString() } };
+        await save(dir, record);
+        const published = await publish(dir, record);
+        return finish(published.record, published.verification);
+      }
       if (current.state === 'usable' || current.state === 'unverified') {
         const published = await publish(dir, record, current.verification);
         return finish(published.record, published.verification);
@@ -557,7 +594,7 @@ export async function ensureRoute(request, deps) {
   });
 }
 
-// Remove by exact compare-and-set from the receipt. A rule Gozar cannot attribute stays in place,
+// Remove by exact compare-and-set from the receipt or empty-slot intent. A rule Gozar cannot attribute stays in place,
 // and the record stays as visible cleanup debt until the rule is gone or the user dismisses it.
 async function removeListener(dir, record, adapters, ctx, { suspend = false } = {}) {
   if (!suspend && record.state === 'suspended') {
@@ -591,9 +628,9 @@ async function removeListener(dir, record, adapters, ctx, { suspend = false } = 
     // receipted rule may still sit under the old identity, and an equal rule under the new one is not ours.
     const current = facet.read(observed.snapshot, pin.port, pin.dnsName);
     if (current === null) return { result: 'absent' };
-    if (!record.receipt) return { result: 'unattributed-rule' };
-    if (!isDeepStrictEqual(current, record.receipt.rule)) return { result: 'rule-changed' };
-    return { write: { op: 'delete', slot: pin.port, rule: record.receipt.rule, identity: pin.dnsName } };
+    if (!record.receipt && !matchesEmptyIntent(record, facet, observed, current)) return { result: 'unattributed-rule' };
+    if (!isDeepStrictEqual(current, pin.rule)) return { result: 'rule-changed' };
+    return { write: { op: 'delete', slot: pin.port, rule: pin.rule, identity: pin.dnsName } };
   });
   if (!written) {
     if (decision.result === 'absent') return complete(false);
@@ -609,6 +646,7 @@ export async function suspendRoute({ routeId, home = defaultHome(), expectedGene
   routeId = routeIdValue(routeId);
   const adapters = await adaptersOf(deps), ctx = durableContext(home);
   return reserved(home, async dir => {
+    await refuseUserStop(dir, routeId);
     let record = await load(dir, routeId);
     if (!record) throw refuse('not_found', 'No durable route has this ID');
     if (expectedGeneration !== undefined && record.generation !== expectedGeneration) throw refuse('route_conflict', 'The route was replaced; this handle is stale');
@@ -634,6 +672,7 @@ export async function releaseRoute({ routeId, mode = 'remove', home = defaultHom
   routeId = routeIdValue(routeId);
   if (!['remove', 'hand-back', 'dismiss'].includes(mode)) throw refuse('invalid_input', 'mode must be remove, hand-back or dismiss');
   return reserved(home, async dir => {
+    if (mode !== 'remove') await refuseUserStop(dir, routeId);
     const record = await load(dir, routeId);
     // A handle names one generation of a route; a replaced route is not ended by a stale handle.
     if (expectedGeneration !== undefined && record && record.generation !== expectedGeneration) throw refuse('route_conflict', 'The route was replaced; this handle is stale');
@@ -763,6 +802,7 @@ export async function adoptRoute(request, deps) {
     const factsOf = observed => planFactsFromObservation(observed, { adapterId, facet, capability, target, origin });
     const seen = factsOf(before.find(item => item.adapterId === adapterId));
     if (migrationRef !== undefined && migrationRef !== migrationRefOf({ origin, target, observedResource: seen.observedResource })) throw stale();
+    if (approval.disclosureRevision !== adoptDisclosureRevision(entry.adapter.definition)) throw stale();
     // The token is spent from here on. Its grant must be for exactly this rule's adapter and state.
     const grant = await redeem(home, request, 'adopt', approval);
     if (grant.adapterId !== adapterId || grant.planDigest !== seen.planDigest || grant.observedResource !== seen.observedResource) throw stale();

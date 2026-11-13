@@ -76,14 +76,14 @@ test('packed local recovery action executes without global gozar, including quot
   const env = {...process.env, HOME:home, GOZAR_HOME:home, PATH:bin};
   const reply = JSON.parse((await run(process.execPath,[installedCli,'status','--port',String(port),'--json'],{env,timeout:10000})).stdout);
   const stopped = await run('/bin/sh',['-c',reply.nextAction.command],{env,timeout:10000});
-  assert.match(stopped.stdout,/Exposure stopped/);
+  assert.match(stopped.stdout,/Cleanup confirmed: nothing Gozar created is still published/);
   assert.deepEqual(commands,['status','stop']);
   healthy = true;
   const human = (await run(process.execPath,[installedCli,'status','--port',String(port)],{env,timeout:10000})).stdout;
   const recovery = human.split('After sleep or network loss: ')[1]?.split(';')[0];
   assert.ok(recovery, human);
   const rechecked = await run('/bin/sh',['-c',recovery],{env,timeout:10000});
-  assert.match(rechecked.stdout,/Route checks passed/);
+  assert.match(rechecked.stdout,/Public URL: https:\/\/a.tunnl.gg/);
   assert.equal(commands.at(-1),'health');
   for (const line of human.split('\n').filter(line => /^(Status|Stop): /.test(line))) {
     assert.ok(line.includes(installedCli.replaceAll("'", "'\\''")), line);
