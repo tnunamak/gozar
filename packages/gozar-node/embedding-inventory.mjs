@@ -11,11 +11,11 @@ export async function listProviders(request,deps={}){
   const {adapter,properties}=item;const actions=[...new Map([...item.actions,...(item.missingActions??[])].map(a=>[a.id,a])).values()];
   const saved=await deps.embeddingServices.readConfiguration({...request,providerId:adapter.id});
   const configuration={...configurationFor(actions,saved),revision:saved.revision,scopeId:saved.scopeId};
-  configuration.inputRequirements=configuration.inputRequirements.map(i=>({...i,actionId:i.actionId??i.id}));
+  configuration.inputRequirements=(adapter.definition.inputRequirements??configuration.inputRequirements).map(i=>({...i,actionId:i.actionId??i.id}));
   const prerequisites=[...prerequisitesFor(item,observedAt),...capabilityPrerequisites(adapter.definition,request.hostCapabilities??deps.hostCapabilities??{})];
   const availability=availabilityFor(adapter.definition);
   for(const kind of Object.keys(availability))if(availability[kind].state==='available'){
-   const denied=prerequisites.find(p=>['denied','unsupported'].includes(p.state));
+   const denied=prerequisites.find(p=>['denied','unsupported','unknown'].includes(p.state)&& (adapter.definition.requiredCapabilities??[]).includes(p.id));
    if(denied)availability[kind]={state:'unsupported',reason:`host-capability-${denied.state}`};
    else if(item.state!=='ready')availability[kind]={state:item.state,reason:`provider-${item.state}`};
   }

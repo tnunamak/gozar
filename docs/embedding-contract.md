@@ -50,3 +50,19 @@ Legacy direct setup calls retain their file-backed path. Migrate embedded caller
 to a configured factory and explicit provider/configuration revision requests.
 The decisive release check is the installed DataConnect integration using public
 APIs. Helper tests alone do not establish that integration.
+
+## Focused verification
+
+The broker test spawns a real Node child and gives it only the resolver descriptor
+and trusted host identity. It checks a digest of the returned canary, backend lock,
+wrong boot, and shutdown. The installed controller and DataConnect acceptance
+remain separate checks owned by the integration lane.
+
+A bounded TLA+ draft model checks shared-secret preservation and retaining the
+live-use reference until close confirmation. The unsafe rule that deletes a
+shared secret on discard fails along `Initial -> Begin -> Discard`. The safe
+rule deletes only staged unreferenced secrets: 38 generated states, 12 distinct
+states, no invariant violations. The configuration test replays the discard path
+and checks that the applied credential still resolves. The model abstracts
+backend crashes, filesystem durability and multiple controllers; tests cover
+those concrete boundaries separately where stated.

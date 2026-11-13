@@ -17,14 +17,14 @@ export async function runEmbeddingSetup(request,deps){
   if(!action||action.digest!==request.approval.digest||action.disclosure.revision!==request.approval.disclosureRevision)fail('candidate_stale');
   await deps.validateSetupApproval?.({request,action,adapter,configuration:await tx.configuration()});
   if(['open-url','instructions'].includes(action.kind))return {state:'pending',nextAction:action};
+  const inputId=(adapter.definition.inputRequirements??[]).find(i=>i.actionId===action.id)?.id??action.id;
   if(action.kind==='provide-value'){
    if(request.secretHandle!==undefined)fail('invalid_input');if(request.value===undefined)return {state:'pending',nextAction:action};
-   const value=checkValue(action.valueFormat,request.value);if(value===null)fail('invalid_input');tx.bindText(action.id,value);return {state:'complete',nextAction:null};
+   const value=checkValue(action.valueFormat,request.value);if(value===null)fail('invalid_input');tx.bindText(inputId,value);return {state:'complete',nextAction:null};
   }
   if(action.kind==='install-artifact'){
    await executeArtifact(action,{hostCapabilities:deps.hostCapabilities??services.hostCapabilities,executor:deps.artifactExecutor,platform,architecture:deps.architecture??process.arch});tx.markChanged();return {state:'complete',nextAction:null};
   }
-  const inputId=(adapter.definition.inputRequirements??[]).find(i=>i.actionId===action.id)?.id??action.id;
   const execute=deps.executeApprovedAction??(async()=>fail('unsupported'));
   const context={...own,withSecret:(handle,use)=>handle===request.secretHandle?tx.withSecret(inputId,handle,use):Promise.reject(embeddingError('invalid_input')),
    configuration:ref=>ref===request.secretHandle&&ref!=null?tx.withSecret(inputId,ref,async bytes=>new Uint8Array(bytes)):own.configuration(ref),
@@ -34,5 +34,5 @@ export async function runEmbeddingSetup(request,deps){
   if(!['complete','pending','blocked'].includes(result?.state))fail('internal_error');
   if(result.state==='complete'){if(action.kind==='provide-secret')await tx.bindSecret(inputId,request.secretHandle);else tx.markChanged();}return result;
  });
- return {schemaVersion:1,...outcome.result,configurationRevision:outcome.configuration.revision,scopeId:outcome.configuration.scopeId,catalogRevision:catalogRevisionOf([],platform)};
+ return {schemaVersion:1,...outcome.result,configurationRevision:outcome.configuration.revision,scopeId:outcome.configuration.scopeId,catalogRevision:catalogRevisionOf(await Promise.all(deps.adapters.map(a=>inspectAdapter(a,{...read,providerConfiguration:providerId=>services.resolveConfiguration({...request,providerId})},platform))),platform)};
 }

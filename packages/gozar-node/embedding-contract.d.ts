@@ -1,6 +1,7 @@
 /** Additive host embedding contract for Gozar 0.4.0. Trusted host APIs only. */
 export type Observation<T> = {known:true;value:T}|{known:false;reason:string};
-export type HostCapabilities = Record<string,Observation<boolean|string>>;
+export type HostCapabilityId = 'installer.execute'|'privilege.elevate'|'secrets.backend'|'runtime.attached'|'runtime.durable'|(string & {});
+export type HostCapabilities = Record<HostCapabilityId,Observation<boolean|string>>;
 export interface HostIdentity {instanceId:string;bootId:string}
 export interface SecretBackend {
  put(request:{scopeId:string;inputId:string;revision:string;bytes:Uint8Array}):Promise<{handle:string}>;

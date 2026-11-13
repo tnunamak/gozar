@@ -1,8 +1,8 @@
 // Factory-scoped configuration transactions. Only opaque references reach disk.
 import {randomUUID,createHash} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
+import {constants} from 'node:fs';
 import {join} from 'node:path';
-import {canonicalHome,withExclusiveLock} from './service-state.mjs';
+import {canonicalHome,withExclusiveLock,checkedFile} from './service-state.mjs';
 import {atomicWrite} from './journal.mjs';
 import {storeSecret,withSecret,deleteSecret} from './secret-store.mjs';
 
@@ -12,6 +12,7 @@ const hash=value=>createHash('sha256').update(value).digest('hex');
 const fresh=()=>randomUUID();
 const clone=value=>structuredClone(value);
 export function createEmbeddingServices({registryId,secretBackend,hostCapabilities={},identity}={}){
+ if(identity&&(!identity.instanceId||typeof identity.instanceId!=='string'||!identity.bootId||typeof identity.bootId!=='string'))fail('invalid_input');
  if(typeof registryId!=='string'||!registryId)fail('invalid_input');
  const backend=home=>secretBackend??{
   put:({bytes})=>storeSecret({home,value:bytes}),
@@ -23,7 +24,8 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
  async function transaction(home,run){
   home=await canonicalHome(home,true);
   return withExclusiveLock(join(home,'.embedding-lock'),async()=>{
-   let state;try{state=JSON.parse(await readFile(join(home,'embedding-state.json'),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;state={schemaVersion:1,configs:{},secrets:{},instanceId:fresh()};}
+   let state;try{const file=await checkedFile(join(home,'embedding-state.json'),constants.O_RDONLY,'embedding state');try{state=JSON.parse(await file.readFile('utf8'));}finally{await file.close();}}catch(e){if(e.code!=='ENOENT')throw e;state={schemaVersion:1,configs:{},secrets:{},instanceId:fresh()};}
+   if(state?.schemaVersion!==1||!state.configs||!state.secrets||typeof state.instanceId!=='string')fail('internal_error');
    const result=await run(state,home);await atomicWrite(join(home,'embedding-state.json'),state);return result;
   },{waitSeconds:30});
  }
