@@ -1100,3 +1100,37 @@ test('a session that may use either of two provider ports is not refused while o
   assert.deepEqual(await reserveSession({ home: w.home, port: 18711, ...provider, providerPorts: [8443, 10000] }), { reserved: true });
   await assert.rejects(reserveSession({ home: w.home, port: 18712, ...provider, providerPorts: [8443] }), { code: 'reserved' });
 });
+
+// Other apps' rules on the same node: Funnel rules on 443 and 9443 and a tailnet-only rule on 8443.
+const otherApps = w => {
+  w.edit(foreignRule(443, 'http://127.0.0.1:9001'));
+  w.edit(foreignRule(9443, 'http://127.0.0.1:9002'));
+  w.edit(foreignRule(8443, 'http://127.0.0.1:9003'));
+  w.edit(({ config }) => { (config.AllowFunnel ??= {})[`${dnsName}:443`] = true; config.AllowFunnel[`${dnsName}:9443`] = true; });
+};
+
+test('31. other apps\' Funnel rules on 443 and 9443 and a tailnet-only rule on 8443 survive create and release byte-identical', async t => {
+  const w = await world(t);
+  w.state.funnelPorts = [443, 8443, 10000];
+  otherApps(w);
+  const before = structuredClone(w.state.config);
+  const created = await w.ensure();
+  assert.equal(created.result.route.origin, `https://${dnsName}:10000`, JSON.stringify(created));
+  const others = config => [443, 8443, 9443].map(port => [config.TCP?.[port], config.Web?.[`${dnsName}:${port}`], config.AllowFunnel?.[`${dnsName}:${port}`]]);
+  assert.deepEqual(others(w.state.config), others(before), 'creating the route changed no other rule or Funnel bit');
+  const released = await w.run('release', { routeId: 'coordinator' });
+  assert.equal(released.result.providerRemoved, true, JSON.stringify(released));
+  assert.deepEqual(w.state.config, before);
+  assert.deepEqual(await w.cliCalls(), []);
+});
+
+test('31. another app\'s path on the route\'s port blocks removal, and its handler and the Funnel bit survive', async t => {
+  const w = await world(t);
+  await w.ensure();
+  w.edit(({ config }) => { config.Web[`${dnsName}:8443`].Handlers['/other'] = { Proxy: 'http://127.0.0.1:9004' }; });
+  const changed = structuredClone(w.state.config);
+  const released = await w.run('release', { routeId: 'coordinator' });
+  assert.equal(released.result.removed, false);
+  assert.equal(released.result.cleanupDebt.reason, 'rule-changed');
+  assert.deepEqual(w.state.config, changed);
+});

@@ -9,7 +9,7 @@ import { LISTENERS_TAKEN, openSessionRoute } from '../../packages/gozar-node/att
 import { loadDefinition } from '../../packages/gozar-node/catalog.mjs';
 import { serve } from '../../packages/gozar-node/daemon.mjs';
 import { atomicWrite } from '../../packages/gozar-node/journal.mjs';
-import { installFakeTailscale, persistentRule } from './fake-tailscale.mjs';
+import { dnsName, installFakeTailscale, persistentRule } from './fake-tailscale.mjs';
 import { query, stubAdapter, tokenStubs } from './route-schema-check.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -136,4 +136,21 @@ test('a provider read that fails during stop is not re-read in a loop', async t 
   await first.controller.shutdown();
   const calls = (await w.fake.read()).calls.slice(before).filter(call => call[0] === 'serve');
   assert.ok(calls.length >= 1 && calls.length <= 2, `serve status was read ${calls.length} times: only an entry that is still shown is re-read`);
+});
+
+test('other apps\' Funnel rules on 443 and 9443 and a tailnet-only rule on 8443 survive a session start and stop byte-identical', async t => {
+  const rule = (port, funnel) => ({ TCP: { [port]: { HTTPS: true } }, Web: { [`${dnsName}:${port}`]: { Handlers: { '/': { Proxy: `http://127.0.0.1:${9000 + port % 1000}` } } } },
+    AllowFunnel: funnel ? { [`${dnsName}:${port}`]: true } : {} });
+  const parts = [rule(443, true), rule(9443, true), rule(8443, false)];
+  const config = Object.fromEntries(['TCP', 'Web', 'AllowFunnel'].map(key => [key, Object.assign({}, ...parts.map(part => part[key]))]));
+  const w = await world(t, { config });
+  const before = structuredClone((await w.fake.read()).config);
+  const daemon = await w.start(18908);
+  assert.equal(daemon.controller.state.published, `https://${dnsName}:10000`, JSON.stringify(daemon.controller.state.limitations));
+  const stopped = await daemon.controller.shutdown();
+  assert.equal(stopped.snapshot.phase, 'stopped', JSON.stringify(stopped.snapshot.limitations));
+  const after = await w.fake.read();
+  assert.deepEqual(after.config, before);
+  const writes = after.calls.filter(call => call[0] !== 'status' && !(call[0] === 'serve' && call[1] === 'status'));
+  assert.deepEqual(writes.map(call => call.slice(0, 4)), [['funnel', '--yes', '--https=10000', '--set-path=/']], 'one narrow funnel call; no reset, off or other port');
 });
