@@ -47,6 +47,20 @@ test('a fake whose probe fails is listed but not eligible, and plain HTTP does n
   assert.equal(loose.eligible, true);
 });
 
+test('red: a fake carries every protocol unless the test narrows it, so an app that needs oauth-dcr can use its own fake', async t => {
+  const home = await scratch(t);
+  const all = await fakeRegistry({ id: fakeId(), kinds: ['session'], reach: 'internet' });
+  const narrow = await fakeRegistry({ id: fakeId(), kinds: ['session'], reach: 'internet', protocols: ['sse'] });
+  t.after(all.cleanup); t.after(narrow.cleanup);
+  const needsDcr = { ...session(home), requirements: { ...session(home).requirements, protocols: ['oauth-dcr'] } };
+  const [open] = (await createRouteApi({ manifest: all.manifest, root: all.root, readContext: fakeReadContext({ home }) }).catalogRoutes(needsDcr)).candidates;
+  assert.equal(open.eligible, true, JSON.stringify(open.unmet));
+  const [shut] = (await createRouteApi({ manifest: narrow.manifest, root: narrow.root, readContext: fakeReadContext({ home }) }).catalogRoutes(needsDcr)).candidates;
+  assert.equal(shut.eligible, false);
+  assert.ok(shut.unmet.some(item => item.requirement === 'protocols'), JSON.stringify(shut.unmet));
+  assert.equal((await fakeRegistry({ id: fakeId(), kinds: ['session'], reach: 'internet', protocols: ['carrier-pigeon'] }).then(() => null, e => e))?.code, 'invalid_input');
+});
+
 test('red: a durable fake is created, checked, shown usable and verified, and closed with no rule left in its store', async t => {
   const home = await scratch(t), id = fakeId();
   const registry = await fakeRegistry({ id, kinds: ['durable'], reach: 'internet' });

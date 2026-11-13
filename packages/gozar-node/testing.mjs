@@ -127,6 +127,8 @@ export default {
   remove: (ctx, receipt, ...rest) => (isDurable(receipt?.readback?.kind) ? base.remove(ctx, receipt, ...rest) : plain.remove(ctx, receipt, ...rest)),
 };
 `;
+// The Query's protocol words; a fake inspects no traffic, so it can carry each of them.
+const PROTOCOLS = ['sse', 'streamable-http', 'oauth-dcr'];
 const runtimeUrl = pathToFileURL(fileURLToPath(new URL('./adapter-runtime.mjs', import.meta.url))).href;
 
 /**
@@ -134,12 +136,15 @@ const runtimeUrl = pathToFileURL(fileURLToPath(new URL('./adapter-runtime.mjs', 
  * `createRouteApi({ manifest, root })` loads. `kinds` is any of 'session', 'attached' and 'durable'. A durable fake keeps its
  * rules in `<root>/providers/<id>/store.json` (read it to see what the provider holds; a rule is `entries.<slot>.rule`), so
  * another process sees the same state. The fake never touches the network. `id` is the id the catalog shows as `providerId`.
+ * `protocols` uses the Query's words ('sse', 'streamable-http', 'oauth-dcr'); a fake carries all three unless a test narrows it,
+ * so an app's protocol requirements do not make its own fake ineligible.
  */
-export async function fakeRegistry({ id, label, kinds, reach, transport = 'https', dir } = {}) {
+export async function fakeRegistry({ id, label, kinds, reach, transport = 'https', protocols = PROTOCOLS, dir } = {}) {
   if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) throw gozarError('invalid_input', 'fakeRegistry needs an id of lowercase letters, digits and hyphens');
   if (!Array.isArray(kinds) || !kinds.length || kinds.some(kind => !KINDS.includes(kind))) throw gozarError('invalid_input', `fakeRegistry kinds must be a non-empty list of ${KINDS.join(', ')}`);
   if (!REACHES.includes(reach)) throw gozarError('invalid_input', `fakeRegistry reach must be one of ${REACHES.join(', ')}`);
   if (!['https', 'http'].includes(transport)) throw gozarError('invalid_input', "fakeRegistry transport must be 'https' or 'http'");
+  if (!Array.isArray(protocols) || protocols.some(item => !PROTOCOLS.includes(item))) throw gozarError('invalid_input', `fakeRegistry protocols must be a list of ${PROTOCOLS.join(', ')}`);
   const own = dir === undefined;
   const root = dir ?? await mkdtemp(join(tmpdir(), 'gozar-fake-'));
   const folder = join(root, 'providers', id);
@@ -152,7 +157,7 @@ export async function fakeRegistry({ id, label, kinds, reach, transport = 'https
       address: { stability: 'unknown', scope: 'a fake address that exists only in memory', conditions: [], ports: null },
       cost: { kind: 'free', summary: 'A fake costs nothing.', currency: null, amount: null, period: null },
       needsAccount: false, lifetimes: [...kinds], supervision: 'controller',
-      protocols: { sse: true, streamableHttp: true, oauthDcr: false },
+      protocols: { sse: protocols.includes('sse'), streamableHttp: protocols.includes('streamable-http'), oauthDcr: protocols.includes('oauth-dcr') },
       proof: { vantage: 'this-device', checks: ['nonce'] },
     },
     supportedKinds: [...kinds],
