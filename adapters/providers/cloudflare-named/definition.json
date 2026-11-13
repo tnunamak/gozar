@@ -36,8 +36,10 @@
         "period": null
       },
       "needsAccount": true,
-      "lifetimes": [],
-      "supervision": "controller",
+      "lifetimes": [
+        "attached"
+      ],
+      "supervision": "host-supervised",
       "protocols": {
         "sse": false,
         "streamableHttp": false,
@@ -52,7 +54,9 @@
         ]
       }
     },
-    "supportedKinds": [],
+    "supportedKinds": [
+      "attached"
+    ],
     "disclosure": {
       "revision": "disc-dcd687fdcadb",
       "text": "Cloudflare named tunnel is detected only. Gozar cannot create a route with it yet. The Cloudflare edge terminates TLS and can read payloads.",
@@ -72,23 +76,42 @@
     "ownership": "gozar-owned",
     "availability": {
       "session": {
-        "state": "detect-only",
-        "reason": "execution-not-implemented"
+        "state": "unsupported",
+        "reason": "usage-not-supported"
       },
       "attached": {
-        "state": "detect-only",
-        "reason": "execution-not-implemented"
+        "state": "available",
+        "reason": "admitted"
       },
       "durable": {
-        "state": "detect-only",
-        "reason": "execution-not-implemented"
+        "state": "unsupported",
+        "reason": "usage-not-supported"
       }
     },
     "prerequisites": [
       {
-        "id": "local-setup",
-        "label": "Local prerequisites",
-        "observation": "detected"
+        "id": "connector-binary",
+        "label": "Connector binary",
+        "observation": "detected",
+        "actionId": "install-connector"
+      },
+      {
+        "id": "credential",
+        "label": "Saved tunnel credential",
+        "observation": "authSet",
+        "actionId": "token"
+      },
+      {
+        "id": "origin",
+        "label": "Published origin",
+        "observation": "originSet",
+        "actionId": "origin"
+      },
+      {
+        "id": "gate-port",
+        "label": "Local connector port",
+        "observation": "portSet",
+        "actionId": "gate-port"
       }
     ],
     "facts": [
@@ -217,6 +240,16 @@
         "affectsConsent": true,
         "source": "https://www.cloudflare.com/plans/sase-zero-trust.md (accessed 2026-11-12) ; https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/ (accessed 2026-11-12)",
         "asOf": "2026-11-12"
+      },
+      {
+        "id": "cleanup-ownership",
+        "label": "Cleanup ownership",
+        "value": "Stopping removes the Gozar connector and gate only. The owner keeps tunnel registration, DNS and token revocation.",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": true,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
       }
     ]
   },

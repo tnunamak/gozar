@@ -287,8 +287,17 @@ export async function runAttachedController(directory, runtime = {}) {
 
   async function verify() {
     if (!receipt || releasing) return;
+    if (proofSession && !proofSession.refresh) return;
     try {
-      const verification = await checkProof(false);
+      attempt.deadlineMs = now() + 120_000;
+      const verification = proofSession
+        ? await proofSession.refresh({ origin: lease.origin, receipt, attempt })
+        : await checkProof(false);
+      if (proofSession) {
+        if (verification.attemptId !== attempt.id || verification.endpoint !== lease.origin || attempt.signal.aborted || now() >= attempt.deadlineMs || releasing) return;
+        lease.proof = verification;
+        lease.facts = [...(adapter.definition.facts ?? []), ...(verification.facts ?? [])];
+      }
       if (!releasing) { lease.state = verification.status === 'verified' ? 'usable' : 'unverified'; lease.checkedAtMs = now(); lease.sseChecked = false; await save(); }
     } catch { if (!releasing) { lease.state = 'unverified'; await save(); } }
   }

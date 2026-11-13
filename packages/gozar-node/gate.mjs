@@ -12,7 +12,7 @@ export function validateLifetimeMs(value) {
 export const STRIPPED_FORWARDING_HEADERS = Object.freeze(['x-forwarded-for', 'forwarded', 'x-real-ip']);
 export const NORMALISED_HEADER = 'x-forwarded-for';
 
-export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = () => {} } = {}) {
+export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = () => {}, listenPort = 0 } = {}) {
   validateLifetimeMs(lifetimeMs);
   let secretPath = `/.gozar-${randomBytes(24).toString('hex')}`;
   let nonce = randomBytes(32).toString('hex');
@@ -48,7 +48,7 @@ export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = 
     request.pipe(upstream);
   });
   server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(listenPort, '127.0.0.1', resolve); });
   const port = server.address().port;
   const matches = value => typeof value === 'string' && value.length === nonce.length && timingSafeEqual(Buffer.from(value), Buffer.from(nonce));
   const expiresAtMs = Date.now() + lifetimeMs;

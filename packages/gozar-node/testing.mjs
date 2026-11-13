@@ -68,13 +68,15 @@ export function createRouteApi(deps = {}) {
 const KINDS = ['session', 'attached', 'durable'];
 const REACHES = ['internet', 'tailnet', 'lan', 'this-device'];
 
-const moduleSource = (actions = []) => `// A fake provider written by @tnunamak/gozar/testing. It does nothing outside memory.
+const moduleSource = (actions = [], proofProtocol = 'http') => `// A fake provider written by @tnunamak/gozar/testing. It does nothing outside memory.
 import { createHash } from 'node:crypto';
 import { readFileSync, appendFileSync } from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 const definition = JSON.parse(readFileSync(new URL('./definition.json', import.meta.url), 'utf8')).adapter;
 const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const servers = new Map();
+const proofProtocol = ${JSON.stringify(proofProtocol)};
 const mark = event => appendFileSync(new URL('./events.jsonl', import.meta.url), JSON.stringify({event}) + '\\n');
 export default {
   id: definition.id,
@@ -88,8 +90,25 @@ export default {
     return { digest: sha({ id: definition.id, target: request.target, usage: request.usage?.kind }), origin: request.origin ?? null, resourceKey, effects: [{target: request.target}],
       readback: { kind: request.usage?.kind, origin: request.origin ?? null, target: request.target }, cleanup: { kind: 'fake' }, precondition: null };
   },
+  ...(proofProtocol === 'echo' ? {
+    async prepareProof(ctx, request, attempt) {
+      const proof = net.createServer(socket => { let input=''; socket.on('data', chunk=>{ input+=chunk; if(input.includes('\\n')) socket.end(input.trim()===attempt.nonce ? attempt.nonce+'\\n' : 'wrong\\n'); }); });
+      await new Promise((resolve,reject)=>{proof.once('error',reject);proof.listen(0,'127.0.0.1',resolve);});
+      return {target:'127.0.0.1:'+proof.address().port,
+        async verify({origin,attempt:current}) {
+          mark('proof'); const endpoint=new URL(origin);
+          const matched=await new Promise(resolve=>{let input='';const socket=net.connect(Number(endpoint.port),endpoint.hostname); const timer=setTimeout(()=>{socket.destroy();resolve(false);},1000);
+            socket.once('connect',()=>socket.write(current.nonce+'\\n')); socket.on('data',chunk=>{input+=chunk;});socket.once('error',()=>{clearTimeout(timer);resolve(false);});socket.once('end',()=>{clearTimeout(timer);resolve(input.trim()===current.nonce);}); });
+          return {status:matched?'verified':'unverified',attemptId:current.id,endpoint:origin,checkedAt:new Date().toISOString(),validUntil:new Date(Date.now()+5000).toISOString(),vantage:'this-device',checks:['nonce'],facts:[]};
+        },async close(){await new Promise(resolve=>proof.close(resolve));}};
+    }
+  }:{}),
   async create(ctx, plan) {
-    if (plan.readback.kind === 'attached') {
+    if (plan.readback.kind === 'attached' && proofProtocol === 'echo') {
+      const [host,port]=plan.effects[0].target.split(':');
+      const server=net.createServer(socket=>{const upstream=net.connect(Number(port),host);upstream.on('error',()=>socket.destroy());socket.on('error',()=>upstream.destroy());socket.pipe(upstream).pipe(socket);});
+      await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});servers.set(plan.resourceKey,server);plan={...plan,origin:'tcp://127.0.0.1:'+server.address().port};mark('start');
+    } else if (plan.readback.kind === 'attached') {
       const target = new URL('http://' + plan.effects[0].target);
       const server = http.createServer((req,res) => {
         const upstream = http.request({hostname:target.hostname,port:target.port,path:req.url,method:req.method,headers:req.headers}, reply => { res.writeHead(reply.statusCode,reply.headers); reply.pipe(res); });
@@ -102,7 +121,7 @@ export default {
   },
   async observe(ctx, request) { return { present: false, resourceKey: definition.id + ':' + sha({ target: request.target }).slice(0, 16), identity: null, revision: null }; },
   async verify(ctx, receipt) { mark('proof'); return ctx.verifyChallenge(receipt?.readback?.origin ?? receipt?.origin ?? '', receipt?.readback?.target ?? ''); },
-  async remove(ctx,receipt) { mark('stop'); const server=servers.get(receipt.resourceKey); if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));servers.delete(receipt.resourceKey);} mark('cleanup');return { removed: true, debt: null }; },
+  async remove(ctx,receipt) { mark('stop'); const server=servers.get(receipt.resourceKey); if(server){server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve));servers.delete(receipt.resourceKey);} mark('cleanup');return { removed: true, debt: null }; },
   async runtimeFacts() { return { properties: structuredClone(definition.capabilities), ingress: null, limits: { recommendedPollIntervalMs: 5000, idleTimeoutMs: null } }; },
 };
 `;
@@ -172,12 +191,12 @@ const runtimeUrl = pathToFileURL(fileURLToPath(new URL('./adapter-runtime.mjs', 
  * `protocols` uses the Query's words ('sse', 'streamable-http', 'oauth-dcr'); a fake carries all three unless a test narrows it,
  * so an app's protocol requirements do not make its own fake ineligible.
  */
-export async function fakeRegistry({ id, label, kinds, reach, transport = 'https', protocols = PROTOCOLS, dir, facts = [], setupActions = [] } = {}) {
+export async function fakeRegistry({ id, label, kinds, reach, transport = 'https', protocols = PROTOCOLS, dir, facts = [], setupActions = [], proofProtocol = 'http' } = {}) {
   if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) throw gozarError('invalid_input', 'fakeRegistry needs an id of lowercase letters, digits and hyphens');
   // An attached fake would make expose start a real controller process, so only session and durable fakes exist.
   if (!Array.isArray(kinds) || !kinds.length || kinds.some(kind => !KINDS.includes(kind))) throw gozarError('invalid_input', `fakeRegistry kinds must be a non-empty list of ${KINDS.join(' and ')}: only session and durable fakes are supported`);
   if (!REACHES.includes(reach)) throw gozarError('invalid_input', `fakeRegistry reach must be one of ${REACHES.join(', ')}`);
-  if (!['https', 'http'].includes(transport)) throw gozarError('invalid_input', "fakeRegistry transport must be 'https' or 'http'");
+  if (!['https', 'http', 'tcp', 'tls'].includes(transport)) throw gozarError('invalid_input', "fakeRegistry transport must be 'https' or 'http'");
   if (!Array.isArray(protocols) || protocols.some(item => !PROTOCOLS.includes(item))) throw gozarError('invalid_input', `fakeRegistry protocols must be a list of ${PROTOCOLS.join(', ')}`);
   const own = dir === undefined;
   const root = dir ?? await mkdtemp(join(tmpdir(), 'gozar-fake-'));
@@ -194,7 +213,7 @@ export async function fakeRegistry({ id, label, kinds, reach, transport = 'https
       protocols: { sse: protocols.includes('sse'), streamableHttp: protocols.includes('streamable-http'), oauthDcr: protocols.includes('oauth-dcr') },
       proof: { vantage: 'this-device', checks: ['nonce'] },
     },
-    supportedKinds: [...kinds], facts,
+    supportedKinds: [...kinds], facts, ...(proofProtocol === 'echo' ? {originSchemes:['tcp:']} : {}),
     disclosure: { revision: `disc-${id}`, text: 'A fake provider used in tests. Nothing leaves this process.', links: [] },
     ownership: 'gozar-owned',
   };
@@ -207,10 +226,10 @@ export async function fakeRegistry({ id, label, kinds, reach, transport = 'https
       id, planVersion: 1, idleTimeoutMs: null, providerResource: `${id}-slot`, addressStability: 'stable', durableLifetime: 'provider-persistent',
       actions: [], recipes: {}, durableRecipe: { mode: 'fake', slots: ['a', 'b', 'c'], listener: { forward: '{target}' } } } }, null, 2));
     await writeFile(join(folder, 'store.json'), JSON.stringify({ identity: `store-${id}`, version: 1, entries: {} }));
-    await writeFile(join(folder, 'plain.mjs'), moduleSource(setupActions));
+    await writeFile(join(folder, 'plain.mjs'), moduleSource(setupActions, proofProtocol));
     await writeFile(join(folder, 'index.mjs'), durableModuleSource(runtimeUrl));
   } else {
-    await writeFile(join(folder, 'index.mjs'), moduleSource(setupActions));
+    await writeFile(join(folder, 'index.mjs'), moduleSource(setupActions, proofProtocol));
   }
   return {
     manifest: { providers: [{ id, module: `providers/${id}/index.mjs`, definition: `providers/${id}/definition.json` }] },

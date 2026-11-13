@@ -54,6 +54,8 @@ export type AdapterProofSession = {
     vantage: RouteView['verification']['vantage']; checks: RouteView['verification']['checks']; facts?: Fact[];
   }>;
   close(): Promise<void>;
+  /** Optional safe reproof. Without it status retains the original proof and its expiry. */
+  refresh?: AdapterProofSession['verify'];
 };
 export type ProofAttempt = { id: string; nonce: string; deadlineMs: number; signal: AbortSignal };
 

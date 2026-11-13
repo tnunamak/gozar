@@ -11,7 +11,7 @@ test('a new fixture provider loads through the public factory and crosses setup,
   const home=await scratch(t), root=join(home,'registry');
   const disclosure={revision:'fixture-input',text:'Fixture only',links:[]};
   const fact={id:'fixture-status',label:'Fixture fact',value:'rendered from data',known:true,group:'extension-group',affectsConsent:true,source:'fixture',asOf:null};
-  const registry=await fakeRegistry({id:'extension-fixture',label:'Extension fixture',kinds:['attached'],reach:'this-device',transport:'http',dir:root,facts:[fact],
+  const registry=await fakeRegistry({id:'extension-fixture',label:'Extension fixture',kinds:['attached'],reach:'this-device',transport:'tcp',proofProtocol:'echo',dir:root,facts:[fact],
     setupActions:[{id:'credential',kind:'provide-secret',label:'Fixture credential',digest:'fixture-input',disclosure}]}); t.after(registry.cleanup);
   assert.equal(typeof gozar.createGozar,'function');
   const api=gozar.createGozar({manifest:registry.manifest,root:registry.root});

@@ -22,7 +22,7 @@ export type Requirements = {
    * 'https' (the default use) needs an encrypted route. 'any' also accepts plain HTTP and is valid only with reach
    * 'lan' or 'this-device'; with any other reach the query fails with invalid_input.
    */
-  transport: 'https' | 'any';
+  transport: 'https' | 'tcp' | 'tls' | 'any';
   payloadAccess: 'endpoint-only' | 'allow-provider';
   address: 'stable' | 'any';
   /** 'none' means ready now; 'allow' permits a candidate that still needs a setup action. */
@@ -68,6 +68,7 @@ export type Action = {
   instructions?: string;
   secretLabel?: string;
   obtainUrl?: string;
+  help?: string;
   /** For 'provide-value' only: a plain, non-secret input (a domain, an address). Answer it with runSetupAction `value`. */
   valueLabel?: string;
   valuePlaceholder?: string;
@@ -77,7 +78,7 @@ export type Action = {
 
 export type Properties = {
   reach: Reach;
-  transport: 'http' | 'https';
+  transport: 'http' | 'https' | 'tcp' | 'tls';
   traffic: {
     tlsTermination: 'endpoint' | 'provider' | 'unknown';
     providerCanReadPayload: boolean | null;

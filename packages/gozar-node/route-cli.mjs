@@ -9,6 +9,7 @@
 import { lstat, readFile } from 'node:fs/promises';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { defaultHome } from './default-home.mjs';
+import { promptInputRequirement } from './input-requirements.mjs';
 
 export const ROUTE_COMMANDS = ['catalog', 'ensure', 'adopt', 'setup', 'preference', 'watch', 'suspend'];
 const MAX_FILE_BYTES = 1 << 20;
@@ -23,7 +24,7 @@ const specs = {
   ensure: { values: ['query-file', 'approval-file', 'route', 'provider-id', 'home'], flags: ['json', 'reconsent'] },
   adopt: { values: ['query-file', 'approval-file', 'handover-file', 'route', 'provider-id', 'home'], flags: ['json', 'reconsent'] },
   expose: { values: ['query-file', 'approval-file', 'wait', 'route', 'provider-id', 'home'], flags: ['json'] },
-  setup: { values: ['approval-file', 'secret-file', 'value', 'home'], flags: ['json'], positional: 'action id' },
+  setup: { values: ['approval-file', 'secret-file', 'value', 'home', 'query-file', 'provider-id'], flags: ['json', 'prompt'], positional: 'action id' },
   preference: { values: ['profile-home', 'expected-revision', 'on-unavailable'], multi: ['prefer'], flags: ['json'], positional: 'show or set' },
   suspend: { values: ['handle-file', 'route', 'home'], flags: ['json'] },
   watch: { values: ['handle-file', 'home', 'interval-ms'], flags: ['json'] },
@@ -37,7 +38,7 @@ function parse(command, argv) {
     if (!token.startsWith('--')) { positional.push(token); continue; }
     const name = token.slice(2);
     if (spec.flags.includes(name)) options[name] = true;
-    else if (spec.values.includes(name) || spec.multi?.includes(name)) {
+    else if (spec.values.includes(name) || spec.multi?.includes(name) || ['registry-file', 'registry-root'].includes(name)) {
       const value = argv[index += 1];
       if (value === undefined || value.startsWith('--')) throw gozarError('invalid_input', `Missing value for ${token}`);
       if (spec.multi?.includes(name)) (options[name] ??= []).push(value);
@@ -137,17 +138,30 @@ const commandsRun = {
     return 0;
   },
 
-  async setup({ options, positional, api, out, err, storeSecret }) {
+  async setup({ options, positional, api, out, err, storeSecret, prompt }) {
     if (options.value !== undefined && options['secret-file'] !== undefined) throw gozarError('invalid_input', '--value and --secret-file cannot be used together');
     const home = options.home ?? defaultHome();
     const approval = await readApproval(options, { needed: true });
     let secretHandle;
+    let value = options.value;
+    if (options.prompt) {
+      if (options.value !== undefined || options['secret-file']) throw gozarError('invalid_input', 'Prompt takes input interactively; omit --value and --secret-file');
+      const catalog = await api.catalogRoutes(await readQuery({ ...options, home }));
+      const configuration = catalog.candidates.map(candidate => candidate.configuration).find(config =>
+        config.actions.some(action => action.id === positional && action.digest === approval.digest && action.disclosure.revision === approval.disclosureRevision));
+      const descriptor = configuration?.inputRequirements.find(input => input.id === positional);
+      if (!descriptor) throw gozarError('candidate_stale', 'No input requirement matches that approved action');
+      const input = await prompt(descriptor);
+      if (descriptor.required && !input.trim()) throw gozarError('invalid_input', `Required input is missing: ${descriptor.id}`);
+      if (descriptor.secret) secretHandle = (await storeSecret({ home, value: input })).handle;
+      else value = input;
+    }
     if (options['secret-file']) {
       const text = await readFileChecked(options['secret-file'], 'The secret file', { privateFile: true });
       secretHandle = (await storeSecret({ home, value: text.replace(/\r?\n$/, '') })).handle;
       err('The secret is in Gozar\'s private store');
     }
-    const result = await api.runSetupAction({ home, actionId: positional, approval, ...(secretHandle ? { secretHandle } : {}), ...(options.value === undefined ? {} : { value: options.value }) });
+    const result = await api.runSetupAction({ home, actionId: positional, approval, ...(secretHandle ? { secretHandle } : {}), ...(value === undefined ? {} : { value }) });
     out(result);
     return result.state === 'complete' ? 0 : 2;
   },
@@ -210,9 +224,12 @@ export async function routeMain(argv, deps = {}) {
   try {
     if (!Object.hasOwn(commandsRun, command)) throw gozarError('invalid_input', `Unknown command ${command}`);
     const { options, positional } = parse(command, rest);
-    const api = deps.api ?? await import('./api.mjs');
+    const rootApi = deps.api ?? await import('./api.mjs');
+    const api = options['registry-file'] ? rootApi.createGozar({ manifest: options['registry-file'], root: options['registry-root'] }) : rootApi;
     const storeSecret = deps.storeSecret ?? (await import('./route-setup.mjs')).storeSecret;
-    return await commandsRun[command]({ options, positional, api, out, outLine, err, stdin: deps.stdin ?? process.stdin, storeSecret });
+    const stdin = deps.stdin ?? process.stdin;
+    const prompt = deps.prompt ?? (descriptor => promptInputRequirement(descriptor, { stdin, stderr }));
+    return await commandsRun[command]({ options, positional, api, out, outLine, err, stdin, storeSecret, prompt });
   } catch (cause) {
     const error = normalizeError(cause);
     const envelope = { schemaVersion: 1, error: { code: error.code, message: error.message, nextAction: error.nextAction ?? null } };

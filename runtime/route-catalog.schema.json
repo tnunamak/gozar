@@ -86,6 +86,8 @@
           "type": "string",
           "enum": [
             "https",
+            "tcp",
+            "tls",
             "any"
           ]
         },
@@ -279,6 +281,9 @@
         },
         "obtainUrl": {
           "type": "string"
+        },
+        "help": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -304,7 +309,9 @@
           "type": "string",
           "enum": [
             "http",
-            "https"
+            "https",
+            "tcp",
+            "tls"
           ]
         },
         "traffic": {

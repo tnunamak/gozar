@@ -279,7 +279,9 @@
           "type": "string",
           "enum": [
             "http",
-            "https"
+            "https",
+            "tcp",
+            "tls"
           ]
         },
         "traffic": {

@@ -35,7 +35,7 @@ export function validateQuery(query) {
   if (usage.kind === 'durable' && !text(usage.routeId)) bad('a durable usage needs routeId');
   if (usage.kind === 'session' && !(Number.isInteger(usage.lifetimeMs) && usage.lifetimeMs > 0)) bad('a session usage needs lifetimeMs');
   const r = query.requirements;
-  if (!REACH.includes(r?.reach) || !['https', 'any'].includes(r.transport) || !['endpoint-only', 'allow-provider'].includes(r.payloadAccess) ||
+  if (!REACH.includes(r?.reach) || !['https', 'tcp', 'tls', 'any'].includes(r.transport) || !['endpoint-only', 'allow-provider'].includes(r.payloadAccess) ||
       !['stable', 'any'].includes(r.address) || !['none', 'allow'].includes(r.setup) || !Array.isArray(r.protocols) ||
       r.protocols.some(item => !(item in PROTOCOL_KEY))) bad('requirements are incomplete or not in the closed vocabulary');
   if (r.transport === 'any' && !['lan', 'this-device'].includes(r.reach)) bad("transport 'any' is valid only with reach 'lan' or 'this-device'");
