@@ -201,3 +201,12 @@ test('red: no shipped provider prints a doubled full stop in its description or 
   const funnel = catalog.candidates.find(item => item.display.label === 'Tailscale Funnel');
   assert.ok(funnel.display.description.endsWith('non-configurable bandwidth limits.'), funnel.display.description);
 });
+
+test('durable target rejects URL and invalid ports before detecting any provider', async t => {
+  for (const target of ['http://127.0.0.1:8787', 'localhost:8787', '127.0.0.1:0', '127.0.0.1:65536']) {
+    const adapter = stubAdapter('alpha');
+    const q = await withHome(t, { target, usage: { kind: 'durable', routeId: 'app' } });
+    await assert.rejects(catalogRoutes(q, deps([adapter])), error => error.code === 'invalid_input' && /target/.test(error.message));
+    assert.equal(adapter.calls.detect, 0);
+  }
+});

@@ -50,7 +50,7 @@ function routeIdValue(value) {
   if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(value)) throw refuse('invalid_input', 'Route ID must be 1..63 lowercase letters, digits or hyphens');
   return value;
 }
-function loopbackTarget(value) {
+export function loopbackTarget(value) {
   const match = typeof value === 'string' && /^127\.0\.0\.1:([0-9]{1,5})$/.exec(value);
   if (!match || Number(match[1]) < 1 || Number(match[1]) > 65535) throw refuse('invalid_input', 'Durable route target must be 127.0.0.1:PORT');
   return value;
@@ -148,8 +148,10 @@ export async function durablePlanFacts({ home = defaultHome(), adapterId, target
   target = loopbackTarget(target);
   if (origin !== null && typeof origin !== 'string') throw refuse('invalid_input', 'origin must be a string or null');
   const { facet, capability } = durableEntry(await adaptersOf({ adapters }), adapterId, true);
-  const facts = planFactsFromObservation(await facet.observe(durableContext(home)), { adapterId, facet, capability, target, origin, table: await observedReservations(home) });
-  return { planDigest: facts.planDigest, observedResource: facts.observedResource, origin: facts.origin };
+  const observed = await facet.observe(durableContext(home));
+  const facts = planFactsFromObservation(observed, { adapterId, facet, capability, target, origin, table: await observedReservations(home) });
+  return { planDigest: facts.planDigest, observedResource: facts.observedResource, origin: facts.origin,
+    creatableOrigin: origin === null || facet.slots(observed.snapshot, { target }).some(item => !item.adoptOnly && item.permitted && item.origin === origin) };
 }
 // Read-only: the adapter a durable record pins for this route ID, or null. No lock, no provider call.
 // The catalog ranks the pin first, so a later preference change never moves a route.
@@ -193,6 +195,16 @@ async function drop(dir, routeId) { await removeFile(recordPath(dir, routeId)); 
 async function stopped(dir, routeId) {
   try { await readRecord(tombstonePath(dir, routeId)); return true; }
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+async function refuseUserStop(dir, routeId) {
+  if (await stopped(dir, routeId)) throw refuse('stopped_by_user', 'The user stopped this route');
+}
+// Close checks before reading provider status, including an interrupted user stop with a record left behind.
+export async function checkUserStop({ home = defaultHome(), routeId }) {
+  routeIdValue(routeId);
+  let dir;
+  try { dir = await routesDirectory(home, false); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  await refuseUserStop(dir, routeId);
 }
 async function clearStop(dir, routeId) { if (await removeFile(tombstonePath(dir, routeId))) await syncDirectory(dir); }
 async function allRecords(dir) {
@@ -609,6 +621,7 @@ export async function suspendRoute({ routeId, home = defaultHome(), expectedGene
   routeId = routeIdValue(routeId);
   const adapters = await adaptersOf(deps), ctx = durableContext(home);
   return reserved(home, async dir => {
+    await refuseUserStop(dir, routeId);
     let record = await load(dir, routeId);
     if (!record) throw refuse('not_found', 'No durable route has this ID');
     if (expectedGeneration !== undefined && record.generation !== expectedGeneration) throw refuse('route_conflict', 'The route was replaced; this handle is stale');
@@ -634,6 +647,7 @@ export async function releaseRoute({ routeId, mode = 'remove', home = defaultHom
   routeId = routeIdValue(routeId);
   if (!['remove', 'hand-back', 'dismiss'].includes(mode)) throw refuse('invalid_input', 'mode must be remove, hand-back or dismiss');
   return reserved(home, async dir => {
+    await refuseUserStop(dir, routeId);
     const record = await load(dir, routeId);
     // A handle names one generation of a route; a replaced route is not ended by a stale handle.
     if (expectedGeneration !== undefined && record && record.generation !== expectedGeneration) throw refuse('route_conflict', 'The route was replaced; this handle is stale');

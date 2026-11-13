@@ -200,6 +200,8 @@ export async function closeRoute(request, deps = {}) {
   try {
     switch (handle.kind) {
       case 'durable': {
+        const { checkUserStop } = await import('./durable-route.mjs');
+        await checkUserStop({ home: request.home, routeId: handle.id });
         const before = await routeStatus({ home: request.home, handle }, deps);
         const reply = await (deps.durable ?? defaults.durable).close(request, { adapters: deps.adapters });
         const debt = reply?.cleanupDebt ?? null;

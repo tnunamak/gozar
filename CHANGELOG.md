@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.4
+
+- Suspend and close of a user-stopped durable route now report `stopped_by_user` where 0.3.3 reported `route_not_found`; release also reports `stopped_by_user` instead of silently reporting no removal.
+- An invalid owner-run query origin is named in the unmet setup entry's `actual` value, without throwing or adding error codes.
+- Closing a session gate twice returns the first close promise, so both calls finish.
+- A durable query with a target other than `127.0.0.1:PORT` fails with `invalid_input` before provider inspection.
+- A durable create query for an origin the provider cannot create is ineligible, names the origin in the unmet address entry, and receives no token; adopt queries keep their existing behavior.
+
 ## 0.3.3
 
 - Suspend a durable route before closing an app's listener with `suspendRoute({ home, handle })` or `gozar suspend`. Forwarding is removed by exact compare-and-set, while the origin, consent and slot reservation remain. The next `ensureRoute` restores and verifies only that origin without new approval. Interrupted suspension keeps its receipt until a fresh read confirms deletion; user stop still blocks recreation. Adopt-only ports are refused because Gozar cannot restore their rules.

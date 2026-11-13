@@ -18,7 +18,7 @@ export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = 
   let nonce = randomBytes(32).toString('hex');
   let nonceRef = randomUUID(), verifierRef = randomUUID();
   const sockets = new Set();
-  let open = true;
+  let open = true, closePromise;
   const server = http.createServer((request, response) => {
     if (!open) { response.writeHead(503); response.end(); return; }
     if (request.url === `${secretPath}/identity`) {
@@ -112,11 +112,12 @@ export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = 
       return { tls: new URL(origin).protocol === 'https:', instanceMatched: true, sse: streaming, streaming,
         streamableHttp: false, oauthDcr: false };
     },
-    async close() {
+    close() {
+      if (closePromise) return closePromise;
       open = false; clearTimeout(deadline);
-      const closed = new Promise(resolve => server.once('close', resolve)); server.close();
+      closePromise = new Promise(resolve => server.once('close', resolve)); server.close();
       for (const socket of sockets) socket.destroy();
-      await closed;
+      return closePromise;
     },
   };
 }

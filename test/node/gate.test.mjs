@@ -135,3 +135,12 @@ test('trusted probe payload explicitly preserves LAN HTTP and HTTPS requirements
   assert.equal(rejected.ok, false); assert.match(rejected.result.detail, /cannot use an HTTP origin/);
   assert.equal(payloads.length, 3);
 });
+
+test('gate close returns the first promise during and after closing', async () => {
+  const gate = await createGate(1);
+  const first = gate.close();
+  assert.equal(gate.close(), first);
+  await first;
+  assert.equal(gate.close(), first);
+  await gate.close();
+});

@@ -192,3 +192,14 @@ test('core names no provider for an owner-kept route: service.mjs holds no regis
   const source = readFileSync(`${root}packages/gozar-node/service.mjs`, 'utf8');
   for (const { id } of manifest.providers) assert.ok(!source.includes(id), `service.mjs names ${id}`);
 });
+
+test('invalid query origin is named in the unmet setup actual without extending closed enums', async t => {
+  const origin = 'https://a.example.com/path';
+  const { candidates: [own] } = await apiFor().catalogRoutes(await durable(t, { providerId: ownerId, origin }));
+  assertShape('Candidate', own);
+  assert.equal(own.eligible, false);
+  assert.equal(own.candidateToken, null);
+  assert.deepEqual(own.unmet.find(item => item.requirement === 'setup'), {
+    requirement: 'setup', actual: { origin, reason: 'invalid_origin' }, reasonCode: 'not_met',
+  });
+});

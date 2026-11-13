@@ -68,7 +68,7 @@ export default recipeAdapter({
         const result = await base.detect(ctx);
         if (result.state !== 'ready') return result;
         // An origin the app named that is not a credential-free https origin cannot be fixed by the owner's action.
-        if (ctx.origin != null && parseOrigin(ctx.origin) === null) return { state: 'unsupported', facts: { ...result.facts, setupNeeded: false, origin: null, reach: 'unknown' } };
+        if (ctx.origin != null && parseOrigin(ctx.origin) === null) return { state: 'unsupported', facts: { ...result.facts, setupNeeded: false, origin: null, reach: 'unknown', invalidOrigin: ctx.origin } };
         const origin = await given(ctx);
         return origin
           ? { state: 'ready', facts: { ...result.facts, setupNeeded: false, origin, reach: reachOf(origin) } }

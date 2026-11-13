@@ -1390,3 +1390,43 @@ test('41. S8 crashes before and after delete retain the receipt until confirmed;
     assert.equal(Boolean(w.state.config.Web?.[`${dnsName}:8443`]), next === 'ensure');
   }
 });
+
+test('stopped durable suspend release and close refuse repeatedly without provider calls', async t => {
+  const w = await world(t);
+  const created = await w.ensure();
+  assert.equal(created.result.route.state, 'usable');
+  await w.gozar('stop', '--route', 'coordinator', '--json');
+  const providerState = () => JSON.stringify({ requests: w.state.requests, writes: w.state.writes, config: w.state.config });
+  const before = providerState();
+  const handle = { kind: 'durable', id: 'coordinator', generation: 1 };
+  for (let repeat = 0; repeat < 2; repeat++) {
+    for (const operation of ['apiSuspend', 'apiClose', 'release']) {
+      const reply = await w.run(operation, { routeId: 'coordinator', handle, mode: 'remove' });
+      assert.equal(reply.error?.code, 'stopped_by_user', JSON.stringify(reply));
+    }
+  }
+  assert.equal(providerState(), before);
+  const missing = { ...handle, id: 'never-created' };
+  for (const operation of ['apiSuspend', 'apiClose']) assert.equal((await w.run(operation, { handle: missing, mode: 'remove' })).error?.code, 'route_not_found');
+  const fresh = await w.mint();
+  assert.equal((await w.run('ensure', { ...fresh.query, approval: fresh.approval, reconsent: true })).result?.route.state, 'usable');
+  await w.run('release', { routeId: 'coordinator' });
+  assert.equal((await w.run('apiSuspend', { handle })).error?.code, 'route_not_found');
+  assert.equal((await w.run('apiClose', { handle, mode: 'remove' })).error?.code, 'route_not_found');
+  assert.equal((await w.run('release', { routeId: 'coordinator' })).result?.removed, false);
+});
+
+test('interrupted user stop refuses cleanup before status can read the provider', async t => {
+  const w = await world(t);
+  await w.ensure();
+  w.state.crash = 'before-apply';
+  assert.equal((await w.gozar('stop', '--route', 'coordinator')).signal, 'SIGKILL');
+  assert.equal((await w.records()).length, 1);
+  const reads = w.state.requests.length, writes = w.writes().length;
+  const handle = { kind: 'durable', id: 'coordinator', generation: 1 };
+  for (const operation of ['apiSuspend', 'apiClose', 'release']) {
+    assert.equal((await w.run(operation, { handle, routeId: 'coordinator', mode: 'remove' })).error?.code, 'stopped_by_user');
+  }
+  assert.equal(w.state.requests.length, reads);
+  assert.equal(w.writes().length, writes);
+});
