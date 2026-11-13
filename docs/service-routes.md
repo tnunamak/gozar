@@ -2,7 +2,7 @@
 
 A service route records an existing HTTPS origin and its fixed HTTP target. Use Linux or macOS with Node.js 22.13 or newer. Windows answers `unsupported`. You manage the service, reverse proxy, TLS and startup. Gozar starts no listener or daemon, forwards no traffic and changes no ingress. Records survive controller exit and reboot and have no Gozar expiry. Service availability still depends on your own supervisors. Each status call checks the route again rather than restoring saved readiness.
 
-The commands below assume a global `gozar` executable. If you installed the package locally or want a one-off command, replace `gozar` with `npx --package=@tnunamak/gozar@0.2.0 gozar`.
+The commands below assume a global `gozar` executable. If you installed the package locally or want a one-off command, replace `gozar` with `npx --package=@tnunamak/gozar@0.2.1 gozar`.
 
 ```sh
 gozar service add --origin https://service.example --target 192.0.2.10:3000 --json
