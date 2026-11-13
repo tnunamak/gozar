@@ -564,6 +564,9 @@ async function removeListener(dir, record, adapters, ctx) {
   if (!pin) { await drop(dir, record.routeId); return { removed: true, providerRemoved: false, cleanupDebt: null }; }
   const { facet } = durableEntry(adapters, record.adapterId);
   const { decision, written } = await compareAndSet(facet, ctx, async observed => {
+    // A slot belongs to the identity it was written under. Under a new identity, the pinned rule is gone,
+    // and an equal rule at the same slot belongs to someone else.
+    if (observed.identity !== pin.dnsName) return { result: 'absent' };
     const current = facet.read(observed.snapshot, pin.port);
     if (current === null) return { result: 'absent' };
     if (!record.receipt) return { result: 'unattributed-rule' };

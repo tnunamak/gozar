@@ -105,6 +105,19 @@ test('a changed rule becomes cleanup debt and is not deleted', async () => {
   assert.equal(store.writes.length, writes, 'no delete was issued');
 });
 
+test('after the provider identity changes, release leaves an equal rule at the new identity in place', async () => {
+  await ensureRoute(await approved(), deps);
+  // The provider now answers as a different identity (for a node, a new DNS name). The rule at slot `a`
+  // is equal to the receipt's rule, but it is not the rule Gozar wrote, so it must not be deleted.
+  store.identity = 'store-2';
+  const before = JSON.stringify(store.entries.get('a'));
+  const writes = store.writes.length;
+  const released = await release();
+  assert.deepEqual(released, { schemaVersion: 1, routeId: 'coordinator', removed: true, providerRemoved: false, cleanupDebt: null });
+  assert.equal(JSON.stringify(store.entries.get('a')), before);
+  assert.equal(store.writes.length, writes, 'no delete was issued');
+});
+
 test('a crash between the intent write and put is reconciled on the next status', async () => {
   store.crashOnPut = true;
   await assert.rejects(ensureRoute(await approved(), deps), /simulated crash/);
