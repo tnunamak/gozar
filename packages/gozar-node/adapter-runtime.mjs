@@ -19,6 +19,7 @@ import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { supportedPlatform } from './platform.mjs';
+import { bindConfiguration } from './adapter-configuration.mjs';
 
 const packageRoot = fileURLToPath(new URL('../../', import.meta.url));
 const defaultAdaptersRoot = resolve(packageRoot, 'adapters');
@@ -326,8 +327,9 @@ async function runDetectRecipe(recipe) {
  * core and effect driver the session path uses, so `ok` is the Rust parser's verdict, never a second parser.
  * `verifyChallenge` is the service-challenge verifier that durable publication also uses (a nonce proof served by
  * the app, read at the target and at the public origin); its `failed` outcome is `unverified` in the contract.
- * `configuration` is Gozar's private lookup: with no named route and nothing configured it answers null, and
- * a named route Gozar does not know is `route_not_found` before any provider is asked.
+ * `configuration` is Gozar's private lookup for a named route: a named route Gozar does not know is
+ * `route_not_found` before any provider is asked. The values a user gave one adapter during setup are added
+ * per adapter by `bindConfiguration`, which every context goes through before an adapter sees it.
  * Every field can be replaced, which is how tests supply fakes.
  */
 export function createReadContext({ home, platform = process.platform, now = Date.now, configuration, probe, verifyChallenge } = {}) {
@@ -373,7 +375,7 @@ export async function executeApprovedAction(id) {
 export function createAdmittedContext({ read, adapterId, generation, assertGeneration = async () => {}, readRevision, applyPlan, cleanupPlan, removeResource, journal }) {
   if (!Number.isSafeInteger(generation)) throw effectError('provider_unavailable', 'An admitted context needs a generation');
   return {
-    ...read,
+    ...bindConfiguration(read, adapterId),
     generation,
     assertGeneration,
     async executePlan(plan) {
@@ -411,7 +413,9 @@ export function createAdmittedContext({ read, adapterId, generation, assertGener
  * `executePlan` and `compareAndRemove` are the recipe engine's, and an attached route has no recipe, so they
  * refuse with `unsupported` instead of pretending to run one.
  */
-export function createAttachedEffectContext({ generation = 1, assertGeneration = async () => {} } = {}) {
+export function createAttachedEffectContext({ generation = 1, assertGeneration = async () => {}, adapter, readContext } = {}) {
   const lacks = what => effectError('unsupported', `An attached route has no recipe engine for ${what}`);
-  return { generation, assertGeneration, executePlan: async () => { throw lacks('executePlan'); }, compareAndRemove: async () => { throw lacks('compareAndRemove'); } };
+  const effects = { generation, assertGeneration, executePlan: async () => { throw lacks('executePlan'); }, compareAndRemove: async () => { throw lacks('compareAndRemove'); } };
+  // With the adapter and its read context the effect context carries the adapter's own configuration, as every context does.
+  return adapter && readContext ? bindConfiguration({ ...readContext, ...effects }, adapter.id) : effects;
 }

@@ -90,8 +90,10 @@ export type ReadContext = {
   platform: string;
   /**
    * Private configuration lookup, scoped to this adapter. It is the only path by which a secret
-   * (for example a provider auth token) reaches an adapter, and only during `create` or `setup`.
-   * The secret must never be placed in facts, plans, receipts, errors or output.
+   * (for example a provider auth token) reaches an adapter. With ref null it returns the values the user
+   * supplied through this adapter's completed `provide-secret` setup actions, keyed by action id, or null.
+   * Every context may read them, because `plan` needs configured values such as a reserved address.
+   * The secret must never be placed in facts, plans, receipts, errors or output, in any context.
    */
   configuration: (ref: string | null) => Promise<unknown>;
   /** Runs a read-only recipe through the engine; `ok` is the recipe parser's verdict (amendment 1). */

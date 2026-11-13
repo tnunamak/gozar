@@ -2,8 +2,9 @@
 //
 // The SDK is an optional dependency, injected as a module (`loadSdk`). The auth token and the reserved
 // domain are per-user setup values. Each is stored through a `provide-secret` action in Gozar's private
-// store and reaches `create` only through `ctx.configuration(ref)`. The token never enters facts, plans,
-// receipts, errors or output: every failure below uses a fixed message and never the SDK's own text.
+// store. Gozar answers `ctx.configuration(null)` with the values this adapter's completed actions supplied,
+// keyed by action id: `{auth, 'reserved-domain'}`. The token never enters facts, plans, receipts, errors or
+// output: every failure below uses a fixed message and never the SDK's own text.
 import { recipeAdapter, effectError } from '../../../packages/gozar-node/adapter-runtime.mjs';
 import { supportedPlatform } from '../../../packages/gozar-node/platform.mjs';
 import { createHash } from 'node:crypto';
@@ -12,7 +13,13 @@ const domainPattern = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+
 const decode = bytes => new TextDecoder().decode(bytes).trim();
 const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
-const configured = config => typeof config?.authToken === 'string' && config.authToken.length > 0 && domainPattern.test(config?.reservedDomain ?? '');
+// The setup values, trimmed as the setup action validated them; each is null until it is set.
+const read = config => {
+  const auth = typeof config?.auth === 'string' ? config.auth.trim() : '';
+  const domain = typeof config?.['reserved-domain'] === 'string' ? config['reserved-domain'].trim() : '';
+  return { authToken: auth.length > 0 ? auth : null, reservedDomain: domainPattern.test(domain) ? domain : null };
+};
+const settings = config => { const values = read(config); return values.authToken && values.reservedDomain ? values : null; };
 
 export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = {}) {
   const listeners = new Map(); // resourceKey -> open SDK listener; it lives and dies with this process
@@ -36,14 +43,15 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
       return {
         async detect(ctx) {
           const os = platformOf(ctx);
-          if (!supportedPlatform(os)) return { state: 'unsupported', facts: { platform: os, sdk: false, configured: false, setupNeeded: false } };
+          if (!supportedPlatform(os)) return { state: 'unsupported', facts: { platform: os, sdk: false, authSet: false, domainSet: false, configured: false, setupNeeded: false } };
           const sdk = await loadSdk().then(module => typeof (module?.forward ?? module?.default?.forward) === 'function', () => false);
-          const config = await ctx.configuration(null).catch(() => null);
-          const ready = sdk && configured(config);
-          return { state: ready ? 'ready' : 'action-required', facts: { platform: os, sdk, configured: configured(config), setupNeeded: !ready } };
+          const values = read(await ctx.configuration(null).catch(() => null));
+          const configured = values.authToken !== null && values.reservedDomain !== null, ready = sdk && configured;
+          return { state: ready ? 'ready' : 'action-required',
+            facts: { platform: os, sdk, authSet: values.authToken !== null, domainSet: values.reservedDomain !== null, configured, setupNeeded: !ready } };
         },
 
-        setupActions: facts => (!facts?.setupNeeded ? [] : [...(facts.sdk ? [] : [installAction]), ...(facts.configured ? [] : [authAction, domainAction])]),
+        setupActions: facts => (!facts?.setupNeeded ? [] : [...(facts.sdk ? [] : [installAction]), ...(facts.authSet ? [] : [authAction]), ...(facts.domainSet ? [] : [domainAction])]),
 
         async setup(ctx, actionId, secretHandle) {
           const next = { auth: authAction, 'reserved-domain': domainAction }[actionId];
@@ -59,8 +67,8 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
         async plan(ctx, request) {
           if (!supportedPlatform(platformOf(ctx))) throw unsupported('this platform');
           if (request?.usage?.kind !== 'attached') throw unsupported(`the ${request?.usage?.kind} kind`);
-          const config = await ctx.configuration(request.configurationRef ?? null).catch(() => null);
-          if (!configured(config)) throw effectError('setup_required', 'Set up the ngrok auth token and reserved domain first');
+          const config = settings(await ctx.configuration(request.configurationRef ?? null).catch(() => null));
+          if (!config) throw effectError('setup_required', 'Set up the ngrok auth token and reserved domain first');
           const origin = `https://${config.reservedDomain}`;
           if (request.origin && request.origin !== origin) throw effectError('setup_required', 'The requested origin is not your reserved ngrok domain');
           const resourceKey = keyFor(config.reservedDomain);
@@ -75,8 +83,8 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
           await ctx.assertGeneration();
           if (!Number.isSafeInteger(ctx.generation)) throw effectError('provider_unavailable', 'The context carries no generation');
           if (listeners.has(plan.resourceKey)) throw effectError('provider_unavailable', 'A listener for this domain is already open');
-          const config = await ctx.configuration(effect.configurationRef).catch(() => null);
-          if (!configured(config) || `https://${config.reservedDomain}` !== effect.origin) throw effectError('setup_required', 'Set up the ngrok auth token and reserved domain first');
+          const config = settings(await ctx.configuration(effect.configurationRef).catch(() => null));
+          if (!config || `https://${config.reservedDomain}` !== effect.origin) throw effectError('setup_required', 'Set up the ngrok auth token and reserved domain first');
           let listener;
           try {
             const sdk = await loadSdk();
@@ -94,8 +102,7 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
         },
 
         async observe(ctx, request) {
-          const config = await ctx.configuration(request.configurationRef ?? null).catch(() => null);
-          const domain = configured(config) ? config.reservedDomain : null;
+          const domain = settings(await ctx.configuration(request.configurationRef ?? null).catch(() => null))?.reservedDomain ?? null;
           const resourceKey = domain ? keyFor(domain) : definition.id;
           return { present: domain ? listeners.has(resourceKey) : false, resourceKey, identity: domain ? { origin: `https://${domain}` } : null, revision: null };
         },

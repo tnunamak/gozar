@@ -21,7 +21,7 @@ function stubSdk({ url = ORIGIN, failForward = false, failClose = false, leakTok
   return sdk;
 }
 
-const config = { authToken: TOKEN, reservedDomain: DOMAIN };
+const config = { auth: TOKEN, 'reserved-domain': DOMAIN };
 const context = (extra = {}) => ({
   now: () => 0, platform: 'linux', generation: 1,
   configuration: async ref => (ref === 'ref-1' || ref === null ? config : null),
