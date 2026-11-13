@@ -175,6 +175,17 @@ export default async function () { const adapter = stubAdapter('stub-a'); adapte
   assert.equal(await codeOf(openAttachedRoute(await approvedRequest(tokens, home), depsFor(tokens, module))), 'setup_required');
 });
 
+test('red: a controller that never starts is stopped when the open times out, so no controller outlives a failed start', async t => {
+  const home = await scratch(t), tokens = tokenStubs(), dir = await scratch(t), module = join(dir, 'hanging.mjs');
+  reapControllers(t, home);
+  await writeFile(module, `export default () => new Promise(() => { setInterval(() => {}, 1000); });\n`);
+  const failure = await openAttachedRoute(await approvedRequest(tokens, home), depsFor(tokens, module, { startTimeoutMs: 1500 })).then(() => null, error => error);
+  t.after(() => { if (failure?.controllerCleanup?.pid && alive(failure.controllerCleanup.pid)) process.kill(failure.controllerCleanup.pid, 'SIGKILL'); });
+  assert.equal(failure?.code, 'provider_unavailable');
+  assert.ok(['stopped', 'killed'].includes(failure.controllerCleanup?.state), JSON.stringify(failure.controllerCleanup && { state: failure.controllerCleanup.state }));
+  assert.equal(alive(failure.controllerCleanup.pid), false);
+});
+
 test('openSessionRoute redeems the grant, takes the adapter from it, and projects the session machinery reply', async t => {
   const home = await scratch(t), tokens = tokenStubs(), started = [];
   const q = query({ home, usage: { kind: 'session', lifetimeMs: 60_000 } });

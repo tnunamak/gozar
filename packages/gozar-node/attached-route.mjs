@@ -20,6 +20,7 @@ import { createGate } from './gate.mjs';
 import { projectAttached, projectSession, releasedView, checkRef } from './route-view.mjs';
 import { validateQuery, adapterRequest, readContextFor, loadRuntime } from './route-catalog.mjs';
 import { supportedPlatform } from './platform.mjs';
+import { recordController, controllerAlive, stopController, withCleanupOutcome } from './controller-start.mjs';
 
 export const HEARTBEAT_MS = 5_000;
 export const LEASE_EXPIRY_MS = 20_000;
@@ -131,7 +132,7 @@ export async function openAttachedRoute(request, deps = {}) {
     const root = await attachedRoot(await canonicalHome(request.home, true));
     const id = `att_${randomBytes(8).toString('hex')}`, directory = join(root, id);
     // Redeem, re-observe and start the controller under one reservation, so two opens cannot both win one resource.
-    const childPid = await withExclusiveLock(join(root, '.open.lock'), async () => {
+    const controller = await withExclusiveLock(join(root, '.open.lock'), async () => {
       const redeemed = await redeemApproval(request, { ...deps, adapters });
       await trustedDirectory(directory, true);
       await privateDirectory(directory);
@@ -141,7 +142,7 @@ export async function openAttachedRoute(request, deps = {}) {
         env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
       child.unref();
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-      return child.pid;
+      return await recordController(child);
     }, { waitSeconds: 30 });
     holdLease(directory, id, deps.heartbeatMs ?? HEARTBEAT_MS);
     const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
@@ -153,7 +154,7 @@ export async function openAttachedRoute(request, deps = {}) {
           if (!error.gone && error.code !== 'provider_unavailable') throw error;
           const failure = await startFailure(directory);
           if (failure) throw failure;
-          if (await processIdentity(childPid) === null) throw gozarError('provider_unavailable', 'The route controller exited before it started the route');
+          if (!await controllerAlive(controller)) throw gozarError('provider_unavailable', 'The route controller exited before it started the route');
         }
         const view = reply?.view;
         if (view && ['lost', 'released', 'uncertain'].includes(view.state)) throw (await startFailure(directory)) ?? gozarError('provider_unavailable', 'The route could not be started');
@@ -165,7 +166,8 @@ export async function openAttachedRoute(request, deps = {}) {
     } catch (error) {
       dropLease(id);
       await controlAttached(directory, { type: 'close' }, 60_000).catch(() => {});
-      throw error;
+      // A failed start must not leave the detached controller running (it would hold the provider resource).
+      throw withCleanupOutcome(error, await stopController(controller));
     }
   } catch (error) { throw normalizeError(error); }
 }
