@@ -201,6 +201,167 @@
         "affectsConsent": true,
         "source": "https://localhost.run/ (accessed 2026-11-12) ; https://localhost.run/docs/forever-free (accessed 2026-11-12)",
         "asOf": "2026-11-12"
+      },
+      {
+        "id": "provider-clocks",
+        "label": "Actual provider expiry and quota window",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "https://localhost.run/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "provider-retry",
+        "label": "Current provider retry-after or refusal",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "https://localhost.run/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "diagnostics-access",
+        "label": "Current account diagnostic access",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "https://localhost.run/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "credential-validity",
+        "label": "Current credential validity",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "https://localhost.run/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "traffic-policy",
+        "label": "Effective remote traffic policy",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "https://localhost.run/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-renewal",
+        "label": "Current CA issuance or renewal outcome",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://localhost.run/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "dns-authority",
+        "label": "Current DNS configuration and token grants",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "https://localhost.run/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "authoritative-address",
+        "label": "Current authoritative provider domain",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://localhost.run/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "account-authorization",
+        "label": "Current organization approval and ACL entitlement",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "https://localhost.run/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "remote-residue",
+        "label": "Remote DNS, certificate and token residue",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "https://localhost.run/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "alternative-cost",
+        "label": "Account-specific alternative cost and quota",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "https://localhost.run/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "proof-scope",
+        "label": "Proof scope",
+        "value": "Route transport and current Gozar boundary only; application login, authorization and downstream journeys are host-owned.",
+        "known": true,
+        "group": "proof",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "storage-policy",
+        "label": "Credential storage",
+        "value": "Private local files; read-back reports presence and non-secret values only.",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "change-policy",
+        "label": "Configuration changes",
+        "value": "Saved inputs do not silently reconfigure a running route; stop and obtain fresh consent before replacing it.",
+        "known": true,
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "fallback-policy",
+        "label": "Fallback policy",
+        "value": "Never substitute a different provider without consent.",
+        "known": true,
+        "group": "access",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
       }
     ]
   },

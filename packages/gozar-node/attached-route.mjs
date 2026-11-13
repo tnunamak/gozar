@@ -19,7 +19,7 @@ import { gozarError, instructionAction, normalizeError } from './error-normalize
 import { cliCommand } from './cli-command.mjs';
 import { createGate } from './gate.mjs';
 import { projectAttached, projectSession, releasedView, checkRef } from './route-view.mjs';
-import { validateQuery, adapterRequest, readContextFor, loadRuntime } from './route-catalog.mjs';
+import { validateQuery, adapterRequest, readContextFor, loadRuntime, consentDisclosureRevision } from './route-catalog.mjs';
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { recordController, controllerAlive, stopController, withCleanupOutcome } from './controller-start.mjs';
@@ -58,6 +58,7 @@ export async function redeemApproval(request, deps) {
   const grant = await (deps.redeem ?? tokens.redeemConsentToken)({ home, token: approval.candidateToken, binding, providerId: query.providerId });
   const adapter = (await adaptersOf(deps)).find(item => item.id === grant.adapterId);
   if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available; ask the catalog again');
+  if (approval.disclosureRevision !== consentDisclosureRevision(adapter.definition, query.intent)) throw gozarError('candidate_stale', 'Consent-relevant facts changed after approval; ask the catalog again');
   if (!adapter.definition.supportedKinds.includes(request.usage.kind)) throw gozarError('unsupported', 'This route does not support that usage');
   const context = bindConfiguration(await readContextFor(deps, home, deps.platform ?? process.platform), adapter.id);
   const adapterAsk = adapterRequest(query);
@@ -160,7 +161,8 @@ export async function openAttachedRoute(request, deps = {}) {
         }
         const view = reply?.view;
         if (view && ['lost', 'released', 'uncertain'].includes(view.state)) throw (await startFailure(directory)) ?? gozarError('provider_unavailable', 'The route could not be started');
-        if (view && (request.wait === 'verified' ? view.state === 'usable' : view.state !== 'creating')) return view;
+        if (view?.routeState === 'expired') throw gozarError('verification_failed', 'The route proof expired before publication');
+        if (view && (request.wait === 'verified' ? view.state === 'usable' && view.verification.status === 'verified' && view.published !== null : view.state !== 'creating')) return view;
         if (Date.now() >= deadline) throw gozarError(view?.state === 'unverified' ? 'verification_failed' : 'provider_unavailable',
           view?.state === 'unverified' ? 'The route did not pass verification in time' : 'The route did not start in time');
         await new Promise(resolve => setTimeout(resolve, 150));
@@ -280,7 +282,7 @@ export async function runAttachedController(directory, runtime = {}) {
         return { ...checked, status: 'unverified' };
       }
       lease.proof = checked;
-      lease.facts = [...(adapter.definition.facts ?? []), ...(checked.facts ?? [])];
+      lease.facts = [...new Map([...(adapter.definition.facts ?? []), ...(lease.facts ?? []), ...(checked.facts ?? [])].map(fact => [fact.id, fact])).values()];
     }
     return checked;
   }
@@ -312,17 +314,19 @@ export async function runAttachedController(directory, runtime = {}) {
       let plan = bootstrap.plan;
       if (gated && adapter.prepareProof) {
         proofSession = await adapter.prepareProof(read, bootstrap.request, attempt);
+        lease.bindTarget = proofSession.target;
         plan = retarget(plan, bootstrap.request.target, proofSession.target);
       } else if (gated) {
         gate = await createGate(portOf(bootstrap.request.target), { lifetimeMs: GATE_LIFETIME_MS, onExpire: () => release().then(finish) });
-        plan = retarget(plan, bootstrap.request.target, `127.0.0.1:${gate.port}`);
+        lease.bindTarget = `127.0.0.1:${gate.port}`;
+        plan = retarget(plan, bootstrap.request.target, lease.bindTarget);
       }
       receipt = await adapter.create(context, plan);
       handle.generation = receipt.generation;
       const facts = await adapter.runtimeFacts(read, receipt);
       const origin = credentialFreeOrigin(receipt.origin, facts.properties, adapter.definition.originSchemes);
       if (!origin) throw gozarError('provider_unavailable', 'The provider returned no usable origin');
-      Object.assign(lease, { properties: facts.properties, ingress: facts.ingress ?? null, limits: facts.limits, origin, state: 'unverified' });
+      Object.assign(lease, { properties: facts.properties, ingress: facts.ingress ?? null, limits: facts.limits, facts: [...(adapter.definition.facts ?? []), ...(facts.facts ?? [])], origin, state: 'unverified' });
       await save();
       // Nothing is reported published until the validation passes; a failed check withdraws the route.
       const checked = await checkProof(claimsSse);
@@ -334,9 +338,9 @@ export async function runAttachedController(directory, runtime = {}) {
       failure = { code: error.code, message: error.message };
       lease.state = 'lost';
       if (receipt) {
-        try { const removal = await removeRoute(); if (!removal.removed || removal.debt) Object.assign(lease, { state: 'uncertain', cleanup: debtOf(removal) }); }
+        try { const removal = await removeRoute(); if (!removal.removed || removal.debt) Object.assign(lease, { state: 'uncertain', cleanup: debtOf(removal) }); else lease.cleanup = {state:'confirmed'}; }
         catch { Object.assign(lease, { state: 'uncertain', cleanup: { state: 'unconfirmed', message: 'The route could not be withdrawn; close it again' } }); }
-      }
+      } else { lease.state = 'uncertain'; lease.cleanup = {state:'unconfirmed',message:'Startup failed before an owned runtime receipt was returned'}; }
       await atomicWrite(join(directory, 'failure.json'), failure);
       await save().catch(() => {});
     }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import * as gozar from '@tnunamak/gozar';
 import { fakeRegistry } from '@tnunamak/gozar/testing';
 import { scratch, query, assertShape } from './route-schema-check.mjs';
@@ -32,4 +32,17 @@ test('a new fixture provider loads through the public factory and crosses setup,
   const events=(await readFile(join(root,'providers','extension-fixture','events.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line).event);
   for(const event of ['setup','start','proof','stop','cleanup']) assert.ok(events.includes(event),JSON.stringify(events));
   assert.ok(events.indexOf('start')<events.indexOf('proof')); assert.ok(events.indexOf('stop')<events.indexOf('cleanup'));
+});
+
+test('core rejects an adapter-tagged proof for another attempt and cleans up the owned fixture', async t => {
+  const home=await scratch(t),root=join(home,'registry'),id='mismatched-proof';
+  const registry=await fakeRegistry({id,kinds:['attached'],reach:'this-device',transport:'tcp',proofProtocol:'echo',dir:root});t.after(registry.cleanup);
+  const module=join(root,'providers',id,'index.mjs');
+  await writeFile(module,(await readFile(module,'utf8')).replace('attemptId:current.id','attemptId:"another-attempt"'));
+  const api=gozar.createGozar({manifest:registry.manifest,root});
+  const q=query({home,usage:{kind:'attached'},requirements:{reach:'this-device',transport:'tcp',payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}});
+  const choice=(await api.catalogRoutes(q)).candidates[0];
+  await assert.rejects(api.expose({...q,wait:'verified',approval:{candidateToken:choice.candidateToken,disclosureRevision:choice.disclosure.revision}}),error=>error.code==='verification_failed');
+  const events=(await readFile(join(root,'providers',id,'events.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line).event);
+  assert.ok(events.includes('start'));assert.ok(events.includes('stop'));assert.ok(events.includes('cleanup'));
 });

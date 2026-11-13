@@ -32,7 +32,7 @@ function exchange(origin, bytes) {
 }
 
 await mkdir(join(homedir(), '.tmp'), { recursive: true });
-const home = await mkdtemp(join(homedir(), '.tmp', 'gozar-lifecycle-'));
+const home = await mkdtemp(join(homedir(), '.tmp', 'gz-'));
 const app = net.createServer({allowHalfOpen:true}, socket => socket.pipe(socket));
 await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
 let registry, api, route;

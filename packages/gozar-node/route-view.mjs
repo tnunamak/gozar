@@ -63,9 +63,9 @@ const verificationOf = (state, checkedAtMs, checks = []) => proven(state === 'us
 const challengeChecks = origin => (typeof origin === 'string' && origin.startsWith('https://') ? ['nonce', 'tls'] : ['nonce']);
 const debtMessage = debt => typeof debt === 'string' ? debt : debt?.message ?? debt?.reason ?? 'Cleanup is incomplete';
 
-function view({ handle, origin, published, state, ownership, properties, ingress = null, verification, limits, cleanup = { state: 'none' }, target, expiresAt, validUntil, now, facts }) {
+function view({ handle, origin, published, state, ownership, properties, ingress = null, verification, limits, cleanup = { state: 'none' }, target, bindTarget, expiresAt, validUntil, now, facts }) {
   return enrichRoute({ schemaVersion: 2, handle: { kind: handle.kind, id: handle.id, generation: handle.generation }, origin, published, state, ownership,
-    properties, ingress, verification, limits, cleanup }, { target, expiresAt, validUntil, now, facts });
+    properties, ingress, verification, limits, cleanup }, { target, bindTarget, expiresAt, validUntil, now, facts });
 }
 const limitsOf = (limits, fallbackPollMs, idleTimeoutMs = null) => ({
   recommendedPollIntervalMs: limits?.recommendedPollIntervalMs ?? fallbackPollMs, idleTimeoutMs: limits?.idleTimeoutMs ?? idleTimeoutMs });
@@ -115,7 +115,7 @@ export function projectAttached(lease, { handle, now = Date.now() }) {
   const verification = lease.proof ? { status: state === 'usable' && lease.proof.status === 'verified' ? 'verified' : 'unverified', checkedAt: lease.proof.checkedAt,
     vantage: lease.proof.vantage, checks: state === 'usable' ? lease.proof.checks : [] }
     : verificationOf(state, state === 'usable' ? lease.checkedAtMs ?? now : lease.checkedAtMs ?? null, checksFor(lease.properties?.proof?.checks, { sse: lease.sseChecked === true, origin: lease.origin ?? null }));
-  return view({ target: lease.target, expiresAt: lease.expiresAt ?? (Number.isFinite(lease.expiresAtMs) ? iso(lease.expiresAtMs) : undefined), validUntil: lease.proof?.validUntil ?? lease.ingress?.validUntil, facts: lease.facts, now, handle, origin: lease.origin ?? null, published: state === 'usable' ? lease.origin ?? null : null, state, ownership: 'gozar-owned',
+  return view({ target: lease.target, bindTarget: lease.bindTarget, expiresAt: lease.expiresAt ?? (Number.isFinite(lease.expiresAtMs) ? iso(lease.expiresAtMs) : undefined), validUntil: lease.proof?.validUntil ?? lease.ingress?.validUntil, facts: lease.facts, now, handle, origin: lease.origin ?? null, published: state === 'usable' ? lease.origin ?? null : null, state, ownership: 'gozar-owned',
     properties: lease.properties ? completeProperties(lease.properties) : lease.properties, ingress: lease.ingress ?? null, verification,
     limits: limitsOf(lease.limits, 5_000), cleanup: lease.cleanup?.state === 'debt' ? { ...lease.cleanup, state: 'unconfirmed' } : lease.cleanup ?? { state: 'none' } });
 }

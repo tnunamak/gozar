@@ -20,7 +20,7 @@ import { durableCapability, admitRouteEffect, routeAuthority } from './plan.mjs'
 import { loadAdapters } from './adapter-runtime.mjs';
 import { redeemConsentToken, consentBinding, canonicalDigest } from './consent-token.mjs';
 import { defaultHome } from './default-home.mjs';
-import { adoptDisclosureRevision } from './adopt-disclosure.mjs';
+import { adoptDisclosureRevision, consentDisclosureRevision } from './adopt-disclosure.mjs';
 
 const refuse = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
 const hash = routeId => createHash('sha256').update(routeId).digest('hex');
@@ -531,6 +531,7 @@ export async function ensureRoute(request, deps) {
     if (tombstone || !record) {
       if (!approval) throw refuse('consent_required', tombstone ? 'Clearing a user stop needs a fresh approval from the catalog' : 'A new durable route needs an approval token from the catalog');
       grant = await redeem(home, request, 'create', approval);
+      if (approval.disclosureRevision !== consentDisclosureRevision(durableEntry(adapters, grant.adapterId).adapter.definition)) throw stale();
     }
     if (record) {
       // The record is authoritative: its adapter and origin are the pin. A different preference or

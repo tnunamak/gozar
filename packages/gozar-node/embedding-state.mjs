@@ -1,7 +1,7 @@
 // Stable computation fields and open-ended display facts. Unknown evidence stays explicit.
 export const unknown = (reason = 'not-observed') => ({ known: false, reason });
 export const known = value => ({ known: true, value });
-export const features = ['structured-state', 'open-facts', 'configuration-fields', 'secret-intake'];
+export const features = ['structured-state', 'open-facts', 'input-requirements', 'secret-intake'];
 
 export function availabilityFor(definition) {
   return Object.fromEntries(['session', 'attached', 'durable'].map(kind => [kind,
@@ -10,13 +10,14 @@ export function availabilityFor(definition) {
 }
 
 export function prerequisitesFor(inspection, observedAt) {
-  const { facts, adapter, actions } = inspection;
+  const { facts, adapter } = inspection;
+  const actions = [...(inspection.missingActions ?? []), ...inspection.actions];
   const declarations = adapter.definition.prerequisites ?? [{ id: 'local-setup', label: 'Local prerequisites', observation: 'detected' }];
   return declarations.map(item => {
     const observed = facts?.[item.observation];
     return { id: item.id, label: item.label,
       state: observed === true ? 'present' : observed === false ? 'missing' : observed === 'denied' ? 'denied' : 'unknown',
-      observedAt, version: unknown(), remedy: actions.find(action => action.id === item.actionId) ?? actions[0] ?? null };
+      observedAt, version: unknown(), remedy: item.actionId ? actions.find(action => action.id === item.actionId) ?? null : actions[0] ?? null };
   });
 }
 
@@ -42,7 +43,7 @@ export function cleanupForSession(reply) {
   return { state: 'none' };
 }
 
-export function enrichRoute(route, { target, expiresAt, validUntil, now = Date.now(), facts = [] } = {}) {
+export function enrichRoute(route, { target, bindTarget, expiresAt, validUntil, now = Date.now(), facts = [] } = {}) {
   const expiry = typeof expiresAt === 'string' ? known(expiresAt) : unknown();
   const proofExpiry = typeof validUntil === 'string' ? known(validUntil) : unknown();
   const expired = [expiry, proofExpiry].some(item => item.known && Date.parse(item.value) <= now);
@@ -54,6 +55,6 @@ export function enrichRoute(route, { target, expiresAt, validUntil, now = Date.n
   return { ...route, schemaVersion: 2, published: expired ? null : route.published, verification, expiresAt: expiry,
     routeState: route.cleanup.state === 'unconfirmed' ? 'cleanup-unconfirmed' : expired ? 'expired' : verified ? 'verified'
       : route.state === 'released' ? 'inactive' : route.origin ? 'detected' : 'unknown',
-    hostConfiguration: { target: target ? known(target) : unknown(), localPort, bindTarget: unknown(), origin: route.origin ? known(route.origin) : unknown() },
+    hostConfiguration: { target: target ? known(target) : unknown(), localPort, bindTarget: bindTarget ? known(bindTarget) : unknown(), origin: route.origin ? known(route.origin) : unknown() },
     facts, actions: route.state === 'released' ? [] : ['stop', 'edit', 'rotate'] };
 }

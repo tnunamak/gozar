@@ -53,3 +53,24 @@ The CLI commands in the [README](../README.md#route-by-requirement) read the sam
 `expose --port`, `status`, `health` and `stop` share the human renderer. The selected adapter's `copy.human` holds address wording, a short selection name, an alternative summary and a setup step. These fields extend the legacy normalized plan definitions; they do not change the provider-definition schema or the public reply. `runtime/plain-copy.json` maps engineering caveats to plain copy, a decision flag and a note/setup/failure kind. Its schema is `runtime/plain-copy.schema.json`; the catalog test checks coverage of adapter caveats, core errors and host errors. Unexpected runtime error text stays in verbose and JSON output.
 
 `--alternatives` lists usable session plans from the recommendations and their detection status (`detected` means seen on this computer, not yet checked; checks run after approval). The heading names the requested audience, and the plan does not repeat the alternatives summary. It continues to the compact plan and existing approval flow. `--via` accepts the printed selection name or the adapter ID. `--verbose` appends the former full engineering view, including every provider's limitations. Reach is conditional on checks passing. The plan and alternatives also describe traffic readers from the existing provider trust declarations; unknown readers are omitted. An owner-managed address keeps proxy, DNS, TLS and cleanup with its owner. These presentation facts do not enter session JSON. The plan states the background lifetime, address pattern, sign-in boundary and selected ownership disclosure. The published view starts with the URL, then reports only checks present in the final receipt, followed by the target, lifetime, stop command and health command. MCP instructions appear only in verbose output because a session request does not identify the application protocol. No demo-only authentication advice is inferred from a port. Failures distinguish confirmed cleanup from public access that may remain, name a known cause or say it was not recorded, and suggest inspection before retrying. JSON serialization uses the original reply and does not run the human renderer.
+
+
+## 0.4 embedding and extension boundary
+
+Catalog and RouteView responses use version 2; requests retain version 1.
+The typed core separates operational availability, local prerequisites, input
+requirements, route/proof state and cleanup confirmation. Open facts carry
+additional values, consent relevance, source and evidence dates. Unknown facts
+carry reasons, including needs-provider-call. Consent-relevant rows are bound to
+the approved disclosure revision.
+
+createGozar loads a trusted manifest through the same validated registry used by
+the CLI. The attached controller preserves that registry across its process
+boundary. Adapter prepareProof optionally owns a protocol challenge/forwarding
+boundary; the controller supplies attempt identity, nonce, deadline and cancel
+signal and enforces bound results before publication. An optional safe refresh
+can update proof; absent refresh leaves the recorded proof and expiry untouched.
+A random non-HTTP extension in the shipped lifecycle fixture exercises this seam
+without a core or renderer edit. Runtime failures without a reliable cleanup
+receipt remain unconfirmed. Provider credential collection is descriptor driven;
+CLI configure hides secret input and stores it using Gozar's private store.

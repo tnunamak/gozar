@@ -10,9 +10,10 @@ import { readConfiguration } from './adapter-configuration.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { loopbackTarget } from './durable-route.mjs';
 import { checksFor, completeProperties, needsFor } from './route-view.mjs';
-import { adoptDisclosureRevision } from './adopt-disclosure.mjs';
+import { adoptDisclosureRevision, consentDisclosureRevision } from './adopt-disclosure.mjs';
 
 export { adoptDisclosureRevision } from './adopt-disclosure.mjs';
+export { consentDisclosureRevision } from './adopt-disclosure.mjs';
 
 const sha = text => createHash('sha256').update(text).digest('hex');
 /** Stable opaque handles for an adapter; apps store the preferenceRef and show the label. */
@@ -199,12 +200,12 @@ async function collect(query, deps) {
     const candidate = { providerId: adapter.id, name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
       display: { label: definition.label, description: describe(definition, properties), needs: needsFor(definition, query.usage.kind) }, properties,
       availability, prerequisites: prerequisitesFor(inspection, observedAt), configuration, facts: structuredClone(definition.facts ?? []),
-      setup: { state: setupState, actions: setupState === 'action-required' ? inspection.missingActions ?? actions : [] }, disclosure: definition.disclosure,
+      setup: { state: setupState, actions: setupState === 'action-required' ? inspection.missingActions ?? actions : [] }, disclosure: { ...definition.disclosure, revision: consentDisclosureRevision(definition) },
       candidateToken: null, expiresAt: null };
     if (query.usage.kind === 'durable' && query.intent === 'adopt') {
       const takeover = 'Gozar takes over the existing rule and removes it when the route is released or stopped.';
       candidate.display.description += ` ${takeover}`;
-      candidate.disclosure = { ...definition.disclosure, revision: adoptDisclosureRevision(definition),
+      candidate.disclosure = { ...definition.disclosure, revision: consentDisclosureRevision(definition, 'adopt'),
         text: `${definition.disclosure.text} ${takeover}` };
     }
     if (eligible && setupState === 'ready' && grant) {

@@ -30,7 +30,10 @@
     "docs/migration-0.4.md",
     "THIRD-PARTY-NOTICES.md",
     "third-party/",
-    "docs/release-0.4-license-audit.md"
+    "docs/release-0.4-license-audit.md",
+    "docs/live-provider-walk.md",
+    "docs/ngrok-stream-protocols.md",
+    "docs/design/0.4.0-state-contract.md"
   ],
   "repository": {
     "type": "git",

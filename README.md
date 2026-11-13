@@ -392,3 +392,39 @@ unknown. A detected address is not a verified route. See the
 [migration guide](docs/migration-0.4.md) and the shipped
 [remote access example](examples/remote-access-screen.mjs), which accepts exactly
 `--fakes` or `--detect` and never creates a real route.
+
+
+Configure one choice with descriptor prompts before opening it:
+
+```sh
+gozar configure --query-file query.json --provider-id ID --json
+```
+
+Secret terminal input is hidden and stored by Gozar. No token belongs in argv,
+an environment variable, an approval file or a support transcript. `configure`
+collects inputs and does not open a route. The explicit-action alternative is
+`gozar setup ACTION_ID --prompt --query-file query.json --approval-file approval.json`.
+See [the opt-in operator walk](docs/live-provider-walk.md) for the stored-credential
+HTTPS flow and cleanup responsibilities.
+
+A trusted extension loads through `createGozar({manifest, root})`. A manifest has
+`providers: [{id, module, definition}]`, with files below `root/providers/`.
+Definitions carry open facts and input requirements derived from setup actions.
+The module implements the [adapter contract](packages/gozar-node/adapter-contract.d.ts).
+An optional `prepareProof` supplies an attempt-bound proof session and protocol
+address schemes; this requires no provider branch in core or renderer. CLI route
+commands accept `--registry-file FILE [--registry-root DIR]` for the same seam.
+Modules execute with the host's authority; load only trusted code.
+
+The installed fixture command creates a random extension using only package
+exports, collects a fake credential through CLI prompts, runs a non-HTTP nonce
+proof and checks forwarding, status, idempotent stop and independent cleanup:
+
+```sh
+node node_modules/@tnunamak/gozar/examples/provider-lifecycle-fixture.mjs
+```
+
+Its JSON reports events, facts, input requirements and the observed resource
+ledger. It uses no provider service or real credential. Raw TCP/TLS proof establishes
+initial transport to Gozar's boundary, not application identity or login. Status
+retains the original proof time/expiry when safe reproof is unavailable.

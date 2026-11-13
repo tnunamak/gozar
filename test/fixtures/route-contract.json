@@ -1713,7 +1713,7 @@
         "features": [
           "structured-state",
           "open-facts",
-          "configuration-fields",
+          "input-requirements",
           "secret-intake"
         ]
       }
@@ -1738,7 +1738,7 @@
         "features": [
           "structured-state",
           "open-facts",
-          "configuration-fields",
+          "input-requirements",
           "secret-intake"
         ]
       }

@@ -42,3 +42,18 @@ Run the shipped example with exactly one flag:
 The first mode uses fake data only. The second performs real read-only detection
 and creates no route. Host passwords, restart policy and application port pins
 remain the embedding app's responsibility.
+
+
+Additional 0.4 changes: Properties.transport can be tcp or tls, and queries can
+require those transports explicitly. Update exhaustive switches and treat their
+origins as protocol addresses, not browser URLs. Candidate's availability,
+prerequisites, facts and configuration, and RouteView's new state/proof fields are
+required in the TypeScript response shapes; update manually constructed mocks.
+The unreleased fields proposal was replaced by configuration.inputRequirements.
+Descriptors use kind (text/domain/https-origin), secret, required, help and obtainUrl.
+Input requirements describe data collection; embedding apps choose their own UI.
+
+Consent-relevant fact rows now participate in the disclosure revision. A changed
+row invalidates an old approval before effects. Display-only fact changes do not
+change that revision. The public createGozar factory and CLI --registry-file seam
+load trusted extension modules. See the installed provider lifecycle fixture.

@@ -200,7 +200,7 @@ test('honest declarations: kinds match the working recipes, unsupported provider
   assert.deepEqual(kinds['tailscale-private'], ['session', 'durable']);
   assert.deepEqual(kinds['ngrok-https-edge'], ['attached']);
   assert.deepEqual(kinds['cloudflare-named'], ['attached']);
-  for (const id of ['ngrok-tls-passthrough', 'ngrok-tcp-passthrough']) assert.deepEqual(kinds[id], [], `${id} has no admitted create recipe`);
+  for (const id of ['ngrok-tls-passthrough', 'ngrok-tcp-passthrough']) assert.deepEqual(kinds[id], ['attached'], `${id} has an attached SDK runtime`);
   const mac = await loadAdapters({ manifest: tenManifest, root: adaptersRoot });
   for (const adapter of mac) assert.equal((await adapter.detect(readContext({ platform: 'win32' }))).state, 'unsupported');
 });
