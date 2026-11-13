@@ -27,10 +27,12 @@ const sharedNat = host => { const [a, b] = host.split('.').map(Number); return a
 export function reachOf(origin) {
   const host = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
   const family = isIP(host);
-  if (family === 4) return host === '0.0.0.0' ? 'unknown' : host.startsWith('127.') ? 'this-device' : IPV4_PRIVATE.some(pattern => pattern.test(host)) ? 'lan' : sharedNat(host) ? 'unknown' : 'internet';
+  // 0.0.0.0/8 means "this network" and is never a remote address.
+  if (family === 4) return host.startsWith('0.') ? 'unknown' : host.startsWith('127.') ? 'this-device' : IPV4_PRIVATE.some(pattern => pattern.test(host)) ? 'lan' : sharedNat(host) ? 'unknown' : 'internet';
   if (family === 6) {
-    // An IPv4 address inside IPv6 (::ffff:a.b.c.d, or the old ::a.b.c.d form) is classified as that IPv4 address.
-    // The URL parser prints it in hex, for example [::ffff:7f00:1] for 127.0.0.1.
+    // An IPv4-mapped address (::ffff:a.b.c.d) is classified as that IPv4 address. The deprecated IPv4-compatible
+    // form (::a.b.c.d) is not routed as IPv4, so only its loopback reading is kept and anything else is unknown.
+    // The URL parser prints both in hex, for example [::ffff:7f00:1] for 127.0.0.1.
     const embedded = host.match(/^::(ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
     if (embedded) {
       const high = parseInt(embedded[2], 16), low = parseInt(embedded[3], 16);
@@ -38,10 +40,10 @@ export function reachOf(origin) {
       return embedded[1] || ipv4 === 'this-device' ? ipv4 : 'unknown';
     }
     if (host === '::') return 'unknown';
-    return host === '::1' ? 'this-device' : /^(f[cd]|fe[89ab])/.test(host) ? 'lan' : 'internet';
+    return host === '::1' ? 'this-device' : /^(f[cd]|fe[89a-f])/.test(host) ? 'lan' : 'internet'; // unique-local, link-local, old site-local
   }
   if (host === 'localhost' || host === 'localhost.localdomain' || host.endsWith('.localhost')) return 'this-device';
-  return !host.includes('.') || /\.(local|lan|internal|home\.arpa)$/.test(host) ? 'lan' : 'internet';
+  return !host.includes('.') || /(^|\.)home\.arpa$/.test(host) || /\.(local|lan|internal)$/.test(host) ? 'lan' : 'internet';
 }
 
 export default recipeAdapter({
@@ -59,6 +61,8 @@ export default recipeAdapter({
       async detect(ctx) {
         const result = await base.detect(ctx);
         if (result.state !== 'ready') return result;
+        // An origin the app named that is not a credential-free https origin cannot be fixed by the owner's action.
+        if (ctx.origin != null && parseOrigin(ctx.origin) === null) return { state: 'unsupported', facts: { ...result.facts, setupNeeded: false, origin: null, reach: 'unknown' } };
         const origin = await given(ctx);
         return origin
           ? { state: 'ready', facts: { ...result.facts, setupNeeded: false, origin, reach: reachOf(origin) } }

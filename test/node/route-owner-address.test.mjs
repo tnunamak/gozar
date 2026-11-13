@@ -79,11 +79,12 @@ test('red: every host shape gets the reach of the address it really is', () => {
   const cases = {
     // An IPv4 address inside IPv6 is that IPv4 address.
     'https://[::ffff:127.0.0.1]': 'this-device', 'https://[::ffff:10.0.0.5]': 'lan', 'https://[::ffff:192.168.1.1]': 'lan', 'https://[::ffff:203.0.113.9]': 'internet',
-    'https://[::127.0.0.1]': 'this-device',
+    // The deprecated IPv4-compatible form is not routed as IPv4: only loopback keeps its reading.
+    'https://[::127.0.0.1]': 'this-device', 'https://[::10.0.0.5]': 'unknown', 'https://[::8.8.8.8]': 'unknown',
     // The unspecified addresses name no host.
-    'https://0.0.0.0': 'unknown', 'https://[::]': 'unknown',
+    'https://0.0.0.0': 'unknown', 'https://[::]': 'unknown', 'https://0.1.2.3': 'unknown',
     // Names that only resolve on a local network.
-    'https://nas': 'lan', 'https://build.internal': 'lan', 'https://printer.home.arpa': 'lan', 'https://localhost.localdomain': 'this-device',
+    'https://nas': 'lan', 'https://build.internal': 'lan', 'https://printer.home.arpa': 'lan', 'https://home.arpa': 'lan', 'https://[fec0::1]': 'lan', 'https://localhost.localdomain': 'this-device',
     // What was already right stays right.
     'https://10.1.2.3': 'lan', 'https://172.16.0.1': 'lan', 'https://172.31.255.255': 'lan', 'https://172.32.0.1': 'internet', 'https://192.168.0.1': 'lan',
     'https://169.254.1.1': 'lan', 'https://[fe80::1]': 'lan', 'https://[fd00::1]': 'lan', 'https://printer.local': 'lan', 'https://nas.lan': 'lan',
@@ -103,6 +104,8 @@ test('red: an origin the app sent that is not a valid https origin is refused, a
     const { candidates: [own] } = await api.catalogRoutes({ ...plain, origin });
     assert.equal(own.eligible, false, origin);
     assert.equal(own.candidateToken, null, origin);
+    // The owner's setup action cannot fix an origin the app named, so none is offered.
+    assert.deepEqual(own.setup.actions, [], origin);
     // A token issued for the stored address cannot be spent with a bad origin either.
     const stored = (await api.catalogRoutes(plain)).candidates[0];
     const approval = { candidateToken: stored.candidateToken, disclosureRevision: stored.disclosure.revision };
