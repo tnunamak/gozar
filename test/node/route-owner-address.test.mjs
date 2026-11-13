@@ -83,6 +83,12 @@ test('red: every host shape gets the reach of the address it really is', () => {
     'https://[::127.0.0.1]': 'this-device', 'https://[::10.0.0.5]': 'unknown', 'https://[::8.8.8.8]': 'unknown',
     // The unspecified addresses name no host.
     'https://0.0.0.0': 'unknown', 'https://[::]': 'unknown', 'https://0.1.2.3': 'unknown',
+    // The URL parser prints an IPv4-compatible address whose first two bytes are zero as one hextet: [::2] is ::0.0.0.2.
+    'https://[::2]': 'unknown', 'https://[::0.0.1.2]': 'unknown', 'https://[::1]': 'this-device',
+    // Multicast and broadcast addresses are never one host's address.
+    'https://224.0.0.1': 'unknown', 'https://239.1.2.3': 'unknown', 'https://255.255.255.255': 'unknown', 'https://240.0.0.1': 'unknown', 'https://[ff02::1]': 'unknown',
+    // The parser drops leading zeros, so [fd::1] is 00fd::1 and [ff::1] is 00ff::1: global addresses, not unique-local or multicast.
+    'https://[fd::1]': 'internet', 'https://[ff::1]': 'internet', 'https://[fe8::1]': 'internet', 'https://[fd12:3456::1]': 'lan',
     // Names that only resolve on a local network.
     'https://nas': 'lan', 'https://build.internal': 'lan', 'https://printer.home.arpa': 'lan', 'https://home.arpa': 'lan', 'https://[fec0::1]': 'lan', 'https://localhost.localdomain': 'this-device',
     // What was already right stays right.

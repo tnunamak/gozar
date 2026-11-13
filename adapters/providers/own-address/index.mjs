@@ -27,20 +27,26 @@ const sharedNat = host => { const [a, b] = host.split('.').map(Number); return a
 export function reachOf(origin) {
   const host = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
   const family = isIP(host);
-  // 0.0.0.0/8 means "this network" and is never a remote address.
-  if (family === 4) return host.startsWith('0.') ? 'unknown' : host.startsWith('127.') ? 'this-device' : IPV4_PRIVATE.some(pattern => pattern.test(host)) ? 'lan' : sharedNat(host) ? 'unknown' : 'internet';
+  // 0.0.0.0/8 means "this network", and 224.0.0.0/3 is multicast, reserved and broadcast: none is one remote host.
+  if (family === 4) {
+    const first = Number(host.split('.')[0]);
+    return first === 0 || first >= 224 ? 'unknown' : first === 127 ? 'this-device' : IPV4_PRIVATE.some(pattern => pattern.test(host)) ? 'lan' : sharedNat(host) ? 'unknown' : 'internet';
+  }
   if (family === 6) {
+    if (host === '::1') return 'this-device';
+    // A prefix test needs the whole first hextet: the parser drops leading zeros, so 00fd::1 prints as fd::1.
+    if (host === '::' || /^ff[0-9a-f]{2}:/.test(host)) return 'unknown'; // unspecified, multicast
     // An IPv4-mapped address (::ffff:a.b.c.d) is classified as that IPv4 address. The deprecated IPv4-compatible
     // form (::a.b.c.d) is not routed as IPv4, so only its loopback reading is kept and anything else is unknown.
-    // The URL parser prints both in hex, for example [::ffff:7f00:1] for 127.0.0.1.
-    const embedded = host.match(/^::(ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    // The URL parser prints both in hex, for example [::ffff:7f00:1] for 127.0.0.1, and drops a zero high hextet,
+    // so ::0.0.0.2 prints as [::2].
+    const embedded = host.match(/^::(ffff:)?(?:([0-9a-f]{1,4}):)?([0-9a-f]{1,4})$/);
     if (embedded) {
-      const high = parseInt(embedded[2], 16), low = parseInt(embedded[3], 16);
+      const high = parseInt(embedded[2] ?? '0', 16), low = parseInt(embedded[3], 16);
       const ipv4 = reachOf(`https://${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
       return embedded[1] || ipv4 === 'this-device' ? ipv4 : 'unknown';
     }
-    if (host === '::') return 'unknown';
-    return host === '::1' ? 'this-device' : /^(f[cd]|fe[89a-f])/.test(host) ? 'lan' : 'internet'; // unique-local, link-local, old site-local
+    return /^(f[cd][0-9a-f]{2}|fe[89a-f][0-9a-f]):/.test(host) ? 'lan' : 'internet'; // unique-local, link-local, old site-local
   }
   if (host === 'localhost' || host === 'localhost.localdomain' || host.endsWith('.localhost')) return 'this-device';
   return !host.includes('.') || /(^|\.)home\.arpa$/.test(host) || /\.(local|lan|internal)$/.test(host) ? 'lan' : 'internet';
