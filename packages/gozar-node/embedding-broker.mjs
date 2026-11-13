@@ -1,6 +1,6 @@
 // Host-owned authenticated, boot-bound resolver. Descriptor contains authority, never credentials.
 import net from 'node:net';
-import {randomBytes,timingSafeEqual} from 'node:crypto';
+import {randomBytes,timingSafeEqual,randomUUID} from 'node:crypto';
 import {chmod,unlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {canonicalHome} from './service-state.mjs';
@@ -26,7 +26,14 @@ export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{}
   });
  });
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(descriptor.socketPath,resolve);});await chmod(descriptor.socketPath,0o600);
- return {descriptor,async close(){if(closed)return;closed=true;for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));await unlink(descriptor.socketPath).catch(e=>{if(e.code!=='ENOENT')throw e;});onLoss(embeddingError('secret_backend_unavailable'));}};
+ return {descriptor,async registerController({identity:nextIdentity}={}){
+   if(closed)throw embeddingError('secret_backend_unavailable');
+   nextIdentity??={instanceId:identity.instanceId,bootId:randomUUID()};
+   if(nextIdentity.instanceId!==identity.instanceId||typeof nextIdentity.bootId!=='string'||!nextIdentity.bootId||nextIdentity.bootId===identity.bootId)throw embeddingError('secret_backend_unavailable');
+   for(const socket of sockets)socket.destroy();
+   identity={...nextIdentity};Object.assign(descriptor,identity,{token:randomBytes(32).toString('hex')});
+   onLoss(embeddingError('secret_backend_unavailable'));return {...descriptor};
+  },async close(){if(closed)return;closed=true;for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));await unlink(descriptor.socketPath).catch(e=>{if(e.code!=='ENOENT')throw e;});onLoss(embeddingError('secret_backend_unavailable'));}};
 }
 export async function connectEmbeddingBroker({descriptor,identity,onLoss=()=>{}}){
  if(!identity||identity.bootId!==descriptor.bootId||identity.instanceId!==descriptor.instanceId)throw embeddingError('secret_backend_unavailable');

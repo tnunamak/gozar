@@ -30,3 +30,8 @@ test('effect dispatch requires explicit host handler and exact fixture mapping',
  broker=await startEmbeddingBroker({services,home,identity});client=await connectEmbeddingBroker({descriptor:broker.descriptor,identity});await assert.rejects(client.dispatchEffect({kind:'probe',operation:'detect',input:{}}),{code:'unsupported'});assert.equal(effects,1);
  }finally{client?.close();await broker?.close();await rm(home,{recursive:true,force:true});}
 });
+test('new controller registration revokes old lease before exposing a fresh boot',async()=>{
+ const home=await mkdtemp(join(tmpdir(),'embed-boot-'));const identity={instanceId:'stable',bootId:'first'};const services=createEmbeddingServices({registryId:'fixture',identity});let broker,old,current;
+ try{broker=await startEmbeddingBroker({services,home,identity});const previous={...broker.descriptor};old=await connectEmbeddingBroker({descriptor:previous,identity});const descriptor=await broker.registerController();assert.notEqual(descriptor.bootId,identity.bootId);assert.equal(descriptor.instanceId,identity.instanceId);await assert.rejects(old.readConfiguration({providerId:'p'}),{code:'secret_backend_unavailable'});await assert.rejects(connectEmbeddingBroker({descriptor:previous,identity}),{code:'secret_backend_unavailable'});current=await connectEmbeddingBroker({descriptor,identity:{instanceId:descriptor.instanceId,bootId:descriptor.bootId}});assert.ok((await current.readConfiguration({providerId:'p'})).revision);
+ }finally{old?.close();current?.close();await broker?.close();await rm(home,{recursive:true,force:true});}
+});

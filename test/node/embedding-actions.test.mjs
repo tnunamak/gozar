@@ -15,6 +15,9 @@ test('provider and action CAS reject with zero adapter effects',async()=>{
  await assert.rejects(runEmbeddingSetup({...r,expectedConfigurationRevision:'old'},deps),{code:'configuration_stale'});
  await assert.rejects(runEmbeddingSetup({...r,providerId:'other'},deps),{code:'candidate_stale'});
  await assert.rejects(runEmbeddingSetup({...r,approval:{...r.approval,digest:'old'}},deps),{code:'candidate_stale'});assert.equal(effects,0);
+ await s.registerConfigurationUse({home,providerId:'opaque',revision:c.revision,handle:'live'});
+ await assert.rejects(runEmbeddingSetup(r,deps),{code:'configuration_in_use'});assert.equal(effects,0);
+ await s.releaseConfigurationUse({home,providerId:'opaque',handle:'live'});
  await runEmbeddingSetup(r,deps);assert.equal(effects,1);
  }finally{await rm(home,{recursive:true,force:true});}
 });

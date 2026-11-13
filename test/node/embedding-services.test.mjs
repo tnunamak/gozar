@@ -58,3 +58,23 @@ test('default backend imports legacy references only; named owners require expli
  const custom=createEmbeddingServices({registryId:'fixture-custom',secretBackend:{}});assert.deepEqual((await custom.readConfiguration({home,providerId:'legacy'})).credentials,{});
  }finally{await rm(home,{recursive:true,force:true});}
 });
+test('draft binding promotion survives revision changes and commits; stale competing commit is inert',async()=>{
+ const home=await mkdtemp(join(tmpdir(),'embed-promotion-'));const values=new Map();let n=0;
+ const s=createEmbeddingServices({registryId:'fixture',secretBackend:{put:async({bytes})=>{const handle=`h${++n}`;values.set(handle,Buffer.from(bytes));return {handle};},withSecret:async({handle},use)=>use(values.get(handle)),presence:async({handle})=>({known:true,value:values.has(handle)}),delete:async({handle})=>({deleted:values.delete(handle)})}});
+ try{const c=await s.readConfiguration({home,providerId:'p'});const r={home,providerId:'p',scopeId:c.scopeId};const d=await s.beginConfigurationDraft({...r,expectedConfigurationRevision:c.revision});const competing=await s.beginConfigurationDraft({...r,expectedConfigurationRevision:c.revision});
+ const dr={...r,draftId:d.draftId,expectedConfigurationRevision:d.configuration.revision};const h=await s.storeSecret({...dr,inputId:'key',bytes:Buffer.from('new-secret')});const changed=await s.mutateConfiguration(dr,tx=>tx.bindSecret('key',h.handle));
+ const next=await s.mutateConfiguration({...dr,expectedConfigurationRevision:changed.configuration.revision},tx=>tx.bindText('domain','example.invalid'));
+ const applied=await s.commitConfigurationDraft({...dr,expectedConfigurationRevision:next.configuration.revision});assert.notEqual(applied.revision,next.configuration.revision);assert.equal((await s.resolveConfiguration(r)).key,'new-secret');
+ await assert.rejects(s.commitConfigurationDraft({...r,draftId:competing.draftId,expectedConfigurationRevision:competing.configuration.revision}),code('configuration_stale'));
+ assert.equal((await s.resolveConfiguration(r)).key,'new-secret');await s.discardConfigurationDraft({...r,draftId:competing.draftId});assert.equal(values.has(h.handle),true);
+ }finally{await rm(home,{recursive:true,force:true});}
+});
+test('approved draft clear releases the reference only after commit; applied use blocks deletion',async()=>{
+ const home=await mkdtemp(join(tmpdir(),'embed-clear-'));const {clearConfigurationInput,clearInputActions}=await import('../../packages/gozar-node/embedding-setup.mjs');let deleted=0;
+ const s=createEmbeddingServices({registryId:'fixture',secretBackend:{put:async()=>({handle:'h'}),withSecret:async(_,use)=>use(Buffer.from('secret')),presence:async()=>({known:true,value:true}),delete:async()=>{deleted++;return {deleted:true};}}});
+ try{const c=await s.readConfiguration({home,providerId:'p'});const r={home,providerId:'p',scopeId:c.scopeId,expectedConfigurationRevision:c.revision};const stored=await s.storeSecret({...r,inputId:'key',bytes:Buffer.from('secret')});assert.equal(stored.configurationRevision,c.revision);const applied=await s.mutateConfiguration(r,tx=>tx.bindSecret('key','h'));const d=await s.beginConfigurationDraft({...r,expectedConfigurationRevision:applied.configuration.revision});const action=clearInputActions(d.configuration)[0];
+ const request={...r,draftId:d.draftId,inputId:'key',expectedConfigurationRevision:d.configuration.revision,approval:{kind:'setup',digest:action.digest,disclosureRevision:action.disclosure.revision}};
+ const adapter={id:'p',definition:{capabilities:{}},detect:async()=>({state:'ready',facts:{}}),properties:()=>({}),setupActions:()=>[]};const next=await clearConfigurationInput(request,{embeddingServices:s,adapters:[adapter],readContext:{configuration:async()=>null}});
+ await assert.rejects(s.discardSecret({home,handle:'h'}),code('secret_in_use'));assert.equal((await s.resolveConfiguration(r)).key,'secret');await s.commitConfigurationDraft({...r,draftId:d.draftId,expectedConfigurationRevision:next.revision});assert.equal((await s.discardSecret({home,handle:'h'})).discarded,true);assert.equal(deleted,1);
+ }finally{await rm(home,{recursive:true,force:true});}
+});
