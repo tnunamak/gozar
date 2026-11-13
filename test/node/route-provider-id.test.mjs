@@ -94,28 +94,27 @@ test('red: setRoutePreferences takes providerIds, getRoutePreferences returns th
   assert.deepEqual(candidates.slice(0, 2).map(c => c.providerId), ['lan', 'tailscale-private']);
 });
 
-test('the consent token still redeems: issued through a providerId query it spends only with that providerId, and without one it is unchanged', async t => {
+test('red: a token from a catalog without providerId redeems with the chosen providerId, and a different id is consent_mismatch', async t => {
   const home = await scratch(t);
   const viaId = await withHome(t, { home, providerId: 'tailscale-funnel' });
+  const other = await withHome(t, { home, providerId: 'tailscale-private' });
   const plain = await withHome(t, { home });
   const issueFor = async q => {
     const { candidates } = await catalog(q);
     const candidate = candidates.find(c => c.providerId === 'tailscale-funnel');
     return { token: candidate.candidateToken, revision: candidate.disclosure.revision };
   };
-  const spend = (q, issued) => redeemConsentToken({ home, token: issued.token, binding: consentBinding(q, home, issued.revision) });
+  const spend = (q, issued) => redeemConsentToken({ home, token: issued.token, binding: consentBinding(q, home, issued.revision), providerId: q.providerId });
 
-  const a = await issueFor(viaId);
-  assert.ok(a.token);
-  assert.equal((await spend(viaId, a)).adapterId, 'tailscale-funnel');
-
-  const b = await issueFor(viaId);
-  assert.equal(await codeOf(spend(plain, b)), 'consent_mismatch', 'a token for a chosen id is not spent by a request that names none');
-  const c = await issueFor(plain);
-  assert.equal(await codeOf(spend(viaId, c)), 'consent_mismatch', 'and the other way round');
-  const d = await issueFor(plain);
-  assert.equal((await spend(plain, d)).adapterId, 'tailscale-funnel', 'a token issued without providerId redeems as before');
-  assert.equal(consentBinding(plain, home, 'r').providerId, undefined, 'the binding of a request without providerId has no new key, so its digest is unchanged');
+  // The app flow: list every provider, the user picks one, the app sends its id back with the token.
+  const listed = await issueFor(plain);
+  assert.equal((await spend(viaId, listed)).adapterId, 'tailscale-funnel', 'a token from the full list redeems with the chosen id');
+  const named = await issueFor(viaId);
+  assert.equal((await spend(plain, named)).adapterId, 'tailscale-funnel', 'a token from a providerId query redeems without the id');
+  const mismatch = await issueFor(plain);
+  assert.equal(await codeOf(spend(other, mismatch)), 'consent_mismatch', 'a request naming another provider cannot spend it');
+  assert.equal(await codeOf(spend(plain, mismatch)), 'consent_unknown', 'and the refused token is spent');
+  assert.deepEqual(consentBinding(viaId, home, 'r'), consentBinding(plain, home, 'r'), 'providerId is not part of the binding');
 });
 
 test('the plan digest the token carries is the same with and without providerId (redeemed through the real approval path)', async t => {

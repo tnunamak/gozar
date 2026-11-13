@@ -41,15 +41,14 @@ export function consentBinding(query, canonicalHome, disclosureRevision) {
     owner: query.owner, home: canonicalHome, target: query.target, usage: structuredClone(query.usage),
     intent: query.intent ?? 'create', requirements: structuredClone(query.requirements),
     route: query.route ?? null, origin: query.origin ?? null, disclosureRevision,
-    // A token issued for a chosen providerId is spent only with that same providerId. A request that names none keeps
-    // the binding it always had, so tokens issued without a providerId are unaffected.
-    ...(query.providerId === undefined ? {} : { providerId: query.providerId }),
+    // providerId is not part of the binding: the token's grant already names the one adapter it approves, and an app
+    // that listed every provider must be able to send back the id the user chose. redeemConsentToken checks it instead.
   };
 }
 function checkBinding(binding) {
   const ok = plain(binding) && ['owner', 'home', 'target', 'disclosureRevision'].every(key => text(binding[key])) &&
     plain(binding.usage) && ['durable', 'session', 'attached'].includes(binding.usage.kind) && plain(binding.requirements) &&
-    ['create', 'adopt'].includes(binding.intent) && [binding.route, binding.origin].every(value => value === null || text(value)) && (binding.providerId === undefined || text(binding.providerId));
+    ['create', 'adopt'].includes(binding.intent) && [binding.route, binding.origin].every(value => value === null || text(value));
   if (!ok) throw refuse('invalid_input', 'Consent binding is incomplete');
   return binding;
 }
@@ -104,9 +103,11 @@ export async function peekConsentGrant({ home = defaultHome(), token }) {
   } catch { return null; }
 }
 
-export async function redeemConsentToken({ home = defaultHome(), token, binding }) {
+/** `providerId`, when the request names one, must be the adapter the token approves. */
+export async function redeemConsentToken({ home = defaultHome(), token, binding, providerId }) {
   if (typeof token !== 'string' || !token || token.length > 256) throw unknownToken();
   checkBinding(binding);
+  if (providerId !== undefined && !text(providerId)) throw refuse('invalid_input', 'providerId must be a non-empty string');
   let dir;
   try { dir = await consentDirectory(home, false); }
   catch (error) { if (error.code === 'ENOENT') throw unknownToken(); throw error; }
@@ -121,5 +122,8 @@ export async function redeemConsentToken({ home = defaultHome(), token, binding 
   if (!(Date.parse(stored.expiresAt) > Date.now())) throw refuse('consent_expired', 'Consent token expired; ask the user again');
   if (!same(stored.bindingDigest, bindingDigest(binding)))
     throw refuse('consent_mismatch', 'Consent token was issued for a different request; ask the user again');
-  return checkGrant(stored.grant);
+  const grant = checkGrant(stored.grant);
+  if (providerId !== undefined && grant.adapterId !== providerId)
+    throw refuse('consent_mismatch', 'Consent token approves a different provider than the request names; ask the user again');
+  return grant;
 }

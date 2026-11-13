@@ -461,7 +461,7 @@ function approvalOf(approval) {
 }
 async function redeem(home, request, intent, approval) {
   const canonical = await canonicalHome(home, true);
-  return redeemConsentToken({ home: canonical, token: approval.candidateToken,
+  return redeemConsentToken({ home: canonical, token: approval.candidateToken, providerId: request.providerId,
     binding: consentBinding({ ...request, intent }, canonical, approval.disclosureRevision) });
 }
 const stale = () => refuse('claim_mismatch', 'The provider changed since the user approved this route; nothing was changed. Ask the user again.');

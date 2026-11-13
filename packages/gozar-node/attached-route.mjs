@@ -55,7 +55,7 @@ export async function redeemApproval(request, deps) {
   const tokens = deps.redeem && deps.consentBinding ? null : await import('./consent-token.mjs');
   const { approval, wait, ...query } = request;
   const binding = (deps.consentBinding ?? tokens.consentBinding)(query, home, approval.disclosureRevision);
-  const grant = await (deps.redeem ?? tokens.redeemConsentToken)({ home, token: approval.candidateToken, binding });
+  const grant = await (deps.redeem ?? tokens.redeemConsentToken)({ home, token: approval.candidateToken, binding, providerId: query.providerId });
   const adapter = (await adaptersOf(deps)).find(item => item.id === grant.adapterId);
   if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available; ask the catalog again');
   if (!adapter.definition.supportedKinds.includes(request.usage.kind)) throw gozarError('unsupported', 'This route does not support that usage');

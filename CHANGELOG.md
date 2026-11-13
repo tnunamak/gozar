@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Choose a provider by id.** `Query.providerId` selects exactly one provider by the `providerId` its candidate shows. The catalog then holds only that candidate, and a consent token issued for it is spent only with the same id. `gozar catalog`, `ensure`, `adopt` and `expose` take `--provider-id <id>`.
+- **Choose a provider by id.** `Query.providerId` selects exactly one provider by the `providerId` its candidate shows. The catalog then holds only that candidate, and a request that names an id can spend only a token that approves that provider. A token from a catalog that listed every provider can be spent with the id the user chose. `gozar catalog`, `ensure`, `adopt` and `expose` take `--provider-id <id>`.
 - **Read what a route needs and proves.** A candidate shows `display.needs` (what to do before it works), the ports the provider may use, and its proof: from where a check runs and which checks it runs.
 - **`transport: 'any'` for lan and this-device.** An app that accepts plain HTTP on the local network, or on this device, can ask for `transport: 'any'` and no longer needs a TLS-terminating provider.
 - **Give an address you run yourself.** A route its owner keeps can be created with a `provide-value` setup action: the app passes the HTTPS address, and Gozar shows it as an owner-run route. Gozar creates and deletes nothing at that address. An address in 100.64.0.0/10 (shared carrier-grade NAT space) has reach `unknown`, not `internet`.
