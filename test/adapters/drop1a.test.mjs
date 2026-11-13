@@ -38,7 +38,8 @@ test('machine-derived Funnel preflight reaches durable intent without fabricated
   assert.equal(output.effects[0]?.kind, 'persist', JSON.stringify(output.snapshot));
   assert.equal(output.effects[0].record.bindings.port.value, 8443);
   assert.equal(output.effects[0].record.bindings.nodeId.value, observed.status.Self.ID);
-  assert.equal(output.effects[0].record.bindings.tailnetId.value, observed.status.CurrentTailnet.StableID);
+  assert.equal(output.effects[0].record.bindings.tailnetSuffix.value, observed.status.CurrentTailnet.MagicDNSSuffix);
+  assert.ok(!('tailnetId' in output.effects[0].record.bindings), 'no tailnet StableID: Tailscale 1.102.5 does not report it');
   assert.ok(!JSON.stringify(output.effects).includes('current-profile'));
   // No intent acknowledgement or execute effect is delivered by this read-only test.
   assert.equal(output.snapshot.resources.length, 0);

@@ -127,10 +127,6 @@
                 "type": "opaque-ref",
                 "pointer": "/Self/ID"
               },
-              "tailnetId": {
-                "type": "opaque-ref",
-                "pointer": "/CurrentTailnet/StableID"
-              },
               "tailnetSuffix": {
                 "type": "dns-name",
                 "pointer": "/CurrentTailnet/MagicDNSSuffix"
@@ -203,11 +199,6 @@
                   "op": "equals",
                   "pointer": "/Self/ID",
                   "value": "{nodeId}"
-                },
-                {
-                  "op": "equals",
-                  "pointer": "/CurrentTailnet/StableID",
-                  "value": "{tailnetId}"
                 },
                 {
                   "op": "equals",
@@ -430,11 +421,6 @@
                 },
                 {
                   "op": "equals",
-                  "pointer": "/CurrentTailnet/StableID",
-                  "value": "{tailnetId}"
-                },
-                {
-                  "op": "equals",
                   "pointer": "/CurrentTailnet/MagicDNSSuffix",
                   "value": "{tailnetSuffix}"
                 }
@@ -556,7 +542,6 @@
       "globalCleanup": false,
       "ownershipFields": [
         "nodeId",
-        "tailnetId",
         "tailnetSuffix",
         "dnsName",
         "port",
@@ -568,7 +553,7 @@
         "proxy": "{loopbackTarget}",
         "funnel": null
       },
-      "identitySemantics": "Current node plus current tailnet StableID and DNS suffix fingerprint; not a native Tailscale profile ID.",
+      "identitySemantics": "Current node (Self.ID) plus the tailnet DNS suffix fingerprint; not a native Tailscale profile ID. The tailnet StableID is not used: Tailscale 1.102.5 does not report it.",
       "cleanup": "Stop only immutable owned foreground process; watcher releases its own session; confirm exact port absent. Any remaining mapping is cleanup debt, never global reset/off."
     },
     "detection": {
@@ -660,11 +645,6 @@
         "type": "opaque-private-reference",
         "source": "status",
         "pointer": "/nodeId"
-      },
-      "tailnetId": {
-        "type": "opaque-private-reference",
-        "source": "status",
-        "pointer": "/tailnetId"
       },
       "tailnetSuffix": {
         "type": "dns-name",

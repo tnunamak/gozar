@@ -1,0 +1,63 @@
+{
+  "provenance": "Synthetic. Key structure of `tailscale status --json --peers=false` from Tailscale 1.102.5; every name, address and key is invented.",
+  "cliVersion": "1.102.5",
+  "status": {
+    "Version": "1.102.5-tfixture",
+    "TUN": true,
+    "BackendState": "Running",
+    "HaveNodeKey": true,
+    "AuthURL": "",
+    "TailscaleIPs": [
+      "100.64.0.10",
+      "fd7a:115c:a1e0::10"
+    ],
+    "Self": {
+      "ID": "fixture-node",
+      "NodeID": 1000000000000001,
+      "PublicKey": "nodekey:fixture",
+      "HostName": "device",
+      "DNSName": "device.example-tailnet.ts.net.",
+      "OS": "macOS",
+      "UserID": 1000000000000002,
+      "TailscaleIPs": [
+        "100.64.0.10",
+        "fd7a:115c:a1e0::10"
+      ],
+      "Online": true,
+      "ExitNode": false,
+      "ExitNodeOption": false,
+      "Active": false,
+      "InNetworkMap": true,
+      "InMagicSock": false,
+      "InEngine": false,
+      "KeyExpiry": "2030-01-01T00:00:00Z",
+      "CapMap": {
+        "funnel": null,
+        "https": null,
+        "https://tailscale.com/cap/funnel-ports?ports=443,8443,10000": null,
+        "https://tailscale.com/cap/file-sharing": null,
+        "tailnet-display-name": null
+      }
+    },
+    "Health": [],
+    "MagicDNSSuffix": "example-tailnet.ts.net",
+    "CurrentTailnet": {
+      "Name": "tailnet-name.example",
+      "MagicDNSSuffix": "example-tailnet.ts.net",
+      "MagicDNSEnabled": true
+    },
+    "CertDomains": [
+      "device.example-tailnet.ts.net"
+    ],
+    "ExtraRecords": null,
+    "Peer": null,
+    "User": {},
+    "ClientVersion": null
+  },
+  "occupiedPorts": [
+    443,
+    8444,
+    9443,
+    10000
+  ]
+}
