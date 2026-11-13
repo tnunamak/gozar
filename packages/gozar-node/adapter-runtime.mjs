@@ -155,10 +155,11 @@ const plainPointer = spec => typeof spec?.pointer === 'string' && spec.pointer !
 /**
  * The read-only steps a create recipe runs before it changes anything, as detect probes: each asks the parser
  * the exact question the session asks (the step's own assertion, and that every value it captures is present).
- * A step whose assertion needs a value captured by an earlier step cannot be asked alone, so it is left out.
+ * A step that asks nothing of the document, or whose assertion needs a value captured by an earlier step, is left out.
  */
 function preflightProbes(recipes) {
-  return (recipes.create?.before ?? []).filter(step => step.recipe?.kind === 'spawn' && !hasBinding(step.assert)).map(({ recipe, assert, captures }) => ({
+  const asks = step => step.assert !== undefined || Object.values(step.captures ?? {}).some(plainPointer);
+  return (recipes.create?.before ?? []).filter(step => step.recipe?.kind === 'spawn' && !hasBinding(step.assert) && asks(step)).map(({ recipe, assert, captures }) => ({
     ...recipe,
     parser: { ...recipe.parser, predicate: { op: 'all', items: [recipe.parser.predicate, ...(assert ? [assert] : []),
       ...Object.values(captures ?? {}).filter(plainPointer).map(({ pointer }) => ({ op: 'exists', pointer }))] } },

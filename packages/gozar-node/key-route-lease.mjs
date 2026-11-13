@@ -5,11 +5,19 @@ import { randomUUID, createHash } from 'node:crypto';
 import { atomicWrite, Journal, processIdentity } from './journal.mjs';
 import { cliCommand } from './cli-command.mjs';
 import { acquireProcessLock } from './process-lock.mjs';
+import { gozarError, instructionAction } from './error-normalizer.mjs';
 
 const leaseFile = (identitiesDirectory, keyFingerprint) =>
   join(identitiesDirectory, `.active-route-${keyFingerprint}.json`);
 const lockFile = (identitiesDirectory, keyFingerprint) =>
   join(identitiesDirectory, `.active-route-${keyFingerprint}.lock`);
+
+const stopAction = (port, home) => instructionAction('stop-key-holder', `Stop the route on port ${port}`, `Run: ${cliCommand('stop', port, home)}`);
+const heldError = (port, home) => gozarError('route_conflict', `The installation key is held by port ${port}. Stop it with ${cliCommand('stop', port, home)}.`, stopAction(port, home));
+const unconfirmedError = (port, home, cause) => gozarError('cleanup_debt',
+  `The installation key is still held by port ${port}; cleanup is not confirmed. Run ${cliCommand('stop', port, home)} and inspect that session.`, stopAction(port, home), cause);
+const unreadableError = home => gozarError('route_conflict', 'Installation key lease is unreadable; inspect its recorded session before retrying',
+  instructionAction('inspect-key-holder', 'Find the route that holds the installation key', `Run: ${cliCommand('status', undefined, home)}`));
 
 async function withLock(path, action) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -17,12 +25,12 @@ async function withLock(path, action) {
   try {
     const info = await anchor.stat();
     if (!info.isFile() || info.uid !== process.getuid() || (info.mode & 0o777) !== 0o600)
-      throw new Error('Installation key lease lock ownership or mode mismatch');
+      throw Object.assign(new Error('Installation key lease lock ownership or mode mismatch'), { code: 'unsafe_state_path' });
   } finally { await anchor.close(); }
   let release;
   try { release = await acquireProcessLock(path, { waitMs: 120_000 }); }
   catch (error) {
-    if (error.code === 'busy') throw new Error('Installation key lease lock is busy', { cause: error });
+    if (error.code === 'busy') throw gozarError('busy', 'Installation key lease lock is busy; try again in a moment', null, error);
     throw error;
   }
   try { return await action(); } finally { await release(); }
@@ -103,15 +111,10 @@ export async function acquireInstallKeyLease({ home, keyFingerprint, sessionDire
   return withLock(mutexPath, async () => {
     const previous = await readLease(recordPath);
     if (previous) {
-      if (!validLease(previous) || previous.keyFingerprint !== keyFingerprint)
-        throw new Error('Installation key lease is unreadable; inspect its recorded session before retrying');
-      if (await processIdentity(previous.pid) === previous.startIdentity) {
-        throw new Error(`The installation key is held by port ${previous.targetPort}. Stop it with ${stop(previous.targetPort)}.`);
-      }
+      if (!validLease(previous) || previous.keyFingerprint !== keyFingerprint) throw unreadableError(home);
+      if (await processIdentity(previous.pid) === previous.startIdentity) throw heldError(previous.targetPort, home);
       try { await recoverOwner({ ...previous, home }); }
-      catch (error) {
-        throw new Error(`The installation key is still held by port ${previous.targetPort}; cleanup is not confirmed. Run ${stop(previous.targetPort)} and inspect that session.`, { cause: error });
-      }
+      catch (error) { throw unconfirmedError(previous.targetPort, home, error); }
       await unlink(recordPath);
     }
 
@@ -146,16 +149,11 @@ export async function retireInstallKeyLease(home, sessionDirectory) {
   await withLock(lockFile(identitiesDirectory, keyFingerprint), async () => {
     const previous = await readLease(recordPath);
     if (!previous) return;
-    if (!validLease(previous) || previous.keyFingerprint !== keyFingerprint)
-      throw new Error('Installation key lease is unreadable; inspect its recorded session before retrying');
+    if (!validLease(previous) || previous.keyFingerprint !== keyFingerprint) throw unreadableError(home);
     if (resolve(previous.sessionDirectory) !== resolve(sessionDirectory)) return;
-    const stop = cliCommand('stop', previous.targetPort, home);
-    if (await processIdentity(previous.pid) === previous.startIdentity)
-      throw new Error(`The installation key is held by port ${previous.targetPort}. Stop it with ${stop}.`);
+    if (await processIdentity(previous.pid) === previous.startIdentity) throw heldError(previous.targetPort, home);
     try { await recoverOwner({ ...previous, home }); }
-    catch (error) {
-      throw new Error(`The installation key is still held by port ${previous.targetPort}; cleanup is not confirmed. Run ${stop} and inspect that session.`, { cause:error });
-    }
+    catch (error) { throw unconfirmedError(previous.targetPort, home, error); }
     await unlink(recordPath);
   });
 }

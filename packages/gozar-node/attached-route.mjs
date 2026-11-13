@@ -10,12 +10,13 @@
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { readFile, chmod, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { atomicWrite, processIdentity } from './journal.mjs';
 import { canonicalHome, trustedDirectory, privateDirectory, withExclusiveLock } from './service-state.mjs';
-import { gozarError, normalizeError } from './error-normalizer.mjs';
+import { gozarError, instructionAction, normalizeError } from './error-normalizer.mjs';
+import { cliCommand } from './cli-command.mjs';
 import { createGate } from './gate.mjs';
 import { projectAttached, projectSession, releasedView, checkRef } from './route-view.mjs';
 import { validateQuery, adapterRequest, readContextFor, loadRuntime } from './route-catalog.mjs';
@@ -406,12 +407,42 @@ export async function openSessionRoute(request, deps = {}) {
     if (!Number.isInteger(port) || port < 1 || port > 65_535) throw gozarError('invalid_input', 'target must end in :PORT');
     const redeemed = await withExclusiveLock(join(await attachedRoot(home), '.open.lock'), () => redeemApproval(request, { ...deps, adapters }), { waitSeconds: 30 });
     const directory = join(home, `port-${port}`);
-    const reply = await (deps.startSession ?? legacyStartSession)({ home, directory, adapterId: redeemed.adapter.id, port, lifetimeMs: request.usage.lifetimeMs,
+    let reply = await (deps.startSession ?? legacyStartSession)({ home, directory, adapterId: redeemed.adapter.id, port, lifetimeMs: request.usage.lifetimeMs,
       origin: request.origin ?? redeemed.plan.origin ?? null, requirements: request.requirements, wait: request.wait });
     const sessionId = reply.snapshot?.sessionId;
     const handle = { kind: 'session', id: sessionId ? `port-${port}:${sessionId}` : `port-${port}`, generation: 1 };
-    return projectSession(reply, { handle, properties: redeemed.adapter.definition.capabilities, now: (deps.now ?? Date.now)() });
+    const project = value => projectSession(value, { handle, properties: redeemed.adapter.definition.capabilities, now: (deps.now ?? Date.now)() });
+    // Like an attached route, a session returns when `wait` is met and fails, cleaned up, when it cannot be.
+    try {
+      const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
+      for (;;) {
+        const view = project(reply);
+        if (['lost', 'released', 'uncertain'].includes(view.state)) throw gozarError('provider_unavailable', 'The route could not be started');
+        if (request.wait === 'verified' ? view.state === 'usable' : view.origin !== null) return view;
+        if (Date.now() >= deadline) throw gozarError(view.state === 'unverified' ? 'verification_failed' : 'provider_unavailable',
+          view.state === 'unverified' ? 'The route did not pass verification in time' : 'The route did not start in time');
+        await new Promise(resolve => setTimeout(resolve, deps.pollMs ?? 250));
+        try { reply = await (deps.sessionStatus ?? (async () => (await import('./daemon.mjs')).control(directory, { type: 'status' }, 30_000)))(); }
+        catch (cause) { throw gozarError('provider_unavailable', 'The session controller stopped before the route was ready', null, cause); }
+      }
+    } catch (error) { throw await failedSessionStart(directory, error, deps); }
   } catch (error) { throw normalizeError(error); }
+}
+
+/**
+ * A session that did not reach `wait` must not keep running: stop it through the session's own path (which removes the
+ * provider state), then prove the controller process is gone. The reported error stays the original one unless cleanup is unconfirmed.
+ */
+async function failedSessionStart(directory, error, deps) {
+  let identity = null;
+  try { identity = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8')); } catch {}
+  let stopped = null, stopFailure = null;
+  try { stopped = await (deps.stopSession ?? (async () => (await import('./daemon.mjs')).stopSession(directory)))(); } catch (cause) { stopFailure = cause; }
+  const outcome = identity?.startIdentity ? await stopController({ pid: identity.pid, startIdentity: identity.startIdentity }) : { state: 'gone' };
+  const unconfirmed = stopFailure || stopped?.snapshot?.phase === 'cleanup-pending' || stopped?.localCleanupFailures?.length;
+  const stop = `Run: ${cliCommand('stop', Number(directory.slice(directory.lastIndexOf('-') + 1)), dirname(directory))}`;
+  return withCleanupOutcome(unconfirmed ? gozarError('cleanup_debt', 'The route failed to start and its cleanup is not confirmed; stop the session again',
+    instructionAction('stop-session', 'Stop the failed session', stop), error) : error, outcome);
 }
 
 // --- Detached controller entry ------------------------------------------------------------------

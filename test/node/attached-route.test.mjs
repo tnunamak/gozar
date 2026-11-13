@@ -193,7 +193,7 @@ test('openSessionRoute redeems the grant, takes the adapter from it, and project
   const q = query({ home, usage: { kind: 'session', lifetimeMs: 60_000 } });
   const { token } = await tokens.issue({ home, binding: tokens.consentBinding(q, home, 'disc-stub-b'), grant: grantFor('stub-b', q) });
   const request = { ...q, adapterId: 'ignored-adapter', approval: { candidateToken: token, disclosureRevision: 'disc-stub-b' }, wait: 'allocated' };
-  const startSession = async options => { started.push(options); return { snapshot: { sessionId: 'sess1', phase: 'ready', origin: 'https://example.invalid', expiresAtMs: Date.now() + 60_000 } }; };
+  const startSession = async options => { started.push(options); return { snapshot: { sessionId: 'sess1', phase: 'candidate-ready', candidate: 'https://example.invalid', expiresAtMs: Date.now() + 60_000 } }; };
   const view = await openSessionRoute(request, { adapters: [stubAdapter('stub-a'), stubAdapter('stub-b')], redeem: tokens.redeem, consentBinding: tokens.consentBinding, platform: 'linux', readContext, startSession });
   assertShape('RouteView', view);
   assert.equal(started.length, 1);

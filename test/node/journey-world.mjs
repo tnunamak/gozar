@@ -45,6 +45,11 @@ export function runner_(env) {
   };
 }
 
+// What `tailscale status --json` prints in the fake CLI: the structure a real status has, so the catalog's readiness probe passes.
+const tailscaleStatus = JSON.stringify({ BackendState: 'Running', Self: { ID: 'fixture-node', DNSName: 'device.example-tailnet.ts.net.',
+  CapMap: { funnel: null, https: null, 'https://tailscale.com/cap/funnel-ports?ports=443,8443,10000': null } },
+  CurrentTailnet: { MagicDNSSuffix: 'example-tailnet.ts.net', MagicDNSEnabled: true }, CertDomains: ['device.example-tailnet.ts.net'] });
+
 // --- The durable world: the real registry, a fake LocalAPI, an app and a loopback HTTPS ingress per port ------------
 
 export async function durableWorld({ root, certificate }, t) {
@@ -52,7 +57,7 @@ export async function durableWorld({ root, certificate }, t) {
   const bin = join(base, 'bin'), home = join(base, 'home'), socket = join(base, 'ts.sock'), cliLog = join(base, 'cli.log');
   await mkdir(bin, { mode: 0o700 }); await mkdir(home, { mode: 0o700 });
   // The catalog's read-only detect probe runs `tailscale status`; any other CLI call is a durable-path violation.
-  await writeFile(join(bin, 'tailscale'), `#!/bin/sh\nif [ "$1" = status ]; then echo '{"BackendState":"Running"}'; exit 0; fi\necho "$*" >> "${cliLog}"\nexit 97\n`); await chmod(join(bin, 'tailscale'), 0o755);
+  await writeFile(join(bin, 'tailscale'), `#!/bin/sh\nif [ "$1" = status ]; then echo '${tailscaleStatus}'; exit 0; fi\necho "$*" >> "${cliLog}"\nexit 97\n`); await chmod(join(bin, 'tailscale'), 0o755);
   const fake = await startFakeLocalApi(socket);
   t.after(() => fake.close());
   const state = fake.state;

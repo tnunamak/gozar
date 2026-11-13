@@ -2,6 +2,7 @@
 // A frozen code passes through. A source code the fixture maps (runtime/error-normalization.json, generated
 // from test/fixtures/route-contract.json errorNormalization) becomes its frozen target. Anything else is a
 // real Gozar fault: internal_error, with the original error kept on `cause` and never on the message.
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 const table = JSON.parse(readFileSync(new URL('../../runtime/error-normalization.json', import.meta.url), 'utf8'));
@@ -15,6 +16,12 @@ export function gozarError(code, message, nextAction = null, cause = undefined) 
   error.nextAction = nextAction;
   if (cause !== undefined) error.cause = cause;
   return error;
+}
+
+/** A step the user carries out themselves; Gozar changes nothing. The digest is over the whole body, so a changed command is a changed action. */
+export function instructionAction(id, label, instructions) {
+  const body = { id, kind: 'instructions', label, instructions, disclosure: { revision: 'gozar-local-1', text: 'Gozar changes nothing; you run the step yourself.', links: [] } };
+  return { ...body, digest: `sha256:${createHash('sha256').update(JSON.stringify(body)).digest('hex')}` };
 }
 
 const stateAction = () => ({ id: 'fix-state-permissions', kind: 'instructions', label: 'Fix the state directory permissions',
