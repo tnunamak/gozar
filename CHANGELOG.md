@@ -2,7 +2,7 @@
 
 ## 0.3.4
 
-- Suspend and close of a user-stopped durable route now report `stopped_by_user` where 0.3.3 reported `route_not_found`; release also reports `stopped_by_user` instead of silently reporting no removal.
+- Suspend of a user-stopped durable route now reports `stopped_by_user` where 0.3.3 reported `route_not_found`. Removing a route the user already stopped succeeds without a provider call; an interrupted stop finishes the normal compare-and-set removal.
 - An invalid owner-run query origin is named in the unmet setup entry's `actual` value, without throwing or adding error codes.
 - Closing a session gate twice returns the first close promise, so both calls finish.
 - A durable query with a target other than `127.0.0.1:PORT` fails with `invalid_input` before provider inspection.

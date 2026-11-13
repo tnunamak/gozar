@@ -1391,7 +1391,7 @@ test('41. S8 crashes before and after delete retain the receipt until confirmed;
   }
 });
 
-test('stopped durable suspend release and close refuse repeatedly without provider calls', async t => {
+test('stopped durable removal succeeds repeatedly without provider calls while suspend refuses', async t => {
   const w = await world(t);
   const created = await w.ensure();
   assert.equal(created.result.route.state, 'usable');
@@ -1400,10 +1400,20 @@ test('stopped durable suspend release and close refuse repeatedly without provid
   const before = providerState();
   const handle = { kind: 'durable', id: 'coordinator', generation: 1 };
   for (let repeat = 0; repeat < 2; repeat++) {
-    for (const operation of ['apiSuspend', 'apiClose', 'release']) {
-      const reply = await w.run(operation, { routeId: 'coordinator', handle, mode: 'remove' });
-      assert.equal(reply.error?.code, 'stopped_by_user', JSON.stringify(reply));
-    }
+    assert.equal((await w.run('apiSuspend', { handle })).error?.code, 'stopped_by_user');
+    const closed = await w.run('apiClose', { handle, mode: 'remove' });
+    assert.equal(closed.result?.state, 'released', JSON.stringify(closed));
+    assert.equal(closed.result.origin, null);
+    assert.equal(closed.result.published, null);
+    assert.deepEqual(closed.result.cleanup, { state: 'none' });
+    assertShape('RouteView', closed.result);
+    assert.deepEqual((await w.run('release', { routeId: 'coordinator', mode: 'remove' })).result,
+      { schemaVersion: 1, routeId: 'coordinator', removed: false, providerRemoved: false, cleanupDebt: null });
+    assert.equal((await w.run('ensure', w.request)).error?.code, 'stopped_by_user');
+    for (const mode of ['hand-back', 'dismiss'])
+      assert.equal((await w.run('release', { routeId: 'coordinator', mode })).error?.code, 'stopped_by_user');
+    for (const mode of ['hand-back', 'dismiss', 'suspend'])
+      assert.equal((await w.run('apiClose', { handle, mode })).error?.code, 'invalid_input');
   }
   assert.equal(providerState(), before);
   const missing = { ...handle, id: 'never-created' };
@@ -1416,17 +1426,36 @@ test('stopped durable suspend release and close refuse repeatedly without provid
   assert.equal((await w.run('release', { routeId: 'coordinator' })).result?.removed, false);
 });
 
-test('interrupted user stop refuses cleanup before status can read the provider', async t => {
-  const w = await world(t);
-  await w.ensure();
-  w.state.crash = 'before-apply';
-  assert.equal((await w.gozar('stop', '--route', 'coordinator')).signal, 'SIGKILL');
-  assert.equal((await w.records()).length, 1);
-  const reads = w.state.requests.length, writes = w.writes().length;
-  const handle = { kind: 'durable', id: 'coordinator', generation: 1 };
-  for (const operation of ['apiSuspend', 'apiClose', 'release']) {
-    assert.equal((await w.run(operation, { handle, routeId: 'coordinator', mode: 'remove' })).error?.code, 'stopped_by_user');
+test('interrupted user stop removal uses compare-and-set and preserves foreign rule debt', async t => {
+  for (const operation of ['apiClose', 'release']) for (const foreign of [false, true]) {
+    const w = await world(t);
+    await w.ensure();
+    w.state.crash = 'before-apply';
+    assert.equal((await w.gozar('stop', '--route', 'coordinator')).signal, 'SIGKILL');
+    assert.equal((await w.records()).length, 1);
+    const reads = w.state.requests.length, writes = w.writes().length;
+    const handle = { kind: 'durable', id: 'coordinator', generation: 1 };
+    for (const mode of ['hand-back', 'dismiss'])
+      assert.equal((await w.run('release', { routeId: 'coordinator', mode })).error?.code, 'stopped_by_user');
+    assert.equal((await w.run('apiSuspend', { handle })).error?.code, 'stopped_by_user');
+    assert.equal(w.state.requests.length, reads);
+    assert.equal(w.writes().length, writes);
+    if (foreign) w.edit(foreignRule(8443, 'http://127.0.0.1:9'));
+    const config = structuredClone(w.state.config);
+    const reply = await w.run(operation, { handle, routeId: 'coordinator', mode: 'remove' });
+    assert.equal(reply.error, undefined, JSON.stringify(reply));
+    if (operation === 'apiClose') {
+      assert.equal(reply.result.state, foreign ? 'uncertain' : 'released');
+      assert.deepEqual(reply.result.cleanup, foreign ? { state: 'debt', message: 'rule-changed' } : { state: 'none' });
+      assertShape('RouteView', reply.result);
+    } else {
+      assert.deepEqual(reply.result, { schemaVersion: 1, routeId: 'coordinator', removed: !foreign,
+        providerRemoved: !foreign, cleanupDebt: foreign ? { reason: 'rule-changed', port: 8443 } : null });
+    }
+    assert.equal(w.writes().length, writes + (foreign ? 0 : 1));
+    if (foreign) assert.deepEqual(w.state.config, config);
+    else assert.equal(forwardTarget(w.state.config, dnsName, 8443), null);
+    assert.equal((await w.records()).length, foreign ? 1 : 0);
+    assert.equal((await w.run('ensure', w.request)).error?.code, 'stopped_by_user');
   }
-  assert.equal(w.state.requests.length, reads);
-  assert.equal(w.writes().length, writes);
 });

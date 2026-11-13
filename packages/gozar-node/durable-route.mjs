@@ -199,12 +199,12 @@ async function stopped(dir, routeId) {
 async function refuseUserStop(dir, routeId) {
   if (await stopped(dir, routeId)) throw refuse('stopped_by_user', 'The user stopped this route');
 }
-// Close checks before reading provider status, including an interrupted user stop with a record left behind.
-export async function checkUserStop({ home = defaultHome(), routeId }) {
+// A missing record can still have a user-stop tombstone after completed removal.
+export async function isUserStopped({ home = defaultHome(), routeId }) {
   routeIdValue(routeId);
   let dir;
-  try { dir = await routesDirectory(home, false); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
-  await refuseUserStop(dir, routeId);
+  try { dir = await routesDirectory(home, false); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  return stopped(dir, routeId);
 }
 async function clearStop(dir, routeId) { if (await removeFile(tombstonePath(dir, routeId))) await syncDirectory(dir); }
 async function allRecords(dir) {
@@ -647,7 +647,7 @@ export async function releaseRoute({ routeId, mode = 'remove', home = defaultHom
   routeId = routeIdValue(routeId);
   if (!['remove', 'hand-back', 'dismiss'].includes(mode)) throw refuse('invalid_input', 'mode must be remove, hand-back or dismiss');
   return reserved(home, async dir => {
-    await refuseUserStop(dir, routeId);
+    if (mode !== 'remove') await refuseUserStop(dir, routeId);
     const record = await load(dir, routeId);
     // A handle names one generation of a route; a replaced route is not ended by a stale handle.
     if (expectedGeneration !== undefined && record && record.generation !== expectedGeneration) throw refuse('route_conflict', 'The route was replaced; this handle is stale');
