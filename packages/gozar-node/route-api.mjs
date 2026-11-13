@@ -32,7 +32,7 @@ export function createRouteApi(deps = {}) {
   /** A durable engine reply is a record view; its RouteView needs the adapter's declared properties. */
   async function durableView(reply) {
     const handle = { kind: 'durable', id: reply.routeId, generation: reply.generation };
-    return projectDurable(reply, { handle, ...await propertiesFor(reply.adapterId, { adapters: await adapters() }) });
+    return projectDurable(reply, { handle, ...await propertiesFor(reply.adapterId, { adapters: await adapters() }, 'durable') });
   }
 
   /**

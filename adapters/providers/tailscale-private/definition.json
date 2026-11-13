@@ -5,6 +5,16 @@
     "id": "tailscale-private",
     "label": "Tailscale private Serve",
     "needs": "Needs Tailscale installed and signed in on this computer and port 9444 or 9445 free. Only devices on your tailnet can reach it.",
+    "byUsage": {
+      "durable": {
+        "needs": "Needs Tailscale installed and signed in on this computer and port 443, 8443 or 10000 free. Only devices on your tailnet can reach it.",
+        "ports": [
+          443,
+          8443,
+          10000
+        ]
+      }
+    },
     "capabilities": {
       "reach": "tailnet",
       "transport": "https",

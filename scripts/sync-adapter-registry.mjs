@@ -6,6 +6,7 @@
 // consumer and no core code reads provider recipes:
 //   capabilities.address.ports  the plan's port binding `candidates`, in the order Gozar tries them, else null
 //   capabilities.proof          the plan's `validation` block: where Gozar checks from, and which checks it makes
+//   byUsage.durable.ports       the plan's durable recipe `candidatePorts`, in the order the durable engine tries them
 // and the definition's `ownership` ('gozar-owned', or 'external-owned' when the owner keeps the route), which is how
 // core tells an owner-run address from a route Gozar creates, so no provider id appears in core.
 // A provider that has no wrapped plan declares both in its own definition and is left alone.
@@ -37,6 +38,12 @@ export function deriveProof(wrapped, transport) {
   return { vantage, checks };
 }
 
+/** The public ports a durable recipe may take, in the order the durable engine tries them, or undefined without one. */
+export function deriveDurablePorts(wrapped) {
+  const candidates = wrapped?.durableRecipe?.candidatePorts;
+  return Array.isArray(candidates) && candidates.length && candidates.every(Number.isInteger) ? [...candidates] : undefined;
+}
+
 /** The route's owner, in the words RouteView.ownership uses. */
 export const deriveOwnership = wrapped => (wrapped?.ownership === 'external-owned' ? 'external-owned' : 'gozar-owned');
 
@@ -64,10 +71,17 @@ async function sync() {
     const capabilities = data.adapter?.capabilities;
     if (!capabilities?.address) continue;
     const ports = derivePorts(wrapped), proof = deriveProof(wrapped, capabilities.transport), ownership = deriveOwnership(wrapped);
-    if (JSON.stringify(capabilities.address.ports) === JSON.stringify(ports) && JSON.stringify(capabilities.proof) === JSON.stringify(proof) && data.adapter.ownership === ownership) continue;
-    if (check) { problems.push(`${provider.id}: ports, proof or ownership differ from the wrapped plan definition; run node scripts/sync-adapter-registry.mjs`); continue; }
+    const durablePorts = deriveDurablePorts(wrapped);
+    if (JSON.stringify(capabilities.address.ports) === JSON.stringify(ports) && JSON.stringify(capabilities.proof) === JSON.stringify(proof) && data.adapter.ownership === ownership &&
+        JSON.stringify(data.adapter.byUsage?.durable?.ports) === JSON.stringify(durablePorts)) continue;
+    if (check) { problems.push(`${provider.id}: ports, durable ports, proof or ownership differ from the wrapped plan definition; run node scripts/sync-adapter-registry.mjs`); continue; }
     capabilities.address = { ...capabilities.address, ports };
     capabilities.proof = proof;
+    if (durablePorts) data.adapter.byUsage = { ...data.adapter.byUsage, durable: { ...data.adapter.byUsage?.durable, ports: durablePorts } };
+    else if (data.adapter.byUsage?.durable) {
+      const { ports: _drop, ...rest } = data.adapter.byUsage.durable;
+      data.adapter.byUsage = { ...data.adapter.byUsage, durable: rest };
+    }
     const { needs, ...rest } = data.adapter, ordered = {};
     for (const [key, value] of Object.entries(rest)) { ordered[key] = value; if (key === 'label') { if (needs !== undefined) ordered.needs = needs; } }
     data.adapter = ordered;

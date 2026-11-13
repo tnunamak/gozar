@@ -6,7 +6,7 @@ import { canonicalHome } from './service-state.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
-import { checksFor, completeProperties } from './route-view.mjs';
+import { checksFor, completeProperties, needsFor } from './route-view.mjs';
 
 const sha = text => createHash('sha256').update(text).digest('hex');
 /** Stable opaque handles for an adapter; apps store the preferenceRef and show the label. */
@@ -145,8 +145,9 @@ async function collect(query, deps) {
 
   const candidates = await Promise.all(inspections.map(async inspection => {
     const { adapter, state, actions } = inspection, definition = adapter.definition;
-    // The proof lists the checks Gozar makes for this request, so the stream check appears only when the request needs SSE.
-    const declared = completeProperties(inspection.properties);
+    // The ports and needs are those of the usage kind asked for. The proof lists the checks Gozar makes for this request,
+    // so the stream check appears only when the request needs SSE.
+    const declared = completeProperties(inspection.properties, definition, query.usage.kind);
     const properties = { ...declared, proof: { ...declared.proof, checks: checksFor(declared.proof.checks, { sse: query.requirements.protocols.includes('sse') }) } };
     let setupState = state, grant = null;
     const unmet = [];
@@ -176,7 +177,7 @@ async function collect(query, deps) {
 
     const eligible = unmet.length === 0;
     const candidate = { providerId: adapter.id, name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
-      display: { label: definition.label, description: describe(definition, properties), needs: definition.needs ?? '' }, properties,
+      display: { label: definition.label, description: describe(definition, properties), needs: needsFor(definition, query.usage.kind) }, properties,
       setup: { state: setupState, actions: setupState === 'action-required' ? actions : [] }, disclosure: definition.disclosure,
       candidateToken: null, expiresAt: null };
     if (eligible && setupState === 'ready' && grant) {

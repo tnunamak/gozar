@@ -5,6 +5,16 @@
     "id": "tailscale-funnel",
     "label": "Tailscale Funnel",
     "needs": "Needs Tailscale installed and signed in on this computer, with Funnel allowed on your tailnet and port 8443 or 10000 free.",
+    "byUsage": {
+      "durable": {
+        "needs": "Needs Tailscale installed and signed in on this computer, with Funnel allowed on your tailnet and port 443, 8443 or 10000 free.",
+        "ports": [
+          443,
+          8443,
+          10000
+        ]
+      }
+    },
     "capabilities": {
       "reach": "internet",
       "transport": "https",

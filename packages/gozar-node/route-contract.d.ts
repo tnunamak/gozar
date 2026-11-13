@@ -86,7 +86,7 @@ export type Properties = {
   };
   address: {
     stability: 'stable' | 'ephemeral' | 'unknown'; scope: string; conditions: string[];
-    /** The public ports the route may use, in the order Gozar tries them; null when the provider assigns the port. */
+    /** The public ports a route of the queried (or viewed) usage kind may use, in the order Gozar tries them; null when the provider assigns the port. */
     ports: number[] | null;
   };
   cost: { kind: 'free' | 'paid' | 'unknown'; summary: string; currency: string | null; amount: number | null; period: string | null };
@@ -119,7 +119,7 @@ export type Candidate = {
   unmet: { requirement: UnmetRequirement; actual: unknown; reasonCode: UnmetReason }[];
   display: {
     label: string; description: string;
-    /** One static sentence: what this route needs on this computer. Shown whether or not setup is ready. */
+    /** One static sentence: what a route of the queried usage kind needs on this computer, naming its ports. Shown whether or not setup is ready. */
     needs: string;
   };
   properties: Properties;

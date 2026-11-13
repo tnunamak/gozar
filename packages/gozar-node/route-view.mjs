@@ -28,9 +28,22 @@ export const unknownProperties = () => ({
   proof: { vantage: 'none', checks: [] },
 });
 
-/** A definition may leave out the two facts that came after 0.2; the consumer shape always carries them, saying "none" when unknown. */
-export const completeProperties = properties => ({ ...properties,
-  address: { ...properties.address, ports: properties.address.ports ?? null }, proof: properties.proof ?? { vantage: 'none', checks: [] } });
+/**
+ * A definition's `byUsage` entry for one usage kind replaces the ports and the needs line it declares at the top level,
+ * because a usage kind can take its slot from a different list (a durable route uses the durable engine's ports).
+ */
+const usageEntry = (definition, kind) => definition?.byUsage?.[kind] ?? {};
+export const needsFor = (definition, kind) => usageEntry(definition, kind).needs ?? definition.needs ?? '';
+
+/**
+ * A definition may leave out the two facts that came after 0.2; the consumer shape always carries them, saying "none" when
+ * unknown. With the definition and a usage kind, the ports are that kind's.
+ */
+export const completeProperties = (properties, definition, kind) => {
+  const own = usageEntry(definition, kind);
+  const ports = Object.hasOwn(own, 'ports') ? own.ports : properties.address.ports ?? null;
+  return { ...properties, address: { ...properties.address, ports }, proof: properties.proof ?? { vantage: 'none', checks: [] } };
+};
 
 /**
  * The declared checks that run for one request: the stream check only when the request needs SSE, and the TLS check
@@ -107,10 +120,11 @@ export function releasedView(last, handle) {
 
 // --- Dispatch -----------------------------------------------------------------------------------
 
-export async function propertiesFor(adapterId, deps) {
+/** The declared properties of one adapter for one usage kind ('durable' or 'session'), or unknown ones when the adapter is gone. */
+export async function propertiesFor(adapterId, deps, kind) {
   const adapters = deps.adapters ?? await (await import('./adapter-runtime.mjs')).loadAdapters();
   const adapter = adapters.find(item => item.id === adapterId);
-  return adapter ? { properties: completeProperties(adapter.definition.capabilities) } : { properties: unknownProperties() };
+  return adapter ? { properties: completeProperties(adapter.definition.capabilities, adapter.definition, kind) } : { properties: unknownProperties() };
 }
 
 const defaults = {
@@ -166,11 +180,11 @@ export async function routeStatus(request, deps = {}) {
       case 'durable': {
         const reply = await (deps.durable ?? defaults.durable).status(request, { adapters: deps.adapters });
         if (Number.isInteger(reply.generation) && reply.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
-        return projectDurable(reply, { handle, now, ...await propertiesFor(reply.adapterId, deps) });
+        return projectDurable(reply, { handle, now, ...await propertiesFor(reply.adapterId, deps, 'durable') });
       }
       case 'session': {
         const reply = await (deps.session ?? defaults.session).status(request);
-        return projectSession(reply, { handle, now, ...await propertiesFor(reply.snapshot?.adapterId, deps) });
+        return projectSession(reply, { handle, now, ...await propertiesFor(reply.snapshot?.adapterId, deps, 'session') });
       }
       case 'attached': return await (deps.attached ?? await defaults.attached()).attachedStatus(request, deps.attachedDeps);
       case 'external': return projectExternal(await (deps.external ?? defaults.external).status(request), { handle, now });

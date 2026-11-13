@@ -86,6 +86,7 @@ export function definitionErrors(definition) {
   const kindsDeclared = [...definition.supportedKinds].sort(), lifetimes = [...definition.capabilities.lifetimes].sort();
   if (new Set(kindsDeclared).size !== kindsDeclared.length) errors.push('supportedKinds has duplicates');
   if (!isDeepStrictEqual(kindsDeclared, lifetimes)) errors.push('capabilities.lifetimes must equal supportedKinds');
+  for (const kind of Object.keys(definition.byUsage ?? {})) if (!definition.supportedKinds.includes(kind)) errors.push(`byUsage.${kind} is not a supported kind`);
   return errors;
 }
 

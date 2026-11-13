@@ -4,15 +4,17 @@
 Apps never name a provider. They state requirements and Gozar's catalog returns the providers that meet them.
 This table lists what the registry ships. Each row is read from the provider's definition, so it is exactly
 what `catalogRoutes` reports. The Id column is the value `Query.providerId` takes. Ports are the public
-ports Gozar tries, in order. Proof is what Gozar checks before it publishes; the sse check runs only when the app asks for SSE.
+ports Gozar tries, in order; where a durable route tries other ports, they follow `durable:`, and the
+catalog reports them, with the durable Needs line, for a durable query.
+Proof is what Gozar checks before it publishes; the sse check runs only when the app asks for SSE.
 
 Gozar 0.2.0 supports Linux and macOS. On any other platform (for example Windows) every candidate answers
 `unsupported`.
 
 | Id | Name | Needs | Usage kinds | Reach | Address | Ports | Proof (vantage: checks) | Payload | SSE / streamable HTTP / OAuth DCR | Cost |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `tailscale-funnel` | Tailscale Funnel | Needs Tailscale installed and signed in on this computer, with Funnel allowed on your tailnet and port 8443 or 10000 free. | session, durable | internet | stable | 8443, 10000 | public: tls, nonce, sse | endpoint only | yes / yes / yes | Free on the Personal plan (up to 6 users); Funnel is available on all plans, with non-configurable bandwidth limits. |
-| `tailscale-private` | Tailscale private Serve | Needs Tailscale installed and signed in on this computer and port 9444 or 9445 free. Only devices on your tailnet can reach it. | session, durable | tailnet | stable | 9444, 9445 | tailnet: tls, nonce, sse | unknown | yes / yes / yes | Tailscale pricing is documented, but the Serve page does not say which plans include Serve. |
+| `tailscale-funnel` | Tailscale Funnel | Needs Tailscale installed and signed in on this computer, with Funnel allowed on your tailnet and port 8443 or 10000 free. durable: Needs Tailscale installed and signed in on this computer, with Funnel allowed on your tailnet and port 443, 8443 or 10000 free. | session, durable | internet | stable | 8443, 10000; durable: 443, 8443, 10000 | public: tls, nonce, sse | endpoint only | yes / yes / yes | Free on the Personal plan (up to 6 users); Funnel is available on all plans, with non-configurable bandwidth limits. |
+| `tailscale-private` | Tailscale private Serve | Needs Tailscale installed and signed in on this computer and port 9444 or 9445 free. Only devices on your tailnet can reach it. durable: Needs Tailscale installed and signed in on this computer and port 443, 8443 or 10000 free. Only devices on your tailnet can reach it. | session, durable | tailnet | stable | 9444, 9445; durable: 443, 8443, 10000 | tailnet: tls, nonce, sse | unknown | yes / yes / yes | Tailscale pricing is documented, but the Serve page does not say which plans include Serve. |
 | `localhost-run` | localhost.run trial | Needs the ssh command on this computer and outbound internet access. No account is needed. | session | internet | ephemeral | provider assigns | public: tls, nonce, sse | provider can read | yes / yes / no | The free tier costs nothing and needs no signup; its domains change regularly and have a speed limit. |
 | `lan` | Local network | Needs a network address on this computer that other devices on the same network can reach. Traffic is not encrypted. | session | lan | unknown | provider assigns | lan: nonce, sse | endpoint only | yes / yes / no | Gozar charges nothing and there is no provider; the owned local forwarder uses your own network. |
 | `own-address` | Your own HTTPS address | Needs an HTTPS address that you run yourself and that forwards to this service. | session, durable | unknown | stable | provider assigns | public: tls, nonce, sse | unknown | yes / yes / yes | Gozar charges nothing; your own domain, hosting and certificate cost whatever you pay for them. |

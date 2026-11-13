@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+0.3.0 was never published to npm. Its changes below ship first in 0.3.1, with this fix.
+
+### Fixed
+
+- **A durable candidate shows the ports a durable route uses.** For a durable query, a Tailscale candidate listed the ports a session tries (Funnel 8443 and 10000, private Serve 9444 and 9445), and its `display.needs` named them. A durable route takes the first free port of 443, 8443 and 10000, so an app showed the user the wrong ports, and the wrong port to free. A candidate's `address.ports` and `display.needs` are now those of the usage kind the query asks for, and a durable route's `RouteView` reports the durable ports. A session candidate is unchanged. A provider definition states its per-kind ports and needs in an optional `byUsage` entry; the registry sync takes the durable ports from the durable recipe, so they cannot drift from the ports the engine tries.
+
 ## 0.3.0
 
 ### Added
