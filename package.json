@@ -1,6 +1,6 @@
 {
   "name": "@tnunamak/gozar",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Give a local MCP server an address its client can reach",
   "type": "module",
   "exports": {
