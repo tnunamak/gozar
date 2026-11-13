@@ -13,7 +13,8 @@ export interface ConfigurationSnapshot {revision:string;scopeId:string;values:Re
 export interface ConfigurationRequest {home:string;owner?:string;providerId:string;expectedConfigurationRevision:string;draftId?:string}
 export interface ConfigurationDraft {draftId:string;scopeId:string;baseRevision:string;configuration:ConfigurationSnapshot}
 export interface HostEmbeddingMethods {
- storeSecret(request:ConfigurationRequest&{inputId:string;scopeId:string;bytes:Uint8Array}):Promise<{handle:string}>;
+ storeSecret(request:ConfigurationRequest&{inputId:string;scopeId:string;bytes:Uint8Array}):Promise<{handle:string;configurationRevision:string;scopeId:string}>;
+ clearConfigurationInput(request:ConfigurationRequest&{draftId:string;inputId:string;approval:{kind:'setup';digest:string;disclosureRevision:string;consentFactsDigest:string}}):Promise<ConfigurationSnapshot>;
  beginConfigurationDraft(request:ConfigurationRequest):Promise<ConfigurationDraft>;
  commitConfigurationDraft(request:ConfigurationRequest&{draftId:string}):Promise<ConfigurationSnapshot>;
  discardConfigurationDraft(request:{home:string;owner?:string;providerId:string;draftId:string}):Promise<{discarded:boolean}>;

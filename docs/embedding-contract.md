@@ -66,3 +66,45 @@ states, no invariant violations. The configuration test replays the discard path
 and checks that the applied credential still resolves. The model abstracts
 backend crashes, filesystem durability and multiple controllers; tests cover
 those concrete boundaries separately where stated.
+
+The initial capability vocabulary is `installer.execute`, `privilege.elevate`,
+`secrets.backend`, `runtime.attached` and `runtime.durable`; additional IDs are
+open strings. An undeclared required capability is unknown with reason
+`host-capability-undeclared` and cannot authorize execution. An explicit false
+capability is denied, which is distinct from missing software.
+
+For the default file backend only, the first ownerless configuration read imports
+legacy private setup references and text without copying credential bytes. Legacy
+records have no owner field: assigning them to a named owner requires explicit
+migration and returns `configuration_migration_required`. Custom backends never
+import or fall back to legacy files. After import, use the configured factory for
+subsequent edits; mixing legacy setup writers with the new revision API is not a
+supported synchronization mechanism.
+
+The broker optionally accepts a host `dispatchEffect` callback and exposes
+`proxy.dispatchEffect({kind,operation,input})` for the public testing factory's
+exact fixture handlers. Without an explicitly supplied handler it returns
+`unsupported`. Awaiting connection includes a token/boot authentication handshake.
+
+## Draft input removal and controller incarnations
+
+`clearConfigurationInput({home,providerId,draftId,inputId,
+expectedConfigurationRevision,approval})` accepts the offered generic `clear-input`
+action's setup approval. It advances only the draft revision and removes only
+that input's reference. Commit after affected runtimes close, then discard the
+previously retained handle. Clearing never deletes backend bytes. Applied config
+and other draft references continue to block secret deletion.
+
+Handle intake provenance stays immutable in the private state. Each current
+configuration/draft binding authorizes that reference at its current revision;
+setup carries unchanged references forward and commit promotes draft references.
+`storeSecret` returns `handle`, `configurationRevision` and `scopeId` without
+advancing the revision. Read-only setup and approved artifact installation do not
+advance configuration. Other applied mutations refuse live/starting/uncertain use.
+
+The trusted supervisor registers each replacement controller through the broker's
+`registerController({identity})` before bootstrap. It revokes prior connections
+and control tokens before returning the new descriptor. Omitting identity creates
+a fresh boot ID for the stable host instance. Explicit identity must name that
+same instance and a new boot. The controller must use this returned boot for its
+proof subject; factory lifetime does not establish controller incarnation.
