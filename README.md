@@ -32,7 +32,7 @@ The examples below use npx with an explicit package, so they do not require a gl
 
 The npm package includes the compiled WASM core and JavaScript bindings. You do not need Rust or wasm-bindgen to use it.
 
-Providers have their own prerequisites: localhost.run needs OpenSSH; Tailscale needs a signed-in client and permission for the selected route. The stable tunnl.gg key lease and adding or removing service-route records need `flock`.
+Providers have their own prerequisites: localhost.run needs OpenSSH; Tailscale needs a signed-in client and permission for the selected route.
 
 ## Share a local service
 
@@ -79,7 +79,7 @@ npx --package=@tnunamak/gozar@0.2.0 gozar service status --origin https://servic
 npx --package=@tnunamak/gozar@0.2.0 gozar service remove --origin https://service.example --json
 ```
 
-Replace the example origin and target. The target port must be the port your backend actually receives; the reverse proxy must preserve the public Host header. A saved record is not a passing verification result: read the returned status. Each status invocation probes afresh. Removing the record removes only Gozar metadata; your service, DNS and proxy continue running. `flock` is needed when adding or removing records.
+Replace the example origin and target. The target port must be the port your backend actually receives; the reverse proxy must preserve the public Host header. A saved record is not a passing verification result: read the returned status. Each status invocation probes afresh. Removing the record removes only Gozar metadata; your service, DNS and proxy continue running.
 
 ## Route by requirement
 

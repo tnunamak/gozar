@@ -1,6 +1,6 @@
 # Existing service routes
 
-A service route records an existing HTTPS origin and its fixed HTTP target. Use Linux or macOS with Node.js 22.13 or newer; adding or removing records also requires `flock`. Windows answers `unsupported`. You manage the service, reverse proxy, TLS and startup. Gozar starts no listener or daemon, forwards no traffic and changes no ingress. Records survive controller exit and reboot and have no Gozar expiry. Service availability still depends on your own supervisors. Each status call checks the route again rather than restoring saved readiness.
+A service route records an existing HTTPS origin and its fixed HTTP target. Use Linux or macOS with Node.js 22.13 or newer. Windows answers `unsupported`. You manage the service, reverse proxy, TLS and startup. Gozar starts no listener or daemon, forwards no traffic and changes no ingress. Records survive controller exit and reboot and have no Gozar expiry. Service availability still depends on your own supervisors. Each status call checks the route again rather than restoring saved readiness.
 
 The commands below assume a global `gozar` executable. If you installed the package locally or want a one-off command, replace `gozar` with `npx --package=@tnunamak/gozar@0.2.0 gozar`.
 
@@ -100,7 +100,7 @@ A durable route is a Tailscale Funnel or Serve listener that Gozar creates, keep
 
 An app asks for a durable route by requirement. It never names a provider. Gozar's catalog returns the providers that meet the requirement, and the app passes back the approval of the one the user chose.
 
-Requirements: Linux or macOS, Node.js 22.13 or newer, `flock`, and tailscaled with its LocalAPI socket that the invoking user may write (on Linux, `sudo tailscale set --operator=$USER`). Set `GOZAR_TAILSCALED_SOCKET` for a non-default socket. Gozar changes the serve config only through the LocalAPI with ETag compare-and-set, never through the `tailscale` CLI, and never writes the config without `If-Match`. Windows answers `unsupported`.
+Requirements: Linux or macOS, Node.js 22.13 or newer, and tailscaled with its LocalAPI socket that the invoking user may write (on Linux, `sudo tailscale set --operator=$USER`). On macOS Gozar supports the open-source tailscaled (for example from Homebrew), whose socket is `/var/run/tailscaled.socket`; the Mac App Store and standalone Tailscale apps expose the LocalAPI differently and answer `provider_unavailable` in 0.2.0. Set `GOZAR_TAILSCALED_SOCKET` for a non-default socket. Gozar changes the serve config only through the LocalAPI with ETag compare-and-set, never through the `tailscale` CLI, and never writes the config without `If-Match`. Windows answers `unsupported`.
 
 **What it exposes.** A durable route is a standing forward from the public origin to `127.0.0.1:PORT`. It forwards to whatever listens on that port, whether or not the app that asked for it is running. Use a port you keep for the route. Show the user the candidate's `disclosure.text` before you pass an approval. `gozar status` shows the same facts afterwards.
 

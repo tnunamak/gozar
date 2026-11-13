@@ -91,8 +91,9 @@ export type Candidate = {
   display: { label: string; description: string };
   properties: Properties;
   /**
-   * On macOS every candidate has setup.state 'unsupported', eligible false and the unmet entry
-   * `{requirement:'platform', reasonCode:'unsupported_platform'}` (revision 3).
+   * On a platform Gozar does not support (anything but Linux and macOS in 0.2.0), every candidate has
+   * setup.state 'unsupported', eligible false and the unmet entry
+   * `{requirement:'platform', reasonCode:'unsupported_platform'}` (revision 3; amendment 3).
    */
   setup: { state: 'ready' | 'action-required' | 'unsupported' | 'unknown'; actions: Action[] };
   disclosure: Disclosure;
