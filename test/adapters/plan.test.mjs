@@ -291,7 +291,7 @@ for (const change of ['handler', 'node', 'tailnet', 'continuity']) {
       ...(change === 'continuity' ? { continuityPatch: { continuous: false } } : {}),
       editObservation: (raw, effect) => {
         if (change === 'node' && effect.stepId === 'identity') raw.Self.ID = 'different-node';
-        if (change === 'tailnet' && effect.stepId === 'identity') raw.CurrentTailnet.StableID = 'different-tailnet';
+        if (change === 'tailnet' && effect.stepId === 'identity') raw.CurrentTailnet.MagicDNSSuffix = 'different-tailnet.ts.net';
         if (change === 'handler' && effect.stage === 'after') { raw.TCP['8443'] = { HTTPS: true }; }
       }
     });
@@ -368,7 +368,7 @@ for (const [name, editObservation] of [
   ['HTTPS capability absent', (raw, effect) => { if (effect.stepId === 'status') delete raw.Self.CapMap.https; }],
   ['MagicDNS disabled', (raw, effect) => { if (effect.stepId === 'status') raw.CurrentTailnet.MagicDNSEnabled = false; }],
   ['certificate domain mismatches', (raw, effect) => { if (effect.stepId === 'permission') raw.CertDomains = ['unrelated.example.com']; }],
-  ['tailnet changes during permission check', (raw, effect) => { if (effect.stepId === 'permission') raw.CurrentTailnet.StableID = 'different-tailnet'; }],
+  ['tailnet changes during permission check', (raw, effect) => { if (effect.stepId === 'permission') raw.CurrentTailnet.MagicDNSSuffix = 'different-tailnet.ts.net'; }],
   ['public visibility on private listener', (raw, effect) => { if (effect.stage === 'after') raw.Foreground['owned-fixture'].AllowFunnel[`${effect.bindings.dnsName.value}:${effect.bindings.port.value}`] = true; }],
   ['extra handler on private listener', (raw, effect) => { if (effect.stage === 'after') raw.Foreground['owned-fixture'].Web[`${effect.bindings.dnsName.value}:${effect.bindings.port.value}`].Handlers['/other'] = { Proxy: 'http://127.0.0.1:7000' }; }],
   ['persistent duplicate on private listener', (raw, effect) => { if (effect.stage === 'after') raw.TCP[String(effect.bindings.port.value)] = { HTTPS: true }; }]

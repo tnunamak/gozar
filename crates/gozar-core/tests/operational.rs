@@ -215,7 +215,6 @@ fn changed_identity_and_unknown_continuity_block_cleanup() {
     );
     for pointer in [
         "/Self/ID",
-        "/CurrentTailnet/StableID",
         "/CurrentTailnet/MagicDNSSuffix",
     ] {
         let mut raw = f["rawStatus"].clone();

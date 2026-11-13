@@ -19,7 +19,7 @@ async function absentFixture(t) {
   const startIdentity = await processIdentity(child.pid), exited = once(child, 'exit');
   child.kill('SIGTERM'); await exited;
   const dnsName = 'device.example-tailnet.ts.net';
-  const bindings = Object.fromEntries(Object.entries({ port: 8443, dnsName, nodeId: 'fixture-node', tailnetId: 'fixture-tailnet', tailnetSuffix: 'example-tailnet.ts.net' }).map(([name, value]) => [name, { value }]));
+  const bindings = Object.fromEntries(Object.entries({ port: 8443, dnsName, nodeId: 'fixture-node', tailnetSuffix: 'example-tailnet.ts.net' }).map(([name, value]) => [name, { value }]));
   const resource = { id: 'recorded-child', sessionId: 'test', adapterId: 'tailscale-funnel', kind: 'process', pid: child.pid, startIdentity, continuityRef: 'fixture-continuity', nonce: 'fixture-nonce', bindings };
   const configPath = join(directory, 'provider.json'), auditPath = join(directory, 'audit.json');
   const program = join(directory, 'read-provider.mjs');
@@ -30,7 +30,7 @@ async function absentFixture(t) {
     parser: { kind: 'json-document', predicate: { op: 'exists', pointer: '' } } }, assert: assertion });
   const adapter = { id: 'tailscale-funnel', audience: 'public', ownership: 'owned', capabilities: {}, planVersion: 1, admission: { state: 'admitted', requiredFeatures: [] }, recipes: { remove: { kind: 'owned-process',
     before: [observe('identity', ['status', '--json', '--peers=false'], { op: 'all', items: [
-      { op: 'equals', pointer: '/Self/ID', value: '{nodeId}' }, { op: 'equals', pointer: '/CurrentTailnet/StableID', value: '{tailnetId}' }] })],
+      { op: 'equals', pointer: '/Self/ID', value: '{nodeId}' }] })],
     after: [observe('absent', ['serve', 'status', '--json'], { op: 'all', items: ['/TCP/{port}', '/Web/{dnsName}:{port}', '/Foreground/*/TCP/{port}', '/Foreground/*/Web/{dnsName}:{port}'].map(pointer => ({ op: 'not', predicate: { op: 'exists', pointer } })) })] } } };
   const driver = new EffectDriver({ journal, adapters: [adapter], sessionId: 'test' });
   return { driver, resource, config, configPath, auditPath, directory, journal, adapter };

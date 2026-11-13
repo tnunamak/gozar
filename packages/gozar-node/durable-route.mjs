@@ -10,7 +10,7 @@ import { readdir, readFile, unlink, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import net from 'node:net';
+import { portListening } from './target-check.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { atomicWrite, processIdentity } from './journal.mjs';
 import { trustedDirectory, canonicalHome, privateDirectory, readRecord, withExclusiveLock, verification, readChallenge,
@@ -273,14 +273,7 @@ async function reconcile(record, observed, { verify = true } = {}) {
 // Live check of what answers on the target right now, independent of the provider.
 async function targetCheck(record) {
   const port = targetPort(record.target);
-  const listening = await new Promise(resolve => {
-    const socket = net.createConnection({ host: '127.0.0.1', port });
-    const done = value => { socket.destroy(); resolve(value); };
-    socket.setTimeout(1000, () => done(true));
-    socket.once('connect', () => done(true));
-    socket.once('error', error => done(error.code !== 'ECONNREFUSED'));
-  });
-  if (!listening) return 'nothing listening';
+  if (!await portListening(port)) return 'nothing listening';
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 3000);
   try {

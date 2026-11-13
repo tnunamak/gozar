@@ -150,6 +150,22 @@ export function setDurableDepsForTest(deps) {
   return () => Object.assign(durableState, saved);
 }
 
+const hasBinding = value => /\{[A-Za-z]\w*\}/.test(JSON.stringify(value ?? null));
+const plainPointer = spec => typeof spec?.pointer === 'string' && spec.pointer !== '' && !spec.pointer.includes('*') && !hasBinding(spec) && spec.optional !== true && !['record', 'port-set'].includes(spec.type);
+/**
+ * The read-only steps a create recipe runs before it changes anything, as detect probes: each asks the parser
+ * the exact question the session asks (the step's own assertion, and that every value it captures is present).
+ * A step that asks nothing of the document, or whose assertion needs a value captured by an earlier step, is left out.
+ */
+function preflightProbes(recipes) {
+  const asks = step => step.assert !== undefined || Object.values(step.captures ?? {}).some(plainPointer);
+  return (recipes.create?.before ?? []).filter(step => step.recipe?.kind === 'spawn' && !hasBinding(step.assert) && asks(step)).map(({ recipe, assert, captures }) => ({
+    ...recipe,
+    parser: { ...recipe.parser, predicate: { op: 'all', items: [recipe.parser.predicate, ...(assert ? [assert] : []),
+      ...Object.values(captures ?? {}).filter(plainPointer).map(({ pointer }) => ({ op: 'exists', pointer }))] } },
+  }));
+}
+
 const toAction = (action, disclosure) => {
   const body = { id: action.id, kind: action.url ? 'open-url' : 'instructions', label: action.label, disclosure,
     ...(action.url ? { href: action.url } : { instructions: action.command ? `${action.reason} Run: ${action.command.join(' ')}` : action.reason }) };
@@ -223,7 +239,11 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
       if (externalOwned) return { state: 'ready', facts: { platform: os, detected: true, setupNeeded: false, externalOwned: true } };
       if (!recipes.detect) return { state: 'unknown', facts: { platform: os, detected: null, setupNeeded: false } };
       let result;
-      try { result = await ctx.probe(recipes.detect); } catch { return { state: 'unknown', facts: { platform: os, detected: null, setupNeeded: false } }; }
+      try {
+        result = await ctx.probe(recipes.detect);
+        // A session runs these read-only steps first. Readiness is their verdict, so the catalog cannot say `ready` for a route the session then refuses.
+        for (const probe of result?.ok === true ? preflightProbes(recipes) : []) if ((result = await ctx.probe(probe))?.ok !== true) break;
+      } catch { return { state: 'unknown', facts: { platform: os, detected: null, setupNeeded: false } }; }
       const detected = result?.ok === true;
       const setupNeeded = !detected && shown.length > 0;
       return { state: detected ? 'ready' : setupNeeded ? 'action-required' : 'unsupported', facts: { platform: os, detected, setupNeeded } };

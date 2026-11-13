@@ -18,6 +18,10 @@
 - `gozar status --route ID` and `gozar stop --route ID`. A user stop is sticky: the app cannot re-create or adopt the route until the user runs the new `gozar allow --route ID`.
 - Status shows each durable route as `owner-run`, with a live check of its local target.
 - Adapter definitions gain `addressStability`, `durableLifetime` and `idleTimeoutMs`.
+- A session started with `expose` now honours `wait`, like an attached route: `allocated` returns once an origin exists, `verified` only when the route is usable. A session that ends lost, released or uncertain, or times out, fails with `provider_unavailable` or `verification_failed`, and its daemon and provider state are stopped.
+- `gozar status` shows a live target check for each session (`listening` or `nothing listening`), as it does for durable routes. A dead target does not change the session state.
+- Tailscale sessions work on Tailscale 1.102.5: the node is identified by its node ID and tailnet DNS suffix, and the catalog says `ready` only when the session's own status checks pass. The Funnel disclosure names port 8443.
+- A second session that needs the installation key held by another route fails with `route_conflict` and a `nextAction` that carries the stop command, instead of `internal_error`.
 
 ### Breaking
 

@@ -22,7 +22,7 @@ for (const adapterId of ['localhost-run', 'tailscale-funnel', 'tailscale-private
     driver.adapters = [adapter]; driver.authorize(adapter.id);
     const gate = await createGate(1); t.after(() => gate.close()); driver.targetPort = gate.port;
     await prepareHost(driver, adapter, { gate, probeExecutor: { vantages: ['public'], verify: async () => { throw new Error('No live verifier in fixture'); } } });
-    const captured = { dnsName: 'node.fixture.example', nodeId: 'fixture-node', tailnetId: 'fixture-tailnet', tailnetSuffix: 'fixture.example' };
+    const captured = { dnsName: 'node.fixture.example', nodeId: 'fixture-node', tailnetSuffix: 'fixture.example' };
     const bindings = {};
     for (const [name, spec] of Object.entries(adapter.bindings)) {
       if (driver.host.bindings[name]) bindings[name] = driver.host.bindings[name];

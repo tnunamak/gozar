@@ -17,7 +17,10 @@ import { prepareHost, LOCAL_PLAN_FEATURES } from './host.mjs';
 import { loadCatalog } from './catalog.mjs';
 import { createGate, validateLifetimeMs } from './gate.mjs';
 import { loadCore } from './core.mjs';
+import { gozarError, instructionAction } from './error-normalizer.mjs';
 
+/** What a failed controller leaves for its starter: the message, and the contract code and next action when it has them. */
+export const failureRecord = error => ({ message: error.message, ...(typeof error.code === 'string' ? { code: error.code, nextAction: error.nextAction ?? null } : {}) });
 export const socketPath = directory => join(directory, 'control.sock');
 export async function control(directory, command, timeoutMs = 15_000) {
   const identity = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8'));
@@ -32,7 +35,7 @@ export async function control(directory, command, timeoutMs = 15_000) {
       output += chunk;
       if (output.length > 1_048_576) return finish(new Error('Controller response exceeds limit'));
       if (output.includes('\n')) {
-        try { const reply = JSON.parse(output.split('\n')[0]); reply.error ? finish(new Error(reply.error)) : finish(null, reply); }
+        try { const reply = JSON.parse(output.split('\n')[0]); reply.error ? finish(Object.assign(new Error(reply.error), reply.code ? { code: reply.code, nextAction: reply.nextAction ?? null } : {})) : finish(null, reply); }
         catch (error) { finish(error); }
       }
     });
@@ -54,13 +57,13 @@ export async function stopSession(directory) {
   const journal = new Journal(directory); await journal.load();
   const current = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8'));
   if (!identity?.startIdentity || current.pid !== identity.pid || current.startIdentity !== identity.startIdentity || current.nonce !== identity.nonce ||
-      !journal.value.state?.stopRequested || journal.value.state.sessionId !== reply.snapshot.sessionId) throw new Error('Controller changed during stop; inspect the recorded session and retry stop');
+      !journal.value.state?.stopRequested || journal.value.state.sessionId !== reply.snapshot.sessionId) throw gozarError('cleanup_debt', 'Controller changed during stop; inspect the recorded session and retry stop');
   if (await processIdentity(identity.pid) === identity.startIdentity) {
     try { process.kill(identity.pid, 'SIGTERM'); }
     catch (error) { if (error.code !== 'ESRCH') throw error; }
     const deadline = Date.now() + 10_000;
     while (await processIdentity(identity.pid) === identity.startIdentity) {
-      if (Date.now() >= deadline) throw new Error('Stopped controller has not exited; inspect the recorded controller identity and retry stop');
+      if (Date.now() >= deadline) throw gozarError('cleanup_debt', 'Stopped controller has not exited; inspect the recorded controller identity and retry stop');
       await new Promise(resolve => setTimeout(resolve, 25));
     }
   }
@@ -84,7 +87,7 @@ export async function launch(directory, configuration, executable, options = {})
   catch (error) {
     if (error.code !== 'EEXIST') throw error;
     const previous = JSON.parse(await readFile(lockPath, 'utf8'));
-    if (await processIdentity(previous.pid) === previous.startIdentity) throw new Error('Session is starting; retry status shortly');
+    if (await processIdentity(previous.pid) === previous.startIdentity) throw gozarError('busy', 'Session is starting; retry status shortly');
     await unlink(lockPath); lock = await open(lockPath, 'wx', 0o600);
   }
   await lock.writeFile(JSON.stringify({ pid: process.pid, startIdentity: await processIdentity(process.pid) }));
@@ -107,12 +110,16 @@ export async function launch(directory, configuration, executable, options = {})
           if (!await controllerAlive(record, { identity })) {
             let failure;
             try { failure = JSON.parse(await readFile(join(directory, 'failure.json'), 'utf8')); } catch {}
-            throw new Error(failure?.message ?? 'Controller exited before startup completed');
+            throw failure?.message ? Object.assign(new Error(failure.message), { code: failure.code, nextAction: failure.nextAction ?? null })
+              : gozarError('provider_unavailable', 'Controller exited before startup completed');
           }
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
-      throw new Error(`Controller startup still pending; run ${cliCommand('status', configuration.targetPort, dirname(directory))} before retrying expose`);
+      {
+        const status = cliCommand('status', configuration.targetPort, dirname(directory));
+        throw gozarError('provider_unavailable', `Controller startup still pending; run ${status} before retrying expose`, instructionAction('check-session', 'Check the session', `Run: ${status}`));
+      }
     } catch (error) {
       if (!record) record = { pid: child.pid, startIdentity: null, child };
       throw withCleanupOutcome(error, await stopController(record, { identity, kill: options.kill, graceMs: options.graceMs }));
@@ -130,18 +137,19 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   // Establish exclusive ownership before inspecting or cleaning a previous session.
   try {
     const prior = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8'));
-    if (await processIdentity(prior.pid) === prior.startIdentity) throw new Error('Existing controller is still running');
+    if (await processIdentity(prior.pid) === prior.startIdentity) throw gozarError('busy', 'Existing controller is still running');
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const stopNext = () => instructionAction('stop-session', `Stop the session on port ${config.targetPort}`, `Run: ${cliCommand('stop', config.targetPort, dirname(directory))}`);
   await retireInstallKeyLease(dirname(directory), directory);
   await journal.load();
   if (journal.value.state && journal.value.snapshot?.phase !== 'stopped') {
     const recovered = await recoverStop(directory);
     if (recovered.snapshot.phase !== 'stopped' || recovered.localCleanupFailures?.length) {
-      throw new Error('Previous session has unresolved cleanup. Run stop; inspect the journal path.');
+      throw gozarError('cleanup_debt', 'Previous session has unresolved cleanup. Run stop; inspect the journal path.', stopNext());
     }
     await journal.load();
   }
-  if (Object.keys(journal.value.owned).length) throw new Error('Cleanup remains pending; stop the recorded session before restarting');
+  if (Object.keys(journal.value.owned).length) throw gozarError('cleanup_debt', 'Cleanup remains pending; stop the recorded session before restarting', stopNext());
   let controller;
   let initializedDone = false;
   let initializationError;
@@ -206,7 +214,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   // Only remove a stale socket after proving the prior daemon identity is gone.
   try {
     const prior = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8'));
-    if (await processIdentity(prior.pid) === prior.startIdentity) throw new Error('Existing controller is still running');
+    if (await processIdentity(prior.pid) === prior.startIdentity) throw gozarError('busy', 'Existing controller is still running');
     await unlink(socketPath(directory)).catch(error => { if (error.code !== 'ENOENT') throw error; });
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   let closing = false;
@@ -261,7 +269,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
         }
         socket.end(`${JSON.stringify(publicReply(present(output), directory))}\n`);
         if (closing) server.close();
-      } catch (error) { socket.end(`${JSON.stringify({ error: error.message })}\n`); }
+      } catch (error) { socket.end(`${JSON.stringify({ error: error.message, ...(typeof error.code === 'string' ? { code: error.code, nextAction: error.nextAction ?? null } : {}) })}\n`); }
     });
   });
   // First listen, then publish identity. A status response always names this running controller.
@@ -306,7 +314,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
     }
   } catch (error) {
     initializationError = error;
-    await atomicWrite(join(directory, 'failure.json'), { message: error.message });
+    await atomicWrite(join(directory, 'failure.json'), failureRecord(error));
     await terminate();
     throw error;
   } finally { initializedDone = true; initializedResolve(); }
@@ -353,10 +361,10 @@ export function recoveryAdapters(saved, installed) {
 export async function recoverStop(directory) {
   try {
     const prior = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8'));
-    if (prior.startIdentity && await processIdentity(prior.pid) === prior.startIdentity) throw new Error('Controller is alive; use its private stop channel');
+    if (prior.startIdentity && await processIdentity(prior.pid) === prior.startIdentity) throw gozarError('busy', 'Controller is alive; use its private stop channel');
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const journal = new Journal(directory); await journal.load();
-  if (!journal.value.state) throw new Error('No recorded session to stop');
+  if (!journal.value.state) throw gozarError('route_not_found', 'No recorded session to stop');
   const step = await loadCore();
   const state = journal.value.state;
   const installed = await loadCatalog(fileURLToPath(new URL('../../', import.meta.url)), { operational: true });

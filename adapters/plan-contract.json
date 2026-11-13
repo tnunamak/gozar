@@ -53,7 +53,7 @@
       "matching nonce verifier and intended network vantage"
     ],
     "tailscale": [
-      "current node/tailnet StableID and DNS suffix fingerprint (no native profile ID)",
+      "current node ID and tailnet DNS suffix fingerprint (no native profile ID; StableID is not used because some CLI versions do not report it)",
       "raw HTTPS/MagicDNS prerequisites; CertDomains is provisioning permission only",
       "immutable owned foreground process birth identity and continuity before cleanup",
       "exact selected listener readback and confirmed absence after owned-child exit"
@@ -83,7 +83,6 @@
     "status": [
       "dnsName",
       "nodeId",
-      "tailnetId",
       "tailnetSuffix"
     ],
     "config": [

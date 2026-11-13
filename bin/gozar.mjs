@@ -9,7 +9,8 @@ import { loadCore } from '../packages/gozar-node/core.mjs';
 import { Journal, atomicWrite } from '../packages/gozar-node/journal.mjs';
 import { EffectDriver } from '../packages/gozar-node/driver.mjs';
 import { Controller } from '../packages/gozar-node/controller.mjs';
-import { control, launch, serve, recoverStop, stopSession } from '../packages/gozar-node/daemon.mjs';
+import { sessionTargetCheck } from '../packages/gozar-node/target-check.mjs';
+import { control, launch, serve, recoverStop, stopSession, failureRecord } from '../packages/gozar-node/daemon.mjs';
 import { render, renderDetection, exposeSnapshot, installLink } from '../packages/gozar-node/render.mjs';
 import { validateLifetimeMs } from '../packages/gozar-node/gate.mjs';
 import { selectedInterfaceAddress } from '../packages/gozar-node/interfaces.mjs';
@@ -87,7 +88,7 @@ async function inventory(home, routeId) {
     const directory = join(home, name), port = Number(match[1]);
     try {
       const reply = await control(directory, { type: 'status' }, 5000);
-      sessions.push({ port, phase: reply.snapshot?.phase ?? 'unknown', origin: reply.snapshot?.phase === 'published-ready' ? reply.snapshot.published ?? null : null });
+      sessions.push({ port, phase: reply.snapshot?.phase ?? 'unknown', origin: reply.snapshot?.phase === 'published-ready' ? reply.snapshot.published ?? null : null, targetCheck: await sessionTargetCheck(port) });
     } catch {
       const journal = new Journal(directory); await journal.load();
       sessions.push({ port, phase: Object.keys(journal.value.owned).length ? 'cleanup-pending' : 'not-running', origin: null });
@@ -100,7 +101,7 @@ function renderInventory(reply) {
   if (reply.error) return `Routes: unavailable (${reply.error})`;
   const lines = [];
   if (reply.sessions) {
-    lines.push('Sessions:', ...(reply.sessions.length ? reply.sessions.map(item => `  port ${item.port}  ${item.phase}${item.origin ? '  ' + item.origin : ''}`) : ['  none']));
+    lines.push('Sessions:', ...(reply.sessions.length ? reply.sessions.map(item => `  port ${item.port}  ${item.phase}${item.origin ? '  ' + item.origin : ''}${item.targetCheck ? `  target: ${item.targetCheck}` : ''}`) : ['  none']));
     lines.push('Service routes:', ...(reply.serviceRoutes.length ? reply.serviceRoutes.map(item => `  ${item.origin} -> ${item.target}  ${item.verification.status}`) : ['  none']));
   }
   lines.push('Durable routes:', ...(reply.durableRoutes.length ? reply.durableRoutes.map(item =>
@@ -127,7 +128,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (argv[0] === '--daemon') {
     const directory = argv[1];
     try { await serve(directory); }
-    catch (error) { await atomicWrite(join(directory, 'failure.json'), { message: error.message }); process.exitCode = 1; }
+    catch (error) { await atomicWrite(join(directory, 'failure.json'), failureRecord(error)); process.exitCode = 1; }
     return;
   }
   const options = parseArgs(argv);
