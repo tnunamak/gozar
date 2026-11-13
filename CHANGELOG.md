@@ -8,7 +8,7 @@
 
 ## 0.3.1
 
-0.3.0 was never published to npm. Its changes below ship first in 0.3.1, with this fix.
+0.3.1 was never published to npm, and neither was 0.3.0. Their changes below ship first in 0.3.2.
 
 ### Fixed
 
