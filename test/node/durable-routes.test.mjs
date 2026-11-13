@@ -1196,3 +1196,22 @@ test('32. an exact private rule on the adopt-only port 9443 is adopted with no w
   assert.equal(released.result?.providerRemoved, true, JSON.stringify(released));
   assert.equal(w.state.config.Web?.[`${dnsName}:9443`], undefined);
 });
+
+test('33. an adopted rule on the adopt-only port 9443 that another program changes is never rewritten or removed', async t => {
+  const w = await world(t, { funnelPorts: [] });
+  const legacy = `https://${dnsName}:9443`;
+  w.edit(foreignRule(9443, `http://${w.target}`));
+  const adopted = await w.adopt({ origin: legacy }, { adapterId: 'tailscale-private' });
+  assert.equal(adopted.result?.route.origin, legacy, JSON.stringify(adopted));
+  // Another program points the rule at its own listener.
+  w.edit(({ config }) => { config.Web[`${dnsName}:9443`] = listener('http://127.0.0.1:9005'); });
+  const changed = structuredClone(w.state.config);
+  const resumed = await w.run('ensure', w.request);
+  assert.equal(resumed.error?.code, 'uncertain', JSON.stringify(resumed));
+  assert.deepEqual(w.state.config, changed, 'the changed rule is not rewritten');
+  const released = await w.run('release', { routeId: 'coordinator' });
+  assert.equal(released.result?.removed, false, JSON.stringify(released));
+  assert.equal(released.result.cleanupDebt.reason, 'rule-changed');
+  assert.deepEqual(w.state.config, changed, 'nor removed');
+  assert.deepEqual(w.writes(), []);
+});
