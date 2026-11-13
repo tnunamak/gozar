@@ -6,6 +6,7 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { attachedStatus, closeAttachedRoute, openAttachedRoute, openSessionRoute } from '../../packages/gozar-node/attached-route.mjs';
 import { routeStatus, closeRoute } from '../../packages/gozar-node/route-view.mjs';
+import { processIdentity } from '../../packages/gozar-node/process-identity.mjs';
 import { assertShape, codeOf, query, scratch, stubAdapter, tokenStubs } from './route-schema-check.mjs';
 
 const helperUrl = pathToFileURL(new URL('./route-schema-check.mjs', import.meta.url).pathname).href;
@@ -183,7 +184,8 @@ test('red: a controller that never starts is stopped when the open times out, so
   t.after(() => { if (failure?.controllerCleanup?.pid && alive(failure.controllerCleanup.pid)) process.kill(failure.controllerCleanup.pid, 'SIGKILL'); });
   assert.equal(failure?.code, 'provider_unavailable');
   assert.ok(['stopped', 'killed'].includes(failure.controllerCleanup?.state), JSON.stringify(failure.controllerCleanup && { state: failure.controllerCleanup.state }));
-  assert.equal(alive(failure.controllerCleanup.pid), false);
+  // A killed child of this test process can stay a zombie until Node reaps it, so ask the identity function, not kill(0).
+  assert.equal(await processIdentity(failure.controllerCleanup.pid), null);
 });
 
 test('openSessionRoute redeems the grant, takes the adapter from it, and projects the session machinery reply', async t => {
