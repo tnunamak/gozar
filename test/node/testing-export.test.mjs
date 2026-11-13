@@ -1,7 +1,8 @@
 // The @tnunamak/gozar/testing helpers: an app lists and uses a fake provider with no code of ours changed and no network.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { access, readFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -101,13 +102,31 @@ test('a durable fake answers the check as told: an unverified answer leaves the 
 });
 
 test('fakeRegistry checks its input, writes only under its own directory and removes it on cleanup', async () => {
-  for (const bad of [{ id: 'Bad Id', kinds: ['session'], reach: 'internet' }, { id: fakeId(), kinds: [], reach: 'internet' }, { id: fakeId(), kinds: ['session'], reach: 'moon' }, { id: fakeId(), kinds: ['session'], reach: 'lan', transport: 'ftp' }]) {
+  for (const bad of [{ id: 'Bad Id', kinds: ['session'], reach: 'internet' }, { id: fakeId(), kinds: [], reach: 'internet' }, { id: fakeId(), kinds: ['session'], reach: 'moon' }, { id: fakeId(), kinds: ['session'], reach: 'lan', transport: 'ftp' }, { id: fakeId(), kinds: ['session', 'attached'], reach: 'tailnet' }]) {
     assert.equal((await fakeRegistry(bad).then(() => null, e => e))?.code, 'invalid_input', JSON.stringify(bad));
   }
-  const registry = await fakeRegistry({ id: fakeId(), kinds: ['session', 'attached'], reach: 'tailnet' });
+  const registry = await fakeRegistry({ id: fakeId(), kinds: ['session', 'durable'], reach: 'tailnet' });
   await access(join(registry.root, 'providers', registry.manifest.providers[0].id, 'index.mjs'));
   await registry.cleanup();
   await assert.rejects(access(registry.root));
+});
+
+test('red: an attached fake is refused, because expose would start a real controller process for it', async () => {
+  const error = await fakeRegistry({ id: fakeId(), kinds: ['attached'], reach: 'internet' }).then(() => null, e => e);
+  assert.equal(error?.code, 'invalid_input');
+  assert.match(error.message, /only session and durable fakes are supported/);
+});
+
+test('red: cleanup with a caller directory removes the providers directory it made, and leaves the caller directory and other fakes', async t => {
+  const dir = await mkdtemp(join(homedir(), '.tmp', 'gozar-fake-dir-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const one = await fakeRegistry({ id: fakeId(), kinds: ['session'], reach: 'internet', dir });
+  const two = await fakeRegistry({ id: fakeId(), kinds: ['session'], reach: 'internet', dir });
+  await one.cleanup();
+  await access(join(dir, 'providers', two.manifest.providers[0].id)); // another fake in the same directory stays
+  await two.cleanup();
+  await assert.rejects(access(join(dir, 'providers')), 'the empty providers directory is gone');
+  await access(dir);
 });
 
 test('createReadContext is the package context itself', () => {

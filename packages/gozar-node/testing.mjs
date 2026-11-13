@@ -8,7 +8,7 @@
 //
 // A fake with kind 'durable' also keeps a rule store, a JSON file in the registry's own directory, so that separate
 // processes see the same state. Pass `fakeReadContext({ verified })` to the route API and the durable route check answers as told.
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRouteApi as createCoreRouteApi } from './route-api.mjs';
@@ -46,7 +46,7 @@ export function createRouteApi(deps = {}) {
   return createCoreRouteApi({ platform: 'linux', ...deps, ...(verify ? { verify } : {}), expose: { startSession: fakeStartSession, ...deps.expose } });
 }
 
-const KINDS = ['session', 'attached', 'durable'];
+const KINDS = ['session', 'durable'];
 const REACHES = ['internet', 'tailnet', 'lan', 'this-device'];
 
 const moduleSource = () => `// A fake provider written by @tnunamak/gozar/testing. It does nothing outside memory.
@@ -135,7 +135,7 @@ const runtimeUrl = pathToFileURL(fileURLToPath(new URL('./adapter-runtime.mjs', 
 
 /**
  * Writes a one-provider registry to a scratch directory and returns `{ manifest, root, cleanup }`, which is what
- * `createRouteApi({ manifest, root })` loads. `kinds` is any of 'session', 'attached' and 'durable'. A durable fake keeps its
+ * `createRouteApi({ manifest, root })` loads. `kinds` is any of 'session' and 'durable'. A durable fake keeps its
  * rules in `<root>/providers/<id>/store.json` (read it to see what the provider holds; a rule is `entries.<slot>.rule`), so
  * another process sees the same state. The fake never touches the network. `id` is the id the catalog shows as `providerId`.
  * `protocols` uses the Query's words ('sse', 'streamable-http', 'oauth-dcr'); a fake carries all three unless a test narrows it,
@@ -143,7 +143,8 @@ const runtimeUrl = pathToFileURL(fileURLToPath(new URL('./adapter-runtime.mjs', 
  */
 export async function fakeRegistry({ id, label, kinds, reach, transport = 'https', protocols = PROTOCOLS, dir } = {}) {
   if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) throw gozarError('invalid_input', 'fakeRegistry needs an id of lowercase letters, digits and hyphens');
-  if (!Array.isArray(kinds) || !kinds.length || kinds.some(kind => !KINDS.includes(kind))) throw gozarError('invalid_input', `fakeRegistry kinds must be a non-empty list of ${KINDS.join(', ')}`);
+  // An attached fake would make expose start a real controller process, so only session and durable fakes exist.
+  if (!Array.isArray(kinds) || !kinds.length || kinds.some(kind => !KINDS.includes(kind))) throw gozarError('invalid_input', `fakeRegistry kinds must be a non-empty list of ${KINDS.join(' and ')}: only session and durable fakes are supported`);
   if (!REACHES.includes(reach)) throw gozarError('invalid_input', `fakeRegistry reach must be one of ${REACHES.join(', ')}`);
   if (!['https', 'http'].includes(transport)) throw gozarError('invalid_input', "fakeRegistry transport must be 'https' or 'http'");
   if (!Array.isArray(protocols) || protocols.some(item => !PROTOCOLS.includes(item))) throw gozarError('invalid_input', `fakeRegistry protocols must be a list of ${PROTOCOLS.join(', ')}`);
@@ -183,6 +184,6 @@ export async function fakeRegistry({ id, label, kinds, reach, transport = 'https
   return {
     manifest: { providers: [{ id, module: `providers/${id}/index.mjs`, definition: `providers/${id}/definition.json` }] },
     root,
-    cleanup: async () => { await rm(own ? root : join(root, 'providers', id), { recursive: true, force: true }); },
+    cleanup: async () => { await rm(own ? root : join(root, 'providers', id), { recursive: true, force: true }); if (!own) await rmdir(join(root, 'providers')).catch(error => { if (!['ENOTEMPTY', 'ENOENT', 'EEXIST'].includes(error.code)) throw error; }); },
   };
 }
