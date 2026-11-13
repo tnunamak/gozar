@@ -68,3 +68,20 @@ Evidence gaps: the 13 platform-native npm tarballs contain no license text, so t
 ## PR-ready paragraph
 
 Gozar 0.4.0 declares Apache-2.0 in its npm and Cargo package metadata and ships the standard Apache-2.0 license text in the npm package. The release dependency inventory covers 14 npm packages, including every optional ngrok platform binding, and all 24 third-party crates resolved by `Cargo.lock`, including the bundled WASM dependency graph. Every dependency has a declared permissive license expression; the report records the exact expressions, separates runtime from build-only crates, and documents the platform-package and lockfile evidence limits.
+
+
+## Packaged notice closure (B1 integration)
+
+The license lane was merged from `933db4e5e2ae167c0008689c516f89a158481641`.
+B1 copied the actual license, Unicode and notice files from all 24 locked cached
+Rust source packages into `third-party/rust/`, including build dependencies.
+`third-party/manifest.json` records the Cargo.lock SHA-256 and each copied file's
+SHA-256; `scripts/check-package.mjs` checks their bytes and archive inclusion in
+ordinary prepack. `THIRD-PARTY-NOTICES.md` links each package to its actual texts.
+The optional SDK/native peers are not bundled into Gozar's archive; their
+metadata-only MIT caveat above remains. No native binary provenance claim is made.
+
+The root lockfile version/license metadata now matches 0.4.0/Apache-2.0 without
+changing dependency resolutions. The WASM build generator now emits Apache-2.0
+in its generated package.json; ordinary prepack requires that declaration and
+the root LICENSE. The final integration report records the exact verification head.

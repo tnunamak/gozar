@@ -15,3 +15,13 @@ test('CLI prompts generically from the approved descriptor and passes a secret h
   const exit=await routeMain(['setup','new-input','--prompt','--query-file',queryFile,'--approval-file',approval,'--home',home,'--json'],{api,stdout,stderr,prompt:async descriptor=>{prompt=descriptor;return 'secret-cli-canary';},storeSecret:async({value})=>{assert.equal(value,'secret-cli-canary');return {handle:'sec_'+'1'.repeat(32)};}});
   assert.equal(exit,0,errors);assert.equal(prompt.secret,true);assert.equal(seen.secretHandle,'sec_'+'1'.repeat(32));assert.equal(seen.value,undefined);assert.ok(!output.includes('secret-cli-canary'));assert.ok(!errors.includes('secret-cli-canary'));
 });
+
+test('configure collects a new provider input without an approval-file or provider-specific branch', async t => {
+  const home=await scratch(t), file=join(home,'query.json');await writeFile(file,JSON.stringify(query({home})));
+  let saved=false,asked=false,submitted;
+  const candidate=()=>({display:{label:'Unknown fixture'},facts:[],setup:{state:saved?'ready':'action-required',actions:[]},configuration:{inputRequirements:[{id:'credential',label:'Unknown credential',kind:'text',secret:true,required:true,help:'Input help',obtainUrl:null}],actions:[{id:'credential',digest:'new',disclosure:{revision:'new',text:'Fixture credential intake'}}]}});
+  const api={catalogRoutes:async()=>({catalogRevision:'new',candidates:[candidate()]}),runSetupAction:async request=>{submitted=request;saved=true;return {state:'complete'};}};
+  const stdout=new PassThrough(),stderr=new PassThrough();let errors='';stderr.on('data',c=>errors+=c);
+  const result=await routeMain(['configure','--query-file',file,'--home',home,'--json'],{api,stdout,stderr,prompt:async descriptor=>{asked=true;assert.equal(descriptor.secret,true);return 'configure-secret-canary';},storeSecret:async()=>({handle:'sec_'+'2'.repeat(32)})});
+  assert.equal(result,0,errors);assert.equal(asked,true);assert.equal(submitted.secretHandle,'sec_'+'2'.repeat(32));assert.ok(!errors.includes('configure-secret-canary'));
+});

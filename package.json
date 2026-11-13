@@ -27,7 +27,10 @@
     "docs/providers.md",
     "LICENSE",
     "examples/",
-    "docs/migration-0.4.md"
+    "docs/migration-0.4.md",
+    "THIRD-PARTY-NOTICES.md",
+    "third-party/",
+    "docs/release-0.4-license-audit.md"
   ],
   "repository": {
     "type": "git",

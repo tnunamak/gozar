@@ -1,5 +1,6 @@
 // Only the connector process is owned here. Registration, DNS and token revocation stay with the owner.
 import { recipeAdapter, effectError } from '../../../packages/gozar-node/adapter-runtime.mjs';
+import { supportedPlatform } from '../../../packages/gozar-node/platform.mjs';
 import { createGate } from '../../../packages/gozar-node/gate.mjs';
 import { findOnPath } from '../../../packages/gozar-node/program-resolution.mjs';
 import { createHash } from 'node:crypto';
@@ -66,11 +67,12 @@ export function createNamedAdapter({ detectBinary = async () => findOnPath('clou
     return {
       configurationActions: () => inputs,
       async detect(ctx) {
+        if(!supportedPlatform(ctx.platform))return {state:'unsupported',facts:{platform:ctx.platform}};
         const config = await ctx.configuration(null), binary = await detectBinary();
         return { state: binary && settings(config) ? 'ready' : 'action-required', facts: { detected: binary,
           authSet: typeof config?.token === 'string' && config.token.length > 0, originSet: typeof config?.origin === 'string', portSet: settings(config) !== null } };
       },
-      setupActions: facts => [...(facts?.detected ? [] : [install]), ...(facts?.authSet ? [] : [inputs[0]]), ...(facts?.originSet ? [] : [inputs[1]]), ...(facts?.portSet ? [] : [inputs[2]])],
+      setupActions: facts => facts?.platform && !supportedPlatform(facts.platform) ? [] : [...(facts?.detected ? [] : [install]), ...(facts?.authSet ? [] : [inputs[0]]), ...(facts?.originSet ? [] : [inputs[1]]), ...(facts?.portSet ? [] : [inputs[2]])],
       async setup(ctx, id, handle) {
         if (id !== 'token') throw effectError('unsupported', 'This input is not a secret');
         const valid = await ctx.withSecret(handle, async bytes => bytes.length > 0 && bytes.length <= 65536);
@@ -102,6 +104,7 @@ export function createNamedAdapter({ detectBinary = async () => findOnPath('clou
         return { target: '127.0.0.1:' + gate.port, verify, refresh: verify, close: () => gate.close() };
       },
       async create(ctx, plan) {
+        if(plan?.readback?.kind!=='attached')throw effectError('unsupported','The connector uses attached usage');
         await ctx.assertGeneration();
         if (runtimes.has(plan.resourceKey)) throw effectError('precondition_failed', 'A connector already owns this route');
         const config = settings(await ctx.configuration(null));

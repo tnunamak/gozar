@@ -11,7 +11,7 @@ import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { defaultHome } from './default-home.mjs';
 import { promptInputRequirement } from './input-requirements.mjs';
 
-export const ROUTE_COMMANDS = ['catalog', 'ensure', 'adopt', 'setup', 'preference', 'watch', 'suspend'];
+export const ROUTE_COMMANDS = ['catalog', 'ensure', 'adopt', 'setup', 'configure', 'preference', 'watch', 'suspend'];
 const MAX_FILE_BYTES = 1 << 20;
 const REQUIREMENT_CODES = new Set(['requirements_unsatisfied', 'setup_required', 'unsupported']);
 const APPROVAL_CODES = new Set(['consent_required', 'consent_unknown', 'consent_expired', 'consent_mismatch', 'candidate_stale', 'route_not_found']);
@@ -25,6 +25,7 @@ const specs = {
   adopt: { values: ['query-file', 'approval-file', 'handover-file', 'route', 'provider-id', 'home'], flags: ['json', 'reconsent'] },
   expose: { values: ['query-file', 'approval-file', 'wait', 'route', 'provider-id', 'home'], flags: ['json'] },
   setup: { values: ['approval-file', 'secret-file', 'value', 'home', 'query-file', 'provider-id'], flags: ['json', 'prompt'], positional: 'action id' },
+  configure: { values: ['query-file', 'provider-id', 'home'], flags: ['json'] },
   preference: { values: ['profile-home', 'expected-revision', 'on-unavailable'], multi: ['prefer'], flags: ['json'], positional: 'show or set' },
   suspend: { values: ['handle-file', 'route', 'home'], flags: ['json'] },
   watch: { values: ['handle-file', 'home', 'interval-ms'], flags: ['json'] },
@@ -97,6 +98,29 @@ function untilReleased(stdin) {
 }
 
 const commandsRun = {
+  async configure({ options, api, out, err, prompt, storeSecret }) {
+    const query = await readQuery(options), home = options.home ?? query.home ?? defaultHome();
+    const catalog = await api.catalogRoutes({ ...query, home });
+    if (catalog.candidates.length !== 1) throw gozarError('invalid_input', 'Select one catalog choice with --provider-id before configuring inputs');
+    const candidate = catalog.candidates[0];
+    err(`Input requirements: ${candidate.display.label}`);
+    for (const fact of candidate.facts) if (fact.affectsConsent) err(`${fact.label}: ${fact.known ? JSON.stringify(fact.value) : `unknown (${fact.reason})`}`);
+    for (const descriptor of candidate.configuration.inputRequirements) {
+      const action = candidate.configuration.actions.find(action => action.id === descriptor.id);
+      if (!action) throw gozarError('internal_error', 'An input requirement has no approved intake action');
+      err(action.disclosure.text);
+      const input = await prompt(descriptor);
+      if (!input.trim() && !descriptor.required) continue;
+      if (!input.trim()) throw gozarError('invalid_input', `Required input is missing: ${descriptor.id}`);
+      const approval = { digest: action.digest, disclosureRevision: action.disclosure.revision };
+      const request = descriptor.secret ? { secretHandle: (await storeSecret({ home, value: input })).handle } : { value: input };
+      await api.runSetupAction({ home, actionId: descriptor.id, approval, ...request });
+    }
+    const current = await api.catalogRoutes({ ...query, home }), selected = current.candidates[0];
+    const complete = selected.setup.state === 'ready';
+    out({ schemaVersion: 1, state: complete ? 'complete' : 'pending', nextAction: selected.setup.actions[0] ?? null, catalogRevision: current.catalogRevision });
+    return complete ? 0 : 2;
+  },
   async catalog({ options, api, out, err }) {
     err('Asking the catalog (read-only; nothing is exposed)');
     const catalog = await api.catalogRoutes(await readQuery(options));

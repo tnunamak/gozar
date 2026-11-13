@@ -157,12 +157,12 @@ export async function conform(adapter) {
         assert.ok(observed.present && observed.revision === 'etag-1', `${id} observes its durable listener with the config revision`);
         continue;
       }
-      const plan = await planFor(adapter, readContext(), kind);
+      const plan = await planFor(adapter, adapter.prepareProof ? readContext({configuration:async()=>({auth:STUB,'reserved-domain':reserved,token:STUB,origin:`https://${reserved}`,'gate-port':'18479'})}) : readContext(), kind);
       for (const field of ['digest', 'resourceKey']) assert.equal(typeof plan[field], 'string', `${id} plan.${field}`);
       assert.ok(Array.isArray(plan.effects) && 'readback' in plan && 'cleanup' in plan && 'origin' in plan && 'precondition' in plan);
       secretFree(plan, `${id} plan`);
       const sdkBacked = plan.effects[0]?.kind === 'sdk-listener';
-      if (sdkBacked) continue; // the SDK runtime has its own tests (ngrok-runtime.test.mjs)
+      if (sdkBacked || adapter.prepareProof) continue; // the SDK runtime has its own tests (ngrok-runtime.test.mjs)
       const receipt = await adapter.create(ctx, plan);
       assert.equal(receipt.schemaVersion, 1); assert.equal(receipt.adapterId, id); assert.equal(receipt.resourceKey, plan.resourceKey);
       secretFree(receipt, `${id} receipt`);
@@ -199,7 +199,8 @@ test('honest declarations: kinds match the working recipes, unsupported provider
   assert.deepEqual(kinds['tailscale-funnel'], ['session', 'durable']);
   assert.deepEqual(kinds['tailscale-private'], ['session', 'durable']);
   assert.deepEqual(kinds['ngrok-https-edge'], ['attached']);
-  for (const id of ['ngrok-tls-passthrough', 'ngrok-tcp-passthrough', 'cloudflare-named']) assert.deepEqual(kinds[id], [], `${id} has no admitted create recipe`);
+  assert.deepEqual(kinds['cloudflare-named'], ['attached']);
+  for (const id of ['ngrok-tls-passthrough', 'ngrok-tcp-passthrough']) assert.deepEqual(kinds[id], [], `${id} has no admitted create recipe`);
   const mac = await loadAdapters({ manifest: tenManifest, root: adaptersRoot });
   for (const adapter of mac) assert.equal((await adapter.detect(readContext({ platform: 'win32' }))).state, 'unsupported');
 });
