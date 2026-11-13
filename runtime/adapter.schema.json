@@ -45,13 +45,10 @@
           "type": "string"
         },
         "byUsage": {
-          "description": "For one usage kind, the ports and needs line that replace the top-level ones in a candidate and a RouteView of that kind.",
+          "description": "For a session or durable usage, the ports and needs line that replace the top-level ones in a candidate and a RouteView of that kind.",
           "type": "object",
           "properties": {
             "session": {
-              "$ref": "#/$defs/UsageFacts"
-            },
-            "attached": {
               "$ref": "#/$defs/UsageFacts"
             },
             "durable": {

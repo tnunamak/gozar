@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { definitionErrors, loadAdapters } from '../../packages/gozar-node/adapter-runtime.mjs';
-import { propertiesFor } from '../../packages/gozar-node/route-view.mjs';
+import { propertiesFor, routeStatus } from '../../packages/gozar-node/route-view.mjs';
 import { createRouteApi, fakeReadContext } from '../../packages/gozar-node/testing.mjs';
 import { query, scratch } from './route-schema-check.mjs';
 
@@ -37,7 +37,8 @@ for (const adapter of durable) {
     assert.deepEqual(candidate.properties.address.ports, tried);
     for (const port of tried) assert.match(candidate.display.needs, new RegExp(`\\b${port}\\b`), `durable needs name port ${port}`);
     assert.equal('portsByKind' in candidate.properties.address, false, 'the candidate shape is unchanged');
-    const view = await propertiesFor(adapter.id, { adapters }, 'durable');
+    const reply = { routeId: 'ports-check', generation: 1, adapterId: adapter.id, state: 'usable', origin: 'https://node.example.ts.net' };
+    const view = await routeStatus({ home, handle: { kind: 'durable', id: 'ports-check', generation: 1 } }, { adapters, durable: { status: async () => reply } });
     assert.deepEqual(view.properties.address.ports, tried, 'a durable RouteView reports the same ports');
   });
 
@@ -52,9 +53,11 @@ for (const adapter of durable) {
   });
 }
 
-test('a byUsage entry is only for a usage kind the provider supports, and holds only needs and ports', () => {
+test('a byUsage entry is only for a session or durable kind the provider supports, and holds only needs and ports', () => {
   const definition = structuredClone(durable[0].definition);
   assert.deepEqual(definitionErrors(definition), []);
-  assert.deepEqual(definitionErrors({ ...definition, byUsage: { attached: { ports: [443] } } }), ['byUsage.attached is not a supported kind']);
+  const durableOnly = { ...definition, supportedKinds: ['durable'], capabilities: { ...definition.capabilities, lifetimes: ['durable'] } };
+  assert.deepEqual(definitionErrors({ ...durableOnly, byUsage: { session: { ports: [443] } } }), ['byUsage.session is not a supported kind']);
+  assert.notDeepEqual(definitionErrors({ ...definition, byUsage: { attached: { ports: [443] } } }), [], 'an attached view reads the declared capabilities');
   assert.notDeepEqual(definitionErrors({ ...definition, byUsage: { durable: { reach: 'internet' } } }), []);
 });
