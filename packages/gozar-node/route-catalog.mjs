@@ -188,8 +188,14 @@ async function collect(query, deps) {
       display: { label: definition.label, description: describe(definition, properties), needs: needsFor(definition, query.usage.kind) }, properties,
       setup: { state: setupState, actions: setupState === 'action-required' ? actions : [] }, disclosure: definition.disclosure,
       candidateToken: null, expiresAt: null };
+    if (query.usage.kind === 'durable' && query.intent === 'adopt') {
+      const takeover = 'Gozar takes over the existing rule and removes it when the route is released or stopped.';
+      candidate.display.description += ` ${takeover}`;
+      candidate.disclosure = { ...definition.disclosure, revision: `${definition.disclosure.revision}:adopt-removal-1`,
+        text: `${definition.disclosure.text} ${takeover}` };
+    }
     if (eligible && setupState === 'ready' && grant) {
-      const issued = await issue({ home, binding: consentBinding(query, home, definition.disclosure.revision), grant });
+      const issued = await issue({ home, binding: consentBinding(query, home, candidate.disclosure.revision), grant });
       candidate.candidateToken = issued.token; candidate.expiresAt = issued.expiresAt;
     }
     return candidate;

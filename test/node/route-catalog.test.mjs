@@ -210,3 +210,22 @@ test('durable target rejects URL and invalid ports before detecting any provider
     assert.equal(adapter.calls.detect, 0);
   }
 });
+
+test('adoption approval and candidate copy explain takeover and removal on release or stop', async t => {
+  const q = await withHome(t, { usage: { kind: 'durable', routeId: 'route-1' }, intent: 'adopt', origin: 'https://node.test' });
+  const catalog = await catalogRoutes(q, deps([stubAdapter('alpha')]));
+  const [candidate] = catalog.candidates;
+  assertShape('Candidate', candidate);
+  assert.equal(candidate.eligible, true);
+  assert.equal(candidate.disclosure.revision, 'disc-alpha:adopt-removal-1');
+  const issued = deps([stubAdapter('alpha')]);
+  const check = (await catalogRoutes(q, issued)).candidates[0];
+  assert.equal(issued.tokens.live.get(check.candidateToken).binding.disclosureRevision, check.disclosure.revision);
+  const create = (await catalogRoutes({ ...q, intent: 'create' }, deps([stubAdapter('alpha')]))).candidates[0];
+  assert.equal(create.disclosure.revision, 'disc-alpha');
+  assert.doesNotMatch(create.disclosure.text, /takes over/);
+  for (const copy of [candidate.disclosure.text, candidate.display.description]) {
+    assert.match(copy, /takes over the existing rule/);
+    assert.match(copy, /removes it when the route is released or stopped/);
+  }
+});

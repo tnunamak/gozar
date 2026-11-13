@@ -1485,3 +1485,12 @@ test('interrupted user stop removal uses compare-and-set and preserves foreign r
     assert.equal((await w.run('ensure', w.request)).error?.code, 'stopped_by_user');
   }
 });
+
+test('adoption transfers removal ownership: release deletes the existing rule', async t => {
+  const w = await world(t);
+  w.edit(state => { foreignRule(8443, `http://${w.target}`)(state); state.config.AllowFunnel = { [`${dnsName}:8443`]: true }; });
+  assert.equal((await w.adopt()).result.route.provenance, 'adopted');
+  assert.equal(w.writes().length, 0);
+  assert.equal((await w.run('release', { routeId: 'coordinator' })).result.providerRemoved, true);
+  assert.equal(forwardTarget(w.state.config, dnsName, 8443), null);
+});

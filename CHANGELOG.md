@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Adoption approval and candidate copy now say that Gozar takes over the existing rule and removes it when the route is released or stopped.
+
 - An interrupted durable create can now finish or remove its exact intended rule after a crash or readback failure before the receipt is saved.
 
 - The default `expose` output says what will happen in a few plain lines. `--alternatives` lists usable ways with their setup status; `--via` picks one by name. `--verbose` prints the full engineering detail. `--json` is unchanged.
