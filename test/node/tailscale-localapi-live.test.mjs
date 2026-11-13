@@ -4,7 +4,7 @@
 // socket is present or access is denied. Never writes, never calls any other endpoint.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getServeConfig } from '../../packages/gozar-node/tailscale-localapi.mjs';
+import { getServeConfig } from '../../adapters/providers/_shared/tailscale-localapi.mjs';
 
 test('26. live: GET serve-config returns a parseable config and a non-empty Etag', async t => {
   if (process.env.GOZAR_TAILSCALED_SOCKET) { t.skip('socket override is set'); return; }

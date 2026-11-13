@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "note": "Programs a recipe names bare, and where to run them from when they are not on PATH. Read by packages/gozar-node/program-resolution.mjs.",
+  "fallbacks": [
+    { "program": "tailscale", "platform": "darwin", "path": "/Applications/Tailscale.app/Contents/MacOS/Tailscale" }
+  ]
+}

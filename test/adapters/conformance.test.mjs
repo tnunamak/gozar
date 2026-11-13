@@ -168,7 +168,7 @@ export async function conform(adapter) {
 
 test('every adapter directory has exactly one registry entry and the ten load in registry order', async () => {
   const manifest = JSON.parse(await readFile(tenManifest, 'utf8'));
-  const directories = (await readdir(join(adaptersRoot, 'providers'))).sort();
+  const directories = (await readdir(join(adaptersRoot, 'providers'))).filter(name => !name.startsWith('_')).sort(); // _shared holds code several providers import; it is not a provider
   assert.deepEqual(directories, manifest.providers.map(entry => entry.id).sort(), 'a directory without an entry (or an entry without a directory) is invisible or broken');
   const adapters = await loadAdapters({ manifest: tenManifest, root: adaptersRoot });
   assert.deepEqual(adapters.map(adapter => adapter.id), manifest.providers.map(entry => entry.id));

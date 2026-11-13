@@ -1,0 +1,55 @@
+{
+  "wraps": "./fake-durable.definition.json",
+  "adapter": {
+    "schemaVersion": 1,
+    "id": "fake-durable",
+    "label": "Fake durable (test only)",
+    "capabilities": {
+      "reach": "internet",
+      "transport": "https",
+      "traffic": {
+        "tlsTermination": "provider",
+        "providerCanReadPayload": true,
+        "readers": [
+          "fake-durable store"
+        ],
+        "metadataVisibleTo": [
+          "fake-durable store"
+        ],
+        "evidenceRef": null
+      },
+      "address": {
+        "stability": "stable",
+        "scope": "synthetic",
+        "conditions": [
+          "test fixture"
+        ]
+      },
+      "cost": {
+        "kind": "unknown",
+        "summary": "synthetic",
+        "currency": null,
+        "amount": null,
+        "period": null
+      },
+      "needsAccount": false,
+      "lifetimes": [
+        "durable"
+      ],
+      "supervision": "controller",
+      "protocols": {
+        "sse": false,
+        "streamableHttp": false,
+        "oauthDcr": false
+      }
+    },
+    "supportedKinds": [
+      "durable"
+    ],
+    "disclosure": {
+      "revision": "disc-1750e4f8d2f1",
+      "text": "Keep this service reachable through the synthetic fake-durable store until you stop it.",
+      "links": []
+    }
+  }
+}
