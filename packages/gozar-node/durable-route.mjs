@@ -8,7 +8,6 @@
 // re-reads and re-decides. No durable path runs the `tailscale` CLI.
 import { readdir, readFile, unlink, open } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import net from 'node:net';
@@ -20,9 +19,9 @@ import { loadDefinition } from './catalog.mjs';
 import { durableCapability, admitRouteEffect, routeAuthority } from './plan.mjs';
 import * as localapi from './tailscale-localapi.mjs';
 import { redeemConsentToken, consentBinding, canonicalDigest } from './consent-token.mjs';
+import { defaultHome } from './default-home.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const defaultHome = () => process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
 const refuse = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
 const hash = routeId => createHash('sha256').update(routeId).digest('hex');
 const routeDirectory = home => join(home, 'routes');

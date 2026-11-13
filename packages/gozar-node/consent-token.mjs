@@ -15,11 +15,10 @@
 import { randomBytes, createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile, readdir, rename, stat, unlink, open } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { atomicWrite } from './journal.mjs';
 import { trustedDirectory, privateDirectory, canonicalHome } from './service-state.mjs';
+import { defaultHome } from './default-home.mjs';
 
-const defaultHome = () => process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
 const refuse = (code, message) => Object.assign(new Error(message), { code });
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const defaultTtlMs = 10 * 60_000;

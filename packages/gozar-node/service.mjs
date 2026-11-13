@@ -1,6 +1,5 @@
 import { readdir, unlink, link, open } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import { homedir } from 'node:os';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import { atomicWrite } from './journal.mjs';
@@ -10,7 +9,6 @@ import { noncePattern, trustedDirectory, canonicalHome, privateDirectory, readRe
   canonicalAuthority, transcript, verification } from './service-state.mjs';
 
 const refuse = (code, message) => Object.assign(new Error(message), { code });
-const defaultHome = () => process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
 function originValue(value) {
   if (typeof value !== 'string') throw refuse('invalid_input', 'Invalid service origin');
   let url;
@@ -143,6 +141,7 @@ export function createServiceVerifier() {
 
 // The kept hand-back and release exports. They leave through the normaliser, like every public export.
 import * as durable from './durable-route.mjs';
+import { defaultHome } from './default-home.mjs';
 const guarded = action => async (...args) => { try { return await action(...args); } catch (error) { throw normalizeError(error); } };
 export const releaseRoute = guarded(durable.releaseRoute);
 export const confirmHandBack = guarded(durable.confirmHandBack);

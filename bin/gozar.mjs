@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { homedir, networkInterfaces } from 'node:os';
+import { networkInterfaces } from 'node:os';
 import { readFile, readdir, realpath } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { loadCatalog, loadDefinition, loadActiveDrop, loadDropRequirements, safeOrigin } from '../packages/gozar-node/catalog.mjs';
@@ -15,6 +15,7 @@ import { validateLifetimeMs } from '../packages/gozar-node/gate.mjs';
 import { selectedInterfaceAddress } from '../packages/gozar-node/interfaces.mjs';
 
 import { cliCommand } from '../packages/gozar-node/cli-command.mjs';
+import { defaultHome } from '../packages/gozar-node/default-home.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const reaches = ['internet', 'tailnet', 'lan', 'this-device', 'unknown'];
@@ -147,7 +148,7 @@ export async function main(argv = process.argv.slice(2)) {
     console.log('Gozar\n  gozar demo-server [--port N]\n  gozar expose --port N [--client-reach internet|tailnet|lan|this-device|unknown] [--origin URL] [--lifetime-ms N]\n  gozar detect --port N\n  gozar status [--port N | --route ID]\n  gozar health [--port N]\n  gozar update-origin --origin URL [--port N]\n  gozar stop [--port N | --route ID]\n  gozar allow --route ID [--yes]\n\n--yes approves only the displayed selected route and exact loopback target.\n--adapter ID selects a catalog route. --json returns machine-readable status.\n--install-link-template HTTPS_TEMPLATE supplies a client install link using {url}; only the link is printed.\n--alternatives expands the route alternatives. No route is installed automatically.\n--probe-directory PATH selects the private challenge/receipt channel for the trusted outside verifier.\n--sse --streamable-http --oauth-dcr require those protocol checks; no inferred success.\n--operational opts into only the operational plans listed in the adapter manifest.\nLAN: --bind-address IP --firewall-ack IP records your exact-interface firewall approval.\n--transport http|https|tls|tcp and --client-profile ID select catalog data; unsupported modes remain blocked.');
     return;
   }
-  const home = process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
+  const home = defaultHome();
   if (options.command === 'stop' && options.route) {
     const { stopRoute } = await import('../packages/gozar-node/durable-route.mjs');
     const reply = await stopRoute({ routeId: options.route, home });

@@ -7,9 +7,8 @@
 // Exit codes: 0 success; 2 requirements, setup or unsupported; 3 missing, stale or unknown approval, or no such route;
 // 1 everything else (operational, schema, usage).
 import { lstat, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
+import { defaultHome } from './default-home.mjs';
 
 export const ROUTE_COMMANDS = ['catalog', 'ensure', 'adopt', 'setup', 'preference', 'watch'];
 const MAX_FILE_BYTES = 1 << 20;
@@ -17,7 +16,6 @@ const REQUIREMENT_CODES = new Set(['requirements_unsatisfied', 'setup_required',
 const APPROVAL_CODES = new Set(['consent_required', 'consent_unknown', 'consent_expired', 'consent_mismatch', 'candidate_stale', 'route_not_found']);
 export const exitCodeFor = code => REQUIREMENT_CODES.has(code) ? 2 : APPROVAL_CODES.has(code) ? 3 : 1;
 
-const defaultHome = () => process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
 
 // What each command accepts. Anything else is invalid_input: unknown flags never fall back to a bypass.
 const specs = {
