@@ -100,7 +100,65 @@ A durable route is a Tailscale Funnel or Serve listener that Gozar creates, keep
 
 An app asks for a durable route by requirement. It never names a provider. Gozar's catalog returns the providers that meet the requirement, and the app passes back the approval of the one the user chose.
 
-Requirements: Linux or macOS, Node.js 22.13 or newer, and tailscaled with its LocalAPI socket that the invoking user may write (on Linux, `sudo tailscale set --operator=$USER`). On macOS Gozar supports the open-source tailscaled (for example from Homebrew), whose socket is `/var/run/tailscaled.socket`; the Mac App Store and standalone Tailscale apps expose the LocalAPI differently and answer `provider_unavailable` in 0.2.0. Set `GOZAR_TAILSCALED_SOCKET` for a non-default socket. Gozar changes the serve config only through the LocalAPI with ETag compare-and-set, never through the `tailscale` CLI, and never writes the config without `If-Match`. Windows answers `unsupported`.
+Requirements: Linux or macOS, Node.js 22.13 or newer, and a running Tailscale whose LocalAPI the invoking user may use. Gozar changes the serve config only through the LocalAPI with ETag compare-and-set, never through the `tailscale` CLI, and never writes the config without `If-Match`. Windows answers `unsupported`.
+
+- **Linux:** tailscaled with a socket the invoking user may write (`sudo tailscale set --operator=$USER`).
+- **macOS, three setups.** Gozar finds the LocalAPI the way Tailscale's own CLI does (`safesocket_darwin.go`):
+  1. **Homebrew or other open-source tailscaled:** the unix socket `/var/run/tailscaled.socket`. Gozar uses a socket first when one exists.
+  2. **Mac App Store app:** a loopback TCP port and a token. Gozar runs `lsof` for the app's `IPNExtension` process and reads the port and token from the name of its open `sameuserproof-<port>-<token>` file.
+  3. **Standalone app (also called macsys):** a loopback port and token in `/Library/Tailscale/` (`ipnport` is a symlink to the port, `sameuserproof-<port>` holds the token). The file is readable only by admin users. Gozar checks that the port accepts a connection, because the files can outlive the app.
+
+  Gozar sends the token as the Basic-auth password with the LocalAPI host header, as the Tailscale client does. It reads the token for each request, uses it in that one request and keeps it nowhere: not in a fact, an error, a log, a journal or a file. With no socket and no running app the answer is `provider_unavailable`, and its next action says to open the Tailscale app or start tailscaled. If the app refuses the token (for example after the app restarted), the answer is `provider_denied`: quit and reopen the app.
+- **Set `GOZAR_TAILSCALED_SOCKET`** for a non-default socket. It overrides everything, and Gozar then looks for no app.
+- **The CLI.** The detect step and session recipes run the `tailscale` program. On macOS, when no `tailscale` is on `PATH`, Gozar runs `/Applications/Tailscale.app/Contents/MacOS/Tailscale` if it exists. That is the CLI the app bundles ([Tailscale CLI documentation](https://tailscale.com/kb/1080/cli), macOS section). A `tailscale` on `PATH` always wins, and Linux never uses the bundle. The recipe and its consent do not change. If the app is installed elsewhere, install the CLI integration from the Tailscale app settings.
+
+**Proof level.** The two app paths are proven only by fixture tests: the file and `lsof` formats are transcribed from Tailscale's source, and the tests run against a fake LocalAPI. No Gozar test has run against a live App Store or standalone app. Run the check below on a Mac with an app to settle it.
+
+**Check a Mac with a Tailscale app (read-only).** Run these in a Gozar checkout or an installed `@tnunamak/gozar` package. Neither command changes anything or prints the token.
+
+```sh
+node packages/gozar-node/check-tailscale-app.mjs
+```
+
+Expected, for the App Store app (the standalone app prints `standalone app`; `tailscale CLI` is `on PATH` when the CLI integration is installed):
+
+```
+Gozar Tailscale check (read-only)
+platform: darwin
+tailscale CLI: the Tailscale app bundle
+Tailscale app LocalAPI: App Store app on loopback port 61577 (a unix socket is used first when one exists)
+LocalAPI status: ok
+LocalAPI serve-config: ok
+result: reachable
+```
+
+The port differs per run. A failure line names the code and the next action, for example `LocalAPI status: provider_unavailable (open the Tailscale app, or start tailscaled)`. Then ask the catalog the way an app would (`gozar` is `node bin/gozar.mjs` in a checkout):
+
+```sh
+mkdir -m 700 "$HOME/.gozar-check"
+cat > q.json <<EOF
+{
+  "schemaVersion": 1,
+  "owner": "gozar-live-check",
+  "target": "127.0.0.1:3000",
+  "home": "$HOME/.gozar-check",
+  "usage": { "kind": "durable", "routeId": "live-check" },
+  "requirements": { "reach": "tailnet", "transport": "https", "payloadAccess": "allow-provider", "address": "stable", "setup": "none", "protocols": [] }
+}
+EOF
+gozar catalog --query-file q.json --json | node -e '
+const o = JSON.parse(require("fs").readFileSync(0, "utf8"));
+for (const c of o.candidates) if (c.display.label.startsWith("Tailscale")) console.log(c.display.label, "| eligible:", c.eligible, "| setup:", c.setup.state, "| token:", c.candidateToken ? "issued" : "none");'
+```
+
+Expected:
+
+```
+Tailscale Funnel | eligible: false | setup: ready | token: none
+Tailscale private Serve | eligible: true | setup: ready | token: issued
+```
+
+A durable candidate becomes `ready` and gets a token only after Gozar has read the node and the serve config through the LocalAPI, so `Tailscale private Serve ... setup: ready | token: issued` proves the LocalAPI was reached. If the LocalAPI is not reachable, that line reads `eligible: false | setup: unknown | token: none`; run the first command to see why. If the CLI is missing, the line reads `setup: action-required`. Do not paste the raw catalog JSON anywhere: it holds the single-use token. Remove the check directory afterwards with `rm -r "$HOME/.gozar-check"`.
 
 **What it exposes.** A durable route is a standing forward from the public origin to `127.0.0.1:PORT`. It forwards to whatever listens on that port, whether or not the app that asked for it is running. Use a port you keep for the route. Show the user the candidate's `disclosure.text` before you pass an approval. `gozar status` shows the same facts afterwards.
 

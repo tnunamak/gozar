@@ -17,6 +17,7 @@ import { selectedInterfaceAddress } from './interfaces.mjs';
 import { loadCore } from './core.mjs';
 import { materializePrivateBinding, privateMaterializationScope } from './materialization.mjs';
 import { attributable, processIdentity } from './journal.mjs';
+import { createProgramResolver } from './program-resolution.mjs';
 
 const mutates = effect => ['create', 'remove'].includes(effect.operation);
 const allowedFields = {
@@ -34,7 +35,7 @@ const bounded = (number, fallback, maximum) => Number.isSafeInteger(number) && n
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export class EffectDriver {
-  constructor({ adapters, journal, sessionId, targetPort, origin, consent = false, handles = {}, bindAddresses = [], firewallApproved = false, recoveryOnly = false, resolveCredential, observeProcessOutput = false, onProcessOutput, host = { features: [], bindings: {}, facts: {} }, onExit = () => {} }) {
+  constructor({ adapters, journal, sessionId, targetPort, origin, consent = false, handles = {}, bindAddresses = [], firewallApproved = false, recoveryOnly = false, resolveCredential, observeProcessOutput = false, onProcessOutput, resolveProgram = createProgramResolver(), host = { features: [], bindings: {}, facts: {} }, onExit = () => {} }) {
     this.adapters = structuredClone(adapters);
     this.host = host;
     this.privateFiles = new PrivateFiles({ journal, sessionId, resolveCredential });
@@ -47,6 +48,7 @@ export class EffectDriver {
     this.bindAddresses = bindAddresses;
     this.firewallApproved = firewallApproved;
     this.onExit = onExit;
+    this.resolveProgram = resolveProgram;
     this.observeProcessOutput = observeProcessOutput; this.onProcessOutput = onProcessOutput;
     this.outputEvents = []; this.outputBytes = 0; this.outputSequence = 0;
     this.recoveryOnly = recoveryOnly;
@@ -356,7 +358,7 @@ export class EffectDriver {
       await this.journal.save();
     }
     const processDetails = longRunning ? this.ledgerDetails(effect) : undefined;
-    const child = spawn(effect.program, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'],
+    const child = spawn(this.resolveProgram(effect.program, process.env), args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'],
       env: { PATH: process.env.PATH, LANG: 'C.UTF-8' }, detached: false });
     let resource;
     if (longRunning) {
