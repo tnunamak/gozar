@@ -59,12 +59,15 @@ await atomicWrite(join(directory, 'control.json'), { pid: process.pid, startIden
 }
 
 async function sessionWorld(t, { port = 8799 } = {}) {
-  const home = await scratch(t), script = await fakeDaemonScript(home), tokens = tokenStubs();
-  const directory = join(home, `port-${port}`);
+  // node:test runs after hooks in the order they were added, and scratch() deletes the directory that holds control.json,
+  // so this hook must come first or a daemon that a passing test kept running outlives the run.
+  let directory = null;
   t.after(async () => {
-    const identity = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8').catch(() => 'null') ?? 'null');
+    const identity = directory && JSON.parse(await readFile(join(directory, 'control.json'), 'utf8').catch(() => 'null'));
     if (identity?.pid && await processIdentity(identity.pid) === identity.startIdentity) { try { process.kill(identity.pid, 'SIGKILL'); } catch { /* gone */ } }
   });
+  const home = await scratch(t), script = await fakeDaemonScript(home), tokens = tokenStubs();
+  directory = join(home, `port-${port}`);
   // `run` redeems a fresh approval each time: a token is single use.
   const open = async (daemon, { wait = 'verified', ...deps } = {}) => {
     const q = query({ home, target: `127.0.0.1:${port}`, usage: { kind: 'session', lifetimeMs: 60_000 } });
