@@ -16,7 +16,7 @@ npx --package=@tnunamak/gozar@0.2.1 gozar expose --port 18765 --client-reach int
 
 Gozar finds eligible routes, shows what it would connect, and asks for approval before making the service reachable. Provider setup or an outside-network verification step may still be required. Only share an address once Gozar verifies it; the address can change or expire. **Gozar does not add authentication to your app.**
 
-For a persistent service behind your existing HTTPS proxy, use a [service route](#keep-an-existing-service-address). For an app integration, see [JavaScript API](#javascript-api). MCP is supported, but not required.
+For a persistent service behind your existing HTTPS proxy, use a [service route](#keep-an-existing-service-address). To embed Gozar in an app, start with [Route by requirement](#route-by-requirement): the app states what it needs, and Gozar lists the providers that meet it. [Embed Gozar in your app](#embed-gozar-in-your-app) shows the shorter session commands. MCP is supported, but not required.
 
 ## Install
 
@@ -126,7 +126,7 @@ await watching;
 
 - `candidateToken` is private bearer data. It is single-use, expires after 10 minutes, and is bound to the query, the disclosure revision and what Gozar observed at the provider. If the provider changed, the call fails with `candidate_stale` and changes nothing: ask the catalog again. Do not log it.
 - `ensureRoute` (durable), `adoptRoute` (takes over an existing rule) and `expose` (session or attached) all return a `RouteView`. Its `origin` is the route's address as soon as the provider has allocated it, also while the route is `unverified`: configure your server for it, so it can answer the challenge. `published` is the address you may advertise; it is `null` until the route is `usable`. With attached usage the calling process holds the route: the library sends a heartbeat every 5 seconds, the route ends within 20 seconds of the process exiting, and `closeRoute` ends it early.
-- Every failure has a code from a closed list (`invalid_input`, `requirements_unsatisfied`, `setup_required`, `consent_required`, `consent_unknown`, `consent_expired`, `consent_mismatch`, `candidate_stale`, `preference_conflict`, `route_not_found`, `route_conflict`, `address_changed`, `stopped_by_user`, `handing_back`, `verification_failed`, `provider_unavailable`, `cleanup_debt`, `unsupported`, `ambiguous_route`, `busy`, `internal_error`) and an optional `nextAction`. Provider diagnostics never reach the app.
+- Every failure has a code from a closed list, `GozarErrorCode` in `packages/gozar-node/route-contract.d.ts`, and an optional `nextAction`. Provider diagnostics never reach the app.
 - `getRoutePreferences` and `setRoutePreferences` keep the user's provider order as opaque `preferenceRef` values. `runSetupAction` runs one setup action the user approved. `resolveClientAddress` turns a proven connection into a client address, or says why it cannot.
 - The route functions behave the same on Linux and macOS. On any other platform every candidate is `unsupported`.
 
@@ -137,9 +137,10 @@ The same requests run from the command line. Each command reads its request from
 | `gozar catalog --query-file FILE [--route NAME] --json` | Lists candidates for the query. |
 | `gozar ensure --query-file FILE [--approval-file FILE] [--reconsent] --json` | Creates or confirms a durable route. |
 | `gozar adopt --query-file FILE --approval-file FILE --handover-file FILE --json` | Takes over an existing rule. |
-| `gozar expose --query-file FILE --approval-file FILE [--wait allocated\|verified] --json` | Opens a session or attached route. For an attached route this process holds it; close stdin to end it. |
+| `gozar expose --query-file FILE --approval-file FILE [--wait allocated] --json` | Opens a session or attached route and returns once the route is verified. With `--wait allocated` it returns as soon as the provider has allocated the address. For an attached route this process holds it; close stdin to end it. |
 | `gozar setup ACTION_ID --approval-file FILE [--secret-file FILE] --json` | Runs one approved setup action. |
-| `gozar preference show\|set [--profile-home DIR] [--expected-revision N] [--prefer REF ...]` | Reads or changes the provider order. |
+| `gozar preference show [--profile-home DIR] --json` | Reads the user's provider order and its revision. |
+| `gozar preference set --expected-revision N [--prefer REF ...] [--profile-home DIR] --json` | Replaces the provider order. N is the revision `show` returned. |
 | `gozar watch --handle-file FILE --json` | Streams route changes until the route is gone. |
 
 Exit codes: `0` success; `2` requirements, setup or `unsupported`; `3` missing, stale or unknown approval, or no such route; `1` any other failure. There is no `--yes` for these commands: the approval is the private file that holds the token the catalog issued.
@@ -207,25 +208,13 @@ The root package exports the route functions `catalogRoutes` (also `detect`), `i
 
 ## Try the echo server
 
-In one terminal, launch the local MCP demo:
-
-```sh
-npx --package=@tnunamak/gozar@0.2.1 gozar demo-server --port 18765
-```
-
-In a second terminal, request a route:
-
-```sh
-npx --package=@tnunamak/gozar@0.2.1 gozar expose --port 18765 --client-reach internet
-```
-
-Review and approve the provider and target. Once the route is verified, connect an MCP client to its `/mcp` URL. This demo alone can be used with no application authentication; invoke the `echo` tool with `{"echo":"hello"}` to receive your text and an instance nonce.
+The two commands at the top of this page start the echo server and expose it. Once Gozar verifies the route, connect an MCP client to its `/mcp` URL. The demo has no application authentication: call its `echo` tool with `{"echo":"hello"}`, and it returns your text and an instance nonce. To end the route:
 
 ```sh
 npx --package=@tnunamak/gozar@0.2.1 gozar stop --port 18765
 ```
 
-Use Ctrl+C to stop the local demo server. The unauthenticated demo is not a safe deployment template for a real service.
+Press Ctrl+C to stop the demo server. The demo is not a safe template for a real service, because it has no authentication.
 
 ## Choose a route
 
@@ -322,7 +311,7 @@ Run `npm link` in a source checkout if you want a bare `gozar` command.
 
 ### Develop
 
-Gozar uses a Rust planning core compiled to WASM, a Node.js process to perform effects, and provider adapters defined in data. Consult the [architecture](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/docs/architecture.md), [protocol contract](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/runtime/core-protocol.json), and [adapter guide](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/adapters/INTEGRATION.md).
+Gozar uses a Rust planning core compiled to WASM, a Node.js process to perform effects, and provider adapters defined in data. Consult the [architecture](docs/architecture.md), [protocol contract](runtime/core-protocol.json), and [adapter guide](adapters/INTEGRATION.md).
 
 ```sh
 cargo test -p gozar-core
@@ -333,4 +322,4 @@ node crates/gozar-core/tests/operational-golden.mjs
 node crates/gozar-core/tests/public-relay-golden.mjs
 ```
 
-The [live provider harness](https://github.com/tnunamak/gozar/blob/b4f72cf63530f8985a4f6a0fbf5cfedbd5959c94/harness/README.md) checks a real MCP call, streaming and cleanup. These development tools are not required for npm use.
+The [live provider harness](harness/README.md) checks a real MCP call, streaming and cleanup. These development tools are not required for npm use.
