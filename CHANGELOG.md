@@ -9,6 +9,7 @@
 - Return schemaVersion 2 for Catalog and RouteView; setup adds detect-only and
   cleanup replaces debt with unconfirmed/confirmed. See docs/migration-0.4.md.
 - Ship a provider-neutral remote access screen example with --fakes and --detect.
+- `@ngrok/ngrok` is now an optional peer dependency. Apps that use the ngrok HTTPS edge must install it; other apps avoid downloading its native binaries (about 10 MB on Linux and 29 MB on macOS).
 
 ## 0.3.4
 

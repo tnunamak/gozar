@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { catalogRoutes } from '../../packages/gozar-node/route-catalog.mjs';
 import { loadAdapters } from '../../packages/gozar-node/adapter-runtime.mjs';
+import { createNgrokAdapter } from '../../adapters/providers/ngrok-https-edge/index.mjs';
 import { consentBinding, redeemConsentToken } from '../../packages/gozar-node/consent-token.mjs';
 import { redeemApproval } from '../../packages/gozar-node/attached-route.mjs';
 import { setRoutePreferences, getRoutePreferences } from '../../packages/gozar-node/route-preferences.mjs';
@@ -30,6 +31,17 @@ test('red: a providerId selects exactly that one candidate, and the catalog hold
     assert.deepEqual(one.candidates.map(c => c.providerId), [id]);
     assert.equal(one.candidates[0].rank, 1);
   }
+});
+
+test('ngrok import failure leaves an eligible candidate with an install-SDK setup action', async t => {
+  const ngrok = createNgrokAdapter({ loadSdk: async () => { throw Object.assign(new Error('missing'), { code: 'ERR_MODULE_NOT_FOUND' }); } });
+  const { candidates: [candidate] } = await catalog(await withHome(t, {
+    providerId: 'ngrok-https-edge', usage: { kind: 'attached' },
+    requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'stable', setup: 'allow', protocols: [] },
+  }), { adapters: [ngrok] });
+  assert.equal(candidate.eligible, true);
+  assert.equal(candidate.setup.state, 'action-required');
+  assert.ok(candidate.setup.actions.some(action => action.id === 'install-sdk'));
 });
 
 test('red: an unknown providerId is route_not_found, and the message lists every id in registry order', async t => {
