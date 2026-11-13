@@ -82,7 +82,7 @@ export function stubAdapter(id, { caps = properties(), kinds = ['session', 'atta
     async setup(ctx, actionId, secretHandle) { calls.setup++; return setup ? setup(ctx, actionId, secretHandle) : { state: 'complete', nextAction: null }; },
     async plan(ctx, request) { calls.plan++; return { digest: `plan-${id}-${request.target}`, origin, resourceKey: `res-${id}`, effects: [], readback: null, cleanup: null, precondition: null }; },
     async observe() { calls.observe++; return { present: world.rules.length > 0, resourceKey: `res-${id}`, identity: null, revision: null }; },
-    async create(ctx, plan) { calls.create++; world.rules.push(id); return { schemaVersion: 1, adapterId: id, resourceKey: `res-${id}`, generation: ctx.generation ?? 1, identity: { origin: origin ?? 'https://example.invalid' }, readback: null }; },
+    async create(ctx, plan) { calls.create++; world.rules.push(id); return { schemaVersion: 1, adapterId: id, resourceKey: `res-${id}`, generation: ctx.generation ?? 1, identity: { origin: origin ?? 'https://example.invalid' }, readback: null, origin: origin ?? 'https://example.invalid' }; },
     async verify() { calls.verify++; return { status: 'verified', checkedAt: new Date().toISOString() }; },
     async remove() { calls.remove++; world.rules.length = 0; return { removed: true, debt: null }; },
     async runtimeFacts() { return { properties: caps, ingress: null, limits: { recommendedPollIntervalMs: 5000, idleTimeoutMs: null } }; },

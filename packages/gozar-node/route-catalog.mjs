@@ -3,7 +3,8 @@
 // Inspection is read-only: it calls detect, properties, setupActions, plan and observe, nothing else.
 import { createHash } from 'node:crypto';
 import { canonicalHome } from './service-state.mjs';
-import { CODES, gozarError, normalizeError } from './route-view.mjs';
+import { gozarError, normalizeError } from './error-normalizer.mjs';
+import { supportedPlatform } from './platform.mjs';
 
 const sha = text => createHash('sha256').update(text).digest('hex');
 /** Stable opaque handles for an adapter; apps store the preferenceRef and show the label. */
@@ -17,7 +18,7 @@ const text = value => typeof value === 'string' && value.length > 0;
 
 /** Structural check of a Query; the schema in runtime/route-catalog.schema.json is the full contract. */
 export function validateQuery(query) {
-  const bad = why => { throw gozarError(CODES.invalidInput, `Invalid route query: ${why}`); };
+  const bad = why => { throw gozarError('invalid_input', `Invalid route query: ${why}`); };
   if (query?.schemaVersion !== 1) bad('schemaVersion must be 1');
   for (const key of ['owner', 'target', 'home']) if (!text(query[key])) bad(`${key} must be a non-empty string`);
   const usage = query.usage;
@@ -48,9 +49,9 @@ export async function loadRuntime() {
 export async function defaultReadContext() {
   const runtime = await loadRuntime();
   if (typeof runtime?.createReadContext === 'function') return runtime.createReadContext();
-  const unavailable = what => async () => { throw gozarError(CODES.unsupported, `${what} is not wired in this build`); };
+  const unavailable = what => async () => { throw gozarError('unsupported', `${what} is not wired in this build`); };
   return { now: () => Date.now(), probe: unavailable('The read-only provider probe'), verifyChallenge: unavailable('The challenge verifier'),
-    async configuration(ref) { if (ref === null || ref === undefined) return null; throw gozarError(CODES.routeNotFound, 'Unknown route name'); } };
+    async configuration(ref) { if (ref === null || ref === undefined) return null; throw gozarError('route_not_found', 'Unknown route name'); } };
 }
 
 /**
@@ -69,7 +70,7 @@ export async function readContextFor(deps, home, platform) {
  */
 export async function inspectAdapter(adapter, context, platform) {
   const base = { adapter, properties: adapter.definition.capabilities, actions: [] };
-  if (platform !== 'linux') return { ...base, state: 'unsupported', facts: null, probed: false };
+  if (!supportedPlatform(platform)) return { ...base, state: 'unsupported', facts: null, probed: false };
   let detected;
   try { detected = await adapter.detect(context); }
   catch { return { ...base, state: 'unknown', facts: null, probed: true }; }
@@ -124,7 +125,7 @@ async function collect(query, deps) {
   const home = await canonicalHome(query.home, true);
   const context = await readContextFor(deps, home, platform);
   // An unknown named route is an error before any provider is asked.
-  if (query.route !== undefined && platform === 'linux') await context.configuration(query.route);
+  if (query.route !== undefined && supportedPlatform(platform)) await context.configuration(query.route);
   const inspections = await Promise.all(adapters.map(adapter => inspectAdapter(adapter, context, platform)));
   const pinned = deps.pinnedAdapterId ? await deps.pinnedAdapterId(query) : null;
 
@@ -132,7 +133,7 @@ async function collect(query, deps) {
     const { adapter, state, actions } = inspection, definition = adapter.definition;
     let { properties } = inspection, setupState = state, grant = null;
     const unmet = [];
-    if (platform === 'linux') {
+    if (supportedPlatform(platform)) {
       unmet.push(...unmetRequirements({ requirements: query.requirements, usage: query.usage, definition, properties, setupState }));
       // A plan exists only for a candidate that could be used now; its digest and resource go into the token.
       if (!unmet.length && setupState === 'ready' && definition.supportedKinds.includes(query.usage.kind)) {
@@ -148,7 +149,7 @@ async function collect(query, deps) {
           }
         } catch (error) {
           // No durable recipe or no plan: not usable for this usage. A failing provider read leaves the state unknown.
-          if (error?.code === CODES.unsupported) unmet.push({ requirement: 'usage', actual: query.usage.kind, reasonCode: 'not_met' });
+          if (normalizeError(error).code === 'unsupported') unmet.push({ requirement: 'usage', actual: query.usage.kind, reasonCode: 'not_met' });
           else { setupState = 'unknown'; unmet.push({ requirement: 'setup', actual: 'unknown', reasonCode: 'unknown' }); }
         }
       }
@@ -186,17 +187,17 @@ export async function catalogRoutes(query, deps = {}) {
   try {
     validateQuery(query);
     const runtime = deps.adapters ? null : await loadRuntime();
-    if (!deps.adapters && !runtime) throw gozarError(CODES.internalError, 'The adapter registry is not available in this build');
+    if (!deps.adapters && !runtime) throw gozarError('internal_error', 'The adapter registry is not available in this build');
     const platform = deps.platform ?? process.platform;
     const preferenceRecord = deps.preferenceRecord ?? await (await import('./route-preferences.mjs')).getRoutePreferences({ profileHome: deps.profileHome });
     const issue = deps.issue ?? (await import('./consent-token.mjs')).issueConsentToken;
     const durablePlanFacts = deps.durablePlanFacts ?? (await import('./durable-route.mjs')).durablePlanFacts;
-    if (typeof durablePlanFacts !== 'function' && query.usage.kind === 'durable') throw gozarError(CODES.internalError, 'The durable engine does not provide plan facts in this build');
+    if (typeof durablePlanFacts !== 'function' && query.usage.kind === 'durable') throw gozarError('internal_error', 'The durable engine does not provide plan facts in this build');
     const adapters = deps.adapters ?? await runtime.loadAdapters();
     const { candidates, inspections } = await collect(query, { ...deps, adapters, platform, issue, durablePlanFacts, preferences: preferenceRecord.adapterPreference });
     const unmetNames = [...new Set(candidates.flatMap(candidate => candidate.unmet.map(item => item.requirement)))].sort();
     return { schemaVersion: 1, catalogRevision: catalogRevisionOf(inspections, platform), observedAt: new Date((deps.now ?? Date.now)()).toISOString(),
       preferenceRevision: preferenceRecord.revision, candidates,
-      noMatch: candidates.some(candidate => candidate.eligible) ? null : { code: CODES.requirementsUnsatisfied, requirements: unmetNames } };
+      noMatch: candidates.some(candidate => candidate.eligible) ? null : { code: 'requirements_unsatisfied', requirements: unmetNames } };
   } catch (error) { throw normalizeError(error); }
 }

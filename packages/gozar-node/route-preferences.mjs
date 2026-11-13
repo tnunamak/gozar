@@ -6,7 +6,7 @@ import { join, isAbsolute } from 'node:path';
 import { homedir, userInfo } from 'node:os';
 import { atomicWrite } from './journal.mjs';
 import { canonicalHome, trustedDirectory, privateDirectory, readRecord, withExclusiveLock } from './service-state.mjs';
-import { CODES, gozarError, normalizeError } from './route-view.mjs';
+import { gozarError, normalizeError } from './error-normalizer.mjs';
 
 const realUserHome = () => { try { return userInfo().homedir; } catch { return homedir(); } };
 export const defaultProfileHome = () => process.env.GOZAR_HOME ?? join(realUserHome(), '.local', 'state', 'gozar');
@@ -16,7 +16,7 @@ const empty = () => ({ schemaVersion: 1, scope: 'user', revision: 0, adapterPref
 
 function checkProfileHome(value) {
   const home = value ?? defaultProfileHome();
-  if (typeof home !== 'string' || !isAbsolute(home)) throw gozarError(CODES.invalidInput, 'profileHome must be an absolute path');
+  if (typeof home !== 'string' || !isAbsolute(home)) throw gozarError('invalid_input', 'profileHome must be an absolute path');
   return home;
 }
 
@@ -30,7 +30,7 @@ async function preferenceDirectory(profileHome, create) {
 function checkRecord(record) {
   if (record?.schemaVersion !== 1 || record.scope !== 'user' || !Number.isSafeInteger(record.revision) || record.revision < 0 || record.onUnavailable !== 'ask' ||
       !Array.isArray(record.adapterPreference) || record.adapterPreference.some(ref => typeof ref !== 'string' || !refPattern.test(ref)))
-    throw gozarError(CODES.internalError, 'The stored route preference is not a valid record');
+    throw gozarError('internal_error', 'The stored route preference is not a valid record');
   return record;
 }
 async function readPreferences(directory) {
@@ -52,16 +52,16 @@ export async function setRoutePreferences(request) {
   try {
     const profileHome = checkProfileHome(request?.profileHome);
     const { expectedRevision, adapterPreference, onUnavailable } = request;
-    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw gozarError(CODES.invalidInput, 'expectedRevision must be a non-negative integer');
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw gozarError('invalid_input', 'expectedRevision must be a non-negative integer');
     if (!Array.isArray(adapterPreference) || adapterPreference.length > 64 || new Set(adapterPreference).size !== adapterPreference.length ||
         adapterPreference.some(ref => typeof ref !== 'string' || !refPattern.test(ref)))
-      throw gozarError(CODES.invalidInput, 'adapterPreference must list at most 64 distinct opaque preferenceRef values');
-    if (onUnavailable !== 'ask') throw gozarError(CODES.invalidInput, "onUnavailable must be 'ask'");
+      throw gozarError('invalid_input', 'adapterPreference must list at most 64 distinct opaque preferenceRef values');
+    if (onUnavailable !== 'ask') throw gozarError('invalid_input', "onUnavailable must be 'ask'");
     const directory = await preferenceDirectory(profileHome, true);
     return await withExclusiveLock(join(directory, '.lock'), async () => {
       const current = await readPreferences(directory);
       if (current.revision !== expectedRevision)
-        throw gozarError(CODES.preferenceConflict, `The preference is at revision ${current.revision}, not ${expectedRevision}; read it again and retry`);
+        throw gozarError('preference_conflict', `The preference is at revision ${current.revision}, not ${expectedRevision}; read it again and retry`);
       const next = { schemaVersion: 1, scope: 'user', revision: current.revision + 1, adapterPreference: [...adapterPreference], onUnavailable: 'ask' };
       await atomicWrite(join(directory, 'user.json'), next);
       return next;

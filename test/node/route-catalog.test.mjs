@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildCatalog, catalogRoutes, preferenceRefFor } from '../../packages/gozar-node/route-catalog.mjs';
-import { CODES, legacyErrorMap, normalizeError } from '../../packages/gozar-node/route-view.mjs';
+import { normalizeError } from '../../packages/gozar-node/error-normalizer.mjs';
 import { action, assertShape, codeOf, fixtures, properties, query, scratch, stubAdapter, tokenStubs } from './route-schema-check.mjs';
 
 const durableFacts = async ({ adapterId }) => ({ planDigest: `durable-${adapterId}`, observedResource: `durable-res-${adapterId}` });
@@ -54,16 +54,27 @@ test('red: a detect-only adapter (no supported kind) is never eligible and gets 
   assert.equal(catalog.noMatch.code, 'requirements_unsatisfied');
 });
 
-test('red: on macOS every candidate is unsupported, nothing is detected and no token is issued', async t => {
+test('on macOS the core does not block candidates: they are detected, planned and issued a token', async t => {
+  const q = await withHome(t);
+  const adapters = [stubAdapter('alpha')];
+  const d = deps(adapters, { platform: 'darwin' });
+  const catalog = await catalogRoutes(q, d);
+  assertShape('Catalog', catalog);
+  assert.equal(catalog.candidates[0].eligible, true);
+  assert.ok(catalog.candidates[0].candidateToken);
+  assert.ok(adapters[0].calls.detect > 0);
+});
+
+test('red: on an unsupported platform (win32) every candidate is unsupported, nothing is detected and no token is issued', async t => {
   const q = await withHome(t);
   const adapters = [stubAdapter('alpha'), stubAdapter('bravo')];
-  const d = deps(adapters, { platform: 'darwin' });
+  const d = deps(adapters, { platform: 'win32' });
   const catalog = await catalogRoutes(q, d);
   assertShape('Catalog', catalog);
   for (const candidate of catalog.candidates) {
     assert.equal(candidate.eligible, false);
     assert.equal(candidate.setup.state, 'unsupported');
-    assert.deepEqual(candidate.unmet, [{ requirement: 'platform', actual: 'darwin', reasonCode: 'unsupported_platform' }]);
+    assert.deepEqual(candidate.unmet, [{ requirement: 'platform', actual: 'win32', reasonCode: 'unsupported_platform' }]);
     assert.equal(candidate.candidateToken, null);
   }
   assert.equal(d.tokens.live.size, 0);
@@ -154,13 +165,21 @@ test('invalid queries and unknown named routes fail with frozen codes', async t 
   assert.equal(await codeOf(catalogRoutes({ ...q, route: 'no-such-route' }, deps([stubAdapter('alpha')], { readContext: undefined }))), 'route_not_found');
 });
 
+test('red: the durable engine answering provider_unsupported makes the candidate unusable for usage, not unknown', async t => {
+  const q = await withHome(t, { usage: { kind: 'durable', routeId: 'coordinator' } });
+  const engine = async () => { throw Object.assign(new Error('This adapter has no durable recipe'), { code: 'provider_unsupported' }); };
+  const catalog = await catalogRoutes(q, deps([stubAdapter('alpha')], { durablePlanFacts: engine }));
+  const [candidate] = catalog.candidates;
+  assert.deepEqual(candidate.unmet, [{ requirement: 'usage', actual: 'durable', reasonCode: 'not_met' }]);
+  assert.equal(candidate.setup.state, 'ready');
+  assert.equal(candidate.candidateToken, null);
+});
+
 test('the legacy→frozen error map matches the fixture normalization', () => {
   for (const [source, rule] of Object.entries(fixtures.errorNormalization)) {
     assert.ok(fixtures.frozenErrorCodes.includes(rule.target), `${source} maps to an unfrozen code`);
     const mapped = normalizeError(Object.assign(new Error('x'), { code: source })).code;
     if (!fixtures.frozenErrorCodes.includes(source) || source === rule.target) assert.equal(mapped, rule.target, `${source} should normalise to ${rule.target}`);
   }
-  assert.ok(Object.values(CODES).every(code => fixtures.frozenErrorCodes.includes(code)), 'every code used by the modules is frozen');
   assert.equal(normalizeError(Object.assign(new Error('x'), { code: 'definitely_unmapped' })).code, 'internal_error');
-  assert.equal(typeof legacyErrorMap, 'object');
 });

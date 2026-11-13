@@ -1,6 +1,19 @@
 # Adapter authoring
 
-Adapters are wrapped `planVersion:1` data records. `manifest.json` enumerates definitions; `operationalCatalog` selects the enabled operational plans. The current catalog selects localhost.run trials, Funnel, private Serve, LAN HTTP and owner-managed HTTPS validation. The remaining modes use detection records until separately admitted.
+A provider is one directory under `adapters/providers/<id>/` and one entry in the `providers` list of `adapters/manifest.json`. Nothing else in Gozar names it: the catalog, the CLI, the docs and the package list read the registry.
+
+```json
+{ "id": "example-edge", "module": "providers/example-edge/index.mjs", "definition": "providers/example-edge/definition.json" }
+```
+
+- `definition.json` is `{ "adapter": AdapterDefinition }`, optionally with `"wraps"` naming an existing recipe record (`adapters/<id>.definition.json`). The definition states the provider's reach, address stability, cost, who can read traffic, supported usage kinds (`session`, `attached`, `durable`), protocol checks (`sse`, `streamableHttp`, `oauthDcr`) and its disclosure text. A claim that Gozar has not proved with a live check stays `false` or `unknown`; evidence goes in the definition.
+- `index.mjs` default-exports the adapter. A recipe-based provider returns `recipeAdapter({ definition })` from `packages/gozar-node/adapter-runtime.mjs`; a provider with its own protocol implements `detect`, `properties`, `setupActions`, `setup`, `plan`, `create`, `observe`, `verify`, `remove` and `runtimeFacts` against the contexts declared in `packages/gozar-node/adapter-contract.d.ts`. A `create` receipt carries the `origin` the provider allocated, or `null`; Gozar reads the published origin from it.
+- An adapter decides its own platform support through `ctx.platform`. Gozar 0.2.0 supports Linux and macOS; on any other value the core answers `unsupported` for every candidate before an adapter runs. An adapter whose commands only work on one supported platform answers `unsupported` for the other, with a comment that says why.
+- Run `node scripts/sync-adapter-registry.mjs` after you edit `providers`. It regenerates the compatibility arrays `definitions` and `normalizedDefinitions` and fails when a listed file is missing. Run `node scripts/generate-adapter-docs.mjs` to refresh `docs/providers.md`. Both accept `--check`, and `test/node/provider-agnostic.test.mjs` runs both checks.
+- `loadAdapters({ manifest, root })` accepts another manifest. A test adds a fake provider through a manifest of its own and needs no core edit; `test/node/public-api-journey.test.mjs` does this.
+- `scripts/check-package.mjs` requires every registry module and definition to be in the packed file list.
+
+Legacy: `manifest.json` also lists the older `planVersion:1` recipe records that the session path and `operationalCatalog` still use. The current catalog selects localhost.run trials, Funnel, private Serve, LAN HTTP and owner-managed HTTPS validation. The remaining modes use detection records until separately admitted.
 
 Each definition supplies its identifier, audience, ownership, capability requirements, user actions, typed bindings and recipes. The core and host both check `admission.requiredFeatures` before a plan executes. Unknown operations, bindings or recipe fields reject the whole plan.
 

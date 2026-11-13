@@ -5,6 +5,7 @@
 // store and reaches `create` only through `ctx.configuration(ref)`. The token never enters facts, plans,
 // receipts, errors or output: every failure below uses a fixed message and never the SDK's own text.
 import { recipeAdapter, effectError } from '../../../packages/gozar-node/adapter-runtime.mjs';
+import { supportedPlatform } from '../../../packages/gozar-node/platform.mjs';
 import { createHash } from 'node:crypto';
 
 const domainPattern = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
@@ -35,7 +36,7 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
       return {
         async detect(ctx) {
           const os = platformOf(ctx);
-          if (os !== 'linux') return { state: 'unsupported', facts: { platform: os, sdk: false, configured: false, setupNeeded: false } };
+          if (!supportedPlatform(os)) return { state: 'unsupported', facts: { platform: os, sdk: false, configured: false, setupNeeded: false } };
           const sdk = await loadSdk().then(module => typeof (module?.forward ?? module?.default?.forward) === 'function', () => false);
           const config = await ctx.configuration(null).catch(() => null);
           const ready = sdk && configured(config);
@@ -56,7 +57,7 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
         },
 
         async plan(ctx, request) {
-          if (platformOf(ctx) !== 'linux') throw unsupported('this platform');
+          if (!supportedPlatform(platformOf(ctx))) throw unsupported('this platform');
           if (request?.usage?.kind !== 'attached') throw unsupported(`the ${request?.usage?.kind} kind`);
           const config = await ctx.configuration(request.configurationRef ?? null).catch(() => null);
           if (!configured(config)) throw effectError('setup_required', 'Set up the ngrok auth token and reserved domain first');
@@ -89,7 +90,7 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
           }
           listeners.set(plan.resourceKey, listener);
           return { schemaVersion: 1, adapterId: definition.id, resourceKey: plan.resourceKey, generation: ctx.generation,
-            identity: { origin: actual }, readback: { ...plan.readback } };
+            identity: { origin: actual }, readback: { ...plan.readback }, origin: actual };
         },
 
         async observe(ctx, request) {

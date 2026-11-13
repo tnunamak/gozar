@@ -1,6 +1,6 @@
 # Existing service routes
 
-A service route records an existing HTTPS origin and its fixed HTTP target. Use Linux with Node.js 24 or newer; adding or removing records also requires `flock` from util-linux. You manage the service, reverse proxy, TLS and startup. Gozar starts no listener or daemon, forwards no traffic and changes no ingress. Records survive controller exit and reboot and have no Gozar expiry. Service availability still depends on your own supervisors. Each status call checks the route again rather than restoring saved readiness.
+A service route records an existing HTTPS origin and its fixed HTTP target. Use Linux or macOS with Node.js 22.13 or newer; adding or removing records also requires `flock`. Windows answers `unsupported`. You manage the service, reverse proxy, TLS and startup. Gozar starts no listener or daemon, forwards no traffic and changes no ingress. Records survive controller exit and reboot and have no Gozar expiry. Service availability still depends on your own supervisors. Each status call checks the route again rather than restoring saved readiness.
 
 The commands below assume a global `gozar` executable. If you installed the package locally or want a one-off command, replace `gozar` with `npx --package=@tnunamak/gozar@0.2.0 gozar`.
 
@@ -96,32 +96,41 @@ Every route has this shape:
 
 # Durable routes (Gozar-owned)
 
-A durable route is a Tailscale Funnel or Serve listener that Gozar creates, keeps at one origin across app restarts and reboots, and removes only when asked. Use it when a client stores the address for a long time (a signed invitation, an OAuth client registration, a hosted connector). For exposure that ends on its own, use a session (`gozar expose`).
+A durable route is a Tailscale Funnel or Serve listener that Gozar creates, keeps at one origin across app restarts and reboots, and removes only when asked. Use it when a client stores the address for a long time (a signed invitation, an OAuth client registration, a hosted connector). For exposure that ends on its own, use a session (`gozar expose`) or an attached route (see the [README](../README.md#route-by-requirement)).
 
-Requirements: Linux, Node.js 24 or newer, `flock`, and tailscaled with its LocalAPI socket (`/var/run/tailscale/tailscaled.sock` or `/run/tailscale/tailscaled.sock`) that the invoking user may write (`sudo tailscale set --operator=$USER`). Set `GOZAR_TAILSCALED_SOCKET` for a non-default socket. Gozar changes the serve config only through the LocalAPI with ETag compare-and-set, never through the `tailscale` CLI, and never writes the config without `If-Match`. When the LocalAPI is missing, denies access, lacks the endpoint, or answers without an `Etag`, the call fails with `provider_unavailable`, `provider_denied` or `provider_unsupported`; when another program keeps changing the config, it fails with `provider_conflict`; when the provider rejects a write, it fails with `provider_failed`. Each error has a `provider` field (the provider family, for example `tailscale`) and a `nextAction` field (the step to take, for example `sudo tailscale set --operator=$USER`).
+An app asks for a durable route by requirement. It never names a provider. Gozar's catalog returns the providers that meet the requirement, and the app passes back the approval of the one the user chose.
 
-**What it exposes.** A durable route is a standing forward from the public origin to `127.0.0.1:PORT`. It forwards to whatever listens on that port, whether or not the app that asked for it is running. Use a port you keep for the route. Show the user this consent text (from `durableConsentText`) before you pass an approval: "Route ID stays reachable at ORIGIN whether or not OWNER is running, until you stop it with `gozar stop --route ID`."
+Requirements: Linux or macOS, Node.js 22.13 or newer, `flock`, and tailscaled with its LocalAPI socket that the invoking user may write (on Linux, `sudo tailscale set --operator=$USER`). Set `GOZAR_TAILSCALED_SOCKET` for a non-default socket. Gozar changes the serve config only through the LocalAPI with ETag compare-and-set, never through the `tailscale` CLI, and never writes the config without `If-Match`. Windows answers `unsupported`.
+
+**What it exposes.** A durable route is a standing forward from the public origin to `127.0.0.1:PORT`. It forwards to whatever listens on that port, whether or not the app that asked for it is running. Use a port you keep for the route. Show the user the candidate's `disclosure.text` before you pass an approval. `gozar status` shows the same facts afterwards.
 
 ```js
-import { ensureRoute, statusRoutes, releaseRoute, adoptRoute, confirmHandBack, cancelHandBack, createServiceVerifier }
-  from '@tnunamak/gozar/service';
+import { catalogRoutes, ensureRoute, routeStatus, closeRoute } from '@tnunamak/gozar';
+import { createServiceVerifier } from '@tnunamak/gozar/service';
 
 // Install createServiceVerifier() in the app's request handler first, as for service routes.
-const approvals = [{ adapterId: 'tailscale-funnel', target: '127.0.0.1:3000', origin: null, durable: true }];
-const { route } = await ensureRoute({ routeId: 'coordinator', owner: 'example-app', adapterId: 'tailscale-funnel',
-  target: '127.0.0.1:3000', approvals });
+const query = {
+  schemaVersion: 1, owner: 'example-app', target: '127.0.0.1:3000', home,
+  usage: { kind: 'durable', routeId: 'coordinator' },
+  requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'stable', setup: 'none', protocols: [] },
+};
+const catalog = await catalogRoutes(query);
+const candidate = catalog.candidates.find(item => item.eligible && item.candidateToken);
+// Show candidate.disclosure.text. After the user agrees, pass the token and the revision the user saw:
+const route = await ensureRoute({ ...query, approval: { candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision } });
 // route.state is 'usable' once the challenge passed through the origin; route.origin is then fixed for good.
-await statusRoutes({ routeId: 'coordinator' });
-await releaseRoute({ routeId: 'coordinator' }); // mode 'remove' (default), 'hand-back' or 'dismiss'
+await routeStatus({ home, handle: route.handle });
+await closeRoute({ home, handle: route.handle, mode: 'remove' });
 ```
 
-- **Idempotent and pinned.** Call `ensureRoute` on every start with the same tuple. The record is authoritative: a different `origin` or adapter is refused, and Gozar never reports a different origin for the route. If the node's DNS name changes, the route is `address_changed`; release it and create a new one with new consent.
-- **Consent.** `approvals` is the ordered list of exact tuples the user approved. On a first allocation only, Gozar may fall back to a later adapter in the list, and only with that adapter's own tuple.
-- **States.** `usable`, `unverified` (rule present, challenge failed; no origin published yet), `lost` (rule gone; the next `ensureRoute` restores it at the pinned origin only), `uncertain` (a rule Gozar cannot attribute), `address_changed`, `releasing` (cleanup debt) and `handing-back`.
-- **Removal** reads the serve config and its ETag, requires an exact match with the receipt, and writes the config without that one listener with `If-Match`. A changed rule stays in place and the record stays as visible cleanup debt. When the foreign rule is gone, release again; or drop the debt record with `releaseRoute({ routeId, mode: 'dismiss' })`.
-- **Hand-back** has two phases. `releaseRoute({ mode: 'hand-back' })` returns `{ claim, transfer }` and keeps the record; repeat calls return the same values. After the previous owner has taken the rule back, call `confirmHandBack({ routeId, transfer })`. `cancelHandBack` returns the route to Gozar.
-- **Adoption.** `adoptRoute({ routeId, owner, target, origin, handover: { from, generation }, approvals })` takes an existing rule with no teardown. The app names no provider: Gozar looks for the one rule that is exactly this target's rule at `origin`, and requires the same match before and after verification. No match gives `claim_mismatch`; more than one gives `ambiguous_route`; nothing changes in either case. The approval must name the adapter Gozar found. The previous owner must already have fenced itself at `generation`. The `claim` that hand-back returns is for the previous owner's rollback; adoption never needs it.
-- **Reservations.** One home-wide lock (30 s bounded wait) serializes sessions, ensure, adopt and release. A listener or provider port held by a session or another route is refused with `reserved`.
+- **Idempotent and pinned.** Call `ensureRoute` on every start with the same query. The first allocation needs an approval. Later identical calls read the persisted pin and need none. The record is authoritative: Gozar never reports a different origin for the route, and a changed requirement does not move the pin. If the node's DNS name changes, the route is `address_changed`; close it and ask again with a new approval.
+- **Approval.** A `candidateToken` is single-use, expires after 10 minutes, and is bound to the owner, home, target, usage, requirements, origin and disclosure revision, and to what Gozar observed at the provider when it issued the token. If the provider changed since, `ensureRoute` fails with `candidate_stale` and changes nothing. Ask the catalog again and show the new offer.
+- **States.** `usable`, `unverified` (rule present, challenge failed), `lost` (rule gone; the next `ensureRoute` restores it at the pinned origin only), `uncertain` (a rule Gozar cannot attribute), `address_changed`, `releasing` (cleanup debt) and `handing-back`.
+- **Removal** reads the serve config and its ETag, requires an exact match with the receipt, and writes the config without that one listener with `If-Match`. A changed rule stays in place and the route shows cleanup debt (`cleanup.state: 'debt'`). When the foreign rule is gone, close again. `releaseRoute({ routeId, mode: 'dismiss' })` from `@tnunamak/gozar/service` drops the debt record. A `closeRoute` with a stale `handle.generation` fails with `route_conflict`.
+- **Hand-back** has two phases. `releaseRoute({ routeId, mode: 'hand-back' })` returns `{ claim, transfer }` and keeps the record; repeat calls return the same values. After the previous owner has taken the rule back, call `confirmHandBack({ routeId, transfer })`. `cancelHandBack` returns the route to Gozar. These stay in `@tnunamak/gozar/service`.
+- **Adoption.** `adoptRoute({ ...query, intent: 'adopt', origin, approval, handover: { from, generation } })` takes an existing rule with no teardown. Ask the catalog with the same query (`intent: 'adopt'` and the exact `origin`) to get the approval. Gozar looks for the one rule that is exactly this target's rule at `origin`, and requires the same match before and after verification. No match gives `candidate_stale`; more than one gives `ambiguous_route`; nothing changes in either case. The previous owner must already have fenced itself at `handover.generation`. The `claim` that hand-back returns is for the previous owner's rollback; adoption never needs it.
+- **Errors.** Apps branch only on the frozen codes in `route-contract.d.ts`. Provider diagnostics (a missing LocalAPI socket, a denied operator permission, an ETag conflict) stay inside Gozar. A missing prerequisite is `setup_required` with a `nextAction` the user can follow. Gozar never falls back to the `tailscale` CLI.
+- **Reservations.** One home-wide lock (30 s bounded wait) serializes sessions, ensure, adopt and release. A listener or provider port held by a session or another route is refused with `route_conflict`.
 
 The user can always see and stop durable routes without the app:
 
@@ -132,4 +141,6 @@ gozar stop --route coordinator    # compare-and-set removal; also blocks re-crea
 gozar allow --route coordinator   # shows the consent text again and lifts the stop
 ```
 
-`gozar status` shows each route as `owner-run`, says `forwards to 127.0.0.1:PORT whether or not OWNER is running`, and checks the target live: `app answering`, `nothing listening`, or the warning `another program is listening` with `gozar stop --route ID` as the next action. A user stop is sticky: the app's next `ensureRoute` or `adoptRoute` fails with `stopped_by_user` until the user runs `gozar allow --route ID` or the app passes `reconsent: true` right after the user approved the consent text again. No `releaseRoute` mode clears it.
+`gozar status` shows each route as `owner-run`, says `forwards to 127.0.0.1:PORT whether or not OWNER is running`, and checks the target live: `app answering`, `nothing listening`, or the warning `another program is listening` with `gozar stop --route ID` as the next action. A user stop is sticky: the app's next `ensureRoute` or `adoptRoute` fails with `stopped_by_user` until the user runs `gozar allow --route ID` or the app passes `reconsent: true` together with a fresh `approval` right after the user approved again. No close mode clears it.
+
+The same flow runs from files with `gozar catalog`, `gozar ensure` and `gozar adopt`; see [CLI commands](../README.md#route-by-requirement).

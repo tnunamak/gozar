@@ -39,8 +39,8 @@
       ],
       "supervision": "host-supervised",
       "protocols": {
-        "sse": false,
-        "streamableHttp": false,
+        "sse": true,
+        "streamableHttp": true,
         "oauthDcr": true
       }
     },
@@ -72,8 +72,8 @@
       "https://ngrok.com/privacy"
     ],
     "protocols": {
-      "sse/streamableHttp": "false. no admitted recipe: this adapter runs no recipe probe, so no timed stream probe gates a publication",
-      "oauthDcr": "sse/streamableHttp false: the SDK listener path runs no timed stream probe before publication (recipe-blocked). oauthDcr: the reserved domain is a stable HTTPS origin and the configured authority is preserved."
+      "sse/streamableHttp": "true. the attached controller (packages/gozar-node/attached-route.mjs, runAttachedController) forwards the SDK listener to a gate it runs in front of the app. Before it reports a published origin it runs the same timed-SSE validation as recipe routes (gate.verify with sse) through the public origin. Frames must arrive unbuffered and in order, or the listener is closed and the route fails with verification_failed. Red test: test/adapters/ngrok-attached-validation.test.mjs",
+      "oauthDcr": "oauthDcr: the reserved domain is a stable HTTPS origin and the configured authority is preserved."
     }
   }
 }

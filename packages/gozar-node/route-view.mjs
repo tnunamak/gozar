@@ -3,54 +3,8 @@
 // answered; provider diagnostics stay on error.cause.
 import { join } from 'node:path';
 
-/** The frozen GozarErrorCode vocabulary, named so call sites never spell a code twice. */
-export const CODES = Object.freeze({
-  invalidInput: 'invalid_input', requirementsUnsatisfied: 'requirements_unsatisfied', setupRequired: 'setup_required',
-  consentRequired: 'consent_required', consentUnknown: 'consent_unknown', consentExpired: 'consent_expired',
-  consentMismatch: 'consent_mismatch', candidateStale: 'candidate_stale', preferenceConflict: 'preference_conflict',
-  routeNotFound: 'route_not_found', routeConflict: 'route_conflict', addressChanged: 'address_changed',
-  stoppedByUser: 'stopped_by_user', handingBack: 'handing_back', verificationFailed: 'verification_failed',
-  providerUnavailable: 'provider_unavailable', cleanupDebt: 'cleanup_debt', unsupported: 'unsupported',
-  ambiguousRoute: 'ambiguous_route', busy: 'busy', internalError: 'internal_error',
-});
-const frozen = new Set(Object.values(CODES));
-
-/** What JS callers catch: `.code` and `.nextAction`, like the CLI envelope. */
-export function gozarError(code, message, nextAction = null, cause = undefined) {
-  const error = new Error(message);
-  error.code = frozen.has(code) ? code : CODES.internalError;
-  error.nextAction = nextAction;
-  if (cause !== undefined) error.cause = cause;
-  return error;
-}
-
-// Pre-0.2 source codes that still escape the durable, service and session code, mapped to the frozen
-// vocabulary (test/fixtures/route-contract.json errorNormalization is the source of truth).
-const legacy = {
-  provider_denied: CODES.setupRequired, provider_unsupported: CODES.unsupported, provider_conflict: CODES.providerUnavailable,
-  provider_failed: CODES.providerUnavailable, provider_not_running: CODES.setupRequired, ETIMEDOUT: CODES.providerUnavailable,
-  provider_create_failed: CODES.providerUnavailable, adapter_changed: CODES.routeConflict, origin_changed: CODES.routeConflict,
-  consent_changed: CODES.routeConflict, route_releasing: CODES.routeConflict, route_exists: CODES.routeConflict,
-  reserved: CODES.routeConflict, port_occupied: CODES.routeConflict, durable_lifetime_unsupported: CODES.requirementsUnsatisfied,
-  adapter_not_durable: CODES.requirementsUnsatisfied, handover_required: CODES.invalidInput, claim_mismatch: CODES.candidateStale,
-  uncertain: CODES.cleanupDebt, not_found: CODES.routeNotFound, not_owned: CODES.invalidInput, nothing_to_dismiss: CODES.invalidInput,
-  not_handing_back: CODES.routeConflict, stale_transfer: CODES.routeConflict, releasing: CODES.routeConflict, unknown: CODES.cleanupDebt,
-  gozar_owned: CODES.routeConflict, unsafe_state_path: CODES.setupRequired, SERVICE_ERROR: CODES.internalError,
-  'needs-validation': CODES.verificationFailed, precondition_failed: CODES.providerUnavailable,
-};
-export const legacyErrorMap = Object.freeze({ ...legacy });
-
-const stateAction = () => ({ id: 'fix-state-permissions', kind: 'instructions', label: 'Fix the state directory permissions',
-  digest: 'sha256:gozar-fix-state-permissions', instructions: 'Make the invoking user own the Gozar state directory, with no group or world write.',
-  disclosure: { revision: 'gozar-local-1', text: 'Gozar changes nothing; you fix the directory yourself.', links: [] } });
-
-/** Every error an app sees leaves through here: frozen codes pass, legacy codes map, the rest is internal_error. */
-export function normalizeError(error) {
-  if (frozen.has(error?.code)) { error.nextAction ??= null; return error; }
-  const target = legacy[error?.code];
-  if (!target) return gozarError(CODES.internalError, 'Unexpected Gozar fault', null, error);
-  return gozarError(target, error.message, error.code === 'unsafe_state_path' ? stateAction() : error.nextAction ?? null, error);
-}
+import { gozarError, normalizeError } from './error-normalizer.mjs';
+export { gozarError, normalizeError };
 
 // --- Shapes -------------------------------------------------------------------------------------
 
@@ -59,7 +13,7 @@ export function checkRef(request) {
   const handle = request?.handle;
   if (typeof request?.home !== 'string' || !request.home || !handle || !KINDS.includes(handle.kind) || typeof handle.id !== 'string' ||
       !handle.id || !Number.isInteger(handle.generation) || handle.generation < 0)
-    throw gozarError(CODES.invalidInput, 'A route reference needs a home and a handle {kind, id, generation}');
+    throw gozarError('invalid_input', 'A route reference needs a home and a handle {kind, id, generation}');
   return handle;
 }
 
@@ -135,7 +89,7 @@ export function releasedView(last, handle) {
 
 // --- Dispatch -----------------------------------------------------------------------------------
 
-async function propertiesFor(adapterId, deps) {
+export async function propertiesFor(adapterId, deps) {
   const adapters = deps.adapters ?? await (await import('./adapter-runtime.mjs')).loadAdapters();
   const adapter = adapters.find(item => item.id === adapterId);
   return adapter ? { properties: adapter.definition.capabilities } : { properties: unknownProperties() };
@@ -146,7 +100,7 @@ const defaults = {
     async status({ home, handle }) {
       const { statusRoutes } = await import('./durable-route.mjs');
       const route = (await statusRoutes({ routeId: handle.id, home })).routes[0];
-      if (!route) throw gozarError(CODES.routeNotFound, `No durable route ${handle.id}`);
+      if (!route) throw gozarError('route_not_found', `No durable route ${handle.id}`);
       return route;
     },
     async close({ home, handle }) {
@@ -160,8 +114,8 @@ const defaults = {
       const [directory, sessionId] = splitSession(handle.id);
       let reply;
       try { reply = await control(join(home, directory), { type: 'status' }, 30_000); }
-      catch (cause) { throw gozarError(CODES.routeNotFound, `No running session ${handle.id}`, null, cause); }
-      if (sessionId && reply.snapshot?.sessionId !== sessionId) throw gozarError(CODES.routeConflict, 'The session was replaced; this handle is stale');
+      catch (cause) { throw gozarError('route_not_found', `No running session ${handle.id}`, null, cause); }
+      if (sessionId && reply.snapshot?.sessionId !== sessionId) throw gozarError('route_conflict', 'The session was replaced; this handle is stale');
       return reply;
     },
     async close({ home, handle }) {
@@ -174,7 +128,7 @@ const defaults = {
     async status({ home, handle }) {
       const { statusServices } = await import('./service.mjs');
       const route = (await statusServices({ home, origin: handle.id })).routes.find(item => item.ownership === 'external-owned');
-      if (!route) throw gozarError(CODES.routeNotFound, 'No external service record for this origin');
+      if (!route) throw gozarError('route_not_found', 'No external service record for this origin');
       return route;
     },
     async close({ home, handle }) {
@@ -193,7 +147,7 @@ export async function routeStatus(request, deps = {}) {
     switch (handle.kind) {
       case 'durable': {
         const reply = await (deps.durable ?? defaults.durable).status(request);
-        if (Number.isInteger(reply.generation) && reply.generation !== handle.generation) throw gozarError(CODES.routeConflict, 'The route was replaced; this handle is stale');
+        if (Number.isInteger(reply.generation) && reply.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
         return projectDurable(reply, { handle, now, ...await propertiesFor(reply.adapterId, deps) });
       }
       case 'session': {
@@ -209,7 +163,7 @@ export async function routeStatus(request, deps = {}) {
 /** Ends one route. Durable, session and attached routes are removed; an external record loses its metadata only. */
 export async function closeRoute(request, deps = {}) {
   const handle = checkRef(request);
-  if (request.mode !== 'remove') throw gozarError(CODES.invalidInput, "closeRoute mode must be 'remove'");
+  if (request.mode !== 'remove') throw gozarError('invalid_input', "closeRoute mode must be 'remove'");
   const now = deps.now?.() ?? Date.now();
   try {
     switch (handle.kind) {

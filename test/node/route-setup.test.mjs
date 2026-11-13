@@ -124,9 +124,9 @@ test('the adapter can run only the one approved action id', async t => {
   assert.equal(await codeOf(run([adapter], { home, actionId: 'login', approval: approvalOf(state.action) })), 'invalid_input');
 });
 
-test('on macOS setup is unsupported and nothing runs', async t => {
+test('on an unsupported platform (win32) setup is unsupported and nothing runs', async t => {
   const home = await scratch(t), { adapter, state } = loginAdapter(), ran = [];
-  assert.equal(await codeOf(runSetupAction({ home, actionId: 'login', approval: approvalOf(state.action) }, { adapters: [adapter], platform: 'darwin', readContext, executeApprovedAction: async id => { ran.push(id); } })), 'unsupported');
+  assert.equal(await codeOf(runSetupAction({ home, actionId: 'login', approval: approvalOf(state.action) }, { adapters: [adapter], platform: 'win32', readContext, executeApprovedAction: async id => { ran.push(id); } })), 'unsupported');
   assert.deepEqual(ran, []);
 });
 

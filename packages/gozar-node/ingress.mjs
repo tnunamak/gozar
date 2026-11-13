@@ -2,7 +2,7 @@
 // when the route's Ingress names a proven boundary and the transport-level peer of this very request is that
 // boundary, at the route generation the proof was taken for. Header presence and loopback prove nothing.
 import { BlockList, isIP } from 'node:net';
-import { CODES, gozarError } from './route-view.mjs';
+import { gozarError } from './error-normalizer.mjs';
 
 const MAX_HEADER_BYTES = 1024;
 const MAX_CHAIN = 32;
@@ -14,7 +14,7 @@ function cidrList(cidrs) {
     const [address, bits, extra] = String(cidr).split('/');
     const family = isIP(address);
     const prefix = Number(bits);
-    if (!family || extra !== undefined || !/^\d{1,3}$/.test(bits ?? '') || prefix > (family === 4 ? 32 : 128)) throw gozarError(CODES.invalidInput, `Not a CIDR: ${cidr}`);
+    if (!family || extra !== undefined || !/^\d{1,3}$/.test(bits ?? '') || prefix > (family === 4 ? 32 : 128)) throw gozarError('invalid_input', `Not a CIDR: ${cidr}`);
     list.addSubnet(address, prefix, family === 4 ? 'ipv4' : 'ipv6');
   }
   return list;
@@ -28,7 +28,7 @@ const plain = address => String(address ?? '').replace(/^::ffff:(\d+\.\d+\.\d+\.
  */
 export function buildIngress({ generation, now = Date.now(), validForMs = 300_000, publicAuthority, boundary }) {
   if (!Number.isInteger(generation) || generation < 0 || typeof publicAuthority !== 'string' || !publicAuthority)
-    throw gozarError(CODES.invalidInput, 'An ingress needs a generation and a public authority');
+    throw gozarError('invalid_input', 'An ingress needs a generation and a public authority');
   const base = { generation, verifiedAt: iso(now), validUntil: iso(now + validForMs), publicAuthority, authorityHandling: 'configured-origin' };
   if (!boundary || boundary.kind === 'unavailable') return { ...base, clientAddress: { source: 'unavailable', reason: boundary?.reason ?? 'no proven ingress boundary' } };
   if (boundary.kind === 'socket') return { ...base, clientAddress: { source: 'socket' } };
@@ -38,7 +38,7 @@ export function buildIngress({ generation, now = Date.now(), validForMs = 300_00
     peer?.kind === 'network-boundary' ? Array.isArray(peer.cidrs) && peer.cidrs.length > 0 && typeof peer.boundaryRef === 'string' : false;
   if (boundary.kind !== 'trusted-header' || !peerOk || typeof evidenceRef !== 'string' || !evidenceRef || !header ||
       !['rfc7239', 'ip-list'].includes(header.format) || !/^[a-z0-9-]+$/.test(header.name ?? '') || !Number.isInteger(header.trustedHops) || header.trustedHops < 0)
-    throw gozarError(CODES.invalidInput, 'A trusted-header ingress needs evidence, a proven peer and a header plan');
+    throw gozarError('invalid_input', 'A trusted-header ingress needs evidence, a proven peer and a header plan');
   if (peer.kind === 'network-boundary') cidrList(peer.cidrs);
   cidrList(header.trustedProxyCidrs ?? []);
   return { ...base, clientAddress: { source: 'trusted-header', evidenceRef, peer,

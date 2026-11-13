@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
+import { supportedPlatform } from './platform.mjs';
 
 const packageRoot = fileURLToPath(new URL('../../', import.meta.url));
 const defaultAdaptersRoot = resolve(packageRoot, 'adapters');
@@ -45,8 +46,7 @@ export function mapProviderError(error) {
   return effectError('provider_unavailable', 'The provider operation failed');
 }
 // A load failure is a Gozar fault: the frozen consumer code `internal_error`.
-const internalError = 'internal_error';
-const loadError = (id, message) => Object.assign(new Error(`Adapter ${id}: ${message}`), { code: internalError, adapterId: id });
+const loadError = (id, message) => Object.assign(new Error(`Adapter ${id}: ${message}`), { code: 'internal_error', adapterId: id });
 
 // --- Schema validation (only the keywords adapter.schema.json uses) ------------------------------------
 
@@ -171,7 +171,8 @@ function readDefinition(location) {
 }
 
 const requireReceipt = (plan, receipt, id) => {
-  if (receipt?.schemaVersion !== 1 || receipt.adapterId !== id || receipt.resourceKey !== plan.resourceKey || !Number.isSafeInteger(receipt.generation)) {
+  if (receipt?.schemaVersion !== 1 || receipt.adapterId !== id || receipt.resourceKey !== plan.resourceKey || !Number.isSafeInteger(receipt.generation) ||
+      validateShape('Receipt', receipt).length) {
     throw effectError('provider_unavailable', 'The engine returned a receipt that does not match the plan');
   }
   return receipt;
@@ -217,7 +218,7 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
 
     async detect(ctx) {
       const os = platformOf(ctx);
-      if (os !== 'linux') return { state: 'unsupported', facts: { platform: os, detected: false, setupNeeded: false } };
+      if (!supportedPlatform(os)) return { state: 'unsupported', facts: { platform: os, detected: false, setupNeeded: false } };
       if (externalOwned) return { state: 'ready', facts: { platform: os, detected: true, setupNeeded: false, externalOwned: true } };
       if (!recipes.detect) return { state: 'unknown', facts: { platform: os, detected: null, setupNeeded: false } };
       let result;
@@ -239,7 +240,7 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
 
     async plan(ctx, request) {
       const kind = request?.usage?.kind;
-      if (platformOf(ctx) !== 'linux') throw unsupported('this platform');
+      if (!supportedPlatform(platformOf(ctx))) throw unsupported('this platform');
       if (!kinds.has(kind)) throw unsupported(`the ${kind} kind`);
       if (kind === 'durable') {
         if (!durableRecipe) throw unsupported('the durable kind');
@@ -299,6 +300,62 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
   return extend ? Object.assign(adapter, extend({ base: { ...adapter }, definition, wrapped, allActions, platformOf, unsupported })) : adapter;
 }
 
+// --- ReadContext -----------------------------------------------------------------------------------------
+
+// The core WASM module and its effect driver load on first use: detecting nothing never pays for them.
+let coreStep = null;
+async function runDetectRecipe(recipe) {
+  const [{ loadCore }, { EffectDriver }] = await Promise.all([import('./core.mjs'), import('./driver.mjs')]);
+  coreStep ??= await loadCore();
+  const adapters = [{ id: 'probe', audience: 'local', ownership: 'external-owned', recipes: { detect: recipe } }];
+  const requirements = { clientReach: 'this-device' };
+  const journal = { value: { owned: {}, intents: {} }, async save() {}, async intent() { throw new Error('A probe cannot persist a mutation intent'); } };
+  const driver = new EffectDriver({ adapters, journal, sessionId: 'probe', targetPort: 0 });
+  let output = coreStep({ command: { type: 'detect', sessionId: 'probe' }, adapters, requirements, host: { ...driver.host, nowMs: driver.nowMs() } });
+  // Read-only detection yields one spawn effect per round; a bounded loop keeps a misbehaving recipe finite.
+  for (let round = 0; round < 8 && output.effects.length; round += 1) {
+    const [effect] = output.effects;
+    const completion = await driver.execute(effect);
+    output = coreStep({ state: output.state, command: { sessionId: 'probe', ...completion }, adapters, requirements, host: { ...driver.host, nowMs: driver.nowMs() } });
+  }
+  return output.snapshot.observations?.probe === 'present';
+}
+
+/**
+ * The read-only ReadContext an engine hands to adapters. `probe` runs a read-only detect recipe through the same
+ * core and effect driver the session path uses, so `ok` is the Rust parser's verdict, never a second parser.
+ * `verifyChallenge` is the service-challenge verifier that durable publication also uses (a nonce proof served by
+ * the app, read at the target and at the public origin); its `failed` outcome is `unverified` in the contract.
+ * `configuration` is Gozar's private lookup: with no named route and nothing configured it answers null, and
+ * a named route Gozar does not know is `route_not_found` before any provider is asked.
+ * Every field can be replaced, which is how tests supply fakes.
+ */
+export function createReadContext({ home, platform = process.platform, now = Date.now, configuration, probe, verifyChallenge } = {}) {
+  return {
+    now, home, platform,
+    configuration: configuration ?? (async ref => {
+      if (ref === null || ref === undefined) return null;
+      throw Object.assign(new Error('Unknown route name'), { code: 'route_not_found' });
+    }),
+    probe: probe ?? (async recipe => {
+      try { return { ok: await runDetectRecipe(recipe) }; } catch { return { ok: false }; }
+    }),
+    verifyChallenge: verifyChallenge ?? (async (origin, target) => {
+      const { verification } = await import('./service-state.mjs');
+      const checked = await verification({ origin, target, verifyCmd: null });
+      return { status: checked.status === 'verified' ? 'verified' : 'unverified', checkedAt: checked.checkedAt ?? null };
+    }),
+  };
+}
+
+/**
+ * Runs the one `gozar-runs` action a user approved. No adapter in this build declares such an action, and Gozar
+ * runs no app-supplied command and no installer, so an action id that reaches this runner is refused as `unsupported`.
+ */
+export async function executeApprovedAction(id) {
+  throw effectError('unsupported', `No approved action is runnable in this build (${String(id).slice(0, 64)})`);
+}
+
 // --- AdmittedEffectContext -----------------------------------------------------------------------------
 
 /**
@@ -328,8 +385,9 @@ export function createAdmittedContext({ read, adapterId, generation, assertGener
       await journal.begin(plan);
       try {
         const applied = await applyPlan(plan);
+        // `origin` is the address the provider allocated at create; a plan that names one is the fallback (amendment 2).
         const receipt = { schemaVersion: 1, adapterId, resourceKey: plan.resourceKey, generation, identity: applied.identity,
-          readback: { ...plan.readback, ...(applied.readback ?? {}) } };
+          readback: { ...plan.readback, ...(applied.readback ?? {}) }, origin: applied.origin ?? plan.origin ?? null };
         await journal.commit(receipt);
         return receipt;
       } catch (error) {
@@ -345,4 +403,15 @@ export function createAdmittedContext({ read, adapterId, generation, assertGener
       return removeResource(receipt, observed);
     },
   };
+}
+
+/**
+ * The effect context an attached route's controller gives its adapter. An attached provider owns its own runtime
+ * (an SDK listener the controller process holds), so it needs the generation and a fence, not the recipe engine:
+ * `executePlan` and `compareAndRemove` are the recipe engine's, and an attached route has no recipe, so they
+ * refuse with `unsupported` instead of pretending to run one.
+ */
+export function createAttachedEffectContext({ generation = 1, assertGeneration = async () => {} } = {}) {
+  const lacks = what => effectError('unsupported', `An attached route has no recipe engine for ${what}`);
+  return { generation, assertGeneration, executePlan: async () => { throw lacks('executePlan'); }, compareAndRemove: async () => { throw lacks('compareAndRemove'); } };
 }

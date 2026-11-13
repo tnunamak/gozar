@@ -1,4 +1,4 @@
-// Gozar adapter boundary, version 1 (frozen in C0; amendment 1 adds context fields only).
+// Gozar adapter boundary, version 1 (frozen in C0; amendment 1 adds context fields; amendment 2 adds Receipt.origin).
 //
 // One adapter is one directory plus one `{id, module, definition}` entry in adapters/manifest.json
 // `providers`. Types only: no runtime behaviour is declared here. Opaque effect, readback and
@@ -66,8 +66,11 @@ export type AdapterEffectError = {
   message: string;
 };
 
-/** No raw secrets in facts, plans or receipts. */
-export type Receipt = { schemaVersion: 1; adapterId: string; resourceKey: string; generation: number; identity: unknown; readback: unknown };
+/**
+ * No raw secrets in facts, plans or receipts. `origin` (amendment 2) is the address the provider allocated at
+ * create, or null when it allocated none; the core reads the published origin from it, never from provider-specific bodies.
+ */
+export type Receipt = { schemaVersion: 1; adapterId: string; resourceKey: string; generation: number; identity: unknown; readback: unknown; origin: string | null };
 
 /** `revision` is the provider's config revision (for example an ETag), or null when the provider has none. */
 export type Observation = { present: boolean; resourceKey: string; identity: unknown; revision: string | null };

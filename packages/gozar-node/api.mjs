@@ -2,8 +2,17 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { validateLifetimeMs } from './gate.mjs';
 
-export { addService, statusServices, removeService, createServiceVerifier,
-  ensureRoute, adoptRoute, releaseRoute, statusRoutes, confirmHandBack, cancelHandBack, durableConsentText } from './service.mjs';
+import { createRouteApi } from './route-api.mjs';
+
+// The route API: by requirement, never by provider. See route-contract.d.ts.
+const routes = createRouteApi();
+export const { catalogRoutes, inspectLegacyRoute, ensureRoute, adoptRoute, routeStatus, closeRoute, watchRoutes,
+  getRoutePreferences, setRoutePreferences, runSetupAction, resolveClientAddress } = routes;
+/** Alias of catalogRoutes. */
+export const detect = catalogRoutes;
+
+// Kept service and hand-back exports (also at @tnunamak/gozar/service).
+export { addService, statusServices, removeService, createServiceVerifier, releaseRoute, confirmHandBack, cancelHandBack } from './service.mjs';
 
 const cli = fileURLToPath(new URL('../../bin/gozar.mjs', import.meta.url));
 const fields = {
@@ -38,7 +47,9 @@ function invoke(command, options = {}) {
   });
 }
 
+/** schemaVersion 1 is the route API (attached or session usage); a call without it is the legacy session call. */
 export function expose(options) {
+  if (options?.schemaVersion === 1) return routes.expose(options);
   if (options?.lifetimeMs !== undefined) validateLifetimeMs(options.lifetimeMs);
   return invoke('expose', options);
 }

@@ -154,7 +154,12 @@ test('the frozen union is the same list the d.ts declares', async () => {
   assert.deepEqual([...block.matchAll(/'([a-z_]+)'/g)].map(match => match[1]).sort(), [...fixtures.frozenErrorCodes].sort());
 });
 
-// Error codes the source can produce today: literal first arguments of refuse()/typed() and `code: '...'`.
+// Error codes the source can produce today: literal first arguments of refuse()/typed()/gozarError() and `code: '...'`.
+// Amendment 3: a code in the frozen union is mapped to itself, so it needs no fixture key.
+const codePatterns = [/\brefuse\(\s*'([^']+)'/g, /\btyped\(\s*'([^']+)'/g, /\bgozarError\(\s*'([^']+)'/g, /\bcode:\s*'([^']+)'/g];
+export const scanCodes = text => [...codePatterns.flatMap(pattern => [...text.matchAll(pattern)].map(match => match[1]))];
+export const unmappedCodes = (codes, normalization, frozen) => codes.filter(code => !Object.hasOwn(normalization, code) && !frozen.includes(code));
+
 async function sourceCodes() {
   const files = (await readdir(join(root, 'packages/gozar-node'))).filter(name => name.endsWith('.mjs')).map(name => `packages/gozar-node/${name}`);
   files.push('bin/gozar.mjs');
@@ -162,7 +167,7 @@ async function sourceCodes() {
   let dynamic = false;
   for (const file of files) {
     const text = await readFile(join(root, file), 'utf8');
-    for (const pattern of [/\brefuse\(\s*'([^']+)'/g, /\btyped\(\s*'([^']+)'/g, /\bcode:\s*'([^']+)'/g]) for (const match of text.matchAll(pattern)) found.add(match[1]);
+    for (const code of scanCodes(text)) found.add(code);
     if (/\brefuse\(\s*(?:record|current)\.state\b/.test(text)) dynamic = true;
   }
   return { found, dynamic };
@@ -172,9 +177,16 @@ test('the error codes in the source equal the errorNormalization keys', async ()
   const { found, dynamic } = await sourceCodes();
   const keys = new Set(Object.keys(fixtures.errorNormalization));
   const dynamicKeys = Object.entries(fixtures.errorNormalization).filter(([, entry]) => entry.dynamic).map(([code]) => code);
-  for (const code of found) assert.ok(keys.has(code), `source code ${code} has no errorNormalization entry: map it to a frozen code`);
+  const unmapped = unmappedCodes([...found], fixtures.errorNormalization, fixtures.frozenErrorCodes);
+  assert.deepEqual(unmapped, [], `source codes have no errorNormalization entry and are not frozen: ${unmapped.join(', ')}`);
   for (const code of keys) if (!found.has(code)) assert.ok(dynamicKeys.includes(code), `errorNormalization.${code} no longer appears in the source`);
   if (dynamicKeys.length) assert.ok(dynamic, 'dynamic state codes are listed but the source no longer throws refuse(<record>.state)');
+});
+
+test('red: the scan still fails on a non-union code that has no fixture key, and accepts a frozen one', () => {
+  const mutated = "throw gozarError('made_up_provider_code', 'x'); throw refuse('invalid_input', 'y'); const e = { code: 'also_made_up' };";
+  assert.deepEqual(unmappedCodes(scanCodes(mutated), fixtures.errorNormalization, fixtures.frozenErrorCodes), ['made_up_provider_code', 'also_made_up']);
+  assert.deepEqual(unmappedCodes(scanCodes("gozarError('route_not_found', 'x')"), fixtures.errorNormalization, fixtures.frozenErrorCodes), []);
 });
 
 test('a candidate token appears only when eligible and setup is ready; unmet entries use the closed vocabulary', () => {

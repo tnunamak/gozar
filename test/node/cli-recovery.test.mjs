@@ -51,7 +51,9 @@ test('packed local recovery action executes without global gozar, including quot
   const trap = join(home, 'global-gozar-ran');
   await writeFile(join(bin, 'gozar'), `#!/bin/sh\nprintf trap > '${trap}'\nexit 91\n`, { mode:0o700 });
   const root = fileURLToPath(new URL('../../', import.meta.url));
-  const packed = JSON.parse((await run('npm', ['pack', '--json', '--pack-destination', home], { cwd:root, timeout:30000 })).stdout)[0];
+  // npm 11 and later print an object keyed by package name; npm 10 printed an array.
+  const packOutput = JSON.parse((await run('npm', ['pack', '--json', '--pack-destination', home], { cwd:root, timeout:30000 })).stdout);
+  const packed = Array.isArray(packOutput) ? packOutput[0] : Object.values(packOutput)[0];
   const install = join(home, "local install's path");
   await run('npm', ['install', '--prefix', install, '--ignore-scripts', '--omit=optional', join(home, packed.filename)], { timeout:30000 });
   const installedCli = join(install, 'node_modules/@tnunamak/gozar/bin/gozar.mjs');
