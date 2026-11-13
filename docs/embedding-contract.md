@@ -108,3 +108,12 @@ and control tokens before returning the new descriptor. Omitting identity create
 a fresh boot ID for the stable host instance. Explicit identity must name that
 same instance and a new boot. The controller must use this returned boot for its
 proof subject; factory lifetime does not establish controller incarnation.
+
+`readConfigurationDraft({home,providerId,draftId})` restores a persisted draft
+with its current revision, base revision, redacted observations and freshly
+reviewable actions. Preserve the same optional owner scope after reload. Unknown
+or foreign draft IDs fail explicitly. This read neither advances revision nor
+rewrites the state file. Every setup result also includes `configuration` for
+the actual applied or draft scope; its revision and scope ID agree with the
+result's `configurationRevision` and `scopeId`. Use its offered actions for the
+next step, or call the draft reader after restart. Do not reconstruct digests.
