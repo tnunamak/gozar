@@ -119,12 +119,14 @@ export type Fact = { id: string; label: string; value: string | number | boolean
 export type Availability = Record<Usage['kind'], { state: 'available' | 'detect-only' | 'unsupported'; reason: string }>;
 export type Prerequisite = { id: string; label: string; state: 'present' | 'missing' | 'unknown' | 'denied';
   observedAt: string; version: Observation<string>; remedy: Action | null };
-export type InputRequirement = { id: string; label: string; kind: 'text' | 'domain' | 'https-origin'; secret: boolean; help: string;
+export type InputRequirement = { id: string; actionId:string; label: string; kind: 'text' | 'domain' | 'https-origin'; secret: boolean; help: string;
   required: boolean; obtainUrl: string | null; validation: 'syntax-only' };
-export type Configuration = { inputRequirements: InputRequirement[]; values: Record<string,string>;
+export type Configuration = { revision:string;scopeId:string;inputRequirements: InputRequirement[]; values: Record<string,string>;
   credentials: Record<string,Observation<boolean>>; actions: Action[] };
 
 export type Candidate = {
+  consentFactsDigest:string;
+  review:{canonicalInput:unknown};
   availability: Availability;
   prerequisites: Prerequisite[];
   facts: Fact[];
@@ -219,14 +221,16 @@ export type RouteView = {
   cleanup: { state: 'none' | 'unconfirmed' | 'confirmed'; message?: string };
 };
 
-export type Approval = { candidateToken: string; disclosureRevision: string };
+export type Approval = { kind:'route';consentFactsDigest:string;candidateToken: string; disclosureRevision: string };
 
 /** Frozen. Apps branch only on these codes; provider diagnostics stay inside Gozar. */
 export type GozarErrorCode =
   | 'invalid_input' | 'requirements_unsatisfied' | 'setup_required' | 'consent_required' | 'consent_unknown'
   | 'consent_expired' | 'consent_mismatch' | 'candidate_stale' | 'preference_conflict' | 'route_not_found'
   | 'route_conflict' | 'address_changed' | 'stopped_by_user' | 'handing_back' | 'verification_failed'
-  | 'provider_unavailable' | 'cleanup_debt' | 'unsupported' | 'ambiguous_route' | 'busy' | 'internal_error';
+  | 'provider_unavailable' | 'cleanup_debt' | 'unsupported' | 'ambiguous_route' | 'busy' | 'internal_error'
+  | 'configuration_stale'|'configuration_in_use'|'secret_in_use'|'secret_backend_locked'|'secret_backend_unavailable'
+  | 'host_policy_denied'|'artifact_integrity_failed'|'configuration_migration_required'|'proof_refresh_unsupported';
 // 'busy': a lock is held; retry after a pause. 'internal_error': an unexpected Gozar fault.
 
 export type GozarError = { schemaVersion: 1; error: { code: GozarErrorCode; message: string; nextAction: Action | null } };
@@ -333,8 +337,9 @@ export type SetRoutePreferencesRequest = {
 };
 export type RunSetupActionRequest = {
   home: string;
+  owner?:string;providerId:string;expectedConfigurationRevision:string;draftId?:string;
   actionId: string;
-  approval: { digest: string; disclosureRevision: string };
+  approval: { kind:'setup';consentFactsDigest:string;digest: string; disclosureRevision: string };
   /** Points into Gozar's private store; never a token value. For 'provide-secret'. */
   secretHandle?: string;
   /** For 'provide-value': checked against the action's valueFormat, then kept as configuration (not in the secret store). */
@@ -415,10 +420,17 @@ export function confirmHandBack(request: { routeId: string; transfer: string; ho
 export function cancelHandBack(request: { routeId: string; transfer: string; home?: string }): Promise<{ schemaVersion: 1; route: ServiceRoute }>;
 
 /** Stores secret bytes privately; returns an opaque handle only. */
-export function storeSecret(request: {home: string; value: string | Uint8Array}): Promise<{handle: string}>;
+export const storeSecret:import('./embedding-contract').HostEmbeddingMethods['storeSecret'];
+export const discardSecret:import('./embedding-contract').HostEmbeddingMethods['discardSecret'];
+export const beginConfigurationDraft:import('./embedding-contract').HostEmbeddingMethods['beginConfigurationDraft'];
+export const commitConfigurationDraft:import('./embedding-contract').HostEmbeddingMethods['commitConfigurationDraft'];
+export const discardConfigurationDraft:import('./embedding-contract').HostEmbeddingMethods['discardConfigurationDraft'];
+export const listProviders:import('./embedding-contract').HostEmbeddingMethods['listProviders'];
+export type {SecretBackend,HostCapabilities,HostCapabilityId,HostIdentity,ConfigurationDraft,ProviderInventory} from './embedding-contract';
 
 /** Trusted executable extension registry. Relative provider paths resolve under root/providers. */
-export function createGozar(options?: {manifest?: string | {providers: {id:string; module:string; definition:string}[]}; root?: string}): {
+export type GozarOptions={manifest?: string | {providers: {id:string; module:string; definition:string}[]}; root?: string;secretBackend?:import('./embedding-contract').SecretBackend;hostCapabilities?:import('./embedding-contract').HostCapabilities;identity?:import('./embedding-contract').HostIdentity};
+export function createGozar(options?: GozarOptions): import('./embedding-contract').HostEmbeddingMethods & {
  catalogRoutes: typeof catalogRoutes; expose: (request:ExposeRequest)=>Promise<RouteView>;
  ensureRoute: typeof ensureRoute; adoptRoute: typeof adoptRoute; routeStatus: typeof routeStatus;
  closeRoute: typeof closeRoute; suspendRoute: typeof suspendRoute; watchRoutes: typeof watchRoutes;

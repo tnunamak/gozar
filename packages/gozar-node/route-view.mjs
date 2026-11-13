@@ -114,7 +114,9 @@ export function projectAttached(lease, { handle, now = Date.now() }) {
   const state = STATES.has(lease.state) ? lease.state : 'unknown';
   const verification = lease.proof ? { status: state === 'usable' && lease.proof.status === 'verified' ? 'verified' : 'unverified', checkedAt: lease.proof.checkedAt,
     vantage: lease.proof.vantage, checks: state === 'usable' ? lease.proof.checks : [] }
-    : verificationOf(state, state === 'usable' ? lease.checkedAtMs ?? now : lease.checkedAtMs ?? null, checksFor(lease.properties?.proof?.checks, { sse: lease.sseChecked === true, origin: lease.origin ?? null }));
+    : verificationOf(state, lease.checkedAtMs ?? null, checksFor(lease.properties?.proof?.checks, { sse: lease.sseChecked === true, origin: lease.origin ?? null }));
+  verification.observedAt=verification.checkedAt??null;
+  verification.subject=lease.proofSubject??null;
   return view({ target: lease.target, bindTarget: lease.bindTarget, expiresAt: lease.expiresAt ?? (Number.isFinite(lease.expiresAtMs) ? iso(lease.expiresAtMs) : undefined), validUntil: lease.proof?.validUntil ?? lease.ingress?.validUntil, facts: lease.facts, now, handle, origin: lease.origin ?? null, published: state === 'usable' ? lease.origin ?? null : null, state, ownership: 'gozar-owned',
     properties: lease.properties ? completeProperties(lease.properties) : lease.properties, ingress: lease.ingress ?? null, verification,
     limits: limitsOf(lease.limits, 5_000), cleanup: lease.cleanup?.state === 'debt' ? { ...lease.cleanup, state: 'unconfirmed' } : lease.cleanup ?? { state: 'none' } });

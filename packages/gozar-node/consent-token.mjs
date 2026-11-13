@@ -36,11 +36,12 @@ export const canonicalDigest = value => sha256(JSON.stringify(canonical(value)))
 const bindingDigest = canonicalDigest;
 
 // Pure: builds the binding from a request so issuer and redeemer cannot disagree.
-export function consentBinding(query, canonicalHome, disclosureRevision) {
+export function consentBinding(query, canonicalHome, disclosureRevision, consentFactsDigest) {
   return {
     owner: query.owner, home: canonicalHome, target: query.target, usage: structuredClone(query.usage),
     intent: query.intent ?? 'create', requirements: structuredClone(query.requirements),
     route: query.route ?? null, origin: query.origin ?? null, disclosureRevision,
+    ...(consentFactsDigest ? {consentFactsDigest} : {}),
     // providerId is not part of the binding: the token's grant already names the one adapter it approves, and an app
     // that listed every provider must be able to send back the id the user chose. redeemConsentToken checks it instead.
   };
@@ -55,7 +56,8 @@ function checkBinding(binding) {
 function checkGrant(grant) {
   if (!plain(grant) || !['adapterId', 'planDigest', 'observedResource'].every(key => text(grant[key])))
     throw refuse('invalid_input', 'Consent grant needs adapterId, planDigest and observedResource');
-  return { adapterId: grant.adapterId, planDigest: grant.planDigest, observedResource: grant.observedResource };
+  return { adapterId: grant.adapterId, planDigest: grant.planDigest, observedResource: grant.observedResource,
+    ...Object.fromEntries(['consentFactsDigest','configurationRevision','scopeId'].filter(key=>grant[key]!==undefined).map(key=>[key,grant[key]])) };
 }
 
 async function consentDirectory(home, create) {

@@ -14,6 +14,10 @@ import { peekConsentGrant } from './consent-token.mjs';
 import { projectExternal } from './route-view.mjs';
 import { resolveClientAddress } from './ingress.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
+import { registryIdentity } from './registry-identity.mjs';
+import { createEmbeddingServices } from './embedding-services.mjs';
+import { listProviders as inventory } from './embedding-inventory.mjs';
+import { setupConsentReview } from './consent-facts.mjs';
 
 const lazy = loader => { let loaded; return () => (loaded ??= loader()); };
 const engine = lazy(() => import('./durable-route.mjs'));
@@ -24,7 +28,19 @@ export function createRouteApi(deps = {}) {
   const platform = () => deps.platform ?? process.platform;
   let loaded;
   const adapters = async () => deps.adapters ?? (loaded ??= runtime().then(module => module.loadAdapters(deps.manifest ? { manifest: deps.manifest, root: deps.root } : undefined)).catch(error => { loaded = undefined; throw error; }));
-  const shared = async () => ({ adapters: await adapters(), platform: platform(), ...(deps.manifest ? { registry: { manifest: deps.manifest, root: deps.root } } : {}), ...(deps.readContext ? { readContext: deps.readContext } : {}) });
+  let servicesPromise;
+  const services = () => servicesPromise ??= (async()=>{
+    const registryId = await registryIdentity({...deps,adapters:deps.adapters});
+    return {registryId,embeddingServices:deps.embeddingServices??createEmbeddingServices({registryId,secretBackend:deps.secretBackend,hostCapabilities:deps.hostCapabilities,identity:deps.identity})};
+  })();
+  const shared = async (request={}) => { const resolved=await services(); return ({ adapters: await adapters(), platform: platform(), ...resolved, owner:request.owner,
+    ...(deps.manifest ? { registry: { manifest: deps.manifest, root: deps.root } } : {}),
+    hostCapabilities:deps.hostCapabilities??{}, ...(deps.dispatchEffect?{dispatchEffect:deps.dispatchEffect}:{}),
+    ...(deps.readContext ? { readContext: deps.readContext } : {}),
+    decorateSetupAction:({action,adapter,configuration,draftId=null})=>{
+      const review=setupConsentReview({registryId:resolved.registryId,providerId:adapter.id,configuration,draftId,action,facts:adapter.definition.facts??[]});
+      return {...action,consent:{scope:review.canonicalInput.scope,consentFactsDigest:review.consentFactsDigest},review:{canonicalInput:review.canonicalInput}};
+    } }); };
   const guard = async action => { try { return await action(); } catch (error) { throw normalizeError(error); } };
   // A `verify` option ({ origin, target }) replaces the challenge verifier for the durable calls below. It is for tests.
   const verified = async action => deps.verify ? (await engine()).withVerifier(deps.verify, action) : action();
@@ -54,7 +70,7 @@ export function createRouteApi(deps = {}) {
   }
 
   const api = {
-    catalogRoutes: query => guard(async () => buildCatalog(query, { ...await shared(), profileHome: deps.profileHome,
+    catalogRoutes: query => guard(async () => buildCatalog(query, { ...await shared(query), profileHome: deps.profileHome,
       pinnedAdapterId: async q => q.usage.kind === 'durable' ? (await engine()).durablePin({ home: q.home, routeId: q.usage.routeId }) : null })),
 
     inspectLegacyRoute: request => guard(async () => (await legacy()).inspectLegacyRoute(request)),
@@ -65,7 +81,7 @@ export function createRouteApi(deps = {}) {
 
     /** A request with schemaVersion 1 is the route API; anything else is the legacy session call (handled by the caller). */
     expose: request => guard(async () => {
-      const options = { ...await shared(), ...deps.expose };
+      const options = { ...await shared(request), ...deps.expose };
       if (request?.usage?.kind === 'attached') return openAttachedRoute(request, options);
       if (request?.usage?.kind === 'session') return openSessionRoute(request, options);
       throw gozarError('invalid_input', "expose needs usage 'session' or 'attached'");
@@ -76,7 +92,15 @@ export function createRouteApi(deps = {}) {
     suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }))),
     watchRoutes: request => pollRoutes(request, { routeStatus: r => verified(async () => viewStatus(r, { adapters: await adapters(), ...deps.view })), ...deps.watch }),
     getRoutePreferences, setRoutePreferences,
-    runSetupAction: request => guard(async () => runSetup(request, { ...deps.setup, ...await shared() })),
+    runSetupAction: request => guard(async () => {
+      const context=await shared(request);
+      return runSetup(request, { ...deps.setup, ...context, validateSetupApproval:({action,adapter,configuration})=>{
+        const review=setupConsentReview({registryId:context.registryId,providerId:adapter.id,configuration,draftId:request.draftId??null,action,facts:adapter.definition.facts??[]});
+        if(request.approval?.kind!=='setup'||request.approval.consentFactsDigest!==review.consentFactsDigest)throw gozarError('consent_mismatch','Setup consent changed; review the current action again');
+      }});
+    }),
+    listProviders: request => guard(async()=>inventory(request,await shared(request))),
+    ...Object.fromEntries(['storeSecret','discardSecret','beginConfigurationDraft','commitConfigurationDraft','discardConfigurationDraft'].map(method=>[method,request=>guard(async()=> (await services()).embeddingServices[method](request))])),
     resolveClientAddress,
   };
   return api;
