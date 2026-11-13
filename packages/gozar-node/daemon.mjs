@@ -162,6 +162,8 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   const queuedRouteOrigins = new Set();
   const operational = config.operational === true || selectedAdapter?.planVersion === 1;
   const gate = operational ? await createGate(config.targetPort, { lifetimeMs: config.lifetimeMs, onExpire: () => { setImmediate(() => initialized.then(() => finalize()).catch(() => {})); } }) : null;
+  // Until the control socket is published, a failed start must close the gate: its port listener keeps the process alive.
+  const abandon = async error => { await gate?.close().catch(() => {}); throw error; };
   controller = new Controller({ ...config, targetPort: gate?.port ?? config.targetPort, servicePort: config.targetPort, step, journal, onAutomaticStop: () => initialized.then(() => finalize()) });
   controller.driver.lifetimeMs = config.lifetimeMs;
   controller.driver.probeWaitMs = config.probeWaitMs;
@@ -205,18 +207,18 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
       }
     }).catch(() => {}).finally(() => queuedRouteOrigins.delete(origin));
   };
-  if (operational) await prepareHost(controller.driver, selectedAdapter, { origin: config.origin, gate, probeExecutor, authorities: hostAuthorities });
+  if (operational) await prepareHost(controller.driver, selectedAdapter, { origin: config.origin, gate, probeExecutor, authorities: hostAuthorities }).catch(abandon);
   let setupPending = Boolean(gate && selectedAdapter?.setup?.requiresProxyTarget);
   const present = output => ({ ...output, ...(gate ? { lifetimeMs: gate.lifetimeMs, expiresAtMs: gate.expiresAtMs } : {}), ...(selectedAdapter?.clientProfile ? { connectionProfile: selectedAdapter.clientProfile } : {}),
     ...(setupPending && !controller.state?.stopRequested ? { action: { kind: 'external', instruction: `Point the existing origin ${config.origin} at ${gate.target}, then run ${cliCommand('health', config.targetPort, dirname(directory))}.`, target: gate.target, recheckCommand: 'health' } } : {}) });
   const nonce = randomUUID();
-  const identity = { pid: process.pid, startIdentity: await processIdentity(process.pid), nonce };
+  const identity = { pid: process.pid, startIdentity: await processIdentity(process.pid).catch(abandon), nonce };
   // Only remove a stale socket after proving the prior daemon identity is gone.
   try {
     const prior = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8'));
     if (await processIdentity(prior.pid) === prior.startIdentity) throw gozarError('busy', 'Existing controller is still running');
     await unlink(socketPath(directory)).catch(error => { if (error.code !== 'ENOENT') throw error; });
-  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  } catch (error) { if (error.code !== 'ENOENT') await abandon(error); }
   let closing = false;
   let armMonitor = () => {};
   const server = net.createServer(socket => {
@@ -275,17 +277,16 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   // First listen, then publish identity. A status response always names this running controller.
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath(directory), resolve); });
+    await chmod(socketPath(directory), 0o600);
+    await atomicWrite(join(directory, 'control.json'), identity);
   } catch (error) {
-    // The gate already listens on a port and holds a lifetime timer; left open, it keeps the process alive.
-    server.close(); await gate?.close();
+    server.close();
     // A Unix socket path is limited to about 104 bytes (macOS) or 108 (Linux); a longer one fails as EINVAL.
     if (error.code === 'EINVAL' && Buffer.byteLength(socketPath(directory)) > 103) {
-      throw gozarError('invalid_input', `The session folder path is too long for its control socket (${Buffer.byteLength(socketPath(directory))} bytes, limit 103): ${directory}. Use a shorter Gozar home.`);
+      await abandon(gozarError('invalid_input', `The session folder path is too long for its control socket (${Buffer.byteLength(socketPath(directory))} bytes, limit 103): ${directory}. Use a shorter Gozar home.`));
     }
-    throw error;
+    await abandon(error);
   }
-  await chmod(socketPath(directory), 0o600);
-  await atomicWrite(join(directory, 'control.json'), identity);
   let monitor;
   server.on('close', async () => {
     clearInterval(monitor);

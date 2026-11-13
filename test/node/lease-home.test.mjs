@@ -64,3 +64,18 @@ test('a session folder too long for a control socket is refused and leaves nothi
   for (let tries = 0; servers() > before && tries < 50; tries++) await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(servers(), before);
 });
+
+test('a session that fails before its control socket opens leaves nothing listening', async t => {
+  const { directory:home } = await fixture(t, {});
+  const session = await makeSession(home, 18768);
+  // An external origin binding with a plain-HTTP origin: host preparation refuses it after the gate is open.
+  const bootstrap = JSON.parse(await readFile(join(session.directory, 'bootstrap.json'), 'utf8'));
+  bootstrap.adapters[0].bindings = { ...bootstrap.adapters[0].bindings, origin:{ type:'credential-free-https-origin' } };
+  bootstrap.origin = 'http://bad.example.test';
+  await atomicWrite(join(session.directory, 'bootstrap.json'), bootstrap);
+  const servers = () => process.getActiveResourcesInfo().filter(kind => kind === 'TCPServerWrap' || kind === 'PipeServerWrap').length;
+  const before = servers();
+  await assert.rejects(serve(session.directory, { probeExecutor:session.probeExecutor }), /External origin requires HTTPS/);
+  for (let tries = 0; servers() > before && tries < 50; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(servers(), before);
+});

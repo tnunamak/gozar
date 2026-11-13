@@ -19,7 +19,7 @@
 
 ### Fixed
 
-- **A session whose folder path is too long no longer hangs the process.** A Unix control socket path must fit in about 104 bytes. With a longer Gozar home, the session's socket failed to open with a bare `EINVAL`, and the port gate Gozar had already opened stayed open, so the calling process never exited. Gozar now closes the gate and fails with `invalid_input`, naming the folder and its length.
+- **A session that fails to start no longer hangs the process.** Gozar opens a port gate before the session's control socket. When the start failed in between (an external origin that is not HTTPS, another controller already running, or a control socket that could not be opened), the gate stayed open and the calling process never exited. Gozar now closes the gate on every such failure. A control socket path must fit in about 104 bytes; a longer Gozar home failed with a bare `EINVAL` and now fails with `invalid_input`, naming the folder and its length.
 
 ## 0.2.1
 
