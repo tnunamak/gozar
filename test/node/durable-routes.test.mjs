@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createServiceVerifier } from '../../packages/gozar-node/service.mjs';
-import { selectAdoptable } from '../../packages/gozar-node/durable-route.mjs';
+import { portHolders, reserveSession, selectAdoptable } from '../../packages/gozar-node/durable-route.mjs';
 import { redeemConsentToken, consentBinding } from '../../packages/gozar-node/consent-token.mjs';
 import { startFakeLocalApi, forwardTarget } from './fake-localapi.mjs';
 
@@ -1089,4 +1089,14 @@ test('R5. a crash after intent and before the write, with a token, gives uncerta
   assert.deepEqual(w.state.config, config);
   assert.equal(w.writes().length, 0);
   assert.equal((await w.run('status', {})).result.routes[0].state, 'uncertain');
+});
+
+test('a session that may use either of two provider ports is not refused while one of them is free, and the holder is named', async t => {
+  const w = await world(t, { funnelPorts: [8443, 10000] });
+  await w.ensure();
+  const provider = { providerResource: 'tailscale-https-port' };
+  assert.deepEqual(await portHolders({ home: w.home, ...provider, ports: [8443, 10000] }), [{ port: 8443, routeId: 'coordinator' }]);
+  // The route holds 8443: a session that can fall back to 10000 is not refused, one that can only use 8443 is.
+  assert.deepEqual(await reserveSession({ home: w.home, port: 18711, ...provider, providerPorts: [8443, 10000] }), { reserved: true });
+  await assert.rejects(reserveSession({ home: w.home, port: 18712, ...provider, providerPorts: [8443] }), { code: 'reserved' });
 });

@@ -85,10 +85,14 @@ test('auto-admitted projection contains detection only and no optimistic capabil
 test('Funnel and Serve never target protected ports or use global cleanup', () => {
   for (const id of ['tailscale-funnel', 'tailscale-private']) {
     const definition = definitions.find(item => item.id === id);
-    assert.ok([443, 10000].every(port => definition.safety.protectedPorts.includes(port)));
-    const expectedPorts = id === 'tailscale-funnel' ? [8443] : [9444, 9445];
-    if (id === 'tailscale-funnel') assert.equal(definition.bindings.port.value, 8443);
-    else { assert.deepEqual(definition.bindings.port.candidates, expectedPorts); assert.deepEqual(definition.bindings.port.protectedPorts, [443, 10000]); }
+    // Funnel may use 8443 then 10000; the Serve route keeps 10000 protected. Both always protect 443, 8444 and 9443.
+    const protectedPorts = id === 'tailscale-funnel' ? [443, 8444, 9443] : [443, 8444, 9443, 10000], candidates = id === 'tailscale-funnel' ? [8443, 10000] : [9444, 9445];
+    assert.deepEqual([...definition.safety.protectedPorts].sort((a, b) => a - b), [...protectedPorts].sort((a, b) => a - b));
+    assert.deepEqual(definition.safety.candidatePorts, candidates);
+    assert.equal(definition.bindings.port.type, 'unused-port');
+    assert.deepEqual(definition.bindings.port.candidates, candidates);
+    assert.deepEqual([...definition.bindings.port.protectedPorts].sort((a, b) => a - b), id === 'tailscale-funnel' ? [443, 8444, 9443] : [443, 10000]);
+    assert.ok(candidates.every(port => !definition.safety.protectedPorts.includes(port) && !definition.bindings.port.protectedPorts.includes(port)));
     for (const operation of ['create', 'remove']) {
       const recipe = definition.recipes[operation];
       if (operation === 'remove') { assert.equal(recipe.kind, 'owned-process'); continue; }

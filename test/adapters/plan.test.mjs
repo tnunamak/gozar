@@ -156,10 +156,51 @@ test('all private candidates occupied means no persistence or mutation', () => {
   assert.notEqual(output.snapshot.phase, 'candidate-ready');
 });
 
-test('public 8443 occupied never falls back or mutates', () => {
+// Funnel's explicit candidates are 8443 then 10000. 443, 9443 and 8444 are protected, and an occupied port is never touched.
+const durableRuleAt8443 = raw => {
+  raw.TCP['8443'] = { HTTPS: true };
+  raw.Web['fixture.example-tailnet.ts.net:8443'] = { Handlers: { '/': { Proxy: 'http://127.0.0.1:7000' } } };
+  raw.AllowFunnel['fixture.example-tailnet.ts.net:8443'] = true;
+};
+const freeTenThousand = raw => { delete raw.TCP['10000']; delete raw.AllowFunnel['fixture.example-tailnet.ts.net:10000']; };
+
+test('red: a durable route holds 8443, so a Funnel session plans and starts on 10000 and leaves every rule alone', () => {
   const record = records.find(record => record.id === 'tailscale-funnel');
-  const { effects } = run(record, { editBaseline: raw => { raw.Web['administrator.example:8443'] = { Handlers: { '/': { Proxy: 'http://127.0.0.1:7000' } } }; } });
+  const { output, effects } = run(record, { editBaseline: raw => { durableRuleAt8443(raw); freeTenThousand(raw); } });
+  const persist = effects.find(effect => effect.kind === 'persist'), execute = effects.find(effect => effect.stage === 'execute');
+  assert.equal(persist.record.bindings.port.value, 10000);
+  assert.equal(execute.bindings.port.value, 10000);
+  assert.ok(execute.args.includes('--https=10000'), JSON.stringify(execute.args));
+  assert.ok(!execute.args.includes('--https=8443'));
+  assert.equal(output.snapshot.candidate, 'https://fixture.example-tailnet.ts.net:10000');
+  assert.ok(!effects.some(effect => ['443', '9443', '8444'].some(port => effect.args?.includes(`--https=${port}`))));
+});
+
+test('with 8443 free the Funnel session keeps 8443', () => {
+  const record = records.find(record => record.id === 'tailscale-funnel');
+  const { effects } = run(record, { editBaseline: freeTenThousand });
+  assert.equal(effects.find(effect => effect.stage === 'execute').bindings.port.value, 8443);
+});
+
+test('red: every Funnel candidate occupied stops before persistence, names the reason and changes nothing', () => {
+  const record = records.find(record => record.id === 'tailscale-funnel');
+  for (const edit of [
+    raw => { raw.Web['administrator.example:8443'] = { Handlers: { '/': { Proxy: 'http://127.0.0.1:7000' } } }; },
+    raw => { raw.Foreground.administrator.TCP['8443'] = { HTTPS: true }; },
+    raw => { durableRuleAt8443(raw); },
+  ]) {
+    const { effects, output } = run(record, { editBaseline: edit });
+    assert.ok(effects.every(effect => effect.stage === 'before'), 'no persist, no create, no remove');
+    assert.equal(output.snapshot.phase, 'failed');
+    assert.ok(output.snapshot.limitations.includes('All explicit listener candidates are occupied or protected'), JSON.stringify(output.snapshot.limitations));
+  }
+});
+
+test('Funnel never falls back to 443, 9443 or 8444 when 8443 and 10000 are both taken', () => {
+  const record = records.find(record => record.id === 'tailscale-funnel');
+  const { effects } = run(record, { editBaseline: raw => { durableRuleAt8443(raw); delete raw.TCP['443']; delete raw.Web['fixture.example-tailnet.ts.net:443']; } });
   assert.ok(effects.every(effect => effect.stage === 'before'));
+  assert.deepEqual(records.find(item => item.id === 'tailscale-funnel').bindings.port.candidates, [8443, 10000]);
 });
 
 test('unknown listener key syntax denies allocation', () => {

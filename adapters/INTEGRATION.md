@@ -29,7 +29,7 @@ Executable recipes use typed direct argv. Keep credentials behind private handle
 
 Record an immutable handle, continuity reference, original generation, resource details and original bindings. An owned process uses its process birth identity as well as its PID. The runtime checks continuity before removal and compares live provider records before route cleanup.
 
-Funnel allocates only a freshly checked unused 8443 listener and preserves protected 443/10000 and all occupied routes. Private Serve plans select from explicitly declared unused candidates. Root mounts use dedicated listeners. Stop signals only the owned foreground child and checks that its selected listener is absent. The live harness compares the full configuration with its baseline.
+Funnel selects the first freshly checked unused listener from its explicit candidates, 8443 then 10000, and never takes 443, 8444 or 9443. Every occupied route is preserved, and when no candidate is free it stops without a change. Private Serve plans select from explicitly declared unused candidates. Root mounts use dedicated listeners. Stop signals only the owned foreground child and checks that its selected listener is absent. The live harness compares the full configuration with its baseline.
 
 An `external-owned` address uses validation and health checks. Its lifecycle preserves the owner-managed route. Origin updates require a fresh binding and challenge and withdraw the prior generation.
 

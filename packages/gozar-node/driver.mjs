@@ -33,6 +33,8 @@ const runtimeFields = new Set(['id', 'sessionId', 'generation', 'operation', 'ad
 const shellPrograms = new Set(['sh', 'bash', 'zsh', 'dash', 'fish', 'cmd', 'cmd.exe', 'powershell', 'pwsh']);
 const bounded = (number, fallback, maximum) => Number.isSafeInteger(number) && number > 0 ? Math.min(number, maximum) : fallback;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// How long stop re-reads a provider that still shows an entry for a watcher that has exited (see proveProcessAbsent). Inside the 5 s receipt validity.
+const ABSENCE_SETTLE_MS = 3000, ABSENCE_POLL_MS = 100;
 
 export class EffectDriver {
   constructor({ adapters, journal, sessionId, targetPort, origin, consent = false, handles = {}, bindAddresses = [], firewallApproved = false, recoveryOnly = false, resolveCredential, observeProcessOutput = false, onProcessOutput, resolveProgram = createProgramResolver(), host = { features: [], bindings: {}, facts: {} }, onExit = () => {} }) {
@@ -470,11 +472,20 @@ export class EffectDriver {
             Object.keys(recipe).some(key => !['kind', 'program', 'args', 'timeoutMs', 'maxOutputBytes', 'parser'].includes(key)) ||
             Object.keys(observation).some(key => !['id', 'recipe', 'assert', 'captures'].includes(key))) throw new Error(`Unsupported ${stage} readback; inspect the admitted removal plan`);
         const expanded = expandPlan(recipe, resource.bindings ?? {});
-        const result = await this.runProcess(expanded);
-        if (result.exitCode !== 0) throw new Error(`${stage} readback failed; confirm the provider is available and retry stop`);
-        const doc = JSON.parse(result.stdout);
-        if (!doc || typeof doc !== 'object' || Array.isArray(doc) || !predicate(expanded.parser.predicate, doc) ||
-            !predicate(expandPlan(observation.assert, resource.bindings ?? {}), doc)) throw new Error(stage === 'absence' ? `Recorded process is gone; listener ${resource.bindings?.port?.value ?? '(recorded port)'} may still be configured. Inspect the current mapping or stop its owning session, then retry stop.` : 'Identity readback did not match the recorded resource; inspect the current provider identity before retrying stop');
+        // A provider can keep a foreground entry visible for a moment after its watcher has exited. Only that one
+        // condition (a readable document that still shows the entry) is re-read, for at most `absenceSettleMs`; a failed
+        // read, an identity mismatch or an entry that outlives the bound still fails the stop as before.
+        const settleUntil = stage === 'absence' ? this.nowMs() + (this.absenceSettleMs ?? ABSENCE_SETTLE_MS) : 0;
+        let result, doc, matched;
+        for (;;) {
+          result = await this.runProcess(expanded);
+          if (result.exitCode !== 0) throw new Error(`${stage} readback failed; confirm the provider is available and retry stop`);
+          doc = JSON.parse(result.stdout);
+          matched = doc && typeof doc === 'object' && !Array.isArray(doc) && predicate(expanded.parser.predicate, doc) && predicate(expandPlan(observation.assert, resource.bindings ?? {}), doc);
+          if (matched || this.nowMs() >= settleUntil) break;
+          await sleep(ABSENCE_POLL_MS);
+        }
+        if (!matched) throw new Error(stage === 'absence' ? `Recorded process is gone; listener ${resource.bindings?.port?.value ?? '(recorded port)'} may still be configured. Inspect the current mapping or stop its owning session, then retry stop.` : 'Identity readback did not match the recorded resource; inspect the current provider identity before retrying stop');
       }
     }
     if (await processIdentity(resource.pid) === resource.startIdentity) throw new Error('Recorded process is still running; absence cannot be proved');

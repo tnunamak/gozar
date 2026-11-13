@@ -538,7 +538,8 @@
         "owned-resource-ledger",
         "owned-process",
         "probe-assertions",
-        "client-vantage-probe"
+        "client-vantage-probe",
+        "unused-port-selection"
       ],
       "reason": "Normalized opt-in plan only; both core and host feature intersection and fresh authorities must pass. Wrapper is not auto-admitted."
     },
@@ -636,8 +637,18 @@
     },
     "bindings": {
       "port": {
-        "type": "port",
-        "value": 8443
+        "type": "unused-port",
+        "source": "config",
+        "pointer": "/occupiedPorts",
+        "candidates": [
+          8443,
+          10000
+        ],
+        "protectedPorts": [
+          443,
+          8444,
+          9443
+        ]
       },
       "mount": {
         "type": "mount",
@@ -666,11 +677,9 @@
     "safety": {
       "protectedPorts": [
         443,
-        10000,
         8444,
         9443
       ],
-      "selectedPort": 8443,
       "fallbackPort": null,
       "dedicatedPortRequired": true,
       "restoreWholeConfig": false,
@@ -680,7 +689,8 @@
       "funnelVisibility": "host:port-wide; never add public visibility to a shared listener",
       "rootMountRequiresDedicatedUnusedPort": true,
       "candidatePorts": [
-        8443
+        8443,
+        10000
       ],
       "preserveAnyOccupiedPort": true,
       "continuity": "Fresh driver ownershipReceipt required; CLI values and ETag are not continuity or compare-and-swap proof.",
@@ -698,7 +708,7 @@
     },
     "displayName": "Tailscale Funnel",
     "copy": {
-      "consent": "Start an owned foreground HTTPS Funnel on unused port 8443 only. Existing listeners remain untouched. HTTPS, instance identity and timed SSE must pass before publication."
+      "consent": "Start an owned foreground HTTPS Funnel on port 8443, or on port 10000 when 8443 is in use, and on no other port. Existing listeners remain untouched. HTTPS, instance identity and timed SSE must pass before publication."
     },
     "addressStability": "stable",
     "durableLifetime": "provider-persistent",

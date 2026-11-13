@@ -78,8 +78,10 @@ for (const version of VERSIONS) test(`red: catalog says not ready exactly when t
   }
 });
 
-test('the Funnel disclosure names the port the plan will use', () => {
-  const planned = records.find(item => item.id === 'tailscale-funnel').bindings.port.value;
+test('the Funnel disclosure names every port the plan may use, and no other', () => {
+  const { candidates } = records.find(item => item.id === 'tailscale-funnel').bindings.port;
   const { disclosure } = adapters.find(item => item.id === 'tailscale-funnel').definition;
-  assert.ok(disclosure.text.includes(`port ${planned}`), disclosure.text);
+  assert.deepEqual(candidates, [8443, 10000]);
+  for (const port of candidates) assert.ok(disclosure.text.includes(`port ${port}`), disclosure.text);
+  assert.deepEqual([...disclosure.text.matchAll(/port (\d+)/g)].map(match => Number(match[1])), candidates);
 });

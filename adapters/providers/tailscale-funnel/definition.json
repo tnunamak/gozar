@@ -20,9 +20,9 @@
       },
       "address": {
         "stability": "stable",
-        "scope": "DNS name of this node plus port 8443",
+        "scope": "DNS name of this node plus port 8443, or port 10000 when 8443 is in use",
         "conditions": [
-          "port 8443 must be unused and the node policy must allow it for Funnel",
+          "port 8443 or port 10000 must be unused and the node policy must allow it for Funnel",
           "the tailnet administrator must allow Funnel",
           "node and tailnet identity stay the same"
         ]
@@ -51,8 +51,8 @@
       "durable"
     ],
     "disclosure": {
-      "revision": "disc-edcf35ca044b",
-      "text": "Publish this service over HTTPS on port 8443 of this device's Tailscale Funnel. Existing listeners stay untouched. HTTPS, instance identity and timed SSE must pass before publication.",
+      "revision": "disc-7fee62e65382",
+      "text": "Publish this service over HTTPS on port 8443 of this device's Tailscale Funnel, or on port 10000 when 8443 is in use. Existing listeners stay untouched. HTTPS, instance identity and timed SSE must pass before publication.",
       "links": [
         {
           "rel": "terms",

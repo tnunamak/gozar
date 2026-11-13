@@ -417,7 +417,7 @@ export async function openSessionRoute(request, deps = {}) {
       const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
       for (;;) {
         const view = project(reply);
-        if (['lost', 'released', 'uncertain'].includes(view.state)) throw gozarError('provider_unavailable', 'The route could not be started');
+        if (['lost', 'released', 'uncertain'].includes(view.state)) throw await sessionStartFailure(reply, { home, adapterId: redeemed.adapter.id, deps });
         if (request.wait === 'verified' ? view.state === 'usable' : view.origin !== null) return view;
         if (Date.now() >= deadline) throw gozarError(view.state === 'unverified' ? 'verification_failed' : 'provider_unavailable',
           view.state === 'unverified' ? 'The route did not pass verification in time' : 'The route did not start in time');
@@ -427,6 +427,43 @@ export async function openSessionRoute(request, deps = {}) {
       }
     } catch (error) { throw await failedSessionStart(directory, error, deps); }
   } catch (error) { throw normalizeError(error); }
+}
+
+/**
+ * What the core says, in `snapshot.limitations`, when it stops a session before it changes anything because every port the
+ * route may use is taken. The core owns the sentence; test/node/funnel-session-ports.test.mjs reads it from the real core.
+ */
+export const LISTENERS_TAKEN = 'All explicit listener candidates are occupied or protected';
+
+const portList = ports => ports.length === 2 ? `${ports[0]} and ${ports[1]}` : ports.join(', ');
+
+/**
+ * The error for a session that ended before it was published. When the core stopped it because every candidate port is
+ * taken, the app gets the closest frozen code and a next step that names the ports and, when Gozar knows it, the holder:
+ *   route_conflict            another Gozar route or session in this home holds a candidate port: name it, say how to stop it
+ *   requirements_unsatisfied  only other listeners hold the ports: nothing Gozar owns can be stopped, and a retry changes nothing
+ * Anything else is a plain `provider_unavailable`: provider diagnostics stay inside Gozar.
+ */
+async function sessionStartFailure(reply, { home, adapterId, deps }) {
+  const generic = () => gozarError('provider_unavailable', 'The route could not be started');
+  if (!(reply.snapshot?.limitations ?? []).includes(LISTENERS_TAKEN)) return generic();
+  let ports = [], holders = [];
+  try {
+    const definition = await (deps.loadDefinition ?? (async id => (await import('./catalog.mjs')).loadDefinition(fileURLToPath(new URL('../../', import.meta.url)), id)))(adapterId);
+    ports = definition.bindings?.port?.candidates ?? [];
+    if (ports.length) holders = await (deps.portHolders ?? (await import('./durable-route.mjs')).portHolders)({ home, providerResource: definition.providerResource ?? null, ports });
+  } catch { /* the ports are an explanation, not a precondition: without them the generic error stands */ }
+  if (!ports.length) return generic();
+  const named = holders.map(({ port, routeId, sessionPort }) => routeId !== undefined ? `port ${port} is held by route ${routeId}` : `port ${port} is held by the session on port ${sessionPort}`);
+  if (named.length) {
+    const first = holders[0];
+    const step = first.routeId !== undefined ? `Release route ${first.routeId} (or stop the app that owns it)` : `Stop the session on port ${first.sessionPort}`;
+    const how = first.routeId !== undefined ? step : `${step} with: ${cliCommand('stop', first.sessionPort, home)}`;
+    return gozarError('route_conflict', `No port is free for this route (${portList(ports)}): ${named.join('; ')}. Existing listeners were left untouched.`,
+      instructionAction('free-route-port', `Free port ${first.port}`, `${how}, then start this route again.`));
+  }
+  return gozarError('requirements_unsatisfied', `No port is free for this route: ${portList(ports)} are all in use by other listeners. They were left untouched.`,
+    instructionAction('free-route-port', `Free one of ports ${portList(ports)}`, `Stop whatever listens on port ${ports[0]} or ${ports[1] ?? ports[0]}, then start this route again.`));
 }
 
 /**

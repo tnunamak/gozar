@@ -229,9 +229,10 @@ export async function reserveSession({ home = defaultHome(), port, providerResou
     const canonical = await canonicalHome(home, true);
     const table = await reservationTable(canonical, dir);
     const listener = `127.0.0.1:${port}`;
-    if (table.some(entry => entry.owner.routeId && (entry.listener === listener ||
-        (providerResource && entry.provider?.resource === providerResource && providerPorts.some(item => entry.provider.ports.includes(item))))))
-      throw reservedError();
+    // A session may take any one of its provider ports, so it is refused only when a durable route holds the listener or every one of them.
+    const durable = table.filter(entry => entry.owner.routeId);
+    const heldPort = port => providerResource && durable.some(entry => entry.provider?.resource === providerResource && entry.provider.ports.includes(port));
+    if (durable.some(entry => entry.listener === listener) || (providerPorts.length && providerPorts.every(heldPort))) throw reservedError();
     await atomicWrite(join(canonical, `port-${port}`, 'reservation.json'),
       { pid: process.pid, startIdentity: await processIdentity(process.pid), providerResource, providerPorts });
     return { reserved: true };
@@ -250,6 +251,16 @@ export async function durableListenerHeld({ home = defaultHome(), port }) {
   try { records = await allRecords(await routesDirectory(home, false)); }
   catch (error) { if (['ENOENT', 'unsafe_state_path'].includes(error.code)) return false; throw error; }
   return records.some(record => record.target === `127.0.0.1:${port}`);
+}
+
+// Read-only: which Gozar route or live session in this home holds each of these provider ports. A port that no
+// Gozar route holds is absent from the answer: whatever holds it is not ours. Never creates state.
+export async function portHolders({ home = defaultHome(), providerResource, ports }) {
+  let dir, canonical;
+  try { dir = await routesDirectory(home, false); canonical = await canonicalHome(home, false); }
+  catch (error) { if (['ENOENT', 'unsafe_state_path'].includes(error.code)) return []; throw error; }
+  const table = await reservationTable(canonical, dir);
+  return ports.flatMap(port => { const entry = heldBy(table, { resource: providerResource, port }); return entry ? [{ port, ...entry.owner }] : []; });
 }
 
 // --- Verification and reconciliation ---
