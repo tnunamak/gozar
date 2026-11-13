@@ -24,7 +24,10 @@ function providerWords() {
   }
   return [...words];
 }
-const findNames = (text, words) => words.filter(word => new RegExp(`(^|[^a-z0-9])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`, 'i').test(text));
+// A camelCase or PascalCase identifier is split at each lower-to-upper step first, so `ngrokToken` and
+// `TailscaleFunnel` are caught as well as `ngrok-token`.
+const words = text => text.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+const findNames = (text, names) => names.filter(word => new RegExp(`(^|[^a-z0-9])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`, 'i').test(words(text)));
 
 test('red gate: no provider name appears in the consumer type file or the consumer schema', () => {
   const words = providerWords();
@@ -39,13 +42,14 @@ test('the gate itself catches a provider name (a clean pass is not an empty scan
   assert.deepEqual(findNames('export type Adapter = "tailscale-funnel";', words).sort(), ['tailscale', 'tailscale-funnel']);
   assert.deepEqual(findNames('route through Ngrok when ready', words), ['ngrok']);
   assert.deepEqual(findNames('the lan and own address words alone are not vendor names', words), []);
+  assert.deepEqual(findNames('const ngrokToken = readTailscaleStatus();', words).sort(), ['ngrok', 'tailscale'], 'camelCase is split');
+  assert.deepEqual(findNames('class TailscaleFunnelAdapter {}', words), ['tailscale'], 'PascalCase is split');
 });
 
 test('registry compatibility arrays and provider docs are generated from `providers` and are current', () => {
   for (const script of ['sync-adapter-registry.mjs', 'generate-adapter-docs.mjs', 'generate-error-normalization.mjs']) {
     execFileSync(process.execPath, [here(`../../scripts/${script}`), '--check'], { stdio: 'pipe' });
   }
-  assert.equal(manifest.providers.length, 10);
   for (const entry of manifest.providers) {
     assert.deepEqual(Object.keys(entry).sort(), ['definition', 'id', 'module'], entry.id);
     assert.equal(entry.module, `providers/${entry.id}/index.mjs`);
@@ -65,15 +69,21 @@ test('red: a hand-edited compatibility array fails the registry check', async t 
   execFileSync(process.execPath, [here('../../scripts/sync-adapter-registry.mjs'), '--check', '--manifest', file], { stdio: 'pipe' });
 });
 
-// The core is provider-neutral: no vendor word from the registry appears in any module of packages/gozar-node/.
-// There are no holdouts.
-test('zero census: no module of packages/gozar-node names a provider', () => {
+// The core is provider-neutral: no vendor word from the registry appears in any source or type file under
+// packages/gozar-node/ (subdirectories included) or in the CLI entry point. There are no holdouts.
+const SOURCE = /\.(mjs|cjs|js|d\.ts)$/;
+function coreFiles() {
+  const root = here('../../packages/gozar-node');
+  const files = readdirSync(root, { recursive: true }).map(String).filter(name => SOURCE.test(name) && !name.split('/').includes('node_modules'))
+    .map(name => join(root, name));
+  return [...files, here('../../bin/gozar.mjs')];
+}
+
+test('zero census: no module of packages/gozar-node, and not the CLI entry point, names a provider', () => {
   const words = providerWords();
-  const directory = here('../../packages/gozar-node');
-  const holdouts = new Set();
-  const files = readdirSync(directory).filter(name => name.endsWith('.mjs'));
-  assert.ok(files.length > 40 && files.includes('durable-route.mjs'), 'the scan reads the real core');
-  const named = Object.fromEntries(files.filter(name => !holdouts.has(name))
-    .map(name => [name, findNames(readFileSync(join(directory, name), 'utf8'), words)]).filter(([, found]) => found.length));
+  const files = coreFiles();
+  assert.ok(files.length > 40 && files.some(file => file.endsWith('durable-route.mjs')) && files.some(file => file.endsWith('route-contract.d.ts')) && files.some(file => file.endsWith('bin/gozar.mjs')), 'the scan reads the real core');
+  const named = Object.fromEntries(files.map(file => [file.slice(file.indexOf('/packages/') >= 0 ? file.indexOf('/packages/') + 1 : file.indexOf('/bin/') + 1), findNames(readFileSync(file, 'utf8'), words)])
+    .filter(([, found]) => found.length));
   assert.deepEqual(named, {});
 });

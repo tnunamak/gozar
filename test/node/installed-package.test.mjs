@@ -59,7 +59,7 @@ console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeId
   assert.equal(seen.types, './packages/gozar-node/route-contract.d.ts');
   assert.equal(seen.exportsTypes, seen.types);
   assert.equal(seen.engines, '>=22.13');
-  assert.equal(seen.providers.length, 10);
+  assert.deepEqual(seen.providers, JSON.parse(await readFile(new URL('../../adapters/manifest.json', import.meta.url), 'utf8')).providers.map(provider => provider.id), 'the installed registry is the source registry');
   assert.equal(seen.candidates, seen.providers.length, 'one candidate per installed registry entry');
   assert.equal(seen.tokens, 0, 'nothing is ready on a host with no provider tooling, so no token is issued');
   for (const path of ['packages/gozar-node/route-contract.d.ts', 'runtime/route-catalog.schema.json', 'runtime/error-normalization.json', 'adapters/providers/ngrok-https-edge/index.mjs']) {
