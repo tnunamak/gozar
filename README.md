@@ -1,5 +1,7 @@
 # Gozar
 
+SPDX-License-Identifier: Apache-2.0
+
 Give a local service an HTTPS address a remote client can reach, or a private route inside your Tailscale network. Gozar can use Tailscale Funnel, Tailscale Serve, localhost.run, your own HTTPS proxy, or a selected LAN interface.
 
 **Will it fit your app?** You need Linux or macOS with Node.js 22.13 or newer, a local service on a port you choose, and a client that reaches it over the internet, your tailnet or your LAN. Windows is not supported: every route answers `unsupported`. Gozar adds no authentication to your app.

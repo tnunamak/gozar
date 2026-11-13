@@ -1,6 +1,7 @@
 {
   "name": "@tnunamak/gozar",
   "version": "0.4.0",
+  "license": "Apache-2.0",
   "description": "Give a local MCP server an address its client can reach",
   "type": "module",
   "exports": {
@@ -24,6 +25,7 @@
     "harness/dummy-server.mjs",
     "docs/service-routes.md",
     "docs/providers.md",
+    "LICENSE",
     "examples/",
     "docs/migration-0.4.md"
   ],
