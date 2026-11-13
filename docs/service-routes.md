@@ -1,4 +1,6 @@
-# Existing service routes
+# Service routes and durable routes
+
+This page covers two features: service routes, which record an HTTPS service you already run, and [durable routes](#durable-routes-gozar-owned), which Gozar creates on Tailscale and keeps at one address.
 
 A service route records an existing HTTPS origin and its fixed HTTP target. Use Linux or macOS with Node.js 22.13 or newer. Windows answers `unsupported`. You manage the service, reverse proxy, TLS and startup. Gozar starts no listener or daemon, forwards no traffic and changes no ingress. Records survive controller exit and reboot and have no Gozar expiry. Service availability still depends on your own supervisors. Each status call checks the route again rather than restoring saved readiness.
 
@@ -6,7 +8,7 @@ The commands below use npx with an explicit package, so they need no global inst
 
 ```sh
 ORIGIN=https://service.example   # replace with your service's public HTTPS address
-TARGET=192.0.2.10:3000           # replace with the host and port your backend listens on
+TARGET=127.0.0.1:3000            # replace with the host and port your backend listens on
 npx --package=@tnunamak/gozar@0.2.1 gozar service add --origin "$ORIGIN" --target "$TARGET" --json
 npx --package=@tnunamak/gozar@0.2.1 gozar service status --origin "$ORIGIN" --json
 npx --package=@tnunamak/gozar@0.2.1 gozar service remove --origin "$ORIGIN" --json
@@ -48,7 +50,7 @@ When source-IP filtering blocks the controller, supply a trusted command:
 
 ```sh
 ORIGIN=https://service.example                   # replace with your service's public HTTPS address
-TARGET=192.0.2.10:3000                           # replace with the host and port your backend listens on
+TARGET=127.0.0.1:3000                            # replace with the host and port your backend listens on
 VERIFY_CMD=/absolute/path/check-existing-route   # replace with your own trusted check command
 npx --package=@tnunamak/gozar@0.2.1 gozar service add --origin "$ORIGIN" --target "$TARGET" --verify-cmd "$VERIFY_CMD" --json
 ```
@@ -86,7 +88,7 @@ Every route has this shape:
 {
   "schemaVersion": 1,
   "origin": "https://service.example",
-  "target": "192.0.2.10:3000",
+  "target": "127.0.0.1:3000",
   "adapterId": "own-address",
   "ownership": "external-owned",
   "verifyCmd": null,
@@ -102,7 +104,7 @@ Every route has this shape:
 
 `status` is `verified|failed`, `method` is `challenge|host-command`, `scope` is `controller-origin|host-command`, and `error` is null or a bounded diagnostic. `checkedAt` is an ISO-8601 UTC timestamp at check completion. Each check has a five-second deadline; challenge responses are limited to 4096 bytes. Failed verification retains the record so status can retry after the network or service recovers. CLI add/status exit 1 if a returned check fails; remove exits 0 on success, including an absent record. Invalid input or state rejects the JS promise and produces CLI exit 1 with `{schemaVersion:1,error:{code:'SERVICE_ERROR',message}}`. With `--json`, stdout contains one JSON reply. Status for an absent selected origin returns an empty routes array.
 
-# Durable routes (Gozar-owned)
+## Durable routes (Gozar-owned)
 
 A durable route is a Tailscale Funnel or Serve listener that Gozar creates, keeps at one origin across app restarts and reboots, and removes only when asked. Use it when a client stores the address for a long time (a signed invitation, an OAuth client registration, a hosted connector). For exposure that ends on its own, use a session (`gozar expose`) or an attached route (see the [README](../README.md#route-by-requirement)).
 

@@ -14,7 +14,7 @@ Then, in a second terminal, expose it (or replace `18765` with your own service'
 npx --package=@tnunamak/gozar@0.2.1 gozar expose --port 18765 --client-reach internet
 ```
 
-Gozar finds eligible routes, shows what it would connect, and asks for approval before making the service reachable. Provider setup or an outside-network verification step may still be required. Only share an address once Gozar verifies it; the address can change or expire. **Gozar does not add authentication to your app.**
+Gozar finds eligible routes, shows the provider it chose and the exact local target, and asks for approval before making the service reachable. To see every candidate first, run `npx --package=@tnunamak/gozar@0.2.1 gozar detect --port 18765 --alternatives`. Provider setup or an outside-network verification step may still be required. Only share an address once Gozar verifies it; the address can change or expire. **Gozar does not add authentication to your app.**
 
 For a persistent service behind your existing HTTPS proxy, use a [service route](#keep-an-existing-service-address). To embed Gozar in an app, start with [Route by requirement](#route-by-requirement): the app states what it needs, and Gozar lists the providers that meet it. [Embed Gozar in your app](#embed-gozar-in-your-app) shows the shorter session commands. MCP is supported, but not required.
 
@@ -91,26 +91,34 @@ Set `ORIGIN` and `TARGET` to your own values first; the sample origin is not a r
 
 ## Route by requirement
 
-An app that needs a route states what it needs and never names a provider. Gozar's catalog lists the providers that meet the requirements. The app shows the user the chosen candidate's disclosure and passes the approval back. The route-contract types are in `packages/gozar-node/route-contract.d.ts`, and `package.json` exposes them to TypeScript through `types`.
+An app that needs a route states what it needs and never names a provider. Gozar's catalog lists the providers that meet the requirements. The app shows the user the chosen candidate's disclosure and passes the approval back.
+
+The example below opens a 15-minute session route to the demo server from the top of this page, so start that first. Save it as `route-example.mjs` in a project with `@tnunamak/gozar@0.2.1` installed, and run `node route-example.mjs`. It prints the disclosure and creates the route only if you answer `y`. For an address that survives restarts, use `ensureRoute` with `usage: { kind: 'durable', routeId }` instead of `expose`. The route-contract types are in `node_modules/@tnunamak/gozar/packages/gozar-node/route-contract.d.ts`, and the package exposes them to TypeScript through its `types` field.
 
 ```js
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { catalogRoutes, ensureRoute, watchRoutes, closeRoute } from '@tnunamak/gozar';
+import { createInterface } from 'node:readline/promises';
+import { catalogRoutes, expose, watchRoutes, closeRoute } from '@tnunamak/gozar';
 
 // Gozar's state directory. The CLI uses the same one, so `gozar status` lists this app's routes too.
 const stateDirectory = process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
 
 const query = {
-  schemaVersion: 1, owner: 'example-app', target: '127.0.0.1:3000', home: stateDirectory,
-  usage: { kind: 'durable', routeId: 'coordinator' },        // or { kind: 'session', lifetimeMs } or { kind: 'attached' }
-  requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'stable', setup: 'none', protocols: [] },
+  schemaVersion: 1, owner: 'example-app', target: '127.0.0.1:18765', home: stateDirectory,
+  usage: { kind: 'session', lifetimeMs: 900_000 },            // or { kind: 'attached' }
+  requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] },
 };
 const catalog = await catalogRoutes(query);                    // read-only: nothing is exposed
 const candidate = catalog.candidates.find(item => item.eligible && item.candidateToken);
 if (!candidate) throw new Error(catalog.noMatch?.code ?? 'setup needed');   // candidate.setup.actions says what the user can do
-// Show candidate.disclosure to the user. After they agree:
-const route = await ensureRoute({ ...query, approval: { candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision } });
+
+const ask = createInterface({ input: process.stdin, output: process.stdout });
+console.log(candidate.disclosure.text);
+if ((await ask.question('Create this route? [y/N] ')).trim().toLowerCase() !== 'y') { ask.close(); process.exit(0); }
+const route = await expose({ ...query, wait: 'verified',
+  approval: { candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision } });
+console.log('Published at', route.published);
 
 const controller = new AbortController();
 const watching = (async () => {
@@ -120,6 +128,8 @@ const watching = (async () => {
 })();
 
 // When the app no longer needs the route. The watch ends with a terminal event; controller.abort() ends it sooner.
+await ask.question('Press Enter to close the route ');
+ask.close();
 await closeRoute({ home: stateDirectory, handle: route.handle, mode: 'remove' });
 await watching;
 ```
@@ -137,13 +147,13 @@ The same requests run from the command line. Each command reads its request from
 | `gozar catalog --query-file FILE [--route NAME] --json` | Lists candidates for the query. |
 | `gozar ensure --query-file FILE [--approval-file FILE] [--reconsent] --json` | Creates or confirms a durable route. |
 | `gozar adopt --query-file FILE --approval-file FILE --handover-file FILE --json` | Takes over an existing rule. |
-| `gozar expose --query-file FILE --approval-file FILE [--wait allocated] --json` | Opens a session or attached route and returns once the route is verified. With `--wait allocated` it returns as soon as the provider has allocated the address. For an attached route this process holds it; close stdin to end it. |
+| `gozar expose --query-file FILE --approval-file FILE [--wait verified] --json` | Opens a session or attached route. `--wait verified`, the default, returns once the route is verified; `--wait allocated` returns as soon as the provider has allocated the address. For an attached route this process holds it; close stdin to end it. |
 | `gozar setup ACTION_ID --approval-file FILE [--secret-file FILE] --json` | Runs one approved setup action. |
 | `gozar preference show [--profile-home DIR] --json` | Reads the user's provider order and its revision. |
 | `gozar preference set --expected-revision N [--prefer REF ...] [--profile-home DIR] --json` | Replaces the provider order. N is the revision `show` returned. |
 | `gozar watch --handle-file FILE --json` | Streams route changes until the route is gone. |
 
-Exit codes: `0` success; `2` requirements, setup or `unsupported`; `3` missing, stale or unknown approval, or no such route; `1` any other failure. There is no `--yes` for these commands: the approval is the private file that holds the token the catalog issued.
+Exit codes: `0` success; `2` requirements, setup or `unsupported`; `3` missing, stale or unknown approval, or no such route; `1` any other failure. There is no `--yes` for these commands: the approval is the private file that holds the token the catalog issued. The session commands in [Share a local service](#share-a-local-service) and [Embed Gozar in your app](#embed-gozar-in-your-app) are a different form of `gozar expose`: they take `--port` and `--client-reach`, use `--yes` for approval, and do not take the files above.
 
 ## Embed Gozar in your app
 
@@ -242,7 +252,7 @@ npx --package=@tnunamak/gozar@0.2.1 gozar expose --port 3000 --client-reach inte
 npx --package=@tnunamak/gozar@0.2.1 gozar health --port 3000
 ```
 
-Set `ORIGIN` to your own proxy's address first; point your own HTTPS proxy to the local Gozar proxy target printed during setup, then run the health check. Stopping Gozar closes its local proxy, not your DNS or external proxy. For a service and reverse proxy that should outlive Gozar independently, [register a service route](#keep-an-existing-service-address) instead.
+Set `ORIGIN` to your own proxy's address first; point your own HTTPS proxy to the local Gozar proxy target printed during setup, then run the health check. If your proxy's address changes while the session runs, run `npx --package=@tnunamak/gozar@0.2.1 gozar update-origin --port 3000 --origin "$NEW_ORIGIN"` and then the health check again. Gozar stops publishing the old address at once and publishes the new one only after the health check verifies it. Stopping Gozar closes its local proxy, not your DNS or external proxy. For a service and reverse proxy that should outlive Gozar independently, [register a service route](#keep-an-existing-service-address) instead.
 
 Private tailnet routes require a trusted check from the intended client network. LAN requires an explicit selected interface, exact firewall approval and a trusted check; it serves HTTP rather than HTTPS.
 
@@ -285,7 +295,7 @@ npx --package=@tnunamak/gozar@0.2.1 gozar health --port 3000 --json
 ```
 Use only the current verified `snapshot.published`. If it is `null`, remove the old link from your app. Anonymous relay URLs can change within minutes even within the requested session lifetime.
 
-**Noninteractive approval required:** Collect the user's approval of the chosen provider and exact local target, then retry with `--yes`. A JSON response is not consent. The route-contract commands above have no `--yes`.
+**Noninteractive approval required:** Collect the user's approval of the chosen provider and exact local target, then retry the session command (`gozar expose --port N`) with `--yes`. A JSON response is not consent. The route-contract commands above have no `--yes`.
 
 **Expired session or cleanup debt:**
 ```sh
