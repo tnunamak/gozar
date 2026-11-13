@@ -2,12 +2,14 @@
 
 A service route records an existing HTTPS origin and its fixed HTTP target. Use Linux or macOS with Node.js 22.13 or newer. Windows answers `unsupported`. You manage the service, reverse proxy, TLS and startup. Gozar starts no listener or daemon, forwards no traffic and changes no ingress. Records survive controller exit and reboot and have no Gozar expiry. Service availability still depends on your own supervisors. Each status call checks the route again rather than restoring saved readiness.
 
-The commands below assume a global `gozar` executable. If you installed the package locally or want a one-off command, replace `gozar` with `npx --package=@tnunamak/gozar@0.2.1 gozar`.
+The commands below use npx with an explicit package, so they need no global install. With a global install, `gozar` alone works. Set `ORIGIN` and `TARGET` to your own service first; the sample values fail verification.
 
 ```sh
-gozar service add --origin https://service.example --target 192.0.2.10:3000 --json
-gozar service status --origin https://service.example --json
-gozar service remove --origin https://service.example --json
+ORIGIN=https://service.example   # replace with your service's public HTTPS address
+TARGET=192.0.2.10:3000           # replace with the host and port your backend listens on
+npx --package=@tnunamak/gozar@0.2.1 gozar service add --origin "$ORIGIN" --target "$TARGET" --json
+npx --package=@tnunamak/gozar@0.2.1 gozar service status --origin "$ORIGIN" --json
+npx --package=@tnunamak/gozar@0.2.1 gozar service remove --origin "$ORIGIN" --json
 ```
 
 Use a credential-free HTTPS origin without a path, query or fragment. Omitting `--origin` from `service status` lists every record. The target is `HOST:PORT` or `[IPv6]:PORT`, with port 1..65535. The proxy must preserve the application's expected public Host. Removing a record does not stop the service or edit the proxy. To change a target or verifier command, remove its record and add the replacement. Repeating an identical add is safe.
@@ -45,7 +47,10 @@ The declared target port MUST equal the service-observed local listener port. NA
 When source-IP filtering blocks the controller, supply a trusted command:
 
 ```sh
-gozar service add --origin https://service.example --target 192.0.2.10:3000 --verify-cmd '/absolute/path/check-existing-route' --json
+ORIGIN=https://service.example                   # replace with your service's public HTTPS address
+TARGET=192.0.2.10:3000                           # replace with the host and port your backend listens on
+VERIFY_CMD=/absolute/path/check-existing-route   # replace with your own trusted check command
+npx --package=@tnunamak/gozar@0.2.1 gozar service add --origin "$ORIGIN" --target "$TARGET" --verify-cmd "$VERIFY_CMD" --json
 ```
 
 The command must check the real HTTPS origin from an allowed vantage and establish that it reaches the exact target. An unrelated HTTP 200 is insufficient. Exit zero asserts success; nonzero or timeout reports failure. Gozar passes `GOZAR_SERVICE_ORIGIN`, `GOZAR_SERVICE_TARGET` and fresh `GOZAR_SERVICE_NONCE` through the environment. It does not interpolate them into the command or retain command output.
@@ -58,15 +63,18 @@ The command is trusted owner code, executed by a shell under the invoking user's
 import { addService, statusServices, removeService, createServiceVerifier }
   from '@tnunamak/gozar/service';
 
-await addService({ origin, target, verifyCmd: null, home });
+const origin = process.env.ORIGIN;   // your service's HTTPS origin, as in the commands above
+const target = process.env.TARGET;   // the local HOST:PORT it reaches
+
+await addService({ origin, target, verifyCmd: null });
 // { schemaVersion: 1, route }
-await statusServices({ origin, home }); // origin optional; no args lists all
+await statusServices({ origin }); // origin optional; no args lists all
 // { schemaVersion: 1, routes: [route] }
-await removeService({ origin, home });
+await removeService({ origin });
 // { schemaVersion: 1, origin, removed: true } // false if already absent
 ```
 
-`home` is optional, defaulting to `GOZAR_HOME` or `~/.local/state/gozar`. Service records use a separate `services` directory. Only configuration is persisted, never verification readiness. Per-origin advisory lock files remain in `services/.locks`; kernel locks release on controller exit and reboot. Concurrent mutations may reject as busy; retry the operation. Records and lock files require ownership by the invoking user and mode 0600; service state directories must be private to that user.
+Each call also takes an optional `home`, defaulting to `GOZAR_HOME` or `~/.local/state/gozar`. Service records use a separate `services` directory. Only configuration is persisted, never verification readiness. Per-origin advisory lock files remain in `services/.locks`; kernel locks release on controller exit and reboot. Concurrent mutations may reject as busy; retry the operation. Records and lock files require ownership by the invoking user and mode 0600; service state directories must be private to that user.
 
 Gozar resolves the requested home to its real path once and uses that path for every read or mutation. Home symlinks and aliases in its ancestry are supported when the resolved path is trusted. Gozar checks every directory in the resolved ancestry: directories must belong to the invoking user or root, with no group or other write permission unless root-owned with the sticky bit (for example, `/tmp`). If the home does not exist, Gozar resolves its nearest existing ancestor, checks that ancestry, then creates and checks each missing directory below that real path. Status leaves missing state absent. Changing an alias after resolution does not redirect the current operation. Dangling and looping aliases are refused with a repair message. The services directory and its lock directory must still be real directories; record and lock symlinks are refused.
 
@@ -114,10 +122,12 @@ Requirements: Linux or macOS, Node.js 22.13 or newer, and a running Tailscale wh
 
 **Proof level.** The two app paths are proven only by fixture tests: the file and `lsof` formats are transcribed from Tailscale's source, and the tests run against a fake LocalAPI. No Gozar test has run against a live App Store or standalone app. Run the check below on a Mac with an app to settle it.
 
-**Check a Mac with a Tailscale app (read-only).** Run these in a Gozar checkout or an installed `@tnunamak/gozar` package. Neither command changes anything or prints the token.
+**Check a Mac with a Tailscale app (read-only).** Neither command changes anything or prints the token. The check script ships in the npm package; install it into a scratch directory and run it from there (in a Gozar checkout, run `node packages/gozar-node/check-tailscale-app.mjs` instead):
 
 ```sh
-node packages/gozar-node/check-tailscale-app.mjs
+mkdir gozar-check && cd gozar-check
+npm install @tnunamak/gozar@0.2.1
+node node_modules/@tnunamak/gozar/packages/gozar-node/check-tailscale-app.mjs
 ```
 
 Expected, for the App Store app (the standalone app prints `standalone app`; `tailscale CLI` is `on PATH` when the CLI integration is installed):
@@ -132,7 +142,7 @@ LocalAPI serve-config: ok
 result: reachable
 ```
 
-The port differs per run. A failure line names the code and the next action, for example `LocalAPI status: provider_unavailable (open the Tailscale app, or start tailscaled)`. Then ask the catalog the way an app would (`gozar` is `node bin/gozar.mjs` in a checkout):
+The port differs per run. A failure line names the code and the next action, for example `LocalAPI status: provider_unavailable (open the Tailscale app, or start tailscaled)`. Then ask the catalog the way an app would:
 
 ```sh
 mkdir -m 700 "$HOME/.gozar-check"
@@ -146,7 +156,7 @@ cat > q.json <<EOF
   "requirements": { "reach": "tailnet", "transport": "https", "payloadAccess": "allow-provider", "address": "stable", "setup": "none", "protocols": [] }
 }
 EOF
-gozar catalog --query-file q.json --json | node -e '
+npx --package=@tnunamak/gozar@0.2.1 gozar catalog --query-file q.json --json | node -e '
 const o = JSON.parse(require("fs").readFileSync(0, "utf8"));
 for (const c of o.candidates) if (c.display.label.startsWith("Tailscale")) console.log(c.display.label, "| eligible:", c.eligible, "| setup:", c.setup.state, "| token:", c.candidateToken ? "issued" : "none");'
 ```
@@ -158,13 +168,18 @@ Tailscale Funnel | eligible: false | setup: ready | token: none
 Tailscale private Serve | eligible: true | setup: ready | token: issued
 ```
 
-A durable candidate becomes `ready` and gets a token only after Gozar has read the node and the serve config through the LocalAPI, so `Tailscale private Serve ... setup: ready | token: issued` proves the LocalAPI was reached. If the LocalAPI is not reachable, that line reads `eligible: false | setup: unknown | token: none`; run the first command to see why. If the CLI is missing, the line reads `setup: action-required`. Do not paste the raw catalog JSON anywhere: it holds the single-use token. Remove the check directory afterwards with `rm -r "$HOME/.gozar-check"`.
+A durable candidate becomes `ready` and gets a token only after Gozar has read the node and the serve config through the LocalAPI, so `Tailscale private Serve ... setup: ready | token: issued` proves the LocalAPI was reached. If the LocalAPI is not reachable, that line reads `eligible: false | setup: unknown | token: none`; run the first command to see why. If the CLI is missing, the line reads `setup: action-required`. Do not paste the raw catalog JSON anywhere: it holds the single-use token. Remove the check directories afterwards with `rm -r "$HOME/.gozar-check"`, and `gozar-check` if you made it.
 
 **What it exposes.** A durable route is a standing forward from the public origin to `127.0.0.1:PORT`. It forwards to whatever listens on that port, whether or not the app that asked for it is running. Use a port you keep for the route. Show the user the candidate's `disclosure.text` before you pass an approval. `gozar status` shows the same facts afterwards.
 
 ```js
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { catalogRoutes, ensureRoute, routeStatus, closeRoute } from '@tnunamak/gozar';
 import { createServiceVerifier } from '@tnunamak/gozar/service';
+
+// Gozar's state directory. The CLI uses the same one, so `gozar status` lists this route.
+const home = process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
 
 // Install createServiceVerifier() in the app's request handler first, as for service routes.
 const query = {
@@ -193,10 +208,10 @@ await closeRoute({ home, handle: route.handle, mode: 'remove' });
 The user can always see and stop durable routes without the app:
 
 ```sh
-gozar status                  # sessions, service routes and durable routes
-gozar status --route coordinator --json
-gozar stop --route coordinator    # compare-and-set removal; also blocks re-creation
-gozar allow --route coordinator   # shows the consent text again and lifts the stop
+npx --package=@tnunamak/gozar@0.2.1 gozar status                          # sessions, service routes and durable routes
+npx --package=@tnunamak/gozar@0.2.1 gozar status --route coordinator --json
+npx --package=@tnunamak/gozar@0.2.1 gozar stop --route coordinator        # compare-and-set removal; also blocks re-creation
+npx --package=@tnunamak/gozar@0.2.1 gozar allow --route coordinator       # shows the consent text again and lifts the stop
 ```
 
 `gozar status` shows each route as `owner-run`, says `forwards to 127.0.0.1:PORT whether or not OWNER is running`, and checks the target live: `app answering`, `nothing listening`, or the warning `another program is listening` with `gozar stop --route ID` as the next action. A user stop is sticky: the app's next `ensureRoute` or `adoptRoute` fails with `stopped_by_user` until the user runs `gozar allow --route ID` or the app passes `reconsent: true` together with a fresh `approval` right after the user approved again. No close mode clears it.

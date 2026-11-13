@@ -2,10 +2,16 @@
 
 Give a local service an HTTPS address a remote client can reach, or a private route inside your Tailscale network. Gozar can use Tailscale Funnel, Tailscale Serve, localhost.run, your own HTTPS proxy, or a selected LAN interface.
 
-**Start with a service already listening on port 3000.** On Linux or macOS with Node.js 22.13 or newer, run:
+**Start with the built-in echo demo, or your own service.** On Linux or macOS with Node.js 22.13 or newer, start the demo in one terminal:
 
 ```sh
-npx --package=@tnunamak/gozar@0.2.1 gozar expose --port 3000 --client-reach internet
+npx --package=@tnunamak/gozar@0.2.1 gozar demo-server --port 18765
+```
+
+Then, in a second terminal, expose it (or replace `18765` with your own service's port):
+
+```sh
+npx --package=@tnunamak/gozar@0.2.1 gozar expose --port 18765 --client-reach internet
 ```
 
 Gozar finds eligible routes, shows what it would connect, and asks for approval before making the service reachable. Provider setup or an outside-network verification step may still be required. Only share an address once Gozar verifies it; the address can change or expire. **Gozar does not add authentication to your app.**
@@ -59,7 +65,7 @@ Status tells you what is currently published. Health rechecks it. Stop attempts 
 | Tailscale Funnel | Public internet | Signed-in Tailscale client, HTTPS/Funnel permission, and verified unused listener; existing routes are not taken over. A session uses port 8443, or 10000 when 8443 is in use. A durable route uses the first free port of 443, 8443 and 10000 that the node's Funnel policy allows. |
 | Tailscale Serve | Your tailnet | Signed-in Tailscale client and a trusted check from the intended tailnet. |
 | localhost.run | Public internet | OpenSSH, a short-lived anonymous relay, and successful route checks. It terminates TLS and can read your traffic. Its HTTPS URL can change within minutes. |
-| tunnl.gg stable | Public internet | Explicit opt-in with an installation key. The relay can read traffic, may show a browser warning, and can close quiet streams after about two minutes. |
+| tunnl.gg stable | Public internet | Explicit opt-in (`--adapter tunnl-gg`) and OpenSSH; Gozar creates its installation key on first approved use. The relay can read traffic, may show a browser warning, and can close quiet streams after about two minutes. |
 | LAN | Selected local network | Explicit non-loopback interface and firewall approval. **HTTP only**; not a public HTTPS route. |
 | Your HTTPS proxy | Clients that reach your configured proxy | You own DNS, TLS, reverse proxy, service uptime and cleanup. Gozar verifies the route, but does not deploy your proxy. |
 | ngrok HTTPS edge | Public internet | **Attached routes only** (the route lives while your app runs). Needs the optional `@ngrok/ngrok` package, a reserved ngrok domain and an auth token. The ngrok edge terminates TLS and can read traffic. `gozar setup` stores the token and domain for the adapter, and the route is ready once every setup step is complete. |
@@ -74,19 +80,26 @@ Already run a service behind your own HTTPS reverse proxy? Save and verify the e
 First install the [service verification helper](docs/service-routes.md#service-challenge) inside your backend request handler, before your ordinary routes. It proves that the public HTTPS address reaches the configured backend listener. If the controller cannot probe your service directly, the [trusted verifier-command alternative](docs/service-routes.md#host-supplied-verification) is available.
 
 ```sh
-npx --package=@tnunamak/gozar@0.2.1 gozar service add --origin https://service.example --target 127.0.0.1:3000 --json
-npx --package=@tnunamak/gozar@0.2.1 gozar service status --origin https://service.example --json
-npx --package=@tnunamak/gozar@0.2.1 gozar service remove --origin https://service.example --json
+ORIGIN=https://service.example   # replace with your service's public HTTPS address
+TARGET=127.0.0.1:3000            # replace with the host and port your backend listens on
+npx --package=@tnunamak/gozar@0.2.1 gozar service add --origin "$ORIGIN" --target "$TARGET" --json
+npx --package=@tnunamak/gozar@0.2.1 gozar service status --origin "$ORIGIN" --json
+npx --package=@tnunamak/gozar@0.2.1 gozar service remove --origin "$ORIGIN" --json
 ```
 
-Replace the example origin and target. The target port must be the port your backend actually receives; the reverse proxy must preserve the public Host header. A saved record is not a passing verification result: read the returned status. Each status invocation probes afresh. Removing the record removes only Gozar metadata; your service, DNS and proxy continue running.
+Set `ORIGIN` and `TARGET` to your own values first; the sample origin is not a real service and fails verification. The target port must be the port your backend actually receives; the reverse proxy must preserve the public Host header. A saved record is not a passing verification result: read the returned status. Each status invocation probes afresh. Removing the record removes only Gozar metadata; your service, DNS and proxy continue running.
 
 ## Route by requirement
 
 An app that needs a route states what it needs and never names a provider. Gozar's catalog lists the providers that meet the requirements. The app shows the user the chosen candidate's disclosure and passes the approval back. The route-contract types are in `packages/gozar-node/route-contract.d.ts`, and `package.json` exposes them to TypeScript through `types`.
 
 ```js
-import { catalogRoutes, ensureRoute, routeStatus, watchRoutes, closeRoute } from '@tnunamak/gozar';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { catalogRoutes, ensureRoute, watchRoutes, closeRoute } from '@tnunamak/gozar';
+
+// Gozar's state directory. The CLI uses the same one, so `gozar status` lists this app's routes too.
+const stateDirectory = process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
 
 const query = {
   schemaVersion: 1, owner: 'example-app', target: '127.0.0.1:3000', home: stateDirectory,
@@ -100,10 +113,15 @@ if (!candidate) throw new Error(catalog.noMatch?.code ?? 'setup needed');   // c
 const route = await ensureRoute({ ...query, approval: { candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision } });
 
 const controller = new AbortController();
-for await (const event of watchRoutes({ home: stateDirectory, handle: route.handle, signal: controller.signal })) {
-  console.log(event.type, event.route.state, event.route.origin);   // snapshot, changed, terminal
-}
+const watching = (async () => {
+  for await (const event of watchRoutes({ home: stateDirectory, handle: route.handle, signal: controller.signal })) {
+    console.log(event.type, event.route.state, event.route.published);   // snapshot, changed, terminal
+  }
+})();
+
+// When the app no longer needs the route. The watch ends with a terminal event; controller.abort() ends it sooner.
 await closeRoute({ home: stateDirectory, handle: route.handle, mode: 'remove' });
+await watching;
 ```
 
 - `candidateToken` is private bearer data. It is single-use, expires after 10 minutes, and is bound to the query, the disclosure revision and what Gozar observed at the provider. If the provider changed, the call fails with `candidate_stale` and changes nothing: ask the catalog again. Do not log it.
@@ -112,7 +130,7 @@ await closeRoute({ home: stateDirectory, handle: route.handle, mode: 'remove' })
 - `getRoutePreferences` and `setRoutePreferences` keep the user's provider order as opaque `preferenceRef` values. `runSetupAction` runs one setup action the user approved. `resolveClientAddress` turns a proven connection into a client address, or says why it cannot.
 - The route functions behave the same on Linux and macOS. On any other platform every candidate is `unsupported`.
 
-The same requests run from the command line. Each command reads its request from files, prints one JSON envelope on stdout (`watch` prints one event per line) and writes progress to stderr. Files that hold an approval or a secret must be private (mode 0600).
+The same requests run from the command line. Each command reads its request from files, prints one JSON envelope on stdout (`watch` prints one event per line) and writes progress to stderr. Files that hold an approval or a secret must be private (mode 0600). In the table, `gozar` stands for `npx --package=@tnunamak/gozar@0.2.1 gozar` (or a global install), and FILE, NAME, ACTION_ID, DIR, N and REF are your values.
 
 | Command | What it does |
 | --- | --- |
@@ -225,16 +243,17 @@ To select tunnl.gg explicitly:
 npx --package=@tnunamak/gozar@0.2.1 gozar expose --port 3000 --client-reach internet --adapter tunnl-gg
 ```
 
-Gozar creates an Ed25519 identity under its home directory (`GOZAR_HOME`, or `~/.local/state/gozar`) on first approved use and reuses it for later sessions. The key-bound relay permits one active route per installation key. Gozar refuses a second start that uses the same key and reports the holding port and its stop command. Retry after that session has stopped and its owned process cleanup is confirmed; Gozar does not queue the start. Gozar coordinates sessions in the same home. If you copy the key into another home, those processes cannot coordinate and a new route can interrupt the existing one. An announced address change withdraws this route and requires stop followed by a new session. The relay can read traffic, may show a browser warning, and can close quiet streams after about two minutes. Automatic provider selection is unchanged.
+tunnl.gg needs OpenSSH (`ssh` and `ssh-keygen`). Gozar creates an Ed25519 identity under its home directory (`GOZAR_HOME`, or `~/.local/state/gozar`) on first approved use and reuses it for later sessions. The key-bound relay permits one active route per installation key. Gozar refuses a second start that uses the same key and reports the holding port and its stop command. Retry after that session has stopped and its owned process cleanup is confirmed; Gozar does not queue the start. Gozar coordinates sessions in the same home. If you copy the key into another home, those processes cannot coordinate and a new route can interrupt the existing one. An announced address change withdraws this route and requires stop followed by a new session. The relay can read traffic, may show a browser warning, and can close quiet streams after about two minutes. Automatic provider selection is unchanged.
 
 For a temporary route through an existing HTTPS proxy:
 
 ```sh
-npx --package=@tnunamak/gozar@0.2.1 gozar expose --port 3000 --client-reach internet --origin https://service.example
+ORIGIN=https://service.example   # replace with the HTTPS address your proxy serves
+npx --package=@tnunamak/gozar@0.2.1 gozar expose --port 3000 --client-reach internet --origin "$ORIGIN"
 npx --package=@tnunamak/gozar@0.2.1 gozar health --port 3000
 ```
 
-Replace the sample origin; point your own HTTPS proxy to the local Gozar proxy target printed during setup, then run the health check. Stopping Gozar closes its local proxy, not your DNS or external proxy. For a service and reverse proxy that should outlive Gozar independently, [register a service route](#keep-an-existing-service-address) instead.
+Set `ORIGIN` to your own proxy's address first; point your own HTTPS proxy to the local Gozar proxy target printed during setup, then run the health check. Stopping Gozar closes its local proxy, not your DNS or external proxy. For a service and reverse proxy that should outlive Gozar independently, [register a service route](#keep-an-existing-service-address) instead.
 
 Private tailnet routes require a trusted check from the intended client network. LAN requires an explicit selected interface, exact firewall approval and a trusted check; it serves HTTP rather than HTTPS.
 
