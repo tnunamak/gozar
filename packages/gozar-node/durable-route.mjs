@@ -20,6 +20,7 @@ import { durableCapability, admitRouteEffect, routeAuthority } from './plan.mjs'
 import { loadAdapters } from './adapter-runtime.mjs';
 import { redeemConsentToken, consentBinding, canonicalDigest } from './consent-token.mjs';
 import { defaultHome } from './default-home.mjs';
+import { adoptDisclosureRevision } from './adopt-disclosure.mjs';
 
 const refuse = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
 const hash = routeId => createHash('sha256').update(routeId).digest('hex');
@@ -316,7 +317,8 @@ export async function portHolders({ home = defaultHome(), providerResource, port
 // A receipt or a write-ahead intent taken on an empty slot attributes this exact rule.
 // Provider-side foreign ownership (for example a foreground Serve rule) still wins.
 function matchesEmptyIntent(record, facet, observed, current) {
-  return record.intent?.slotWasEmpty === true && !facet.foreign(observed.snapshot, record.intent.port) &&
+  const pin = record.receipt ?? record.intent;
+  return record.intent?.slotWasEmpty === true && !facet.foreign(observed.snapshot, record.intent.port, pin.dnsName) &&
     isDeepStrictEqual(current, record.intent.rule);
 }
 
@@ -800,6 +802,7 @@ export async function adoptRoute(request, deps) {
     const factsOf = observed => planFactsFromObservation(observed, { adapterId, facet, capability, target, origin });
     const seen = factsOf(before.find(item => item.adapterId === adapterId));
     if (migrationRef !== undefined && migrationRef !== migrationRefOf({ origin, target, observedResource: seen.observedResource })) throw stale();
+    if (approval.disclosureRevision !== adoptDisclosureRevision(entry.adapter.definition)) throw stale();
     // The token is spent from here on. Its grant must be for exactly this rule's adapter and state.
     const grant = await redeem(home, request, 'adopt', approval);
     if (grant.adapterId !== adapterId || grant.planDigest !== seen.planDigest || grant.observedResource !== seen.observedResource) throw stale();

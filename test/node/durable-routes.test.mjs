@@ -40,6 +40,8 @@ before(async () => {
 import { issueConsentToken, consentBinding } from ${JSON.stringify(packageUrl('consent-token.mjs'))};
 import { inspectLegacyRoute } from ${JSON.stringify(packageUrl('legacy-import.mjs'))};
 import { canonicalHome } from ${JSON.stringify(packageUrl('service-state.mjs'))};
+import { loadAdapters } from ${JSON.stringify(packageUrl('adapter-runtime.mjs'))};
+import { adoptDisclosureRevision } from ${JSON.stringify(packageUrl('adopt-disclosure.mjs'))};
 const [operation, input] = process.argv.slice(2);
 const args = JSON.parse(input);
 try {
@@ -52,6 +54,10 @@ try {
     const binding = consentBinding({ ...query, intent }, await canonicalHome(home, true), disclosureRevision);
     result = { ...await issueConsentToken({ home, binding, grant, ttlMs }), grant };
   } else if (operation === 'facts') result = await durablePlanFacts(args);
+  else if (operation === 'adoptRevision') {
+    const adapters = await loadAdapters();
+    result = adoptDisclosureRevision(adapters.find(item => item.id === args.adapterId).definition);
+  }
   else if (operation === 'inspect') result = await inspectLegacyRoute(args);
   else throw Object.assign(new Error(operation + ' is not implemented'), { code: 'not_implemented' });
   console.log(JSON.stringify({ result }));
@@ -100,7 +106,7 @@ async function world(t, provider = {}) {
     try { const { stdout } = await pending; return { code: 0, stdout }; }
     catch (error) { if (error.stdout === undefined) throw error; return { code: error.code, signal: error.signal, stdout: error.stdout }; }
   };
-  const helperOperations = new Set(['issue', 'facts', 'inspect']);
+  const helperOperations = new Set(['issue', 'facts', 'inspect', 'adoptRevision']);
   const run = async (operation, input = {}, extraEnv) => {
     const reply = await child([helperOperations.has(operation) ? helper : runner, operation, JSON.stringify({ home, ...input })], extraEnv);
     return reply.signal ? { crashed: reply.signal } : JSON.parse(reply.stdout);
@@ -114,8 +120,9 @@ async function world(t, provider = {}) {
   const query = (extra = {}) => ({ schemaVersion: 1, owner: 'example-app', target, usage: { kind: 'durable', routeId: 'coordinator' }, requirements, home, ...extra });
   const request = query();
   // What the catalog does: observe, then issue a single-use token whose grant names the adapter.
-  const mint = async (extra = {}, { adapterId = 'tailscale-funnel', intent = 'create', disclosureRevision = 'disclosure-1', grant, ttlMs } = {}) => {
+  const mint = async (extra = {}, { adapterId = 'tailscale-funnel', intent = 'create', disclosureRevision, grant, ttlMs } = {}) => {
     const q = query(extra);
+    disclosureRevision ??= intent === 'adopt' ? (await run('adoptRevision', { adapterId })).result : 'disclosure-1';
     const reply = await run('issue', { query: q, adapterId, intent, disclosureRevision, grant, ttlMs });
     if (reply.error) throw Object.assign(new Error(reply.error.message), reply.error);
     return { query: q, approval: { candidateToken: reply.result.token, disclosureRevision }, grant: reply.result.grant };
@@ -592,6 +599,26 @@ test('18. adopt of an exact rule with a handover makes no provider mutation and 
   assert.equal(adopted.result.route.adapterId, 'tailscale-funnel');
   assert.deepEqual((await w.record()).handover, { from: 'example-app', generation: 1 });
   assert.deepEqual(w.writes(), []);
+});
+
+test('adopt refuses an approval for the old disclosure before spending its token, and accepts the current revision', async t => {
+  const w = await world(t);
+  w.edit(state => { foreignRule(8443, `http://${w.target}`)(state); state.config.AllowFunnel = { [`${dnsName}:8443`]: true }; });
+  const old = await w.mint({ origin: w.origin }, { intent: 'adopt', disclosureRevision: 'disc-alpha' });
+  const handover = { from: 'example-app', generation: 1 };
+  const stale = await w.run('adopt', { ...old.query, approval: old.approval, handover });
+  assert.equal(stale.error.code, 'claim_mismatch');
+  assert.match(stale.error.message, /Ask the user again/);
+  assert.deepEqual(w.writes(), [], 'stale disclosure is rejected before any provider mutation');
+  const oldBinding = consentBinding({ ...old.query, intent: 'adopt' }, w.home, old.approval.disclosureRevision);
+  assert.equal((await redeemConsentToken({ home: w.home, token: old.approval.candidateToken, binding: oldBinding })).adapterId, 'tailscale-funnel',
+    'the stale revision check did not spend the token');
+
+  const current = await w.mint({ origin: w.origin }, { intent: 'adopt' });
+  assert.match(current.approval.disclosureRevision, /^disc-[a-f0-9]+:adopt-removal-1$/);
+  const adopted = await w.run('adopt', { ...current.query, approval: current.approval, handover });
+  assert.equal(adopted.error, undefined, JSON.stringify(adopted.error));
+  assert.equal(adopted.result.route.provenance, 'adopted');
 });
 
 test('18. adopt with a token granted for a different adapter than the rule\'s gives candidate_stale (claim_mismatch) and changes nothing', async t => {

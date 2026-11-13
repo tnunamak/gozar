@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildCatalog, catalogRoutes, preferenceRefFor } from '../../packages/gozar-node/route-catalog.mjs';
+import { adoptDisclosureRevision, buildCatalog, catalogRoutes, preferenceRefFor } from '../../packages/gozar-node/route-catalog.mjs';
 import { normalizeError } from '../../packages/gozar-node/error-normalizer.mjs';
 import { action, assertShape, codeOf, fixtures, properties, query, scratch, stubAdapter, tokenStubs } from './route-schema-check.mjs';
 
@@ -217,7 +217,7 @@ test('adoption approval and candidate copy explain takeover and removal on relea
   const [candidate] = catalog.candidates;
   assertShape('Candidate', candidate);
   assert.equal(candidate.eligible, true);
-  assert.equal(candidate.disclosure.revision, 'disc-alpha:adopt-removal-1');
+  assert.equal(candidate.disclosure.revision, adoptDisclosureRevision(stubAdapter('alpha').definition));
   const issued = deps([stubAdapter('alpha')]);
   const check = (await catalogRoutes(q, issued)).candidates[0];
   assert.equal(issued.tokens.live.get(check.candidateToken).binding.disclosureRevision, check.disclosure.revision);

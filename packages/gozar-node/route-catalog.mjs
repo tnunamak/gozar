@@ -8,6 +8,9 @@ import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { loopbackTarget } from './durable-route.mjs';
 import { checksFor, completeProperties, needsFor } from './route-view.mjs';
+import { adoptDisclosureRevision } from './adopt-disclosure.mjs';
+
+export { adoptDisclosureRevision } from './adopt-disclosure.mjs';
 
 const sha = text => createHash('sha256').update(text).digest('hex');
 /** Stable opaque handles for an adapter; apps store the preferenceRef and show the label. */
@@ -191,7 +194,7 @@ async function collect(query, deps) {
     if (query.usage.kind === 'durable' && query.intent === 'adopt') {
       const takeover = 'Gozar takes over the existing rule and removes it when the route is released or stopped.';
       candidate.display.description += ` ${takeover}`;
-      candidate.disclosure = { ...definition.disclosure, revision: `${definition.disclosure.revision}:adopt-removal-1`,
+      candidate.disclosure = { ...definition.disclosure, revision: adoptDisclosureRevision(definition),
         text: `${definition.disclosure.text} ${takeover}` };
     }
     if (eligible && setupState === 'ready' && grant) {

@@ -127,6 +127,25 @@ test('after the provider identity changes, release leaves an equal rule at the n
   assert.equal(store.writes.length, writes, 'no delete was issued');
 });
 
+test('release preserves a foreign-marked intent rule at its pinned identity after a provider rename', async () => {
+  const facet = adapters.find(a => a.id === adapterId).durable;
+  const put = facet.put;
+  facet.put = async (...args) => { await put(...args); throw new Error('crash after write'); };
+  await assert.rejects(ensureRoute(await approved(), deps), /crash after write/);
+  facet.put = put;
+  const entry = store.entries.get('a');
+  entry.foreign = true;
+  entry.identity = 'store-1';
+  store.identity = 'store-2';
+  const before = JSON.stringify(entry);
+  const writes = store.writes.length;
+  const released = await release();
+  assert.equal(released.providerRemoved, false);
+  assert.deepEqual(released.cleanupDebt, { reason: 'unattributed-rule', port: 'a' });
+  assert.equal(JSON.stringify(store.entries.get('a')), before);
+  assert.equal(store.writes.length, writes);
+});
+
 test('release with the adapter gone keeps the record as cleanup debt, and dismiss drops it', async () => {
   await ensureRoute(await approved(), deps);
   const before = JSON.stringify(store.view());
