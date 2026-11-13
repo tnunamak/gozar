@@ -23,8 +23,8 @@ export type ConsentBinding = {
   route: string | null;
   origin: string | null;
   disclosureRevision: string;
-  /** Present only when the query chose a provider; a token issued for one is spent only with the same value. */
-  providerId?: string;
+  // No providerId: a token from a catalog that listed every provider is spent with the id the user chose,
+  // and redeemConsentToken checks that id against the grant's adapterId.
 };
 
 /**
@@ -38,9 +38,12 @@ export function issueConsentToken(request: {
   home: string; binding: ConsentBinding; grant: ConsentGrant; ttlMs?: number;
 }): Promise<{ token: string; expiresAt: string }>;
 
-/** Single use: the token is spent whether redemption succeeds or fails. */
+/**
+ * Single use: the token is spent whether redemption succeeds or fails. When `providerId` is given, it must equal
+ * the grant's `adapterId`, or the call fails with consent_mismatch.
+ */
 export function redeemConsentToken(request: {
-  home: string; token: string; binding: ConsentBinding;
+  home: string; token: string; binding: ConsentBinding; providerId?: string;
 }): Promise<ConsentGrant>;
 
 /** Pure: builds the binding from a request so issuer and redeemer cannot disagree. */

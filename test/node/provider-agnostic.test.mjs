@@ -24,10 +24,18 @@ function providerWords() {
   }
   return [...words];
 }
-// A camelCase or PascalCase identifier is split at each lower-to-upper step first, so `ngrokToken` and
-// `TailscaleFunnel` are caught as well as `ngrok-token`.
-const words = text => text.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
-const findNames = (text, names) => names.filter(word => new RegExp(`(^|[^a-z0-9])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`, 'i').test(words(text)));
+// An identifier is split with a marker that real text never holds: at each lower-to-upper step (`ngrokToken`), before the
+// last capital of a capital run (`NGROKToken`), and between letters and digits (`ngrok2`). A hyphenated id then matches as
+// one compound whose parts are joined by `-`, `_`, the marker or nothing (`own-address`, `ownAddress`, `OWN_ADDRESS`),
+// while prose that happens to hold the same words with a space between them ("its own address") does not.
+const MARK = '\u0001';
+const words = text => text.replace(/([a-z0-9])([A-Z])/g, `$1${MARK}$2`).replace(/([A-Z]+)([A-Z][a-z])/g, `$1${MARK}$2`)
+  .replace(/([A-Za-z])(\d)/g, `$1${MARK}$2`).replace(/(\d)([A-Za-z])/g, `$1${MARK}$2`);
+const escape = part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const findNames = (text, names) => {
+  const split = words(text);
+  return names.filter(word => new RegExp(`(^|[^a-z0-9])${word.split('-').map(escape).join(`[-_${MARK}]?`)}([^a-z0-9]|$)`, 'i').test(split));
+};
 
 test('red gate: no provider name appears in the consumer type file or the consumer schema', () => {
   const words = providerWords();
@@ -43,7 +51,13 @@ test('the gate itself catches a provider name (a clean pass is not an empty scan
   assert.deepEqual(findNames('route through Ngrok when ready', words), ['ngrok']);
   assert.deepEqual(findNames('the lan and own address words alone are not vendor names', words), []);
   assert.deepEqual(findNames('const ngrokToken = readTailscaleStatus();', words).sort(), ['ngrok', 'tailscale'], 'camelCase is split');
-  assert.deepEqual(findNames('class TailscaleFunnelAdapter {}', words), ['tailscale'], 'PascalCase is split');
+  assert.deepEqual(findNames('class TailscaleFunnelAdapter {}', words).sort(), ['tailscale', 'tailscale-funnel'], 'PascalCase is split');
+  // A hyphenated id with a short head is caught in its identifier spellings, and not in prose.
+  for (const text of ['const ownAddress = 1;', 'OwnAddress', 'OWN_ADDRESS', 'own_address', 'OWNADDRESS']) assert.deepEqual(findNames(text, words), ['own-address'], text);
+  assert.deepEqual(findNames('it keeps its own address', words), []);
+  // An all-capitals head and a digit next to the name are split too.
+  for (const text of ['NGROKToken', 'ngrok2', 'ngrok2Token', 'v2ngrok', 'Ngrok2']) assert.deepEqual(findNames(text, words), ['ngrok'], text);
+  assert.deepEqual(findNames('CLOUDFLARENamed', words).sort(), ['cloudflare', 'cloudflare-named']);
 });
 
 test('registry compatibility arrays and provider docs are generated from `providers` and are current', () => {
