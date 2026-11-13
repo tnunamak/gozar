@@ -25,16 +25,24 @@ function providerWords() {
   return [...words];
 }
 // An identifier is split with a marker that real text never holds: at each lower-to-upper step (`ngrokToken`), before the
-// last capital of a capital run (`NGROKToken`), and between letters and digits (`ngrok2`). A hyphenated id then matches as
-// one compound whose parts are joined by `-`, `_`, the marker or nothing (`own-address`, `ownAddress`, `OWN_ADDRESS`),
-// while prose that happens to hold the same words with a space between them ("its own address") does not.
+// last capital of a capital run (`NGROKToken`), and between letters and digits (`ngrok2`). A capital run followed by
+// lower case is ambiguous (`NGROKtoken` or `HTTPServer`), so the text is also read split after the whole run, and a name
+// found in either reading counts. A hyphenated id then matches as one compound whose parts are joined by `-`, `_`, the
+// marker or nothing (`own-address`, `ownAddress`, `OWN_ADDRESS`), while prose that happens to hold the same words with a
+// space between them ("its own address") does not.
 const MARK = '\u0001';
-const words = text => text.replace(/([a-z0-9])([A-Z])/g, `$1${MARK}$2`).replace(/([A-Z]+)([A-Z][a-z])/g, `$1${MARK}$2`)
-  .replace(/([A-Za-z])(\d)/g, `$1${MARK}$2`).replace(/(\d)([A-Za-z])/g, `$1${MARK}$2`);
+const digits = text => text.replace(/([A-Za-z])(\d)/g, `$1${MARK}$2`).replace(/(\d)([A-Za-z])/g, `$1${MARK}$2`);
+const readings = text => {
+  const steps = text.replace(/([a-z0-9])([A-Z])/g, `$1${MARK}$2`);
+  return [steps.replace(/([A-Z]+)([A-Z][a-z])/g, `$1${MARK}$2`), steps.replace(/([A-Z]{2,})([a-z])/g, `$1${MARK}$2`)].map(digits);
+};
 const escape = part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const findNames = (text, names) => {
-  const split = words(text);
-  return names.filter(word => new RegExp(`(^|[^a-z0-9])${word.split('-').map(escape).join(`[-_${MARK}]?`)}([^a-z0-9]|$)`, 'i').test(split));
+  const texts = readings(text);
+  return names.filter(word => {
+    const pattern = new RegExp(`(^|[^a-z0-9])${word.split('-').map(escape).join(`[-_${MARK}]?`)}([^a-z0-9]|$)`, 'i');
+    return texts.some(split => pattern.test(split));
+  });
 };
 
 test('red gate: no provider name appears in the consumer type file or the consumer schema', () => {
@@ -58,6 +66,11 @@ test('the gate itself catches a provider name (a clean pass is not an empty scan
   // An all-capitals head and a digit next to the name are split too.
   for (const text of ['NGROKToken', 'ngrok2', 'ngrok2Token', 'v2ngrok', 'Ngrok2']) assert.deepEqual(findNames(text, words), ['ngrok'], text);
   assert.deepEqual(findNames('CLOUDFLARENamed', words).sort(), ['cloudflare', 'cloudflare-named']);
+  // A capital run followed by lower case is read both ways.
+  for (const text of ['NGROKtoken', 'TLSngrok']) assert.deepEqual(findNames(text, words), ['ngrok'], text);
+  assert.deepEqual(findNames('OWNaddress', words), ['own-address']);
+  assert.deepEqual(findNames('TAILSCALEfunnel', words).sort(), ['tailscale', 'tailscale-funnel']);
+  assert.deepEqual(findNames('const HTTPServer = new URLSearchParams();', words), []);
 });
 
 test('registry compatibility arrays and provider docs are generated from `providers` and are current', () => {
