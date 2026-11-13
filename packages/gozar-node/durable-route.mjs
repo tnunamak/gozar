@@ -119,6 +119,16 @@ export async function durablePlanFacts({ home = defaultHome(), adapterId, target
   const facts = planFactsFromObservation(await observe(), { adapterId, capability, target, origin, table: await observedReservations(home) });
   return { planDigest: facts.planDigest, observedResource: facts.observedResource, origin: facts.origin };
 }
+// Read-only: the adapter a durable record pins for this route ID, or null. No lock, no provider call.
+// The catalog ranks the pin first, so a later preference change never moves a route.
+export async function durablePin({ home = defaultHome(), routeId }) {
+  routeIdValue(routeId);
+  let canonical;
+  try { canonical = await canonicalHome(home, false); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  const dir = routeDirectory(canonical);
+  try { await trustedDirectory(dir); await privateDirectory(dir); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  return (await load(dir, routeId))?.adapterId ?? null;
+}
 // Opaque reference for one existing provider route; adopt checks it when the caller passes one.
 export const migrationRefOf = ({ origin, target, observedResource }) => 'mig_' + canonicalDigest({ origin, target, observedResource }).slice(0, 40);
 
@@ -285,7 +295,7 @@ async function targetCheck(record) {
 
 function view(record, current = {}, extra = {}) {
   const state = current.state ?? record.state;
-  const reply = { routeId: record.routeId, owner: record.owner, createdAt: record.createdAt, origin: record.origin ?? null, target: record.target,
+  const reply = { routeId: record.routeId, generation: record.generation, owner: record.owner, createdAt: record.createdAt, origin: record.origin ?? null, target: record.target,
     adapterId: record.adapterId, ownership: record.ownership, provenance: record.provenance ?? 'created', lifetime: record.lifetime,
     exposure: 'owner-run', forwards: `forwards to ${record.target} whether or not ${record.owner} is running`,
     idleTimeoutMs: record.idleTimeoutMs ?? null, state, verification: current.verification ?? null,
@@ -525,11 +535,13 @@ async function removeListener(dir, record) {
 // mode 'remove': compare-and-set removal. mode 'hand-back': phase 1 of a two-phase hand-back.
 // mode 'dismiss': drop a record that only carries cleanup debt, leaving the foreign rule in place.
 // No mode clears a user stop.
-export async function releaseRoute({ routeId, mode = 'remove', home = defaultHome() }) {
+export async function releaseRoute({ routeId, mode = 'remove', home = defaultHome(), expectedGeneration }) {
   routeId = routeIdValue(routeId);
   if (!['remove', 'hand-back', 'dismiss'].includes(mode)) throw refuse('invalid_input', 'mode must be remove, hand-back or dismiss');
   return reserved(home, async dir => {
     const record = await load(dir, routeId);
+    // A handle names one generation of a route; a replaced route is not ended by a stale handle.
+    if (expectedGeneration !== undefined && record && record.generation !== expectedGeneration) throw refuse('route_conflict', 'The route was replaced; this handle is stale');
     if (mode === 'hand-back') return handBack(dir, record, routeId);
     if (!record) return { schemaVersion: 1, routeId, removed: false, providerRemoved: false, cleanupDebt: null };
     if (record.state === 'handing-back') throw refuse('handing_back', 'This route is being handed back; confirm or cancel the hand-back first');

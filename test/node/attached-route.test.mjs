@@ -27,7 +27,7 @@ export default async function () {
   const { create, remove } = adapter;
   adapter.create = async (...args) => { mark('created'); return create(...args); };
   adapter.remove = async (...args) => { mark('removed'); return remove(...args); };
-  return { adapters: [adapter], effectContext: () => ({}),
+  return { adapters: [adapter], effectContext: () => ({}), validation: 'none',
     readContext: { now: () => Date.now(), configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified' }) } };
 }
 `);
@@ -161,7 +161,7 @@ test('missing approval is consent_required, a wrong usage kind is invalid_input,
   const { approval, ...withoutApproval } = request;
   assert.equal(await codeOf(openAttachedRoute(withoutApproval, depsFor(tokens, controller.module))), 'consent_required');
   assert.equal(await codeOf(openAttachedRoute({ ...request, usage: { kind: 'session', lifetimeMs: 1000 } }, depsFor(tokens, controller.module))), 'invalid_input');
-  assert.equal(await codeOf(openAttachedRoute(request, depsFor(tokens, controller.module, { platform: 'darwin' }))), 'unsupported');
+  assert.equal(await codeOf(openAttachedRoute(request, depsFor(tokens, controller.module, { platform: 'win32' }))), 'unsupported');
   assert.deepEqual(await controller.read(), []);
 });
 
@@ -170,7 +170,7 @@ test('a controller that cannot create reports the typed failure and leaves nothi
   reapControllers(t, home);
   await writeFile(module, `import { stubAdapter } from ${JSON.stringify(helperUrl)};
 export default async function () { const adapter = stubAdapter('stub-a'); adapter.create = async () => { throw Object.assign(new Error('no auth'), { code: 'setup_required' }); };
-  return { adapters: [adapter], effectContext: () => ({}), readContext: { now: () => Date.now(), configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified' }) } }; }
+  return { adapters: [adapter], effectContext: () => ({}), validation: 'none', readContext: { now: () => Date.now(), configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified' }) } }; }
 `);
   assert.equal(await codeOf(openAttachedRoute(await approvedRequest(tokens, home), depsFor(tokens, module))), 'setup_required');
 });

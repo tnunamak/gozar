@@ -67,8 +67,9 @@ export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = 
       nonceRef = randomUUID(); verifierRef = randomUUID();
       return { nonceRef, verifierRef };
     },
-    async verify(origin, { sse = false, signal } = {}) {
-      const identity = await fetch(`${origin}${secretPath}/identity`, { redirect: 'error', signal });
+    // `fetchImpl` is a test seam: the global fetch is the only one production uses.
+    async verify(origin, { sse = false, signal, fetch: fetchImpl = fetch } = {}) {
+      const identity = await fetchImpl(`${origin}${secretPath}/identity`, { redirect: 'error', signal });
       if (!identity.ok || !identity.headers.get('content-type')?.startsWith('application/json')) throw new Error('Instance identity endpoint unavailable');
       const reader = identity.body.getReader();
       let body = '';
@@ -84,7 +85,7 @@ export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = 
       if (body.length > 1024 || !matches(identityValue.nonce)) throw new Error('Origin points to a different instance');
       let streaming = false;
       if (sse) {
-        const response = await fetch(`${origin}${secretPath}/stream`, { redirect: 'error', signal, headers: { accept: 'text/event-stream' } });
+        const response = await fetchImpl(`${origin}${secretPath}/stream`, { redirect: 'error', signal, headers: { accept: 'text/event-stream' } });
         if (!response.ok || !response.headers.get('content-type')?.startsWith('text/event-stream')) throw new Error('Timed SSE endpoint unavailable');
         const reader = response.body.getReader();
         let buffer = '', bytes = 0, sequence = 0, lastAt;

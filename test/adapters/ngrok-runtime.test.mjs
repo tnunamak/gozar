@@ -51,7 +51,7 @@ test('attached create opens one SDK listener on the reserved domain; remove clos
   const receipt = await adapter.create(ctx, plan);
   assert.equal(sdk.open().length, 1);
   assert.deepEqual(sdk.calls[0], { addr: '127.0.0.1:8123', authtoken: TOKEN, domain: DOMAIN });
-  assert.equal(receipt.identity.origin, ORIGIN); assert.equal(receipt.readback.target, '127.0.0.1:8123');
+  assert.equal(receipt.identity.origin, ORIGIN); assert.equal(receipt.origin, ORIGIN); assert.equal(receipt.readback.target, '127.0.0.1:8123');
   const observed = await adapter.observe(ctx, request());
   assert.equal(observed.present, true); assert.equal(observed.revision, null);
   assert.equal((await adapter.verify(ctx, receipt)).status, 'verified');
@@ -177,12 +177,12 @@ test('red: the token appears nowhere: facts, plan, receipt, runtime facts, error
   assert.ok(!output.includes(TOKEN));
 });
 
-test('macOS: detect reports unsupported without loading the SDK', async () => {
+test('win32: detect reports unsupported without loading the SDK', async () => {
   let loaded = false;
   const adapter = createNgrokAdapter({ loadSdk: async () => { loaded = true; return stubSdk(); } });
-  const mac = await adapter.detect(context({ platform: 'darwin' }));
+  const mac = await adapter.detect(context({ platform: 'win32' }));
   assert.equal(mac.state, 'unsupported'); assert.equal(loaded, false);
-  await rejects(adapter.plan(context({ platform: 'darwin' }), request()), 'unsupported');
+  await rejects(adapter.plan(context({ platform: 'win32' }), request()), 'unsupported');
 });
 
 test('the default adapter needs the optional SDK: without it detect asks for installation', async () => {
@@ -190,4 +190,20 @@ test('the default adapter needs the optional SDK: without it detect asks for ins
   const detected = await adapter.detect(context());
   assert.ok(['ready', 'action-required'].includes(detected.state));
   if (!detected.facts.sdk) assert.ok(adapter.setupActions(detected.facts).some(action => action.id === 'install-sdk'));
+});
+
+test('macOS: the SDK adapter is not turned away by the platform check (its SDK ships darwin builds)', async () => {
+  let loaded = false;
+  const adapter = createNgrokAdapter({ loadSdk: async () => { loaded = true; return stubSdk(); } });
+  const mac = await adapter.detect(context({ platform: 'darwin' }));
+  assert.notEqual(mac.state, 'unsupported');
+  assert.equal(loaded, true);
+});
+
+test('macOS: the SDK adapter is not turned away by the platform check (its SDK ships darwin builds)', async () => {
+  let loaded = false;
+  const adapter = createNgrokAdapter({ loadSdk: async () => { loaded = true; return stubSdk(); } });
+  const mac = await adapter.detect(context({ platform: 'darwin' }));
+  assert.notEqual(mac.state, 'unsupported');
+  assert.equal(loaded, true);
 });
