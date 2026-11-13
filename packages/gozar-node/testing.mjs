@@ -81,9 +81,10 @@ const mark = event => appendFileSync(new URL('./events.jsonl', import.meta.url),
 export default {
   id: definition.id,
   definition,
-  async detect(ctx) { const seen = definition.supportedKinds.includes('attached') ? {ok:true} : await ctx.probe({ fake: true }); return { state: seen?.ok === true ? 'ready' : 'unknown', facts: { fake: true, setupNeeded: false } }; },
+  async detect(ctx) { const seen = definition.supportedKinds.includes('attached') ? {ok:true} : await ctx.probe({ fake: true }); const values=await ctx.configuration(null);const missing=${JSON.stringify(actions)}.filter(action=>action.required!==false&&!values?.[action.id]);return {state:seen?.ok!==true?'unknown':missing.length?'action-required':'ready',facts:{fake:true,detected:seen?.ok===true,setupNeeded:missing.length>0,missing}}; },
   properties: () => structuredClone(definition.capabilities),
-  setupActions: () => ${JSON.stringify(actions)},
+  configurationActions: () => ${JSON.stringify(actions)},
+  setupActions: facts => facts?.missing ?? ${JSON.stringify(actions)},
   async setup() { mark('setup'); return { state: 'complete', nextAction: null }; },
   async plan(ctx, request) {
     const resourceKey = definition.id + ':' + sha({ target: request.target }).slice(0, 16);
@@ -92,21 +93,29 @@ export default {
   },
   ...(proofProtocol === 'echo' ? {
     async prepareProof(ctx, request, attempt) {
-      const proof = net.createServer(socket => { let input=''; socket.on('data', chunk=>{ input+=chunk; if(input.includes('\\n')) socket.end(input.trim()===attempt.nonce ? attempt.nonce+'\\n' : 'wrong\\n'); }); });
+      let proving=true,witness=false,used=false;
+      const [host,port]=request.target.split(':');
+      const proof = net.createServer({allowHalfOpen:true}, socket => {
+        if(!proving){const upstream=net.connect(Number(port),host);upstream.on('error',()=>socket.destroy());socket.on('error',()=>upstream.destroy());socket.pipe(upstream).pipe(socket);return;}
+        let input=Buffer.alloc(0);socket.on('data',chunk=>{input=Buffer.concat([input,chunk]);if(input.length>65){socket.destroy();return;}if(input.length===65){witness=input.equals(Buffer.from(attempt.nonce+'\\n'));socket.end(witness?input:Buffer.from('wrong\\n'));}});
+      });
       await new Promise((resolve,reject)=>{proof.once('error',reject);proof.listen(0,'127.0.0.1',resolve);});
       return {target:'127.0.0.1:'+proof.address().port,
         async verify({origin,attempt:current}) {
+          if(used)throw new Error('initial proof only');used=true;
           mark('proof'); const endpoint=new URL(origin);
-          const matched=await new Promise(resolve=>{let input='';const socket=net.connect(Number(endpoint.port),endpoint.hostname); const timer=setTimeout(()=>{socket.destroy();resolve(false);},1000);
-            socket.once('connect',()=>socket.write(current.nonce+'\\n')); socket.on('data',chunk=>{input+=chunk;});socket.once('error',()=>{clearTimeout(timer);resolve(false);});socket.once('end',()=>{clearTimeout(timer);resolve(input.trim()===current.nonce);}); });
-          return {status:matched?'verified':'unverified',attemptId:current.id,endpoint:origin,checkedAt:new Date().toISOString(),validUntil:new Date(Date.now()+5000).toISOString(),vantage:'this-device',checks:['nonce'],facts:[]};
+          try {
+            const matched=await new Promise(resolve=>{let input=Buffer.alloc(0);const socket=net.connect(Number(endpoint.port),endpoint.hostname);const timer=setTimeout(()=>{socket.destroy();resolve(false);},1000);
+              socket.once('connect',()=>socket.write(current.nonce+'\\n'));socket.on('data',chunk=>{input=Buffer.concat([input,chunk]);if(input.length>65){socket.destroy();clearTimeout(timer);resolve(false);}});socket.once('error',()=>{clearTimeout(timer);resolve(false);});socket.once('end',()=>{clearTimeout(timer);resolve(input.equals(Buffer.from(current.nonce+'\\n')));}); });
+            return {status:matched&&witness?'verified':'unverified',attemptId:current.id,endpoint:origin,checkedAt:new Date().toISOString(),validUntil:new Date(Date.now()+5000).toISOString(),vantage:'this-device',checks:['nonce'],facts:[]};
+          } finally {proving=false;}
         },async close(){await new Promise(resolve=>proof.close(resolve));}};
     }
   }:{}),
   async create(ctx, plan) {
     if (plan.readback.kind === 'attached' && proofProtocol === 'echo') {
       const [host,port]=plan.effects[0].target.split(':');
-      const server=net.createServer(socket=>{const upstream=net.connect(Number(port),host);upstream.on('error',()=>socket.destroy());socket.on('error',()=>upstream.destroy());socket.pipe(upstream).pipe(socket);});
+      const server=net.createServer({allowHalfOpen:true}, socket=>{const upstream=net.connect(Number(port),host);upstream.on('error',()=>socket.destroy());socket.on('error',()=>upstream.destroy());socket.pipe(upstream).pipe(socket);});
       await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});servers.set(plan.resourceKey,server);plan={...plan,origin:'tcp://127.0.0.1:'+server.address().port};mark('start');
     } else if (plan.readback.kind === 'attached') {
       const target = new URL('http://' + plan.effects[0].target);

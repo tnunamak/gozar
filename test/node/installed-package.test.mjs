@@ -49,7 +49,7 @@ console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeId
   types: pkg.types, exportsTypes: pkg.exports['.'].types, engines: pkg.engines.node, providers: manifest.providers.map(item => item.id),
   candidates: catalog.candidates.length, observedAt: typeof catalog.observedAt, tokens: catalog.candidates.filter(item => item.candidateToken).length }));
 `);
-  const { stdout } = await exec(process.execPath, [probe], { cwd: project, timeout: 60_000, env: { PATH: emptyBin, HOME: stateHome, GOZAR_HOME: stateHome } });
+  const { stdout } = await exec(process.execPath, [probe], { cwd: project, timeout: 60_000, env: { PATH: emptyBin, HOME: stateHome, GOZAR_HOME: stateHome, TMPDIR: stateHome } });
   const seen = JSON.parse(stdout);
   assert.deepEqual(seen.rootExports, seen.declared, 'the root exports exactly the functions route-contract.d.ts declares');
   assert.deepEqual(seen.serviceExports, ['addService', 'cancelHandBack', 'confirmHandBack', 'createServiceVerifier', 'releaseRoute', 'removeService', 'statusServices']);
@@ -63,7 +63,7 @@ console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeId
   assert.equal(seen.candidates, seen.providers.length, 'one candidate per installed registry entry');
   assert.equal(seen.tokens, 0, 'nothing is ready on a host with no provider tooling, so no token is issued');
   const example = join(installed, 'examples/remote-access-screen.mjs');
-  const exampleEnv = { PATH: emptyBin, HOME: stateHome, GOZAR_HOME: stateHome };
+  const exampleEnv = { PATH: emptyBin, HOME: stateHome, GOZAR_HOME: stateHome, TMPDIR: stateHome };
   const fakeScreen = await exec(process.execPath, [example, '--fakes'], { cwd: project, timeout: 60_000, env: exampleEnv });
   for (const kind of ['session', 'attached', 'durable']) for (const state of ['detected', 'verified', 'expired', 'cleanup-unconfirmed']) {
     assert.ok(fakeScreen.stdout.includes(`Route: ${kind} ${state}`), `${kind} ${state}`);
@@ -73,6 +73,14 @@ console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeId
   const detectedScreen = await exec(process.execPath, [example, '--detect'], { cwd: project, timeout: 60_000, env: exampleEnv });
   assert.match(detectedScreen.stdout, /detect-only/);
   assert.match(detectedScreen.stdout, /needs-provider-call/);
+  const fixture = JSON.parse((await exec(process.execPath, [join(installed, 'examples/provider-lifecycle-fixture.mjs')], { cwd: project, timeout: 60_000, env: exampleEnv })).stdout);
+  assert.match(fixture.providerId, /^fixture-[a-f0-9]{16}$/);
+  assert.deepEqual(fixture.events, ['setup', 'start', 'proof', 'stop', 'cleanup']);
+  assert.deepEqual(fixture.facts.map(fact => [fact.known, fact.value]), [[true, false], [true, 0], [true, ''], [false, null]]);
+  assert.equal(fixture.inputRequirements[0].secret, true);
+  assert.match(fixture.screen, /Input requirement: Fixture credential/);
+  assert.deepEqual(fixture.resourceLedger, { ownedAfter: [], foreignPreserved: true });
+  assert.equal(fixture.statusPreservedProofTime, true);
   for (const path of ['packages/gozar-node/route-contract.d.ts', 'runtime/route-catalog.schema.json', 'runtime/error-normalization.json', 'adapters/providers/ngrok-https-edge/index.mjs']) {
     assert.ok((await readFile(join(installed, path), 'utf8')).length > 0, path);
   }

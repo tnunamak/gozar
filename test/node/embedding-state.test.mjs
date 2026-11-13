@@ -66,6 +66,7 @@ test('secret intake, read-back, edit and rotation never return a secret', async 
   const q=query({home,usage:{kind:'session',lifetimeMs:60000}});
   const read=async()=> (await api.catalogRoutes(q)).candidates[0];
   assert.equal((await read()).configuration.credentials.auth.value,false);
+  await api.runSetupAction({home,actionId:'domain',value:'example.invalid',approval:{digest:'domain',disclosureRevision:'test'}});
   for(const secret of ['first-private-test-value','replacement-private-test-value']) {
     const stored=await storeSecret({home,value:secret});assert.deepEqual(Object.keys(stored),['handle']);
     await api.runSetupAction({home,actionId:'auth',secretHandle:stored.handle,approval:{digest:'auth',disclosureRevision:'test'}});
