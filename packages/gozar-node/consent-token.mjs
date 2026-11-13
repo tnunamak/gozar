@@ -41,12 +41,15 @@ export function consentBinding(query, canonicalHome, disclosureRevision) {
     owner: query.owner, home: canonicalHome, target: query.target, usage: structuredClone(query.usage),
     intent: query.intent ?? 'create', requirements: structuredClone(query.requirements),
     route: query.route ?? null, origin: query.origin ?? null, disclosureRevision,
+    // A token issued for a chosen providerId is spent only with that same providerId. A request that names none keeps
+    // the binding it always had, so tokens issued without a providerId are unaffected.
+    ...(query.providerId === undefined ? {} : { providerId: query.providerId }),
   };
 }
 function checkBinding(binding) {
   const ok = plain(binding) && ['owner', 'home', 'target', 'disclosureRevision'].every(key => text(binding[key])) &&
     plain(binding.usage) && ['durable', 'session', 'attached'].includes(binding.usage.kind) && plain(binding.requirements) &&
-    ['create', 'adopt'].includes(binding.intent) && [binding.route, binding.origin].every(value => value === null || text(value));
+    ['create', 'adopt'].includes(binding.intent) && [binding.route, binding.origin].every(value => value === null || text(value)) && (binding.providerId === undefined || text(binding.providerId));
   if (!ok) throw refuse('invalid_input', 'Consent binding is incomplete');
   return binding;
 }

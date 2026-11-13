@@ -4,6 +4,7 @@
     "schemaVersion": 1,
     "id": "ngrok-tcp-passthrough",
     "label": "ngrok TCP passthrough",
+    "needs": "Needs an ngrok account. This route is not available in this release.",
     "capabilities": {
       "reach": "internet",
       "transport": "http",
@@ -24,7 +25,8 @@
         "conditions": [
           "no admitted create recipe",
           "opaque TCP: no HTTPS origin until a mapping passes a client probe"
-        ]
+        ],
+        "ports": null
       },
       "cost": {
         "kind": "unknown",
@@ -40,6 +42,14 @@
         "sse": false,
         "streamableHttp": false,
         "oauthDcr": false
+      },
+      "proof": {
+        "vantage": "public",
+        "checks": [
+          "tls",
+          "nonce",
+          "sse"
+        ]
       }
     },
     "supportedKinds": [],

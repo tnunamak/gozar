@@ -4,6 +4,7 @@
     "schemaVersion": 1,
     "id": "ngrok-https-edge",
     "label": "ngrok HTTPS edge",
+    "needs": "Needs an ngrok account, its auth token and a reserved domain.",
     "capabilities": {
       "reach": "internet",
       "transport": "https",
@@ -24,7 +25,8 @@
         "conditions": [
           "a reserved domain is a per-user setup value",
           "the listener lives only while the host process runs"
-        ]
+        ],
+        "ports": null
       },
       "cost": {
         "kind": "unknown",
@@ -42,6 +44,14 @@
         "sse": true,
         "streamableHttp": true,
         "oauthDcr": true
+      },
+      "proof": {
+        "vantage": "public",
+        "checks": [
+          "tls",
+          "nonce",
+          "sse"
+        ]
       }
     },
     "supportedKinds": [

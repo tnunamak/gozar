@@ -361,7 +361,8 @@
           "scope": "account",
           "conditions": [
             "reserved name kept by the account"
-          ]
+          ],
+          "ports": null
         },
         "cost": {
           "kind": "free",
@@ -381,6 +382,13 @@
           "sse": true,
           "streamableHttp": true,
           "oauthDcr": true
+        },
+        "proof": {
+          "vantage": "public",
+          "checks": [
+            "tls",
+            "nonce"
+          ]
         }
       }
     },
@@ -401,7 +409,8 @@
         "address": {
           "stability": "ephemeral",
           "scope": "network",
-          "conditions": []
+          "conditions": [],
+          "ports": null
         },
         "cost": {
           "kind": "free",
@@ -420,6 +429,10 @@
           "sse": true,
           "streamableHttp": true,
           "oauthDcr": true
+        },
+        "proof": {
+          "vantage": "none",
+          "checks": []
         }
       }
     },
@@ -440,7 +453,8 @@
         "address": {
           "stability": "unknown",
           "scope": "unknown",
-          "conditions": []
+          "conditions": [],
+          "ports": null
         },
         "cost": {
           "kind": "unknown",
@@ -460,6 +474,13 @@
           "sse": true,
           "streamableHttp": true,
           "oauthDcr": true
+        },
+        "proof": {
+          "vantage": "public",
+          "checks": [
+            "tls",
+            "nonce"
+          ]
         }
       }
     },
@@ -486,7 +507,8 @@
           "scope": "account",
           "conditions": [
             "reserved name kept by the account"
-          ]
+          ],
+          "ports": null
         },
         "cost": {
           "kind": "paid",
@@ -506,14 +528,22 @@
           "sse": true,
           "streamableHttp": true,
           "oauthDcr": true
+        },
+        "proof": {
+          "vantage": "public",
+          "checks": [
+            "tls",
+            "nonce"
+          ]
         }
       }
     },
     {
       "schema": "route-catalog",
       "shape": "Candidate",
-      "name": "eligible, ready, with token",
+      "name": "eligible, ready, with token and ordered ports",
       "value": {
+        "providerId": "example-96",
         "name": "cand_synthetic_1",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
@@ -521,7 +551,8 @@
         "unmet": [],
         "display": {
           "label": "Example public route",
-          "description": "Example public route (synthetic)"
+          "description": "Example public route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -542,6 +573,10 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
+            ],
+            "ports": [
+              8443,
+              10000
             ]
           },
           "cost": {
@@ -562,6 +597,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -593,6 +635,7 @@
       "shape": "Candidate",
       "name": "ineligible: address not stable",
       "value": {
+        "providerId": "example-32",
         "name": "cand_synthetic_2",
         "preferenceRef": "pref_synthetic_2",
         "rank": 2,
@@ -606,7 +649,8 @@
         ],
         "display": {
           "label": "Example temporary route",
-          "description": "Example temporary route (synthetic)"
+          "description": "Example temporary route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -627,7 +671,8 @@
             "scope": "session",
             "conditions": [
               "address changes on restart"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -647,6 +692,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -678,6 +730,7 @@
       "shape": "Candidate",
       "name": "macOS: unsupported",
       "value": {
+        "providerId": "example-51",
         "name": "cand_synthetic_3",
         "preferenceRef": "pref_synthetic_3",
         "rank": 3,
@@ -691,7 +744,8 @@
         ],
         "display": {
           "label": "Example route on macOS",
-          "description": "Example route on macOS (synthetic)"
+          "description": "Example route on macOS (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -712,7 +766,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -732,6 +787,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -763,6 +825,7 @@
       "shape": "Candidate",
       "name": "setup required",
       "value": {
+        "providerId": "example-39",
         "name": "cand_synthetic_4",
         "preferenceRef": "pref_synthetic_4",
         "rank": 4,
@@ -770,7 +833,8 @@
         "unmet": [],
         "display": {
           "label": "Example route needing sign-in",
-          "description": "Example route needing sign-in (synthetic)"
+          "description": "Example route needing sign-in (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -791,7 +855,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -811,6 +876,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -866,6 +938,7 @@
       "shape": "Candidate",
       "name": "unknown privacy",
       "value": {
+        "providerId": "example-82",
         "name": "cand_synthetic_5",
         "preferenceRef": "pref_synthetic_5",
         "rank": 5,
@@ -879,7 +952,8 @@
         ],
         "display": {
           "label": "Example route with unknown privacy",
-          "description": "Example route with unknown privacy (synthetic)"
+          "description": "Example route with unknown privacy (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -894,7 +968,8 @@
           "address": {
             "stability": "unknown",
             "scope": "unknown",
-            "conditions": []
+            "conditions": [],
+            "ports": null
           },
           "cost": {
             "kind": "unknown",
@@ -914,6 +989,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -951,6 +1033,7 @@
         "preferenceRevision": 3,
         "candidates": [
           {
+            "providerId": "example-96",
             "name": "cand_synthetic_1",
             "preferenceRef": "pref_synthetic_1",
             "rank": 1,
@@ -958,7 +1041,8 @@
             "unmet": [],
             "display": {
               "label": "Example public route",
-              "description": "Example public route (synthetic)"
+              "description": "Example public route (synthetic)",
+              "needs": "Needs nothing beyond this computer."
             },
             "properties": {
               "reach": "internet",
@@ -979,7 +1063,8 @@
                 "scope": "account",
                 "conditions": [
                   "reserved name kept by the account"
-                ]
+                ],
+                "ports": null
               },
               "cost": {
                 "kind": "free",
@@ -999,6 +1084,13 @@
                 "sse": true,
                 "streamableHttp": true,
                 "oauthDcr": true
+              },
+              "proof": {
+                "vantage": "public",
+                "checks": [
+                  "tls",
+                  "nonce"
+                ]
               }
             },
             "setup": {
@@ -1025,6 +1117,7 @@
             "expiresAt": "2026-11-12T12:10:00.000Z"
           },
           {
+            "providerId": "example-32",
             "name": "cand_synthetic_2",
             "preferenceRef": "pref_synthetic_2",
             "rank": 2,
@@ -1038,7 +1131,8 @@
             ],
             "display": {
               "label": "Example temporary route",
-              "description": "Example temporary route (synthetic)"
+              "description": "Example temporary route (synthetic)",
+              "needs": "Needs nothing beyond this computer."
             },
             "properties": {
               "reach": "internet",
@@ -1059,7 +1153,8 @@
                 "scope": "session",
                 "conditions": [
                   "address changes on restart"
-                ]
+                ],
+                "ports": null
               },
               "cost": {
                 "kind": "free",
@@ -1079,6 +1174,13 @@
                 "sse": true,
                 "streamableHttp": true,
                 "oauthDcr": true
+              },
+              "proof": {
+                "vantage": "public",
+                "checks": [
+                  "tls",
+                  "nonce"
+                ]
               }
             },
             "setup": {
@@ -1105,6 +1207,7 @@
             "expiresAt": null
           },
           {
+            "providerId": "example-51",
             "name": "cand_synthetic_3",
             "preferenceRef": "pref_synthetic_3",
             "rank": 3,
@@ -1118,7 +1221,8 @@
             ],
             "display": {
               "label": "Example route on macOS",
-              "description": "Example route on macOS (synthetic)"
+              "description": "Example route on macOS (synthetic)",
+              "needs": "Needs nothing beyond this computer."
             },
             "properties": {
               "reach": "internet",
@@ -1139,7 +1243,8 @@
                 "scope": "account",
                 "conditions": [
                   "reserved name kept by the account"
-                ]
+                ],
+                "ports": null
               },
               "cost": {
                 "kind": "free",
@@ -1159,6 +1264,13 @@
                 "sse": true,
                 "streamableHttp": true,
                 "oauthDcr": true
+              },
+              "proof": {
+                "vantage": "public",
+                "checks": [
+                  "tls",
+                  "nonce"
+                ]
               }
             },
             "setup": {
@@ -1185,6 +1297,7 @@
             "expiresAt": null
           },
           {
+            "providerId": "example-39",
             "name": "cand_synthetic_4",
             "preferenceRef": "pref_synthetic_4",
             "rank": 4,
@@ -1192,7 +1305,8 @@
             "unmet": [],
             "display": {
               "label": "Example route needing sign-in",
-              "description": "Example route needing sign-in (synthetic)"
+              "description": "Example route needing sign-in (synthetic)",
+              "needs": "Needs nothing beyond this computer."
             },
             "properties": {
               "reach": "internet",
@@ -1213,7 +1327,8 @@
                 "scope": "account",
                 "conditions": [
                   "reserved name kept by the account"
-                ]
+                ],
+                "ports": null
               },
               "cost": {
                 "kind": "free",
@@ -1233,6 +1348,13 @@
                 "sse": true,
                 "streamableHttp": true,
                 "oauthDcr": true
+              },
+              "proof": {
+                "vantage": "public",
+                "checks": [
+                  "tls",
+                  "nonce"
+                ]
               }
             },
             "setup": {
@@ -1283,6 +1405,7 @@
             "expiresAt": null
           },
           {
+            "providerId": "example-82",
             "name": "cand_synthetic_5",
             "preferenceRef": "pref_synthetic_5",
             "rank": 5,
@@ -1296,7 +1419,8 @@
             ],
             "display": {
               "label": "Example route with unknown privacy",
-              "description": "Example route with unknown privacy (synthetic)"
+              "description": "Example route with unknown privacy (synthetic)",
+              "needs": "Needs nothing beyond this computer."
             },
             "properties": {
               "reach": "internet",
@@ -1311,7 +1435,8 @@
               "address": {
                 "stability": "unknown",
                 "scope": "unknown",
-                "conditions": []
+                "conditions": [],
+                "ports": null
               },
               "cost": {
                 "kind": "unknown",
@@ -1331,6 +1456,13 @@
                 "sse": true,
                 "streamableHttp": true,
                 "oauthDcr": true
+              },
+              "proof": {
+                "vantage": "public",
+                "checks": [
+                  "tls",
+                  "nonce"
+                ]
               }
             },
             "setup": {
@@ -1578,7 +1710,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -1598,6 +1731,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "ingress": {
@@ -1628,7 +1768,11 @@
         },
         "verification": {
           "status": "verified",
-          "checkedAt": "2026-11-12T12:00:00.000Z"
+          "checkedAt": "2026-11-12T12:00:00.000Z",
+          "vantage": "this-device",
+          "checks": [
+            "nonce"
+          ]
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
@@ -1667,7 +1811,8 @@
           "address": {
             "stability": "unknown",
             "scope": "unknown",
-            "conditions": []
+            "conditions": [],
+            "ports": null
           },
           "cost": {
             "kind": "unknown",
@@ -1687,12 +1832,21 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "ingress": null,
         "verification": {
           "status": "unverified",
-          "checkedAt": null
+          "checkedAt": null,
+          "vantage": "none",
+          "checks": []
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
@@ -1737,7 +1891,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -1757,12 +1912,23 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "ingress": null,
         "verification": {
           "status": "verified",
-          "checkedAt": "2026-11-12T12:00:00.000Z"
+          "checkedAt": "2026-11-12T12:00:00.000Z",
+          "vantage": "this-device",
+          "checks": [
+            "nonce"
+          ]
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
@@ -1807,7 +1973,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -1827,12 +1994,23 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "ingress": null,
         "verification": {
           "status": "verified",
-          "checkedAt": "2026-11-12T12:00:00.000Z"
+          "checkedAt": "2026-11-12T12:00:00.000Z",
+          "vantage": "this-device",
+          "checks": [
+            "nonce"
+          ]
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
@@ -2016,7 +2194,8 @@
               "scope": "account",
               "conditions": [
                 "reserved name kept by the account"
-              ]
+              ],
+              "ports": null
             },
             "cost": {
               "kind": "free",
@@ -2036,12 +2215,23 @@
               "sse": true,
               "streamableHttp": true,
               "oauthDcr": true
+            },
+            "proof": {
+              "vantage": "public",
+              "checks": [
+                "tls",
+                "nonce"
+              ]
             }
           },
           "ingress": null,
           "verification": {
             "status": "verified",
-            "checkedAt": "2026-11-12T12:00:00.000Z"
+            "checkedAt": "2026-11-12T12:00:00.000Z",
+            "vantage": "this-device",
+            "checks": [
+              "nonce"
+            ]
           },
           "limits": {
             "recommendedPollIntervalMs": 60000,
@@ -2091,7 +2281,8 @@
               "scope": "account",
               "conditions": [
                 "reserved name kept by the account"
-              ]
+              ],
+              "ports": null
             },
             "cost": {
               "kind": "free",
@@ -2111,12 +2302,23 @@
               "sse": true,
               "streamableHttp": true,
               "oauthDcr": true
+            },
+            "proof": {
+              "vantage": "public",
+              "checks": [
+                "tls",
+                "nonce"
+              ]
             }
           },
           "ingress": null,
           "verification": {
             "status": "verified",
-            "checkedAt": "2026-11-12T12:00:00.000Z"
+            "checkedAt": "2026-11-12T12:00:00.000Z",
+            "vantage": "this-device",
+            "checks": [
+              "nonce"
+            ]
           },
           "limits": {
             "recommendedPollIntervalMs": 60000,
@@ -2166,7 +2368,8 @@
               "scope": "account",
               "conditions": [
                 "reserved name kept by the account"
-              ]
+              ],
+              "ports": null
             },
             "cost": {
               "kind": "free",
@@ -2186,12 +2389,23 @@
               "sse": true,
               "streamableHttp": true,
               "oauthDcr": true
+            },
+            "proof": {
+              "vantage": "public",
+              "checks": [
+                "tls",
+                "nonce"
+              ]
             }
           },
           "ingress": null,
           "verification": {
             "status": "verified",
-            "checkedAt": "2026-11-12T12:00:00.000Z"
+            "checkedAt": "2026-11-12T12:00:00.000Z",
+            "vantage": "this-device",
+            "checks": [
+              "nonce"
+            ]
           },
           "limits": {
             "recommendedPollIntervalMs": 60000,
@@ -2570,7 +2784,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -2590,6 +2805,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "supportedKinds": [
@@ -2641,7 +2863,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -2661,6 +2884,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "supportedKinds": [
@@ -2996,6 +3226,34 @@
         "code": "setup_required",
         "message": "Synthetic message."
       }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Query",
+      "name": "durable create selecting one provider by id",
+      "value": {
+        "schemaVersion": 1,
+        "owner": "example-app",
+        "target": "127.0.0.1:8799",
+        "home": "/private/gozar-state",
+        "usage": {
+          "kind": "durable",
+          "routeId": "example-main"
+        },
+        "requirements": {
+          "reach": "internet",
+          "transport": "https",
+          "payloadAccess": "allow-provider",
+          "address": "stable",
+          "setup": "allow",
+          "protocols": [
+            "sse",
+            "streamable-http",
+            "oauth-dcr"
+          ]
+        },
+        "providerId": "example-route-id"
+      }
     }
   ],
   "invalid": [
@@ -3011,6 +3269,7 @@
         "preferenceRevision": 3,
         "candidates": [
           {
+            "providerId": "example-96",
             "name": "cand_synthetic_1",
             "preferenceRef": "pref_synthetic_1",
             "rank": 1,
@@ -3018,7 +3277,8 @@
             "unmet": [],
             "display": {
               "label": "Example public route",
-              "description": "Example public route (synthetic)"
+              "description": "Example public route (synthetic)",
+              "needs": "Needs nothing beyond this computer."
             },
             "properties": {
               "reach": "internet",
@@ -3039,7 +3299,8 @@
                 "scope": "account",
                 "conditions": [
                   "reserved name kept by the account"
-                ]
+                ],
+                "ports": null
               },
               "cost": {
                 "kind": "free",
@@ -3059,6 +3320,13 @@
                 "sse": true,
                 "streamableHttp": true,
                 "oauthDcr": true
+              },
+              "proof": {
+                "vantage": "public",
+                "checks": [
+                  "tls",
+                  "nonce"
+                ]
               }
             },
             "setup": {
@@ -3085,6 +3353,7 @@
             "expiresAt": "2026-11-12T12:10:00.000Z"
           },
           {
+            "providerId": "example-43",
             "name": "cand_synthetic_2",
             "preferenceRef": "pref_synthetic_2",
             "rank": 2,
@@ -3098,7 +3367,8 @@
             ],
             "display": {
               "label": "Example temporary route",
-              "description": "Example temporary route (synthetic)"
+              "description": "Example temporary route (synthetic)",
+              "needs": "Needs nothing beyond this computer."
             },
             "properties": {
               "reach": "internet",
@@ -3119,7 +3389,8 @@
                 "scope": "session",
                 "conditions": [
                   "address changes on restart"
-                ]
+                ],
+                "ports": null
               },
               "cost": {
                 "kind": "free",
@@ -3139,6 +3410,13 @@
                 "sse": true,
                 "streamableHttp": true,
                 "oauthDcr": true
+              },
+              "proof": {
+                "vantage": "public",
+                "checks": [
+                  "tls",
+                  "nonce"
+                ]
               }
             },
             "setup": {
@@ -3165,6 +3443,7 @@
             "expiresAt": null
           },
           {
+            "providerId": "example-42",
             "name": "cand_synthetic_3",
             "preferenceRef": "pref_synthetic_3",
             "rank": 3,
@@ -3178,7 +3457,8 @@
             ],
             "display": {
               "label": "Example route on macOS",
-              "description": "Example route on macOS (synthetic)"
+              "description": "Example route on macOS (synthetic)",
+              "needs": "Needs nothing beyond this computer."
             },
             "properties": {
               "reach": "internet",
@@ -3199,7 +3479,8 @@
                 "scope": "account",
                 "conditions": [
                   "reserved name kept by the account"
-                ]
+                ],
+                "ports": null
               },
               "cost": {
                 "kind": "free",
@@ -3219,6 +3500,13 @@
                 "sse": true,
                 "streamableHttp": true,
                 "oauthDcr": true
+              },
+              "proof": {
+                "vantage": "public",
+                "checks": [
+                  "tls",
+                  "nonce"
+                ]
               }
             },
             "setup": {
@@ -3245,6 +3533,7 @@
             "expiresAt": null
           },
           {
+            "providerId": "example-39",
             "name": "cand_synthetic_4",
             "preferenceRef": "pref_synthetic_4",
             "rank": 4,
@@ -3252,7 +3541,8 @@
             "unmet": [],
             "display": {
               "label": "Example route needing sign-in",
-              "description": "Example route needing sign-in (synthetic)"
+              "description": "Example route needing sign-in (synthetic)",
+              "needs": "Needs nothing beyond this computer."
             },
             "properties": {
               "reach": "internet",
@@ -3273,7 +3563,8 @@
                 "scope": "account",
                 "conditions": [
                   "reserved name kept by the account"
-                ]
+                ],
+                "ports": null
               },
               "cost": {
                 "kind": "free",
@@ -3293,6 +3584,13 @@
                 "sse": true,
                 "streamableHttp": true,
                 "oauthDcr": true
+              },
+              "proof": {
+                "vantage": "public",
+                "checks": [
+                  "tls",
+                  "nonce"
+                ]
               }
             },
             "setup": {
@@ -3343,6 +3641,7 @@
             "expiresAt": null
           },
           {
+            "providerId": "example-90",
             "name": "cand_synthetic_5",
             "preferenceRef": "pref_synthetic_5",
             "rank": 5,
@@ -3356,7 +3655,8 @@
             ],
             "display": {
               "label": "Example route with unknown privacy",
-              "description": "Example route with unknown privacy (synthetic)"
+              "description": "Example route with unknown privacy (synthetic)",
+              "needs": "Needs nothing beyond this computer."
             },
             "properties": {
               "reach": "internet",
@@ -3371,7 +3671,8 @@
               "address": {
                 "stability": "unknown",
                 "scope": "unknown",
-                "conditions": []
+                "conditions": [],
+                "ports": null
               },
               "cost": {
                 "kind": "unknown",
@@ -3391,6 +3692,13 @@
                 "sse": true,
                 "streamableHttp": true,
                 "oauthDcr": true
+              },
+              "proof": {
+                "vantage": "public",
+                "checks": [
+                  "tls",
+                  "nonce"
+                ]
               }
             },
             "setup": {
@@ -3484,7 +3792,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -3504,12 +3813,23 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "ingress": null,
         "verification": {
           "status": "verified",
-          "checkedAt": "2026-11-12T12:00:00.000Z"
+          "checkedAt": "2026-11-12T12:00:00.000Z",
+          "vantage": "this-device",
+          "checks": [
+            "nonce"
+          ]
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
@@ -3548,7 +3868,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -3568,6 +3889,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "supportedKinds": [
@@ -3616,7 +3944,8 @@
           "scope": "account",
           "conditions": [
             "reserved name kept by the account"
-          ]
+          ],
+          "ports": null
         },
         "needsAccount": true,
         "lifetimes": [
@@ -3629,6 +3958,13 @@
           "sse": true,
           "streamableHttp": true,
           "oauthDcr": true
+        },
+        "proof": {
+          "vantage": "public",
+          "checks": [
+            "tls",
+            "nonce"
+          ]
         }
       }
     },
@@ -3656,7 +3992,8 @@
           "scope": "account",
           "conditions": [
             "reserved name kept by the account"
-          ]
+          ],
+          "ports": null
         },
         "cost": {
           "kind": "free",
@@ -3675,6 +4012,13 @@
           "sse": true,
           "streamableHttp": true,
           "oauthDcr": true
+        },
+        "proof": {
+          "vantage": "public",
+          "checks": [
+            "tls",
+            "nonce"
+          ]
         }
       }
     },
@@ -3737,7 +4081,8 @@
           "scope": "account",
           "conditions": [
             "reserved name kept by the account"
-          ]
+          ],
+          "ports": null
         },
         "cost": {
           "kind": "free",
@@ -3757,6 +4102,13 @@
           "sse": true,
           "streamableHttp": true,
           "oauthDcr": true
+        },
+        "proof": {
+          "vantage": "public",
+          "checks": [
+            "tls",
+            "nonce"
+          ]
         }
       }
     },
@@ -3783,7 +4135,8 @@
           "scope": "account",
           "conditions": [
             "reserved name kept by the account"
-          ]
+          ],
+          "ports": null
         },
         "cost": {
           "kind": "free",
@@ -3803,6 +4156,13 @@
           "sse": true,
           "streamableHttp": true,
           "oauthDcr": true
+        },
+        "proof": {
+          "vantage": "public",
+          "checks": [
+            "tls",
+            "nonce"
+          ]
         }
       }
     },
@@ -3830,7 +4190,8 @@
           "scope": "account",
           "conditions": [
             "reserved name kept by the account"
-          ]
+          ],
+          "ports": null
         },
         "cost": {
           "kind": "free",
@@ -3851,7 +4212,14 @@
           "streamableHttp": true,
           "oauthDcr": true
         },
-        "trustedProxy": true
+        "trustedProxy": true,
+        "proof": {
+          "vantage": "public",
+          "checks": [
+            "tls",
+            "nonce"
+          ]
+        }
       }
     },
     {
@@ -3860,6 +4228,7 @@
       "name": "extra unknown property",
       "why": "Candidate is a closed shape",
       "value": {
+        "providerId": "example-19",
         "name": "cand_synthetic_1",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
@@ -3867,7 +4236,8 @@
         "unmet": [],
         "display": {
           "label": "Example public route",
-          "description": "Example public route (synthetic)"
+          "description": "Example public route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -3888,7 +4258,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -3908,6 +4279,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -4130,6 +4508,7 @@
       "name": "ineligible candidate carries a token",
       "why": "no token is issued for an ineligible offer",
       "value": {
+        "providerId": "example-65",
         "name": "cand_synthetic_2",
         "preferenceRef": "pref_synthetic_2",
         "rank": 2,
@@ -4143,7 +4522,8 @@
         ],
         "display": {
           "label": "Example temporary route",
-          "description": "Example temporary route (synthetic)"
+          "description": "Example temporary route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -4164,7 +4544,8 @@
             "scope": "session",
             "conditions": [
               "address changes on restart"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -4184,6 +4565,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -4216,6 +4604,7 @@
       "name": "missing disclosure",
       "why": "every candidate shows its disclosure",
       "value": {
+        "providerId": "example-6",
         "name": "cand_synthetic_1",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
@@ -4223,7 +4612,8 @@
         "unmet": [],
         "display": {
           "label": "Example public route",
-          "description": "Example public route (synthetic)"
+          "description": "Example public route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -4244,7 +4634,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -4264,6 +4655,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -4280,6 +4678,7 @@
       "name": "setup state outside enum",
       "why": "setup.state is ready|action-required|unsupported|unknown",
       "value": {
+        "providerId": "example-96",
         "name": "cand_synthetic_1",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
@@ -4287,7 +4686,8 @@
         "unmet": [],
         "display": {
           "label": "Example public route",
-          "description": "Example public route (synthetic)"
+          "description": "Example public route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -4308,7 +4708,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -4328,6 +4729,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -4556,7 +4964,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -4576,12 +4985,23 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "ingress": null,
         "verification": {
           "status": "verified",
-          "checkedAt": "2026-11-12T12:00:00.000Z"
+          "checkedAt": "2026-11-12T12:00:00.000Z",
+          "vantage": "this-device",
+          "checks": [
+            "nonce"
+          ]
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
@@ -4626,7 +5046,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -4646,6 +5067,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "ingress": null,
@@ -4781,7 +5209,8 @@
               "scope": "account",
               "conditions": [
                 "reserved name kept by the account"
-              ]
+              ],
+              "ports": null
             },
             "cost": {
               "kind": "free",
@@ -4801,12 +5230,23 @@
               "sse": true,
               "streamableHttp": true,
               "oauthDcr": true
+            },
+            "proof": {
+              "vantage": "public",
+              "checks": [
+                "tls",
+                "nonce"
+              ]
             }
           },
           "ingress": null,
           "verification": {
             "status": "verified",
-            "checkedAt": "2026-11-12T12:00:00.000Z"
+            "checkedAt": "2026-11-12T12:00:00.000Z",
+            "vantage": "this-device",
+            "checks": [
+              "nonce"
+            ]
           },
           "limits": {
             "recommendedPollIntervalMs": 60000,
@@ -5218,7 +5658,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -5238,6 +5679,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "disclosure": {
@@ -5286,7 +5734,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "needsAccount": true,
           "lifetimes": [
@@ -5299,6 +5748,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "supportedKinds": [
@@ -5351,7 +5807,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -5371,6 +5828,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "supportedKinds": [
@@ -5422,7 +5886,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -5442,6 +5907,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "supportedKinds": [
@@ -5495,6 +5967,7 @@
       "name": "action-required candidate carries a token",
       "why": "a token is issued only when eligible and setup.state is ready; after runSetupAction the app asks the catalog again",
       "value": {
+        "providerId": "example-56",
         "name": "cand_synthetic_4",
         "preferenceRef": "pref_synthetic_4",
         "rank": 4,
@@ -5502,7 +5975,8 @@
         "unmet": [],
         "display": {
           "label": "Example route needing sign-in",
-          "description": "Example route needing sign-in (synthetic)"
+          "description": "Example route needing sign-in (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -5523,7 +5997,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -5543,6 +6018,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -5599,6 +6081,7 @@
       "name": "ineligible ready candidate carries a token (unsupported platform)",
       "why": "no token for an unsupported or ineligible candidate",
       "value": {
+        "providerId": "example-68",
         "name": "cand_synthetic_3",
         "preferenceRef": "pref_synthetic_3",
         "rank": 3,
@@ -5612,7 +6095,8 @@
         ],
         "display": {
           "label": "Example route on macOS",
-          "description": "Example route on macOS (synthetic)"
+          "description": "Example route on macOS (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -5633,7 +6117,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -5653,6 +6138,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -5685,6 +6177,7 @@
       "name": "unmet requirement outside vocabulary",
       "why": "unmet.requirement is a closed list",
       "value": {
+        "providerId": "example-44",
         "name": "cand_synthetic_1",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
@@ -5698,7 +6191,8 @@
         ],
         "display": {
           "label": "Example public route",
-          "description": "Example public route (synthetic)"
+          "description": "Example public route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -5719,7 +6213,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -5739,6 +6234,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -5771,6 +6273,7 @@
       "name": "unmet reasonCode outside vocabulary",
       "why": "unmet.reasonCode is not_met, unknown or unsupported_platform",
       "value": {
+        "providerId": "example-63",
         "name": "cand_synthetic_1",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
@@ -5784,7 +6287,8 @@
         ],
         "display": {
           "label": "Example public route",
-          "description": "Example public route (synthetic)"
+          "description": "Example public route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -5805,7 +6309,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -5825,6 +6330,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -5857,6 +6369,7 @@
       "name": "unmet entry missing actual",
       "why": "actual is required (null when unknown)",
       "value": {
+        "providerId": "example-29",
         "name": "cand_synthetic_1",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
@@ -5869,7 +6382,8 @@
         ],
         "display": {
           "label": "Example public route",
-          "description": "Example public route (synthetic)"
+          "description": "Example public route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
         },
         "properties": {
           "reach": "internet",
@@ -5890,7 +6404,8 @@
             "scope": "account",
             "conditions": [
               "reserved name kept by the account"
-            ]
+            ],
+            "ports": null
           },
           "cost": {
             "kind": "free",
@@ -5910,6 +6425,13 @@
             "sse": true,
             "streamableHttp": true,
             "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
           }
         },
         "setup": {
@@ -6253,6 +6775,575 @@
       "value": {
         "code": "route_conflict",
         "message": "x"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Candidate",
+      "name": "missing providerId",
+      "why": "an app selects and stores a candidate by providerId, so it is required",
+      "value": {
+        "name": "cand_synthetic_1",
+        "preferenceRef": "pref_synthetic_1",
+        "rank": 1,
+        "eligible": true,
+        "unmet": [],
+        "display": {
+          "label": "Example public route",
+          "description": "Example public route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
+        },
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ],
+            "ports": [
+              8443,
+              10000
+            ]
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
+          }
+        },
+        "setup": {
+          "state": "ready",
+          "actions": []
+        },
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "candidateToken": "tok_synthetic_eligible_1",
+        "expiresAt": "2026-11-12T12:10:00.000Z"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Candidate",
+      "name": "display missing needs",
+      "why": "the static needs line is shown whether or not setup is ready",
+      "value": {
+        "providerId": "example-96",
+        "name": "cand_synthetic_1",
+        "preferenceRef": "pref_synthetic_1",
+        "rank": 1,
+        "eligible": true,
+        "unmet": [],
+        "display": {
+          "label": "Example public route",
+          "description": "Example public route (synthetic)"
+        },
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ],
+            "ports": [
+              8443,
+              10000
+            ]
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
+          }
+        },
+        "setup": {
+          "state": "ready",
+          "actions": []
+        },
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "candidateToken": "tok_synthetic_eligible_1",
+        "expiresAt": "2026-11-12T12:10:00.000Z"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Candidate",
+      "name": "proof vantage outside enum",
+      "why": "vantage is one of five closed words",
+      "value": {
+        "providerId": "example-96",
+        "name": "cand_synthetic_1",
+        "preferenceRef": "pref_synthetic_1",
+        "rank": 1,
+        "eligible": true,
+        "unmet": [],
+        "display": {
+          "label": "Example public route",
+          "description": "Example public route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
+        },
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ],
+            "ports": [
+              8443,
+              10000
+            ]
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "somewhere",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
+          }
+        },
+        "setup": {
+          "state": "ready",
+          "actions": []
+        },
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "candidateToken": "tok_synthetic_eligible_1",
+        "expiresAt": "2026-11-12T12:10:00.000Z"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Candidate",
+      "name": "proof check outside enum",
+      "why": "checks are tls, nonce or sse",
+      "value": {
+        "providerId": "example-96",
+        "name": "cand_synthetic_1",
+        "preferenceRef": "pref_synthetic_1",
+        "rank": 1,
+        "eligible": true,
+        "unmet": [],
+        "display": {
+          "label": "Example public route",
+          "description": "Example public route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
+        },
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ],
+            "ports": [
+              8443,
+              10000
+            ]
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "magic"
+            ]
+          }
+        },
+        "setup": {
+          "state": "ready",
+          "actions": []
+        },
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "candidateToken": "tok_synthetic_eligible_1",
+        "expiresAt": "2026-11-12T12:10:00.000Z"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Candidate",
+      "name": "ports not integers",
+      "why": "ports are integers or null",
+      "value": {
+        "providerId": "example-96",
+        "name": "cand_synthetic_1",
+        "preferenceRef": "pref_synthetic_1",
+        "rank": 1,
+        "eligible": true,
+        "unmet": [],
+        "display": {
+          "label": "Example public route",
+          "description": "Example public route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
+        },
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ],
+            "ports": [
+              "8443"
+            ]
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
+          }
+        },
+        "setup": {
+          "state": "ready",
+          "actions": []
+        },
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "candidateToken": "tok_synthetic_eligible_1",
+        "expiresAt": "2026-11-12T12:10:00.000Z"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "RouteView",
+      "name": "verification missing vantage",
+      "why": "verification says where the last check ran from",
+      "value": {
+        "schemaVersion": 1,
+        "handle": {
+          "kind": "durable",
+          "id": "example-main",
+          "generation": 4
+        },
+        "origin": "https://example.invalid",
+        "published": "https://example.invalid",
+        "state": "usable",
+        "ownership": "gozar-owned",
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ],
+            "ports": null
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
+          }
+        },
+        "ingress": {
+          "generation": 2,
+          "verifiedAt": "2026-11-12T12:00:00.000Z",
+          "validUntil": "2026-11-12T12:05:00.000Z",
+          "publicAuthority": "example.invalid",
+          "authorityHandling": "configured-origin",
+          "clientAddress": {
+            "source": "trusted-header",
+            "evidenceRef": "evidence-synthetic-2",
+            "peer": {
+              "kind": "unix-socket",
+              "path": "/private/gozar-state/ingress.sock",
+              "ownerUid": 1000
+            },
+            "header": {
+              "name": "x-forwarded-for",
+              "format": "ip-list",
+              "sanitization": "strip-inbound-and-write",
+              "selection": "rightmost-untrusted",
+              "trustedHops": 1,
+              "trustedProxyCidrs": [
+                "192.0.2.0/24"
+              ]
+            }
+          }
+        },
+        "verification": {
+          "status": "verified",
+          "checkedAt": "2026-11-12T12:00:00.000Z",
+          "checks": [
+            "nonce"
+          ]
+        },
+        "limits": {
+          "recommendedPollIntervalMs": 60000,
+          "idleTimeoutMs": null
+        },
+        "cleanup": {
+          "state": "none"
+        }
       }
     }
   ],

@@ -1,7 +1,7 @@
 // The user's route preference: one small record per real OS user, shared by every app and every app home.
 // It lives under the profile home, which is resolved for the real user (passwd entry), not from $HOME, so an
 // app that isolates its own HOME still reads and writes the same preference. GOZAR_HOME selects a separate,
-// disclosed profile. Writes are compare-and-set on `revision`; only opaque preferenceRef values are stored.
+// disclosed profile. Writes are compare-and-set on `revision`; only preferenceRef values and providerIds are stored.
 import { join, isAbsolute } from 'node:path';
 import { homedir, userInfo } from 'node:os';
 import { atomicWrite } from './journal.mjs';

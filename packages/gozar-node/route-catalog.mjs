@@ -6,6 +6,7 @@ import { canonicalHome } from './service-state.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
+import { completeProperties } from './route-view.mjs';
 
 const sha = text => createHash('sha256').update(text).digest('hex');
 /** Stable opaque handles for an adapter; apps store the preferenceRef and show the label. */
@@ -31,7 +32,8 @@ export function validateQuery(query) {
       !['stable', 'any'].includes(r.address) || !['none', 'allow'].includes(r.setup) || !Array.isArray(r.protocols) ||
       r.protocols.some(item => !(item in PROTOCOL_KEY))) bad('requirements are incomplete or not in the closed vocabulary');
   if (query.intent !== undefined && !['create', 'adopt'].includes(query.intent)) bad('intent must be create or adopt');
-  for (const key of ['route', 'origin', 'migrationRef']) if (query[key] !== undefined && !text(query[key])) bad(`${key} must be a non-empty string`);
+  for (const key of ['route', 'origin', 'migrationRef', 'providerId']) if (query[key] !== undefined && !text(query[key])) bad(`${key} must be a non-empty string`);
+  if (query.providerId !== undefined && query.route !== undefined) bad('providerId and route are two ways to select; send one');
   return query;
 }
 
@@ -61,6 +63,14 @@ export async function defaultReadContext() {
  */
 export async function readContextFor(deps, home, platform) {
   return { ...(deps.readContext ?? await defaultReadContext()), home, platform };
+}
+
+/** `providerId` picks exactly one adapter by the id its definition declares; an unknown id lists every id on offer, in registry order. */
+export function selectAdapters(adapters, providerId) {
+  if (providerId === undefined) return adapters;
+  const chosen = adapters.filter(adapter => adapter.id === providerId);
+  if (!chosen.length) throw gozarError('route_not_found', `Unknown route id "${providerId}". Offered: ${adapters.map(adapter => adapter.id).join(', ')}`);
+  return chosen;
 }
 
 // --- One adapter, observed ----------------------------------------------------------------------
@@ -128,12 +138,13 @@ async function collect(query, deps) {
   const context = await readContextFor(deps, home, platform);
   // An unknown named route is an error before any provider is asked.
   if (query.route !== undefined && supportedPlatform(platform)) await context.configuration(query.route);
-  const inspections = await Promise.all(adapters.map(adapter => inspectAdapter(adapter, context, platform)));
+  const inspections = await Promise.all(selectAdapters(adapters, query.providerId).map(adapter => inspectAdapter(adapter, context, platform)));
   const pinned = deps.pinnedAdapterId ? await deps.pinnedAdapterId(query) : null;
 
   const candidates = await Promise.all(inspections.map(async inspection => {
     const { adapter, state, actions } = inspection, definition = adapter.definition;
-    let { properties } = inspection, setupState = state, grant = null;
+    const properties = completeProperties(inspection.properties);
+    let setupState = state, grant = null;
     const unmet = [];
     if (supportedPlatform(platform)) {
       unmet.push(...unmetRequirements({ requirements: query.requirements, usage: query.usage, definition, properties, setupState }));
@@ -141,7 +152,7 @@ async function collect(query, deps) {
       if (!unmet.length && setupState === 'ready' && definition.supportedKinds.includes(query.usage.kind)) {
         try {
           if (query.usage.kind === 'durable') {
-            const plan = await durablePlanFacts({ home, adapterId: adapter.id, target: query.target, origin: query.origin ?? null });
+            const plan = await durablePlanFacts({ home, adapterId: adapter.id, target: query.target, origin: query.origin ?? null, adapters });
             grant = { adapterId: adapter.id, planDigest: plan.planDigest, observedResource: plan.observedResource };
           } else {
             const request = adapterRequest(query);
@@ -159,8 +170,8 @@ async function collect(query, deps) {
     } else unmet.push({ requirement: 'platform', actual: platform, reasonCode: 'unsupported_platform' });
 
     const eligible = unmet.length === 0;
-    const candidate = { name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
-      display: { label: definition.label, description: describe(definition, properties) }, properties,
+    const candidate = { providerId: adapter.id, name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
+      display: { label: definition.label, description: describe(definition, properties), needs: definition.needs ?? '' }, properties,
       setup: { state: setupState, actions: setupState === 'action-required' ? actions : [] }, disclosure: definition.disclosure,
       candidateToken: null, expiresAt: null };
     if (eligible && setupState === 'ready' && grant) {
@@ -171,9 +182,13 @@ async function collect(query, deps) {
   }));
 
   // Hard filters are in `eligible`; ranking only orders. A durable pin outranks the preference list.
-  const order = ref => deps.preferences.indexOf(ref);
+  // A preference list holds preferenceRef values or providerIds; the earlier of the two positions counts.
+  const order = candidate => {
+    const at = [candidate.preferenceRef, candidate.providerId].map(ref => deps.preferences.indexOf(ref)).filter(index => index >= 0);
+    return at.length ? Math.min(...at) : -1;
+  };
   const keyed = candidates.map((candidate, index) => ({ candidate, index, pinned: pinned !== null && candidate.preferenceRef === preferenceRefFor(pinned),
-    preferred: order(candidate.preferenceRef) }));
+    preferred: order(candidate) }));
   keyed.sort((a, b) => (b.pinned - a.pinned) || ((a.preferred < 0 ? Infinity : a.preferred) - (b.preferred < 0 ? Infinity : b.preferred)) || a.index - b.index);
   const ranked = keyed.map(({ candidate }, index) => ({ ...candidate, rank: index + 1 }));
   return { candidates: ranked, inspections };

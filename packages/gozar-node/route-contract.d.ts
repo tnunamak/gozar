@@ -36,6 +36,12 @@ export type Query = {
   /** Gozar-owned named policy; uninterpreted by apps. Unknown name: route_not_found. */
   route?: string;
   origin?: string;
+  /**
+   * Selects exactly one adapter by the `providerId` its Candidate shows; the catalog then holds only that candidate.
+   * An unknown id is route_not_found, and its message lists every id on offer. Not valid together with `route`.
+   * Apps show, store and send the id back; they never compare it with a literal.
+   */
+  providerId?: string;
   /** Default: 'create'. */
   intent?: 'create' | 'adopt';
   /** Opaque reference from inspectLegacyRoute. */
@@ -69,18 +75,29 @@ export type Properties = {
     metadataVisibleTo: string[];
     evidenceRef: string | null;
   };
-  address: { stability: 'stable' | 'ephemeral' | 'unknown'; scope: string; conditions: string[] };
+  address: {
+    stability: 'stable' | 'ephemeral' | 'unknown'; scope: string; conditions: string[];
+    /** The public ports the route may use, in the order Gozar tries them; null when the provider assigns the port. */
+    ports: number[] | null;
+  };
   cost: { kind: 'free' | 'paid' | 'unknown'; summary: string; currency: string | null; amount: number | null; period: string | null };
   needsAccount: boolean | null;
   lifetimes: ('session' | 'attached' | 'durable')[];
   supervision: 'controller' | 'provider-persistent' | 'host-supervised';
   protocols: { sse: boolean; streamableHttp: boolean; oauthDcr: boolean };
+  /** What Gozar checks before it publishes: where the check runs from, and which checks it makes. */
+  proof: { vantage: ProofVantage; checks: ProofCheck[] };
 };
+
+export type ProofVantage = 'public' | 'tailnet' | 'lan' | 'this-device' | 'none';
+export type ProofCheck = 'tls' | 'nonce' | 'sse';
 
 export type UnmetRequirement = 'reach' | 'transport' | 'payloadAccess' | 'address' | 'setup' | 'protocols' | 'usage' | 'platform';
 export type UnmetReason = 'not_met' | 'unknown' | 'unsupported_platform';
 
 export type Candidate = {
+  /** The adapter's own stable id, the value `Query.providerId` takes. Pass-through data: show it, store it, send it back. */
+  providerId: string;
   /** Opaque to apps. */
   name: string;
   /** Opaque to apps; the only value usable in a preference list. */
@@ -88,7 +105,11 @@ export type Candidate = {
   rank: number;
   eligible: boolean;
   unmet: { requirement: UnmetRequirement; actual: unknown; reasonCode: UnmetReason }[];
-  display: { label: string; description: string };
+  display: {
+    label: string; description: string;
+    /** One static sentence: what this route needs on this computer. Shown whether or not setup is ready. */
+    needs: string;
+  };
   properties: Properties;
   /**
    * On a platform Gozar does not support (anything but Linux and macOS in 0.2.0), every candidate has
@@ -153,7 +174,8 @@ export type RouteView = {
   ownership: 'gozar-owned' | 'external-owned';
   properties: Properties;
   ingress: Ingress | null;
-  verification: { status: 'verified' | 'unverified'; checkedAt: string | null };
+  /** `vantage` is where the last check actually ran from; a check made from this computer is 'this-device'. */
+  verification: { status: 'verified' | 'unverified'; checkedAt: string | null; vantage: ProofVantage; checks: ProofCheck[] };
   limits: { recommendedPollIntervalMs: number; idleTimeoutMs: number | null };
   cleanup: { state: 'none' | 'debt'; message?: string };
 };
@@ -179,7 +201,7 @@ export type PreferenceRecord = {
   schemaVersion: 1;
   scope: 'user';
   revision: number;
-  /** Opaque preferenceRef values. */
+  /** What was stored: preferenceRef or providerId values. */
   adapterPreference: string[];
   onUnavailable: 'ask';
 };
@@ -265,6 +287,7 @@ export type WatchRoutesRequest = RouteRef & { signal: AbortSignal; intervalMs?: 
 export type SetRoutePreferencesRequest = {
   profileHome: string;
   expectedRevision: number;
+  /** preferenceRef or providerId values. */
   adapterPreference: string[];
   onUnavailable: 'ask';
 };

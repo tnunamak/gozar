@@ -4,6 +4,7 @@
     "schemaVersion": 1,
     "id": "own-address",
     "label": "Your own HTTPS address",
+    "needs": "Needs an HTTPS address that you run yourself and that forwards to this service.",
     "capabilities": {
       "reach": "unknown",
       "transport": "https",
@@ -24,7 +25,8 @@
         "conditions": [
           "the owner keeps the route and the certificate",
           "a successful response alone does not prove the correct application or outside reach"
-        ]
+        ],
+        "ports": null
       },
       "cost": {
         "kind": "free",
@@ -42,6 +44,14 @@
         "sse": true,
         "streamableHttp": true,
         "oauthDcr": true
+      },
+      "proof": {
+        "vantage": "public",
+        "checks": [
+          "tls",
+          "nonce",
+          "sse"
+        ]
       }
     },
     "supportedKinds": [

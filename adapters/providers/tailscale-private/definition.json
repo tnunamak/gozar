@@ -4,6 +4,7 @@
     "schemaVersion": 1,
     "id": "tailscale-private",
     "label": "Tailscale private Serve",
+    "needs": "Needs Tailscale installed and signed in on this computer and port 9444 or 9445 free. Only devices on your tailnet can reach it.",
     "capabilities": {
       "reach": "tailnet",
       "transport": "https",
@@ -25,6 +26,10 @@
           "needs an unused Serve port",
           "tailnet HTTPS and MagicDNS must be enabled",
           "node and tailnet identity stay the same"
+        ],
+        "ports": [
+          9444,
+          9445
         ]
       },
       "cost": {
@@ -44,6 +49,14 @@
         "sse": true,
         "streamableHttp": true,
         "oauthDcr": true
+      },
+      "proof": {
+        "vantage": "tailnet",
+        "checks": [
+          "tls",
+          "nonce",
+          "sse"
+        ]
       }
     },
     "supportedKinds": [

@@ -37,8 +37,9 @@ export function createRouteApi(deps = {}) {
 
     inspectLegacyRoute: request => guard(async () => (await legacy()).inspectLegacyRoute(request)),
 
-    ensureRoute: request => guard(async () => durableView((await (await engine()).ensureRoute(request)).route)),
-    adoptRoute: request => guard(async () => durableView((await (await engine()).adoptRoute(request)).route)),
+    // The loaded adapters go to every durable engine call as an optional second argument; an engine that does not use it ignores it.
+    ensureRoute: request => guard(async () => durableView((await (await engine()).ensureRoute(request, { adapters: await adapters() })).route)),
+    adoptRoute: request => guard(async () => durableView((await (await engine()).adoptRoute(request, { adapters: await adapters() })).route)),
 
     /** A request with schemaVersion 1 is the route API; anything else is the legacy session call (handled by the caller). */
     expose: request => guard(async () => {

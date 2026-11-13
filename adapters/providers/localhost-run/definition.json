@@ -4,6 +4,7 @@
     "schemaVersion": 1,
     "id": "localhost-run",
     "label": "localhost.run trial",
+    "needs": "Needs the ssh command on this computer and outbound internet access. No account is needed.",
     "capabilities": {
       "reach": "internet",
       "transport": "https",
@@ -25,7 +26,8 @@
           "trial: uptime and URL lifetime are not guaranteed",
           "a new connection gets a new URL",
           "the plan limits a session to 15 minutes"
-        ]
+        ],
+        "ports": null
       },
       "cost": {
         "kind": "free",
@@ -43,6 +45,14 @@
         "sse": true,
         "streamableHttp": true,
         "oauthDcr": false
+      },
+      "proof": {
+        "vantage": "public",
+        "checks": [
+          "tls",
+          "nonce",
+          "sse"
+        ]
       }
     },
     "supportedKinds": [

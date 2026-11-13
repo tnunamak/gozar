@@ -4,6 +4,7 @@
     "schemaVersion": 1,
     "id": "tailscale-funnel",
     "label": "Tailscale Funnel",
+    "needs": "Needs Tailscale installed and signed in on this computer, with Funnel allowed on your tailnet and port 8443 or 10000 free.",
     "capabilities": {
       "reach": "internet",
       "transport": "https",
@@ -25,6 +26,10 @@
           "one of those ports must be unused and the node policy must allow it for Funnel",
           "the tailnet administrator must allow Funnel",
           "node and tailnet identity stay the same"
+        ],
+        "ports": [
+          8443,
+          10000
         ]
       },
       "cost": {
@@ -44,6 +49,14 @@
         "sse": true,
         "streamableHttp": true,
         "oauthDcr": true
+      },
+      "proof": {
+        "vantage": "public",
+        "checks": [
+          "tls",
+          "nonce",
+          "sse"
+        ]
       }
     },
     "supportedKinds": [

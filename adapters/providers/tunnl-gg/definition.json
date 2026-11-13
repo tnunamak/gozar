@@ -4,6 +4,7 @@
     "schemaVersion": 1,
     "id": "tunnl-gg",
     "label": "tunnl.gg trial",
+    "needs": "Needs the ssh command on this computer and outbound internet access. No account is needed.",
     "capabilities": {
       "reach": "internet",
       "transport": "https",
@@ -25,7 +26,8 @@
           "an announced address change ends the route",
           "the relay can close quiet streams after about two minutes",
           "browsers can show a warning page"
-        ]
+        ],
+        "ports": null
       },
       "cost": {
         "kind": "free",
@@ -43,6 +45,14 @@
         "sse": true,
         "streamableHttp": true,
         "oauthDcr": true
+      },
+      "proof": {
+        "vantage": "public",
+        "checks": [
+          "tls",
+          "nonce",
+          "sse"
+        ]
       }
     },
     "supportedKinds": [

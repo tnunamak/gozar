@@ -4,6 +4,7 @@
     "schemaVersion": 1,
     "id": "cloudflare-named",
     "label": "Cloudflare named tunnel",
+    "needs": "Needs a Cloudflare account and an existing named tunnel. This route is not available in this release.",
     "capabilities": {
       "reach": "internet",
       "transport": "https",
@@ -24,7 +25,8 @@
         "conditions": [
           "no admitted create recipe",
           "DNS and the tunnel are owner-managed prerequisites"
-        ]
+        ],
+        "ports": null
       },
       "cost": {
         "kind": "unknown",
@@ -40,6 +42,14 @@
         "sse": false,
         "streamableHttp": false,
         "oauthDcr": false
+      },
+      "proof": {
+        "vantage": "public",
+        "checks": [
+          "tls",
+          "nonce",
+          "sse"
+        ]
       }
     },
     "supportedKinds": [],

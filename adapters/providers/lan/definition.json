@@ -4,6 +4,7 @@
     "schemaVersion": 1,
     "id": "lan",
     "label": "Local network",
+    "needs": "Needs a network address on this computer that other devices on the same network can reach. Traffic is not encrypted.",
     "capabilities": {
       "reach": "lan",
       "transport": "http",
@@ -22,7 +23,8 @@
         "conditions": [
           "firewall and routing are the owner’s prerequisites",
           "no TLS: HTTPS-required clients cannot use it"
-        ]
+        ],
+        "ports": null
       },
       "cost": {
         "kind": "free",
@@ -40,6 +42,14 @@
         "sse": true,
         "streamableHttp": true,
         "oauthDcr": false
+      },
+      "proof": {
+        "vantage": "lan",
+        "checks": [
+          "tls",
+          "nonce",
+          "sse"
+        ]
       }
     },
     "supportedKinds": [

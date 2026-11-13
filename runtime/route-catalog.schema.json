@@ -164,6 +164,9 @@
         },
         "migrationRef": {
           "type": "string"
+        },
+        "providerId": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -348,6 +351,16 @@
               "items": {
                 "type": "string"
               }
+            },
+            "ports": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              }
             }
           },
           "additionalProperties": false
@@ -438,6 +451,37 @@
             }
           },
           "additionalProperties": false
+        },
+        "proof": {
+          "type": "object",
+          "required": [
+            "vantage",
+            "checks"
+          ],
+          "properties": {
+            "vantage": {
+              "type": "string",
+              "enum": [
+                "public",
+                "tailnet",
+                "lan",
+                "this-device",
+                "none"
+              ]
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "tls",
+                  "nonce",
+                  "sse"
+                ]
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -445,6 +489,7 @@
     "Candidate": {
       "type": "object",
       "required": [
+        "providerId",
         "name",
         "preferenceRef",
         "rank",
@@ -458,6 +503,9 @@
         "expiresAt"
       ],
       "properties": {
+        "providerId": {
+          "type": "string"
+        },
         "name": {
           "type": "string"
         },
@@ -510,13 +558,17 @@
           "type": "object",
           "required": [
             "label",
-            "description"
+            "description",
+            "needs"
           ],
           "properties": {
             "label": {
               "type": "string"
             },
             "description": {
+              "type": "string"
+            },
+            "needs": {
               "type": "string"
             }
           },
@@ -949,7 +1001,9 @@
           "type": "object",
           "required": [
             "status",
-            "checkedAt"
+            "checkedAt",
+            "vantage",
+            "checks"
           ],
           "properties": {
             "status": {
@@ -965,6 +1019,27 @@
                 "null"
               ],
               "pattern": "^(\\d{4}-\\d{2}-\\d{2}T.*)?$"
+            },
+            "vantage": {
+              "type": "string",
+              "enum": [
+                "public",
+                "tailnet",
+                "lan",
+                "this-device",
+                "none"
+              ]
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "tls",
+                  "nonce",
+                  "sse"
+                ]
+              }
             }
           },
           "additionalProperties": false

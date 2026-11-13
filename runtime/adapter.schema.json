@@ -40,6 +40,9 @@
         },
         "disclosure": {
           "$ref": "#/$defs/Disclosure"
+        },
+        "needs": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -157,6 +160,16 @@
               "items": {
                 "type": "string"
               }
+            },
+            "ports": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              }
             }
           },
           "additionalProperties": false
@@ -244,6 +257,37 @@
             },
             "oauthDcr": {
               "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "proof": {
+          "type": "object",
+          "required": [
+            "vantage",
+            "checks"
+          ],
+          "properties": {
+            "vantage": {
+              "type": "string",
+              "enum": [
+                "public",
+                "tailnet",
+                "lan",
+                "this-device",
+                "none"
+              ]
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "tls",
+                  "nonce",
+                  "sse"
+                ]
+              }
             }
           },
           "additionalProperties": false
