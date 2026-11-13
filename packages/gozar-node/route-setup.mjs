@@ -22,7 +22,7 @@ export function checkValue(format, value) {
   if (format === 'https-origin') {
     let url;
     try { url = new URL(text); } catch { return null; }
-    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash && url.hostname && (text === url.origin || text === `${url.origin}/`) ? url.origin : null;
+    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash && url.hostname && (url.pathname === '' || url.pathname === '/') ? url.origin : null;
   }
   return null;
 }

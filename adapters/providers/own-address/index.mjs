@@ -17,7 +17,7 @@ function parseOrigin(value) {
   let url;
   try { url = new URL(value); } catch { return null; }
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || !url.hostname) return null;
-  return value === url.origin || value === `${url.origin}/` ? url.origin : null;
+  return url.pathname === '' || url.pathname === '/' ? url.origin : null;
 }
 
 const IPV4_PRIVATE = [/^10\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^169\.254\./];
@@ -27,10 +27,21 @@ const sharedNat = host => { const [a, b] = host.split('.').map(Number); return a
 export function reachOf(origin) {
   const host = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
   const family = isIP(host);
-  if (family === 4) return host.startsWith('127.') ? 'this-device' : IPV4_PRIVATE.some(pattern => pattern.test(host)) ? 'lan' : sharedNat(host) ? 'unknown' : 'internet';
-  if (family === 6) return host === '::1' ? 'this-device' : /^(f[cd]|fe[89ab])/.test(host) ? 'lan' : 'internet';
-  if (host === 'localhost' || host.endsWith('.localhost')) return 'this-device';
-  return /\.(local|lan)$/.test(host) ? 'lan' : 'internet';
+  if (family === 4) return host === '0.0.0.0' ? 'unknown' : host.startsWith('127.') ? 'this-device' : IPV4_PRIVATE.some(pattern => pattern.test(host)) ? 'lan' : sharedNat(host) ? 'unknown' : 'internet';
+  if (family === 6) {
+    // An IPv4 address inside IPv6 (::ffff:a.b.c.d, or the old ::a.b.c.d form) is classified as that IPv4 address.
+    // The URL parser prints it in hex, for example [::ffff:7f00:1] for 127.0.0.1.
+    const embedded = host.match(/^::(ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (embedded) {
+      const high = parseInt(embedded[2], 16), low = parseInt(embedded[3], 16);
+      const ipv4 = reachOf(`https://${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+      return embedded[1] || ipv4 === 'this-device' ? ipv4 : 'unknown';
+    }
+    if (host === '::') return 'unknown';
+    return host === '::1' ? 'this-device' : /^(f[cd]|fe[89ab])/.test(host) ? 'lan' : 'internet';
+  }
+  if (host === 'localhost' || host === 'localhost.localdomain' || host.endsWith('.localhost')) return 'this-device';
+  return !host.includes('.') || /\.(local|lan|internal|home\.arpa)$/.test(host) ? 'lan' : 'internet';
 }
 
 export default recipeAdapter({
@@ -42,7 +53,7 @@ export default recipeAdapter({
         valuePlaceholder: 'https://app.example.com', valueFormat: 'https-origin', required: true, disclosure: definition.disclosure };
       return { ...body, digest: sha(body) };
     })();
-    const given = async ctx => parseOrigin(ctx.origin) ?? parseOrigin((await ctx.configuration(null).catch(() => null))?.origin);
+    const given = async ctx => ctx.origin == null ? parseOrigin((await ctx.configuration(null).catch(() => null))?.origin) : parseOrigin(ctx.origin);
 
     return {
       async detect(ctx) {
@@ -67,7 +78,8 @@ export default recipeAdapter({
       async plan(ctx, request) {
         if (request?.usage?.kind !== 'durable') return base.plan(ctx, request);
         platformOf(ctx);
-        const origin = parseOrigin(request.origin) ?? await given(ctx);
+        const origin = request.origin == null ? await given(ctx) : parseOrigin(request.origin);
+        if (request.origin != null && !origin) throw effectError('invalid_input', 'The requested origin is invalid');
         if (!origin) throw effectError('setup_required', 'Provide the HTTPS address you run first');
         const resourceKey = `${definition.id}:${sha({ target: request.target, origin }).slice(0, 16)}`;
         return { digest: sha({ adapterId: definition.id, kind: 'durable', target: request.target, origin, resourceKey }), origin, resourceKey, effects: [],
