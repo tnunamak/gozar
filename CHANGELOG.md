@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- `@ngrok/ngrok` is now an optional peer dependency. Apps that use the ngrok HTTPS edge must install it; other apps avoid downloading its native binaries (about 10 MB on Linux and 29 MB on macOS).
+
 ## 0.3.4
 
 ### Fixes

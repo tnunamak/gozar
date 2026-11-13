@@ -36,6 +36,8 @@ For a project or an embedded integration:
 npm install @tnunamak/gozar@0.3.4
 ```
 
+The ngrok SDK is optional. To use the ngrok HTTPS edge, install it in your app with `npm install @ngrok/ngrok`; without it, Gozar reports the ngrok candidate as needing setup.
+
 The examples below use npx with an explicit package, so they do not require a global installation. Installing locally does not add a bare `gozar` command to your normal shell PATH.
 
 The npm package includes the compiled WASM core and JavaScript bindings. You do not need Rust or wasm-bindgen to use it.
