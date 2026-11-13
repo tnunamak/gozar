@@ -15,12 +15,12 @@ test('first expose screen fits twelve lines including the prompt and keeps other
   for (const phrase of ['reachable from the internet', 'Tailscale Funnel', 'http://127.0.0.1:18765', 'Lasts', 'up to 15 minutes', 'Other ways:']) assert.ok(text.includes(phrase), phrase);
   assert.doesNotMatch(text, banned);
   assert.doesNotMatch(text, /warning page|isolated known_hosts|ngrok|Cloudflare/);
-  assert.match(text, /Address\s+assigned after you approve \(https:\/\/<machine>\.<tailnet>\.ts\.net, port 8443 or 10000\)/);
+  assert.match(text, /Address\s+https:\/\/<machine>\.<tailnet>\.ts\.net, port 8443 or 10000 \(a pattern; the exact address comes after you approve\)/);
   assert.doesNotMatch(text, /until you press Ctrl/);
 });
 test('alternatives are usable routes with detection status, one row each, followed by the same plan', () => {
   const text = render(planned, adapters, { ...options, alternatives: true });
-  assert.match(text, /localhost.run trial \(localhost.run\)\s+available  checked after you approve/);
+  assert.match(text, /localhost.run trial \(localhost.run\)\s+detected  not yet checked; free trial; address can change during a run; localhost.run relay can read traffic$/m);
   assert.match(text, /Your own HTTPS address \(own-address\)\s+needs setup.*--origin https:\/\/your.domain.*http:\/\/127.0.0.1:18765/);
   assert.doesNotMatch(text, /ngrok|Cloudflare|--url|unknown\./);
   assert.doesNotMatch(text, /Other ways:/);
@@ -128,13 +128,16 @@ test('failure cause uses specific evidence or admits it is unrecorded; inspectio
     const reply = { ...failed, snapshot: { ...failed.snapshot, limitations: [limitation] } };
     const text = render(reply, adapters, options);
     assert.match(text, expected);
-    assert.ok(text.indexOf('Inspect first:') < text.indexOf('Then retry:'));
+    assert.ok(text.indexOf('Inspect first:') < text.indexOf('After stopping it and fixing the cause, retry:'));
     assert.ok(text.includes(`Inspect first: ${cliCommand('health', options.port)}`));
     assert.doesNotMatch(text, /failed or expired/);
   }
   for (const reply of [failed, cleaned, { ...failed, snapshot: { ...failed.snapshot, phase: 'cleanup-pending' } }]) {
     assert.match(render(reply, adapters, options), /Inspect first:/);
   }
+  // Retry is offered only after the user stops what may remain; after confirmed cleanup it only needs the cause fixed.
+  assert.match(render(cleaned, adapters, options), /^After fixing the cause, retry:/m);
+  assert.doesNotMatch(render(cleaned, adapters, options), /After stopping it/);
 });
 
 test('stop reports confirmed cleanup only with explicit host confirmation, even without a failure', () => {
@@ -144,7 +147,7 @@ test('stop reports confirmed cleanup only with explicit host confirmation, even 
 });
 test('owner-managed proxy setup names the actual gate when it is known', () => {
   const text = render({ ...planned, gateTarget: 'http://127.0.0.1:41817' }, adapters, { ...options, alternatives: true });
-  assert.match(text, /own-address.*--origin https:\/\/your.domain.*Gozar's local proxy port.*http:\/\/127.0.0.1:41817/);
+  assert.match(text, /own-address.*--origin https:\/\/your.domain and point your proxy at the local port Gozar prints after approval, not at http:\/\/127.0.0.1:41817/);
 });
 
 test('traffic readers are shown before consent and beside each alternative only when declared', () => {
@@ -153,8 +156,10 @@ test('traffic readers are shown before consent and beside each alternative only 
   const trial = { ...planned, snapshot: { ...planned.snapshot, adapterId: 'localhost-run' } };
   assert.match(render(trial, adapters, options), /The localhost.run relay can read the traffic\./);
   const alternatives = render(planned, adapters, { ...options, alternatives: true });
-  assert.match(alternatives, /Tailscale Funnel.*The relay cannot read the traffic/);
-  assert.match(alternatives, /localhost.run trial.*The localhost.run relay can read the traffic/);
+  assert.match(alternatives, /Tailscale Funnel.*; relay cannot read traffic; TLS ends on this computer$/m);
+  // The selected row already says it, so the plan below the list does not repeat it.
+  assert.equal(alternatives.split('relay cannot read').length - 1, 1);
+  assert.match(alternatives, /localhost.run trial.*; localhost.run relay can read traffic$/m);
   const ownRow = alternatives.split('\n').find(line => line.includes('(own-address)'));
   assert.doesNotMatch(ownRow, /can read the traffic|cannot read the traffic/);
 });
@@ -164,7 +169,7 @@ test('plan promises reach only after checks pass for the requested audience', ()
 });
 test('own-address plan and available or unconfigured rows retain owner responsibilities', () => {
   const own = { ...planned, snapshot: { ...planned.snapshot, adapterId: 'own-address' } };
-  const sentence = 'You run the proxy, DNS and TLS; Gozar does not create or remove them. You also handle their cleanup.';
+  const sentence = 'You own the DNS, TLS, proxy and their cleanup; Gozar changes none of them.';
   assert.ok(render(own, adapters, options).includes(sentence));
   for (const catalog of [adapters, adapters.map(a => a.id === 'own-address' ? { ...a, endpoint: 'https://your.domain' } : a)]) {
     const row = render(planned, catalog, { ...options, alternatives: true }).split('\n').find(line => line.includes('(own-address)'));

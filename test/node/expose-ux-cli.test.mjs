@@ -43,7 +43,7 @@ else process.exit(99);
     assert.ok(declined, stdout);
     const plan = stdout.slice(stdout.indexOf('Gozar will make'));
     if (!flags.includes('--verbose')) assert.ok(plan.split('\n').filter(line => line.trim()).length <= 12, stdout);
-    assert.match(stdout, /Address\s+assigned after you approve \(https:\/\/<machine>\.<tailnet>\.ts\.net/);
+    assert.match(stdout, /Address\s+https:\/\/<machine>\.<tailnet>\.ts\.net, port 8443 or 10000 \(a pattern; the exact address comes after you approve\)/);
     assert.doesNotMatch(stdout, /Public URL:/);
   }
   const invocations = (await readFile(calls, 'utf8')).trim().split('\n').map(JSON.parse);

@@ -98,15 +98,19 @@ function usableWays(snapshot, adapters) {
 }
 function wayStatus(snapshot, adapter) {
   if (adapter.ownership === 'external-owned' && !adapter.endpoint) return 'needs setup';
-  return ({ present: 'available', absent: 'needs setup', 'signed-out': 'needs setup', blocked: 'needs setup' })[snapshot.observations?.[adapter.id]] ?? 'needs setup';
+  return ({ present: 'detected', absent: 'needs setup', 'signed-out': 'needs setup', blocked: 'needs setup' })[snapshot.observations?.[adapter.id]] ?? 'needs setup';
 }
 function alternativeRows(snapshot, adapters, selected, reach, target) {
   return [`Ways to make this reachable from ${reachWords[reach]}:`, ...usableWays(snapshot, adapters).map(a => {
     const way = ways[a.id], status = wayStatus(snapshot, a);
-    const details = [trafficFacts[a.id], a.ownership === 'external-owned' ? plainCaveat(a.copy?.consent).plain : undefined].filter(Boolean);
-    return `  ${a.id === selected?.id ? '●' : '○'} ${adapterName(a)} (${way.name})  ${status}  ${status === 'available' ? `checked after you approve; ${way.summary}` : way.setup.replaceAll('{target}', target)}${details.length ? `; ${details.join(' ')}` : ''}`;
+    const details = [rowFact(trafficFacts[a.id]), a.ownership === 'external-owned' ? plainCaveat(a.copy?.consent).plain : undefined].filter(Boolean);
+    return `  ${a.id === selected?.id ? '●' : '○'} ${adapterName(a)} (${way.name})  ${status}  ${status === 'detected' ? `not yet checked; ${way.summary}` : way.setup.replaceAll('{target}', target)}${details.length ? `; ${details.join(' ')}` : ''}`;
   }), 'Pick one with --via <name>.'];
 }
+// A provider address with placeholders is a pattern; say so, and that the exact address comes after approval.
+const addressLine = address => !address ? 'not known yet' : address.includes('<') ? `${address} (a pattern; the exact address comes after you approve)` : address;
+// In a one-line row a traffic sentence becomes a clause: "The relay cannot read the traffic." -> "relay cannot read traffic".
+const rowFact = text => text?.replace(/^The /, '').replace(/ the traffic/, ' traffic').replace(/\.$/, '');
 function lifetime(reply, selected, port, options) {
   if (selected?.planVersion === 1) return `up to ${(reply.lifetimeMs ?? options.lifetimeMs ?? 900_000) / 60_000} minutes in the background`;
   return selected?.ownership === 'external-owned' ? `your address stays under your control; stop checking with ${cliCommand('stop', port)}` : `until you run ${cliCommand('stop', port)}`;
@@ -128,7 +132,9 @@ export function render(reply, adapters, options = {}) {
   const failure = caveats.find(item => item.kind === 'failure');
   const failureText = failure?.plain ?? 'The route could not be verified. The cause was not recorded.';
   const inspect = `Inspect first: ${cliCommand('health', port)}`;
-  const retry = `Then retry: ${cliCommand('expose', port)} --client-reach ${options.clientReach ?? 'internet'}`;
+  const expose = `${cliCommand('expose', port)} --client-reach ${options.clientReach ?? 'internet'}`;
+  const retry = `After stopping it and fixing the cause, retry: ${expose}`;
+  const retryClean = `After fixing the cause, retry: ${expose}`;
   const cleanupWarning = 'Public access or a background process may remain. Cleanup is not confirmed.';
   const cleanupDone = "Cleanup confirmed: nothing Gozar created is still published. Your server's settings were not changed.";
   const cleanupConfirmed = snapshot.phase === 'stopped' && Array.isArray(reply.localCleanupFailures) && !reply.localCleanupFailures.length &&
@@ -142,15 +148,15 @@ export function render(reply, adapters, options = {}) {
     if (failure) lines.push(`✗ ${failureText}`);
     if (cleanupConfirmed) lines.push(cleanupDone);
     else lines.push(cleanupWarning, `Stop: ${cliCommand('stop', port)}`);
-    if (failure) lines.push(inspect, retry);
+    if (failure) lines.push(inspect, cleanupConfirmed ? retryClean : retry);
   } else if (snapshot.phase === 'planned') {
     if (alternatives) lines.push(...alternativeRows(snapshot, adapters, selected, options.clientReach ?? 'unknown', reply.gateTarget ?? target), '');
     lines.push(`Gozar will make ${target} reachable from ${reachWords[options.clientReach ?? 'unknown']} after its checks pass.`,
       `${['internet', 'unknown'].includes(options.clientReach ?? 'unknown') ? 'Anyone' : `Anyone on ${reachWords[options.clientReach]}`} with the address can reach it; Gozar adds no sign-in.`, '',
       `  Using    ${name}${snapshot.observations?.[selected?.id] === 'present' ? ' (set up on this computer; checked after you approve)' : ''}`,
-      `  Address  ${selected?.endpoint ?? `assigned after you approve (${ways[selected?.id]?.address ?? 'address not known yet'})`}`,
+      `  Address  ${selected?.endpoint ?? addressLine(ways[selected?.id]?.address)}`,
       `  Lasts    ${lifetime(reply, selected, port, options)}${selected?.planVersion === 1 ? '; the stop command below ends it sooner' : ''}`);
-    if (trafficFacts[selected?.id]) lines.push(trafficFacts[selected.id]);
+    if (trafficFacts[selected?.id] && !alternatives) lines.push(trafficFacts[selected.id]);
     const ownership = plainCaveat(selected?.copy?.consent).plain;
     if (ownership) lines.push(ownership);
     lines.push(`Stop: ${cliCommand('stop', port)}`);
@@ -170,7 +176,16 @@ export function render(reply, adapters, options = {}) {
       lines.push(`Public URL: ${endpoint}`,
         `Checked: ${checks.length ? checks.join('; ') : 'no check results were recorded'}. Your app's own sign-in and requests are not checked.`,
         `Forwarding to ${target}`,
-        `Lasts: ${lifetime(reply, selected, port, options)}. Stop sooner: ${cliCommand('stop', port)}`);
+        selected?.planVersion === 1 ? `Lasts: ${lifetime(reply, selected, port, options)}. Stop sooner: ${cliCommand('stop', port)}` : `Lasts: ${lifetime(reply, selected, port, options)}`);
+      // A client profile the user supplied (an install link template or a saved profile) says the target is an
+      // MCP service; only then print the client setup. An adapter's own default profile is not that request.
+      if (reply.connectionProfile) {
+        const template = reply.connectionProfile.installLinkTemplate ?? selected?.clientProfile?.installLinkTemplate ?? selected?.profile?.installLinkTemplate;
+        const mcpUrl = `${endpoint}/mcp`, link = installLink(template, mcpUrl);
+        lines.push('', `MCP client URL: ${mcpUrl}`, ...(link ? [`Install link: ${link}`] : []),
+          "Authentication: use your service's configured method. Your client connection and tool call still need checking.",
+          JSON.stringify({ mcpServers: { service: { url: mcpUrl } } }));
+      }
       lines.push(`After sleep or network loss: ${cliCommand('health', port)}`);
     } else lines.push('The saved address is invalid. Recheck the route.', `Next: ${cliCommand('health', port)}`);
   } else if (['failed', 'blocked', 'degraded'].includes(snapshot.phase)) {

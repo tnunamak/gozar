@@ -1296,7 +1296,7 @@
       "kind": "note"
     },
     "Validate this exact owner-managed HTTPS origin against this instance and requested protocols. The address remains under its owner\u2019s control.": {
-      "plain": "You run the proxy, DNS and TLS; Gozar does not create or remove them. You also handle their cleanup.",
+      "plain": "You own the DNS, TLS, proxy and their cleanup; Gozar changes none of them.",
       "decision": false,
       "kind": "note"
     }
