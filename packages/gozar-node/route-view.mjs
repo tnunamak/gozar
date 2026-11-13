@@ -44,7 +44,8 @@ export function projectDurable(reply, { handle, properties, ingress = null, limi
   const state = STATES.has(reply.state) ? reply.state : 'unknown';
   const published = state === 'usable' && typeof reply.origin === 'string' ? reply.origin : null;
   const checkedAt = typeof reply.verification?.checkedAt === 'string' ? Date.parse(reply.verification.checkedAt) : null;
-  return view({ handle, origin: reply.origin ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
+  // RouteView.origin is the route's address, also before verification; `published` is what the app may advertise.
+  return view({ handle, origin: reply.allocatedOrigin ?? reply.origin ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
     verification: { status: reply.verification?.status === 'verified' && state === 'usable' ? 'verified' : 'unverified', checkedAt: Number.isFinite(checkedAt) ? iso(checkedAt) : null },
     limits: limitsOf(limits, 60_000, reply.idleTimeoutMs), cleanup: reply.cleanupDebt ? { state: 'debt', message: debtMessage(reply.cleanupDebt) } : { state: 'none' } });
 }

@@ -50,6 +50,31 @@ test('journey: durable route by requirement, in separate processes, from catalog
   assert.equal(after.error?.code, 'route_not_found');
 });
 
+test('red: an unverified durable route reports the origin it was allocated, so the app can configure itself for it', async t => {
+  // An app often needs its own address before it can answer the challenge (it serves the challenge itself). The view
+  // must give that address as `origin` while `published`, the address the app may advertise, stays null until verified.
+  const w = await durableWorld(world, t);
+  const { approval } = approvalFrom((await w.api('catalogRoutes', w.query())).result);
+  w.challenge.answer = false;
+  const first = await w.api('ensureRoute', { ...w.query(), approval });
+  assert.equal(first.error, undefined, JSON.stringify(first.error));
+  assert.equal(first.result.state, 'unverified');
+  assert.equal(first.result.origin, w.origin, 'the allocated origin is reported before verification');
+  assert.equal(first.result.published, null, 'nothing is published before verification');
+  assert.equal(first.result.verification.status, 'unverified');
+  const status = await w.api('routeStatus', { home: w.home, handle: first.result.handle });
+  assert.equal(status.result.origin, w.origin);
+  assert.equal(status.result.published, null);
+
+  w.challenge.answer = true;
+  const second = await w.api('ensureRoute', w.query());
+  assert.equal(second.error, undefined, JSON.stringify(second.error));
+  assert.equal(second.result.state, 'usable');
+  assert.equal(second.result.origin, w.origin, 'verification keeps the address the app was given');
+  assert.equal(second.result.published, w.origin);
+  await w.api('closeRoute', { home: w.home, handle: second.result.handle, mode: 'remove' });
+});
+
 test('journey: adoptRoute takes over an existing rule by the same path', async t => {
   const w = await durableWorld(world, t);
   w.state.config.TCP = { 8443: { HTTPS: true } };

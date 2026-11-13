@@ -287,7 +287,10 @@ async function targetCheck(record) {
 
 function view(record, current = {}, extra = {}) {
   const state = current.state ?? record.state;
-  const reply = { routeId: record.routeId, generation: record.generation, owner: record.owner, createdAt: record.createdAt, origin: record.origin ?? null, target: record.target,
+  // `origin` is published only after a verification and pins the address; `allocatedOrigin` is the address this route was
+  // given (receipt) or is being given (intent). An app needs it before verification, to answer the challenge at that address.
+  const reply = { routeId: record.routeId, generation: record.generation, owner: record.owner, createdAt: record.createdAt, origin: record.origin ?? null,
+    allocatedOrigin: record.origin ?? record.receipt?.origin ?? record.intent?.origin ?? null, target: record.target,
     adapterId: record.adapterId, ownership: record.ownership, provenance: record.provenance ?? 'created', lifetime: record.lifetime,
     exposure: 'owner-run', forwards: `forwards to ${record.target} whether or not ${record.owner} is running`,
     idleTimeoutMs: record.idleTimeoutMs ?? null, state, verification: current.verification ?? null,

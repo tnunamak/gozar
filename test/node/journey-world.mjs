@@ -62,7 +62,9 @@ export async function durableWorld({ root, certificate }, t) {
   t.after(() => fake.close());
   const state = fake.state;
   const verifier = createServiceVerifier();
-  const app = http.createServer((req, res) => { if (!verifier(req, res)) res.end('app'); });
+  // `challenge.answer = false` is an app that is not configured for its address yet: it serves, but not the challenge.
+  const challenge = { answer: true };
+  const app = http.createServer((req, res) => { if (!(challenge.answer && verifier(req, res))) res.end('app'); });
   await listen(app); t.after(() => close(app));
   const routes = {};
   for (const port of [443, 8443, 10000]) {
@@ -81,7 +83,7 @@ export async function durableWorld({ root, certificate }, t) {
   const target = `127.0.0.1:${app.address().port}`;
   const query = (extra = {}) => ({ schemaVersion: 1, owner: 'example-app', target, usage: { kind: 'durable', routeId: 'coordinator' }, requirements, home, ...extra });
   const cliCalls = async () => (await readFile(cliLog, 'utf8').catch(() => '')).split('\n').filter(Boolean);
-  return { home, env, api: runner_(env), state, target, query, cliCalls, app, origin: `https://${dnsName}:8443` };
+  return { home, env, api: runner_(env), state, target, query, cliCalls, app, challenge, origin: `https://${dnsName}:8443` };
 }
 
 /** What a consumer does: ask by requirement, take the first eligible candidate's token and approval. */

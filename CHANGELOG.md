@@ -22,6 +22,7 @@
 - `gozar status` shows a live target check for each session (`listening` or `nothing listening`), as it does for durable routes. A dead target does not change the session state.
 - Tailscale sessions work on Tailscale 1.102.5: the node is identified by its node ID and tailnet DNS suffix, and the catalog says `ready` only when the session's own status checks pass. The Funnel disclosure names port 8443.
 - A second session that needs the installation key held by another route fails with `route_conflict` and a `nextAction` that carries the stop command, instead of `internal_error`.
+- A durable route's `RouteView.origin` is its allocated address from the moment the provider accepts the rule, also while the route is `unverified`, so an app that serves the verification challenge itself can configure that address first. `published` stays `null` until the route is verified.
 - **Setup values reach the adapter.** A value the user supplies through a `provide-secret` setup action (for example the ngrok auth token or reserved domain) is recorded for that adapter in the Gozar home, and the adapter reads it in every later call, so the ngrok HTTPS edge can become ready once its setup is complete. A secret stored for an action that did not complete is deleted.
 
 ### Breaking
