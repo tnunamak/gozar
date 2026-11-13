@@ -164,7 +164,9 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   const gate = operational ? await createGate(config.targetPort, { lifetimeMs: config.lifetimeMs, onExpire: () => { setImmediate(() => initialized.then(() => finalize()).catch(() => {})); } }) : null;
   // Until the control socket is published, a failed start must close the gate: its port listener keeps the process alive.
   const abandon = async error => { await gate?.close().catch(() => {}); throw error; };
-  controller = new Controller({ ...config, targetPort: gate?.port ?? config.targetPort, servicePort: config.targetPort, step, journal, onAutomaticStop: () => initialized.then(() => finalize()) });
+  try {
+    controller = new Controller({ ...config, targetPort: gate?.port ?? config.targetPort, servicePort: config.targetPort, step, journal, onAutomaticStop: () => initialized.then(() => finalize()) });
+  } catch (error) { await abandon(error); }
   controller.driver.lifetimeMs = config.lifetimeMs;
   controller.driver.probeWaitMs = config.probeWaitMs;
   controller.driver.observeProcessOutput = config.observeProcessOutput === true;
