@@ -49,3 +49,12 @@ test('backend lock never becomes absent or file fallback, and unbound discard re
  try{const c=await s.readConfiguration({home,providerId:'p'});const r={home,providerId:'p',inputId:'key',scopeId:c.scopeId,expectedConfigurationRevision:c.revision,bytes:Buffer.from('canary')};locked=true;await assert.rejects(s.storeSecret(r),code('secret_backend_locked'));locked=false;const {handle}=await s.storeSecret(r);assert.equal((await s.discardSecret({home,handle})).discarded,true);assert.equal((await s.discardSecret({home,handle})).discarded,false);assert.equal(deletes,1);await assert.rejects(readFile(join(home,'secrets',handle)),{code:'ENOENT'});
  }finally{await rm(home,{recursive:true,force:true});}
 });
+test('default backend imports legacy references only; named owners require explicit migration',async()=>{
+ const home=await mkdtemp(join(tmpdir(),'embed-migrate-'));
+ const {bindSetupText,bindSetupValue}=await import('../../packages/gozar-node/adapter-configuration.mjs');const {storeSecret}=await import('../../packages/gozar-node/secret-store.mjs');
+ try{const {handle}=await storeSecret({home,value:'legacy-secret'});await bindSetupValue({home,adapterId:'legacy',actionId:'token',handle});await bindSetupText({home,adapterId:'legacy',actionId:'domain',value:'example.invalid'});
+ const s=createEmbeddingServices({registryId:'fixture'});assert.deepEqual(await s.resolveConfiguration({home,providerId:'legacy'}),{domain:'example.invalid',token:'legacy-secret'});
+ await assert.rejects(s.readConfiguration({home,providerId:'legacy',owner:'new-owner'}),code('configuration_migration_required'));
+ const custom=createEmbeddingServices({registryId:'fixture-custom',secretBackend:{}});assert.deepEqual((await custom.readConfiguration({home,providerId:'legacy'})).credentials,{});
+ }finally{await rm(home,{recursive:true,force:true});}
+});
