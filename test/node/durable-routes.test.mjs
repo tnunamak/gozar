@@ -14,7 +14,8 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createServiceVerifier } from '../../packages/gozar-node/service.mjs';
-import { portHolders, reserveSession, selectAdoptable } from '../../packages/gozar-node/durable-route.mjs';
+import { portHolders, reserveSession } from '../../packages/gozar-node/durable-route.mjs';
+import { selectAdoptable } from '../../adapters/providers/_shared/tailscale-adopt.mjs';
 import { redeemConsentToken, consentBinding } from '../../packages/gozar-node/consent-token.mjs';
 import { startFakeLocalApi, forwardTarget } from './fake-localapi.mjs';
 

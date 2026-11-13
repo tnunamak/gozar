@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -63,4 +63,17 @@ test('red: a hand-edited compatibility array fails the registry check', async t 
   assert.throws(() => execFileSync(process.execPath, [here('../../scripts/sync-adapter-registry.mjs'), '--check', '--manifest', file], { stdio: 'pipe' }), /differs from providers/);
   await writeFile(file, JSON.stringify(manifest));
   execFileSync(process.execPath, [here('../../scripts/sync-adapter-registry.mjs'), '--check', '--manifest', file], { stdio: 'pipe' });
+});
+
+// The core is provider-neutral: no vendor word from the registry appears in any module of packages/gozar-node/.
+// One known holdout, service.mjs, is fixed by the contract builder; remove it from this list when that lands.
+test('zero census: no module of packages/gozar-node names a provider', () => {
+  const words = providerWords();
+  const directory = here('../../packages/gozar-node');
+  const holdouts = new Set(['service.mjs']);
+  const files = readdirSync(directory).filter(name => name.endsWith('.mjs'));
+  assert.ok(files.length > 40 && files.includes('durable-route.mjs'), 'the scan reads the real core');
+  const named = Object.fromEntries(files.filter(name => !holdouts.has(name))
+    .map(name => [name, findNames(readFileSync(join(directory, name), 'utf8'), words)]).filter(([, found]) => found.length));
+  assert.deepEqual(named, {});
 });

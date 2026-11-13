@@ -91,6 +91,18 @@ export function definitionErrors(definition) {
 
 // --- Loading -------------------------------------------------------------------------------------------
 
+/** The optional `durable` facet: provider I/O for durable routes. Core owns state; see durable-route.mjs. */
+export const durableFacetMethods = ['observe', 'slots', 'read', 'foreign', 'occupied', 'put', 'delete', 'expand'];
+function durableFacetErrors(facet) {
+  if (facet === undefined) return [];
+  if (facet === null || typeof facet !== 'object') return ['not an object'];
+  const errors = durableFacetMethods.filter(name => typeof facet[name] !== 'function').map(name => `missing ${name}`);
+  for (const name of ['renew', 'expiresAt']) if (facet[name] !== undefined && typeof facet[name] !== 'function') errors.push(`${name} is not a function`);
+  if (facet.renew && !facet.expiresAt) errors.push('renew needs expiresAt');
+  if (typeof facet.definition !== 'object' || facet.definition === null) errors.push('missing definition');
+  return errors;
+}
+
 const methods = ['detect', 'properties', 'setupActions', 'setup', 'plan', 'create', 'observe', 'verify', 'remove', 'runtimeFacts'];
 
 async function inside(root, path, label, id) {
@@ -134,6 +146,8 @@ export async function loadAdapters({ manifest, root } = {}) {
     try { adapter = (await import(pathToFileURL(modulePath).href)).default; } catch (error) { throw loadError(id, `module failed to load: ${error?.code ?? 'error'}`); }
     const missing = methods.filter(name => typeof adapter?.[name] !== 'function');
     if (missing.length) throw loadError(id, `incomplete adapter, missing ${missing.join(', ')}`);
+    const facetErrors = durableFacetErrors(adapter.durable);
+    if (facetErrors.length) throw loadError(id, `invalid durable facet: ${facetErrors.join('; ')}`);
     if (adapter.id !== id || file.adapter.id !== id || !isDeepStrictEqual(adapter.definition, file.adapter)) throw loadError(id, 'registry entry, module and definition disagree');
     adapters.push(adapter);
   }
@@ -142,8 +156,10 @@ export async function loadAdapters({ manifest, root } = {}) {
 
 // --- recipeAdapter ------------------------------------------------------------------------------------
 
-const durableState = { load: () => import('./durable-route.mjs'), serve: () => import('./tailscale-localapi.mjs') };
-/** Test seam: replace the durable engine / LocalAPI loaders. Returns a restore function. */
+// `load` loads the durable engine. `serve` optionally loads a transport module handed to the facet's `inspect`; a facet
+// that has its own transport uses it when none is given.
+const durableState = { load: () => import('./durable-route.mjs'), serve: null };
+/** Test seam: replace the durable engine / facet transport loaders. Returns a restore function. */
 export function setDurableDepsForTest(deps) {
   const saved = { ...durableState };
   Object.assign(durableState, deps);
@@ -215,18 +231,10 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
   const shown = allActions.filter(action => !excludeActions.includes(action.id));
   const unsupported = what => effectError('unsupported', `${definition.id} does not support ${what}`);
 
+  // Read-only state of the durable listener for a request: the facet reads, this shapes the adapter's observe result.
   async function listener(request) {
-    const { getServeConfig } = await durableState.serve();
-    let reply;
-    try { reply = await getServeConfig(); } catch (error) { throw mapProviderError(error); }
-    const { config, etag } = reply;
-    if (!request.origin) return { present: false, resourceKey: wrapped.providerResource, identity: null, revision: etag };
-    const url = new URL(request.origin), port = url.port || '443', hostPort = `${url.hostname}:${port}`;
-    const live = { tcp: config.TCP?.[port] ?? null, web: config.Web?.[hostPort] ?? null, funnel: config.AllowFunnel?.[hostPort] ?? null };
-    const wanted = JSON.parse(JSON.stringify(durableRecipe.listener).replaceAll('{target}', request.target));
-    const present = isDeepStrictEqual(live, { tcp: wanted.tcp, web: wanted.web, funnel: wanted.funnel ?? null });
-    const occupied = Object.values(live).some(value => value !== null);
-    return { present, resourceKey: `${wrapped.providerResource}:${port}`, identity: { hostPort, occupied, matches: present }, revision: etag };
+    try { return await adapter.durable.inspect(request, { transport: durableState.serve ? await durableState.serve() : undefined }); }
+    catch (error) { throw mapProviderError(error); }
   }
 
   const adapter = {
@@ -264,12 +272,12 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
       if (!supportedPlatform(platformOf(ctx))) throw unsupported('this platform');
       if (!kinds.has(kind)) throw unsupported(`the ${kind} kind`);
       if (kind === 'durable') {
-        if (!durableRecipe) throw unsupported('the durable kind');
+        if (!durableRecipe || !adapter.durable) throw unsupported('the durable kind');
         if (typeof ctx.home !== 'string' || !ctx.home) throw effectError('provider_unavailable', 'A durable plan needs the Gozar home');
         const engine = await durableState.load();
         if (typeof engine.durablePlanFacts !== 'function') throw unsupported('the durable engine');
         let facts, seen;
-        try { facts = await engine.durablePlanFacts({ home: ctx.home, adapterId: definition.id, target: request.target, origin: request.origin }); seen = await listener(request); }
+        try { facts = await engine.durablePlanFacts({ home: ctx.home, adapterId: definition.id, target: request.target, origin: request.origin, adapters: [adapter] }); seen = await listener(request); }
         catch (error) { throw mapProviderError(error); }
         return { digest: facts.planDigest, origin: facts.origin ?? request.origin, resourceKey: facts.observedResource, effects: [],
           readback: { kind: 'durable', origin: facts.origin ?? request.origin, target: request.target }, cleanup: { kind: 'durable' }, precondition: { revision: seen.revision } };
@@ -293,7 +301,7 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
     },
 
     async observe(ctx, request) {
-      if (request?.usage?.kind === 'durable' && durableRecipe) return listener(request);
+      if (request?.usage?.kind === 'durable' && durableRecipe && adapter.durable) return listener(request);
       const resourceKey = `${definition.id}:${sha({ target: request.target, origin: request.origin }).slice(0, 16)}`;
       return { present: false, resourceKey, identity: null, revision: null };
     },

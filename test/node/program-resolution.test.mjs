@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, chmod, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createProgramResolver, tailscaleAppBundleCli } from '../../packages/gozar-node/program-resolution.mjs';
+import { createProgramResolver, tailscaleAppBundleCli } from '../../adapters/providers/_shared/tailscale-program.mjs';
 import { fixture, effect } from './helpers.mjs';
 
 const bundle = '/Applications/Tailscale.app/Contents/MacOS/Tailscale';

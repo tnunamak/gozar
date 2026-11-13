@@ -38,7 +38,6 @@ const denied = () => typed('provider_denied', 'Tailscale LocalAPI denied access:
 // The Tailscale app refused the token. The token is never in this message; the file it came from names the running app.
 const deniedByApp = () => typed('provider_denied', 'The Tailscale app refused the LocalAPI credentials: quit and reopen the Tailscale app, then retry', 'quit and reopen the Tailscale app');
 const unsupported = () => typed('provider_unsupported', 'Tailscale LocalAPI does not offer serve config with an ETag: upgrade tailscaled', 'upgrade tailscaled');
-export const conflict = () => typed('provider_conflict', 'Another program keeps changing the Tailscale serve config: retry later', 'retry later');
 
 // Platform and app discovery are replaceable so that tests run the macOS path on any host.
 // Overrides are for tests only; production uses `process.platform` and the real discovery.

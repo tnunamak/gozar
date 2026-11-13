@@ -17,8 +17,8 @@ import http from 'node:http';
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getNode, getServeConfig, setServeConfig, setTransportEffectsForTest } from '../../packages/gozar-node/tailscale-localapi.mjs';
-import { discoverAppLocalApi, parseLsofSameUserProof } from '../../packages/gozar-node/tailscale-app-discovery.mjs';
+import { getNode, getServeConfig, setServeConfig, setTransportEffectsForTest } from '../../adapters/providers/_shared/tailscale-localapi.mjs';
+import { discoverAppLocalApi, parseLsofSameUserProof } from '../../adapters/providers/_shared/tailscale-app-discovery.mjs';
 import { normalizeError } from '../../packages/gozar-node/error-normalizer.mjs';
 import { durablePlanFacts } from '../../packages/gozar-node/durable-route.mjs';
 import { startFakeLocalApi } from './fake-localapi.mjs';
@@ -248,7 +248,7 @@ test('the token reaches no fact, result or file: durable plan facts through the 
 // --- The live check a person runs on a Mac with a Tailscale app --------------------------------------------
 
 test('check-tailscale-app prints the variant, the port and pass or fail, and never the token', async t => {
-  const { checkTailscaleApp } = await import('../../packages/gozar-node/check-tailscale-app.mjs');
+  const { checkTailscaleApp } = await import('../../adapters/providers/_shared/check-tailscale-app.mjs');
   const app = await startAppLocalApi(t);
   const env = { PATH: '/nonexistent/bin' };
   const resolve = () => '/Applications/Tailscale.app/Contents/MacOS/Tailscale';

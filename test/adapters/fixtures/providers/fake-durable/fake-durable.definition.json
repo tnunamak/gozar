@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "definition": {
+    "id": "fake-durable",
+    "planVersion": 1,
+    "idleTimeoutMs": null,
+    "providerResource": "fake-durable-slot",
+    "addressStability": "stable",
+    "durableLifetime": "provider-persistent",
+    "actions": [],
+    "recipes": {},
+    "durableRecipe": {
+      "mode": "fake",
+      "slots": [
+        "a",
+        "b",
+        "c"
+      ],
+      "listener": {
+        "forward": "{target}"
+      }
+    }
+  }
+}

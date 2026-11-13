@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Read-only check of how Gozar reaches Tailscale on this machine, for the Tailscale macOS apps.
-// Run: node packages/gozar-node/check-tailscale-app.mjs
+// Run: node adapters/providers/_shared/check-tailscale-app.mjs
 // It sends two GET requests to the LocalAPI (status and serve-config) and changes nothing. It prints no
 // token, no DNS name and no serve config: the loopback port, the app variant and pass or fail only.
 import { pathToFileURL } from 'node:url';
 import { discoverAppLocalApi } from './tailscale-app-discovery.mjs';
 import { getNode, getServeConfig } from './tailscale-localapi.mjs';
-import { createProgramResolver, findOnPath, tailscaleAppBundleCli } from './program-resolution.mjs';
+import { createProgramResolver, findOnPath, tailscaleAppBundleCli } from './tailscale-program.mjs';
 
 const variants = { 'app-store': 'App Store app', standalone: 'standalone app' };
 

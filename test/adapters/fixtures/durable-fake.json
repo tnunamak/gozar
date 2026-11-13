@@ -1,0 +1,9 @@
+{
+  "providers": [
+    {
+      "id": "fake-durable",
+      "module": "providers/fake-durable/index.mjs",
+      "definition": "providers/fake-durable/definition.json"
+    }
+  ]
+}

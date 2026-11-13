@@ -431,7 +431,7 @@ export async function openSessionRoute(request, deps = {}) {
 
 /**
  * What the core says, in `snapshot.limitations`, when it stops a session before it changes anything because every port the
- * route may use is taken. The core owns the sentence; test/node/funnel-session-ports.test.mjs reads it from the real core.
+ * route may use is taken. The core owns the sentence; the session-ports test reads it from the real core.
  */
 export const LISTENERS_TAKEN = 'All explicit listener candidates are occupied or protected';
 
