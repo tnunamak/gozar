@@ -163,6 +163,9 @@ export const unmappedCodes = (codes, normalization, frozen) => codes.filter(code
 async function sourceCodes() {
   const files = (await readdir(join(root, 'packages/gozar-node'))).filter(name => name.endsWith('.mjs')).map(name => `packages/gozar-node/${name}`);
   files.push('bin/gozar.mjs');
+  // Adapters raise errors that reach apps too, including the provider code they share under adapters/providers/_shared.
+  const providers = await readdir(join(root, 'adapters/providers'), { recursive: true });
+  files.push(...providers.filter(name => name.endsWith('.mjs')).map(name => `adapters/providers/${name}`));
   const found = new Set();
   let dynamic = false;
   for (const file of files) {

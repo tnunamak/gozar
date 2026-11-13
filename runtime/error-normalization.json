@@ -50,6 +50,7 @@
     "handover_required": "invalid_input",
     "claim_mismatch": "candidate_stale",
     "uncertain": "cleanup_debt",
+    "close_failed": "cleanup_debt",
     "address_changed": "address_changed",
     "stopped_by_user": "stopped_by_user",
     "handing_back": "handing_back",

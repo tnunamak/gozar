@@ -7589,6 +7589,11 @@
       "source": "durable-route.mjs",
       "rule": "owner decision: the error code is cleanup_debt; RouteView keeps the uncertain state"
     },
+    "close_failed": {
+      "target": "cleanup_debt",
+      "source": "adapters/providers/ngrok-https-edge/index.mjs",
+      "rule": "a listener that does not confirm closing is left as cleanup debt, never reported as removed"
+    },
     "address_changed": {
       "target": "address_changed",
       "source": "durable-route.mjs"
