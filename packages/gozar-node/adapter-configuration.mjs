@@ -126,5 +126,5 @@ async function boundValues(home, adapterId) {
  */
 export function bindConfiguration(context, adapterId) {
   const named = context.configuration;
-  return { ...context, configuration: ref => (ref === null || ref === undefined ? boundValues(context.home, adapterId) : named(ref)) };
+  return { ...context, configuration: ref => (ref === null || ref === undefined ? (context.providerConfiguration ? context.providerConfiguration(adapterId) : boundValues(context.home, adapterId)) : named(ref)) };
 }
