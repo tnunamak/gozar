@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+
+- **Choose a provider by id.** `Query.providerId` selects exactly one provider by the `providerId` its candidate shows. The catalog then holds only that candidate, and a consent token issued for it is spent only with the same id. `gozar catalog`, `ensure`, `adopt` and `expose` take `--provider-id <id>`.
+- **Read what a route needs and proves.** A candidate shows `display.needs` (what to do before it works), the ports the provider may use, and its proof: from where a check runs and which checks it runs.
+- **`transport: 'any'` for lan and this-device.** An app that accepts plain HTTP on the local network, or on this device, can ask for `transport: 'any'` and no longer needs a TLS-terminating provider.
+- **Give an address you run yourself.** A route its owner keeps can be created with a `provide-value` setup action: the app passes the HTTPS address, and Gozar shows it as an owner-run route. Gozar creates and deletes nothing at that address. An address in 100.64.0.0/10 (shared carrier-grade NAT space) has reach `unknown`, not `internet`.
+- **`@tnunamak/gozar/testing`.** `fakeRegistry` writes a fake provider of kind session, attached or durable; `fakeReadContext` answers the probe and the route check as you tell it; `createRouteApi` runs the route API with no network and no process. A durable fake keeps its rules in a JSON file, so you can check what it holds before and after `closeRoute`.
+
+### Changed
+
+- **Durable routes run through an adapter facet.** The lifecycle of a durable route (observe, choose a slot, write with compare-and-set, renew, remove) now goes through an optional `durable` facet on the provider's adapter. A new durable provider is one directory and one registry entry; it needs no change to Gozar's core. The Tailscale code moved to `adapters/providers/_shared/`, including `check-tailscale-app.mjs`. Behavior for apps is unchanged.
+
 ## 0.2.1
 
 ### Fixed

@@ -23,6 +23,8 @@ export type ConsentBinding = {
   route: string | null;
   origin: string | null;
   disclosureRevision: string;
+  /** Present only when the query chose a provider; a token issued for one is spent only with the same value. */
+  providerId?: string;
 };
 
 /**

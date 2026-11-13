@@ -47,10 +47,43 @@ test('a fake whose probe fails is listed but not eligible, and plain HTTP does n
   assert.equal(loose.eligible, true);
 });
 
-test('red: a durable fake is refused with unsupported and the message that names the durable facet', async () => {
-  const error = await fakeRegistry({ id: fakeId(), kinds: ['session', 'durable'], reach: 'internet' }).then(() => null, e => e);
-  assert.equal(error?.code, 'unsupported');
-  assert.equal(error.message, 'durable fakes need the durable facet');
+test('red: a durable fake is created, checked, shown usable and verified, and closed with no rule left in its store', async t => {
+  const home = await scratch(t), id = fakeId();
+  const registry = await fakeRegistry({ id, kinds: ['durable'], reach: 'internet' });
+  t.after(registry.cleanup);
+  const storePath = join(registry.root, 'providers', id, 'store.json');
+  const rules = async () => Object.keys(JSON.parse(await readFile(storePath, 'utf8')).entries);
+  const api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home }) });
+  const durable = query({ home, usage: { kind: 'durable', routeId: 'coordinator' } });
+  const catalog = await api.catalogRoutes(durable);
+  assertShape('Catalog', catalog);
+  const [own] = catalog.candidates;
+  assert.equal(own.providerId, id);
+  assert.equal(own.eligible, true, JSON.stringify(own.unmet));
+  const view = await api.ensureRoute({ ...durable, approval: { candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision } });
+  assertShape('RouteView', view);
+  assert.deepEqual(await rules(), ['a'], 'the rule is in the store file');
+  const status = await api.routeStatus({ home, handle: view.handle });
+  assert.equal(status.state, 'usable');
+  assert.equal(status.verification.status, 'verified');
+  assert.equal(status.origin, `https://a.${id}.invalid`);
+  const closed = await api.closeRoute({ home, handle: view.handle, mode: 'remove' });
+  assertShape('RouteView', closed);
+  assert.equal(closed.state, 'released');
+  assert.deepEqual(await rules(), [], 'the store holds no rule after close');
+});
+
+test('a durable fake answers the check as told: an unverified answer leaves the route unverified', async t => {
+  const home = await scratch(t), id = fakeId();
+  const registry = await fakeRegistry({ id, kinds: ['durable'], reach: 'internet' });
+  t.after(registry.cleanup);
+  const api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home, verified: false }) });
+  const durable = query({ home, usage: { kind: 'durable', routeId: 'coordinator' } });
+  const [own] = (await api.catalogRoutes(durable)).candidates;
+  const view = await api.ensureRoute({ ...durable, approval: { candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision } });
+  assert.equal(view.state, 'unverified');
+  assert.equal(view.verification.status, 'unverified');
+  assert.equal((await api.routeStatus({ home, handle: view.handle })).state, 'unverified', 'a later status asks the same fake');
 });
 
 test('fakeRegistry checks its input, writes only under its own directory and removes it on cleanup', async () => {

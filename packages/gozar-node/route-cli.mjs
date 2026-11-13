@@ -19,10 +19,10 @@ export const exitCodeFor = code => REQUIREMENT_CODES.has(code) ? 2 : APPROVAL_CO
 
 // What each command accepts. Anything else is invalid_input: unknown flags never fall back to a bypass.
 const specs = {
-  catalog: { values: ['query-file', 'route', 'home'], flags: ['json'] },
-  ensure: { values: ['query-file', 'approval-file', 'route', 'home'], flags: ['json', 'reconsent'] },
-  adopt: { values: ['query-file', 'approval-file', 'handover-file', 'route', 'home'], flags: ['json', 'reconsent'] },
-  expose: { values: ['query-file', 'approval-file', 'wait', 'route', 'home'], flags: ['json'] },
+  catalog: { values: ['query-file', 'route', 'provider-id', 'home'], flags: ['json'] },
+  ensure: { values: ['query-file', 'approval-file', 'route', 'provider-id', 'home'], flags: ['json', 'reconsent'] },
+  adopt: { values: ['query-file', 'approval-file', 'handover-file', 'route', 'provider-id', 'home'], flags: ['json', 'reconsent'] },
+  expose: { values: ['query-file', 'approval-file', 'wait', 'route', 'provider-id', 'home'], flags: ['json'] },
   setup: { values: ['approval-file', 'secret-file', 'home'], flags: ['json'], positional: 'action id' },
   preference: { values: ['profile-home', 'expected-revision', 'on-unavailable'], multi: ['prefer'], flags: ['json'], positional: 'show or set' },
   watch: { values: ['handle-file', 'home', 'interval-ms'], flags: ['json'] },
@@ -68,7 +68,8 @@ const required = (options, name) => { if (!options[name]) throw gozarError('inva
 async function readQuery(options) {
   const query = await readJson(required(options, 'query-file'), 'The query file');
   if (query === null || typeof query !== 'object' || Array.isArray(query)) throw gozarError('invalid_input', 'The query file must hold one JSON object');
-  return { ...query, home: query.home ?? options.home ?? defaultHome(), ...(options.route === undefined ? {} : { route: options.route }) };
+  return { ...query, home: query.home ?? options.home ?? defaultHome(), ...(options.route === undefined ? {} : { route: options.route }),
+    ...(options['provider-id'] === undefined ? {} : { providerId: options['provider-id'] }) };
 }
 async function readApproval(options, { needed }) {
   if (!options['approval-file']) {

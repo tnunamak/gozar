@@ -66,11 +66,11 @@ test('red: a hand-edited compatibility array fails the registry check', async t 
 });
 
 // The core is provider-neutral: no vendor word from the registry appears in any module of packages/gozar-node/.
-// One known holdout, service.mjs, is fixed by the contract builder; remove it from this list when that lands.
+// There are no holdouts.
 test('zero census: no module of packages/gozar-node names a provider', () => {
   const words = providerWords();
   const directory = here('../../packages/gozar-node');
-  const holdouts = new Set(['service.mjs']);
+  const holdouts = new Set();
   const files = readdirSync(directory).filter(name => name.endsWith('.mjs'));
   assert.ok(files.length > 40 && files.includes('durable-route.mjs'), 'the scan reads the real core');
   const named = Object.fromEntries(files.filter(name => !holdouts.has(name))

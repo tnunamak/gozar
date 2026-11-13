@@ -274,9 +274,31 @@ The session host is not reused. Today's driver admits only long-running owned pr
 
 The session path does not change.
 
+## The adapter `durable` facet
+
+A provider's durable rules change only through an optional `durable` facet on its adapter. A new durable provider is one directory plus one registry entry; core names no provider. The facet does provider I/O and the arithmetic of its slots. Core keeps the rest.
+
+| Method | What it does |
+|---|---|
+| `observe(ctx)` | Reads the provider's rules and returns `{ identity, snapshot, version }`. `version` is an opaque token for compare-and-set. |
+| `slots(snapshot)` | Lists the places a route can take, each as `{ slot, origin, permitted }`. |
+| `read(snapshot, slot)` | Returns the rule in a slot, or `null`. |
+| `foreign(snapshot, slot)` | Says whether another program wrote the rule in a slot. A foreign rule is never changed. |
+| `occupied(snapshot, slot)` | Says whether anything is in the slot. An occupied slot is skipped. |
+| `put(ctx, { slot, rule, version })` | Writes a rule if `version` is still current. Returns `written` or `conflict`. |
+| `delete(ctx, { slot, rule, version })` | Removes a rule if `version` is current and the rule is exactly the one given. Returns `written` or `conflict`. |
+| `expand(target)` | Turns the loopback target into the rule the provider stores. |
+| `expiresAt(snapshot, slot)` and `renew(ctx, { slot })` | Optional. A provider whose rules expire reports when, and renews them. Status renews a rule that is due. |
+
+On `conflict`, core reads again and decides again, up to a fixed bound, then fails with `provider_conflict`. It never writes without the version of a read.
+
+Core keeps: the route record and its intent-then-receipt order, consent and the plan digest, slot choice, reservations between routes, verification and publication, cleanup debt and the user stop. It also keeps the compare-and-set loop and the closed error codes. A provider-specific failure reaches an app only as one of those codes.
+
+`@tnunamak/gozar/testing` writes a durable fake with this facet; its rule store is a JSON file in the registry's directory.
+
 ## Not in scope
 - Finite lifetimes for durable routes (see "Lifetimes").
-- macOS host (plan R12) and ngrok operational recipes (slice S1). Durable routes are designed for them but ship first for Tailscale on Linux. **On macOS the LocalAPI transport differs**: the Mac App Store and standalone Tailscale apps do not expose the Linux unix socket; the LocalAPI is reached on loopback with a token. 0.2.0 implements that transport below the same LocalAPI client, with discovery that follows Tailscale's own CLI (`packages/gozar-node/tailscale-app-discovery.mjs`). It is proven by fixture tests only; see [service-routes.md](../service-routes.md#durable-routes-gozar-owned).
+- macOS host (plan R12) and ngrok operational recipes (slice S1). Durable routes are designed for them but ship first for Tailscale on Linux. **On macOS the LocalAPI transport differs**: the Mac App Store and standalone Tailscale apps do not expose the Linux unix socket; the LocalAPI is reached on loopback with a token. 0.2.0 implements that transport below the same LocalAPI client, with discovery that follows Tailscale's own CLI (`adapters/providers/_shared/tailscale-app-discovery.mjs`). It is proven by fixture tests only; see [service-routes.md](../service-routes.md#durable-routes-gozar-owned).
 - Authentication for the app's own routes (plan R5).
 - Authenticated origin migration. An app that wants to move clients to a new origin signs that itself. Gozar only refuses to move silently.
 

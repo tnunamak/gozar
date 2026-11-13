@@ -5,18 +5,23 @@
 //   const api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home }) });
 //   ...catalogRoutes, then expose with the candidate's token...
 //   await registry.cleanup();
+//
+// A fake with kind 'durable' also keeps a rule store, a JSON file in the registry's own directory, so that separate
+// processes see the same state. Pass `fakeReadContext({ verified })` to the route API and the durable route check answers as told.
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRouteApi as createCoreRouteApi } from './route-api.mjs';
 import { createReadContext } from './adapter-runtime.mjs';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { gozarError } from './error-normalizer.mjs';
 
 export { createReadContext };
 
 /**
  * A read context whose probe and verification answer as told. `probeOk` is the detect verdict (default true);
- * `verified` is the outcome of a route check (default true).
+ * `verified` is the outcome of a route check (default true). The testing `createRouteApi` also uses `verified` for the
+ * challenge check of a durable route, so a durable fake answers as told too.
  */
 export function fakeReadContext({ home, probeOk = true, verified = true, now = Date.now } = {}) {
   return createReadContext({
@@ -33,7 +38,12 @@ const fakeStartSession = options => ({ snapshot: { sessionId: `fake-${options.po
 
 /** The route API with no process or network: sessions are answered in memory. Same options as the package's own factory. */
 export function createRouteApi(deps = {}) {
-  return createCoreRouteApi({ platform: 'linux', ...deps, expose: { startSession: fakeStartSession, ...deps.expose } });
+  // A durable route is checked by the challenge verifier. With a read context given, that verifier is the context's.
+  const verify = deps.verify ?? (deps.readContext && (async ({ origin, target }) => {
+    const checked = await deps.readContext.verifyChallenge(origin, target);
+    return { method: 'challenge', error: checked.status === 'verified' ? null : 'fake', scope: 'controller-origin', ...checked };
+  }));
+  return createCoreRouteApi({ platform: 'linux', ...deps, ...(verify ? { verify } : {}), expose: { startSession: fakeStartSession, ...deps.expose } });
 }
 
 const KINDS = ['session', 'attached', 'durable'];
@@ -66,15 +76,68 @@ export default {
 };
 `;
 
+// The module of a fake that also has the durable kind. It keeps the session methods above, and answers the durable
+// ones through the engine's own adapter, with a facet whose rule store is `store.json` next to the module: a version
+// counter is the compare-and-set token, and a write is a rename, so another process sees whole states only.
+const durableModuleSource = runtime => `// A fake durable provider written by @tnunamak/gozar/testing. Its rule store is the file store.json beside this module.
+import { recipeAdapter } from ${JSON.stringify(runtime)};
+import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
+import plain from './plain.mjs';
+
+const storePath = new URL('./store.json', import.meta.url);
+const read = () => JSON.parse(readFileSync(storePath, 'utf8'));
+const write = state => { const temporary = new URL('./store.json.tmp', import.meta.url); writeFileSync(temporary, JSON.stringify(state)); renameSync(temporary, storePath); };
+const slotIds = ['a', 'b', 'c'];
+
+function durableFacet(definition) {
+  return {
+    family: 'fake',
+    definition,
+    async observe() { const state = read(); return { identity: state.identity, snapshot: state.entries, version: String(state.version) }; },
+    slots: () => slotIds.map(slot => ({ slot, origin: 'https://' + slot + '.' + plain.id + '.invalid', permitted: true })),
+    read: (snapshot, slot) => snapshot[slot]?.rule ?? null,
+    foreign: (snapshot, slot) => snapshot[slot]?.foreign === true,
+    occupied: (snapshot, slot) => snapshot[slot] !== undefined,
+    expand: target => ({ forward: target }),
+    expiresAt: () => null,
+    async put(ctx, { slot, rule, version }) {
+      const state = read();
+      if (version !== String(state.version)) return 'conflict';
+      state.entries[slot] = { rule }; state.version += 1; write(state);
+      return 'written';
+    },
+    async delete(ctx, { slot, rule, version }) {
+      const state = read();
+      if (version !== String(state.version) || !isDeepStrictEqual(state.entries[slot]?.rule, rule)) return 'conflict';
+      delete state.entries[slot]; state.version += 1; write(state);
+      return 'written';
+    },
+  };
+}
+
+const base = recipeAdapter({ definition: new URL('./definition.json', import.meta.url), extend: ({ wrapped }) => ({ durable: durableFacet(wrapped) }) });
+const isDurable = value => value === 'durable';
+export default {
+  ...plain,
+  durable: base.durable,
+  plan: (ctx, request) => (isDurable(request.usage?.kind) ? base.plan(ctx, request) : plain.plan(ctx, request)),
+  observe: (ctx, request) => (isDurable(request.usage?.kind) ? base.observe(ctx, request) : plain.observe(ctx, request)),
+  verify: (ctx, receipt) => (isDurable(receipt?.readback?.kind) ? base.verify(ctx, receipt) : plain.verify(ctx, receipt)),
+  remove: (ctx, receipt, ...rest) => (isDurable(receipt?.readback?.kind) ? base.remove(ctx, receipt, ...rest) : plain.remove(ctx, receipt, ...rest)),
+};
+`;
+const runtimeUrl = pathToFileURL(fileURLToPath(new URL('./adapter-runtime.mjs', import.meta.url))).href;
+
 /**
  * Writes a one-provider registry to a scratch directory and returns `{ manifest, root, cleanup }`, which is what
- * `createRouteApi({ manifest, root })` loads. `kinds` is any of 'session' and 'attached'; a durable fake needs the durable
- * facet and is refused. The fake never touches the network. `id` is the id the catalog shows as `providerId`.
+ * `createRouteApi({ manifest, root })` loads. `kinds` is any of 'session', 'attached' and 'durable'. A durable fake keeps its
+ * rules in `<root>/providers/<id>/store.json` (read it to see what the provider holds; a rule is `entries.<slot>.rule`), so
+ * another process sees the same state. The fake never touches the network. `id` is the id the catalog shows as `providerId`.
  */
 export async function fakeRegistry({ id, label, kinds, reach, transport = 'https', dir } = {}) {
   if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) throw gozarError('invalid_input', 'fakeRegistry needs an id of lowercase letters, digits and hyphens');
   if (!Array.isArray(kinds) || !kinds.length || kinds.some(kind => !KINDS.includes(kind))) throw gozarError('invalid_input', `fakeRegistry kinds must be a non-empty list of ${KINDS.join(', ')}`);
-  if (kinds.includes('durable')) throw gozarError('unsupported', 'durable fakes need the durable facet');
   if (!REACHES.includes(reach)) throw gozarError('invalid_input', `fakeRegistry reach must be one of ${REACHES.join(', ')}`);
   if (!['https', 'http'].includes(transport)) throw gozarError('invalid_input', "fakeRegistry transport must be 'https' or 'http'");
   const own = dir === undefined;
@@ -97,7 +160,19 @@ export async function fakeRegistry({ id, label, kinds, reach, transport = 'https
     ownership: 'gozar-owned',
   };
   await writeFile(join(folder, 'definition.json'), JSON.stringify({ adapter: definition }, null, 2));
-  await writeFile(join(folder, 'index.mjs'), moduleSource());
+  if (kinds.includes('durable')) {
+    // The durable engine reads the provider's durable recipe from the wrapped definition of the recipe adapter.
+    definition.capabilities.address.stability = 'stable';
+    await writeFile(join(folder, 'definition.json'), JSON.stringify({ wraps: './wrapped.definition.json', adapter: definition }, null, 2));
+    await writeFile(join(folder, 'wrapped.definition.json'), JSON.stringify({ schemaVersion: 1, definition: {
+      id, planVersion: 1, idleTimeoutMs: null, providerResource: `${id}-slot`, addressStability: 'stable', durableLifetime: 'provider-persistent',
+      actions: [], recipes: {}, durableRecipe: { mode: 'fake', slots: ['a', 'b', 'c'], listener: { forward: '{target}' } } } }, null, 2));
+    await writeFile(join(folder, 'store.json'), JSON.stringify({ identity: `store-${id}`, version: 1, entries: {} }));
+    await writeFile(join(folder, 'plain.mjs'), moduleSource());
+    await writeFile(join(folder, 'index.mjs'), durableModuleSource(runtimeUrl));
+  } else {
+    await writeFile(join(folder, 'index.mjs'), moduleSource());
+  }
   return {
     manifest: { providers: [{ id, module: `providers/${id}/index.mjs`, definition: `providers/${id}/definition.json` }] },
     root,

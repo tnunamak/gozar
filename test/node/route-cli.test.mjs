@@ -221,3 +221,15 @@ test('red: expose without an approval file cannot publish, whatever else is pass
   assert.equal(JSON.parse(lines.join('')).error.code, 'consent_required');
   assert.deepEqual(await w.writesSeen(), []);
 });
+
+test('--provider-id sets query.providerId for catalog, and a query file value is replaced by the flag', async t => {
+  const w = await durableWorld(world, t);
+  const queryFile = await privateFile(await files(w, 'provider-query.json'), { ...w.query(), providerId: 'from-file' });
+  const seen = [];
+  const api = { catalogRoutes: async query => { seen.push(query.providerId); return { schemaVersion: 1, candidates: [], ranking: { order: [], reasons: [] } }; } };
+  const run = args => routeMain(['catalog', '--query-file', queryFile, ...args, '--json'], { api, stdout: { write() {} }, stderr: { write() {} } });
+  await run(['--provider-id', 'example-provider']);
+  await run([]);
+  assert.deepEqual(seen, ['example-provider', 'from-file']);
+  assert.equal(await routeMain(['setup', 'x', '--provider-id', 'a', '--json'], { api, stdout: { write() {} }, stderr: { write() {} } }), 1, 'a command that takes no provider id refuses the flag');
+});

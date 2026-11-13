@@ -124,12 +124,12 @@ Requirements: Linux or macOS, Node.js 22.13 or newer, and a running Tailscale wh
 
 **Proof level.** The two app paths are proven only by fixture tests: the file and `lsof` formats are transcribed from Tailscale's source, and the tests run against a fake LocalAPI. No Gozar test has run against a live App Store or standalone app. Run the check below on a Mac with an app to settle it.
 
-**Check a Mac with a Tailscale app (read-only).** Neither command changes anything or prints the token. The check script ships in the npm package; install it into a scratch directory and run it from there (in a Gozar checkout, run `node packages/gozar-node/check-tailscale-app.mjs` instead):
+**Check a Mac with a Tailscale app (read-only).** Neither command changes anything or prints the token. The check script ships in the npm package; install it into a scratch directory and run it from there (in a Gozar checkout, run `node adapters/providers/_shared/check-tailscale-app.mjs` instead):
 
 ```sh
 mkdir gozar-check && cd gozar-check
-npm install @tnunamak/gozar@0.2.1
-node node_modules/@tnunamak/gozar/packages/gozar-node/check-tailscale-app.mjs
+npm install @tnunamak/gozar@0.3.0
+node node_modules/@tnunamak/gozar/adapters/providers/_shared/check-tailscale-app.mjs
 ```
 
 Expected, for the App Store app (the standalone app prints `standalone app`; `tailscale CLI` is `on PATH` when the CLI integration is installed):

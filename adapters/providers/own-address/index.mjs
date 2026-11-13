@@ -21,11 +21,13 @@ function parseOrigin(value) {
 }
 
 const IPV4_PRIVATE = [/^10\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^169\.254\./];
+// 100.64.0.0/10 is shared carrier-grade NAT space: not public, and not a network this device can name. Its reach is unknown.
+const sharedNat = host => { const [a, b] = host.split('.').map(Number); return a === 100 && b >= 64 && b <= 127; };
 /** Where the address can be reached from: loopback is this device, a private address or a local name is the local network. */
 export function reachOf(origin) {
   const host = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
   const family = isIP(host);
-  if (family === 4) return host.startsWith('127.') ? 'this-device' : IPV4_PRIVATE.some(pattern => pattern.test(host)) ? 'lan' : 'internet';
+  if (family === 4) return host.startsWith('127.') ? 'this-device' : IPV4_PRIVATE.some(pattern => pattern.test(host)) ? 'lan' : sharedNat(host) ? 'unknown' : 'internet';
   if (family === 6) return host === '::1' ? 'this-device' : /^(f[cd]|fe[89ab])/.test(host) ? 'lan' : 'internet';
   if (host === 'localhost' || host.endsWith('.localhost')) return 'this-device';
   return /\.(local|lan)$/.test(host) ? 'lan' : 'internet';

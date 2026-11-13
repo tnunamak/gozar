@@ -64,6 +64,11 @@ test('red: with a public https origin it is eligible, reaches the internet, is c
   assert.equal(typeof own.candidateToken, 'string');
 });
 
+test('shared carrier-grade NAT space (100.64.0.0/10) has unknown reach, and its neighbours stay internet', () => {
+  for (const origin of ['https://100.64.0.1', 'https://100.127.255.254:8443']) assert.equal(reachOf(origin), 'unknown', origin);
+  for (const origin of ['https://100.63.255.255', 'https://100.128.0.0']) assert.equal(reachOf(origin), 'internet', origin);
+});
+
 test('the origin sets the reach: a public name is internet, a private address or local name is lan, loopback is this-device', () => {
   const cases = { 'https://app.example.com': 'internet', 'https://203.0.113.9': 'internet', 'https://10.0.0.5': 'lan', 'https://192.168.1.20:8443': 'lan', 'https://172.20.0.1': 'lan',
     'https://printer.local': 'lan', 'https://nas.lan': 'lan', 'https://127.0.0.1:9000': 'this-device', 'https://localhost': 'this-device', 'https://[::1]': 'this-device', 'https://[fd00::1]': 'lan' };

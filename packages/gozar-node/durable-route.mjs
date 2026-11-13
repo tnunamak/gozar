@@ -9,6 +9,7 @@
 // owns provider I/O and the arithmetic of its slots.
 import { readdir, readFile, unlink, open } from 'node:fs/promises';
 import { join } from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { portListening } from './target-check.mjs';
 import { isDeepStrictEqual } from 'node:util';
@@ -38,6 +39,12 @@ export function setVerifierForTest(replacement) {
   verifier.run = replacement;
   return () => { verifier.run = saved; };
 }
+// A verifier that holds for one call and the work it starts, so concurrent callers do not share it (used by a route API
+// built with a `verify` option). Without one, the replaceable global above answers.
+const scopedVerifier = new AsyncLocalStorage();
+const runVerifier = check => (scopedVerifier.getStore() ?? verifier.run)(check);
+/** Runs `action` with `verify({ origin, target })` as the challenge verifier. */
+export const withVerifier = (verify, action) => scopedVerifier.run(verify, action);
 
 function routeIdValue(value) {
   if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(value)) throw refuse('invalid_input', 'Route ID must be 1..63 lowercase letters, digits or hyphens');
@@ -303,7 +310,7 @@ async function reconcile(record, facet, observed, { verify = true } = {}) {
   if (current === null) return { state: 'lost' };
   if (!isDeepStrictEqual(current, record.receipt.rule)) return { state: 'uncertain', cleanupDebt: { reason: 'rule-changed', port: pin.port } };
   if (!verify) return { state: record.state };
-  const checked = await verifier.run({ origin: record.origin ?? record.intent.origin, target: record.target, verifyCmd: null });
+  const checked = await runVerifier({ origin: record.origin ?? record.intent.origin, target: record.target, verifyCmd: null });
   return { state: checked.status === 'verified' ? 'usable' : 'unverified', verification: checked };
 }
 
@@ -431,7 +438,7 @@ async function createListener(dir, record, entry, { table, firstAllocation, expe
 
 // Verify the pinned origin and durably publish it only after verification succeeds.
 async function publish(dir, record, checked) {
-  checked ??= await verifier.run({ origin: record.origin ?? record.intent.origin, target: record.target, verifyCmd: null });
+  checked ??= await runVerifier({ origin: record.origin ?? record.intent.origin, target: record.target, verifyCmd: null });
   // Fence: a concurrent release or hand-back that moved the generation wins.
   const fresh = await load(dir, record.routeId);
   if (!fresh || fresh.generation !== record.generation || ['releasing', 'handing-back'].includes(fresh.state))
@@ -712,7 +719,7 @@ export async function adoptRoute(request, deps) {
     // The token is spent from here on. Its grant must be for exactly this rule's adapter and state.
     const grant = await redeem(home, request, 'adopt', approval);
     if (grant.adapterId !== adapterId || grant.planDigest !== seen.planDigest || grant.observedResource !== seen.observedResource) throw stale();
-    const checked = await verifier.run({ origin, target, verifyCmd: null });
+    const checked = await runVerifier({ origin, target, verifyCmd: null });
     if (checked.status !== 'verified') throw refuse('verification_failed', 'The route did not pass the challenge; nothing was changed');
     // Re-read: the same match must still hold after verification.
     const afterAll = (await observeStores(adapters, ctx)).entries;

@@ -26,6 +26,8 @@ export function createRouteApi(deps = {}) {
   const adapters = async () => deps.adapters ?? (loaded ??= runtime().then(module => module.loadAdapters(deps.manifest ? { manifest: deps.manifest, root: deps.root } : undefined)).catch(error => { loaded = undefined; throw error; }));
   const shared = async () => ({ adapters: await adapters(), platform: platform(), ...(deps.readContext ? { readContext: deps.readContext } : {}) });
   const guard = async action => { try { return await action(); } catch (error) { throw normalizeError(error); } };
+  // A `verify` option ({ origin, target }) replaces the challenge verifier for the durable calls below. It is for tests.
+  const verified = async action => deps.verify ? (await engine()).withVerifier(deps.verify, action) : action();
 
   /** A durable engine reply is a record view; its RouteView needs the adapter's declared properties. */
   async function durableView(reply) {
@@ -58,8 +60,8 @@ export function createRouteApi(deps = {}) {
     inspectLegacyRoute: request => guard(async () => (await legacy()).inspectLegacyRoute(request)),
 
     // The loaded adapters go to every durable engine call as an optional second argument; an engine that does not use it ignores it.
-    ensureRoute: request => guard(async () => (await ownerKept(request)) ?? durableView((await (await engine()).ensureRoute(request, { adapters: await adapters() })).route)),
-    adoptRoute: request => guard(async () => durableView((await (await engine()).adoptRoute(request, { adapters: await adapters() })).route)),
+    ensureRoute: request => guard(() => verified(async () => (await ownerKept(request)) ?? durableView((await (await engine()).ensureRoute(request, { adapters: await adapters() })).route))),
+    adoptRoute: request => guard(() => verified(async () => durableView((await (await engine()).adoptRoute(request, { adapters: await adapters() })).route))),
 
     /** A request with schemaVersion 1 is the route API; anything else is the legacy session call (handled by the caller). */
     expose: request => guard(async () => {
@@ -69,9 +71,9 @@ export function createRouteApi(deps = {}) {
       throw gozarError('invalid_input', "expose needs usage 'session' or 'attached'");
     }),
 
-    routeStatus: request => guard(async () => viewStatus(request, { adapters: await adapters(), ...deps.view })),
-    closeRoute: request => guard(async () => viewClose(request, { adapters: await adapters(), ...deps.view })),
-    watchRoutes: request => pollRoutes(request, { routeStatus: async r => viewStatus(r, { adapters: await adapters(), ...deps.view }), ...deps.watch }),
+    routeStatus: request => guard(() => verified(async () => viewStatus(request, { adapters: await adapters(), ...deps.view }))),
+    closeRoute: request => guard(() => verified(async () => viewClose(request, { adapters: await adapters(), ...deps.view }))),
+    watchRoutes: request => pollRoutes(request, { routeStatus: r => verified(async () => viewStatus(r, { adapters: await adapters(), ...deps.view })), ...deps.watch }),
     getRoutePreferences, setRoutePreferences,
     runSetupAction: request => guard(async () => runSetup(request, { ...deps.setup, ...await shared() })),
     resolveClientAddress,
