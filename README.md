@@ -16,7 +16,7 @@ Then, in a second terminal, expose it to the public internet (or replace `18765`
 npx --package=@tnunamak/gozar@0.3.4 gozar expose --port 18765 --client-reach internet
 ```
 
-Gozar finds eligible routes, shows the provider it chose and the exact local target, and asks for approval before making the service reachable. To see every candidate first, run `npx --package=@tnunamak/gozar@0.3.4 gozar detect --port 18765 --alternatives`. Provider setup or an outside-network verification step may still be required. Only share an address once Gozar verifies it; the address can change or expire. **Gozar does not add authentication to your app.**
+Gozar finds eligible routes, shows the provider it chose and the exact local target, and asks for approval before making the service reachable. To compare usable ways before approval, add `--alternatives` to that `expose` command. It lists their setup status, then shows the same plan and prompt. Provider setup or an outside-network verification step may still be required. Only share an address once Gozar verifies it; the address can change or expire. **Gozar does not add authentication to your app.**
 
 There are three paths. **A quick session:** `expose` above, a temporary address that lasts 15 minutes by default. **A persistent service:** a [service route](#keep-an-existing-service-address) behind your own HTTPS proxy, with no expiry. **Gozar inside an app:** [Route by requirement](#route-by-requirement), where the app states what it needs and Gozar lists the providers that meet it, or the shorter session commands in [Embed Gozar in your app](#embed-gozar-in-your-app). MCP is supported, but not required.
 
@@ -254,12 +254,12 @@ To inspect available providers without creating anything:
 npx --package=@tnunamak/gozar@0.3.4 gozar detect --port 3000 --alternatives
 ```
 
-Choose `--client-reach internet` for a hosted client, `tailnet` for an authorized Tailscale client, or `lan` for a client on a local network. Use `--adapter ID` to select a provider listed by detection; unsupported or detection-only providers will still be refused.
+Choose `--client-reach internet` for a hosted client, `tailnet` for an authorized Tailscale client, or `lan` for a client on a local network. For the session command, `--alternatives` lists only ways it can use, with any setup step still needed, then continues to the plan and approval prompt. Select one with `--via NAME`, for example `--via localhost.run` or `--via tailscale-funnel`. The list shows each selection name in parentheses when it differs from the service name. `--adapter ID` remains supported. Detection can also show providers that the session command cannot start.
 
 To select tunnl.gg explicitly:
 
 ```sh
-npx --package=@tnunamak/gozar@0.3.4 gozar expose --port 3000 --client-reach internet --adapter tunnl-gg
+npx --package=@tnunamak/gozar@0.3.4 gozar expose --port 3000 --client-reach internet --via tunnl.gg
 ```
 
 tunnl.gg needs OpenSSH (`ssh` and `ssh-keygen`). Gozar creates an Ed25519 identity under its home directory (`GOZAR_HOME`, or `~/.local/state/gozar`) on first approved use and reuses it for later sessions. The key-bound relay permits one active route per installation key. Gozar refuses a second start that uses the same key and reports the holding port and its stop command. Retry after that session has stopped and its owned process cleanup is confirmed; Gozar does not queue the start. Gozar coordinates sessions in the same home. If you copy the key into another home, those processes cannot coordinate and a new route can interrupt the existing one. An announced address change withdraws this route and requires stop followed by a new session. The relay can read traffic, may show a browser warning, and can close quiet streams after about two minutes. Automatic provider selection is unchanged.
@@ -287,6 +287,14 @@ Route verification and application testing are different. A route check does not
 Temporary sessions forward requests to the selected loopback port and replace the request's Host header with `127.0.0.1:PORT`. If your app checks hostnames or generates public links and redirects, test that behavior before sharing it. This differs from a service route through your own proxy, where the backend must receive the expected public Host; see [service routes](docs/service-routes.md).
 
 Gozar cleans up resources it owns. Your own proxy and DNS remain your responsibility. If cleanup is pending, retry stopping the session and inspect the result before assuming the route is gone.
+
+## Session output
+
+Before approval, the session command shows the target, who can reach it, the selected service, the address or address pattern, the lifetime and at most one relevant note. Funnel's exact hostname and free port are checked after approval, so its plan shows `https://<machine>.<tailnet>.ts.net` without a port. A trial address is assigned when it starts.
+
+After the required checks pass, `Public URL` is the address to share. It comes before the MCP connection instructions. The command returns while a background controller keeps the session running; use the printed stop command to end it early. A failed check names what Gozar could not verify. If removal is not confirmed, the output says a route or process may remain and prints the stop command.
+
+Add `--verbose` to a session command for the full plan sentence, all provider observations and every engineering limitation. `--json` keeps the existing machine-readable reply, including its engineering strings.
 
 ## Session lifetime
 

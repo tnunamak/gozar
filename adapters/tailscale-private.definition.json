@@ -681,7 +681,13 @@
     "drop": "1",
     "displayName": "Private tailnet HTTPS",
     "copy": {
-      "consent": "Start an owned foreground private HTTPS listener on an unused 9444 or 9445 only. Existing listeners stay untouched. Verify TLS, instance identity and requested protocols from a tailnet client before publication."
+      "consent": "Start an owned foreground private HTTPS listener on an unused 9444 or 9445 only. Existing listeners stay untouched. Verify TLS, instance identity and requested protocols from a tailnet client before publication.",
+      "human": {
+        "name": "tailscale-private",
+        "address": "https://<machine>.<tailnet>.ts.net",
+        "summary": "private HTTPS inside your Tailscale network",
+        "setup": "Install Tailscale and sign in"
+      }
     },
     "addressStability": "stable",
     "durableLifetime": "provider-persistent",

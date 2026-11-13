@@ -2,6 +2,10 @@
 
 ## 0.3.4
 
+### Fixes
+
+- The default `expose` output says what will happen in a few plain lines. `--alternatives` lists usable ways with their setup status; `--via` picks one by name. `--verbose` prints the full engineering detail. `--json` is unchanged.
+
 - Suspend of a user-stopped durable route now reports `stopped_by_user` where 0.3.3 reported `route_not_found`. Removing a route the user already stopped succeeds without a provider call; an interrupted stop finishes the normal compare-and-set removal.
 - An invalid owner-run query origin is named in the unmet setup entry's `actual` value, without throwing or adding error codes.
 - Closing a session gate twice returns the first close promise, so both calls finish.

@@ -1,5 +1,7 @@
 import { cliCommand } from './cli-command.mjs';
 import { safeOrigin } from './catalog.mjs';
+import { ways } from './expose-copy.mjs';
+import { plainCaveat, reachWords } from './plain-copy.mjs';
 
 export function installLink(template, endpoint) {
   if (typeof template !== 'string' || !template.includes('{url}')) return null;
@@ -10,7 +12,7 @@ export function installLink(template, endpoint) {
   } catch { return null; }
 }
 
-export function render(reply, adapters, { alternatives = false, port } = {}) {
+function renderEngineering(reply, adapters, { alternatives = false, port } = {}) {
   const snapshot = reply.snapshot;
   if (!snapshot) return `Status unknown. Run ${cliCommand('status', port)} to recheck the controller.`;
   if (snapshot.phase === 'stopped') {
@@ -82,6 +84,106 @@ export function render(reply, adapters, { alternatives = false, port } = {}) {
     lines.push(`Status: ${cliCommand('status', port)}`, `Stop: ${cliCommand('stop', port)}`);
     if (snapshot.phase !== 'published-ready') lines.push(`Next: ${reply.nextAction?.command ?? cliCommand('health', port)}`, `Success: ${reply.nextAction?.expectedSuccess ?? 'route checks pass and a validated URL is printed.'}`);
     else lines.push(`After sleep or network loss: ${cliCommand('health', port)}; if the route cannot recover, stop it and run expose again.`);
+  }
+  return lines.join('\n');
+}
+
+
+const adapterName = adapter => adapter?.displayName ?? adapter?.label ?? adapter?.id ?? 'selected service';
+const adapterId = item => typeof item === 'string' ? item : item?.adapterId ?? item?.id;
+
+function usableWays(snapshot, adapters) {
+  const ids = (snapshot.recommendations ?? []).map(adapterId);
+  return ids.map(id => adapters.find(a => a.id === id)).filter(a => a && ways[a.id] &&
+    (a.ownership === 'external-owned' || a.recipes?.create));
+}
+function wayStatus(snapshot, adapter) {
+  if (adapter.ownership === 'external-owned' && !adapter.endpoint) return 'needs setup';
+  return ({ present: 'ready', absent: 'not set up', 'signed-out': 'needs setup', blocked: 'needs setup' })[snapshot.observations?.[adapter.id]] ?? 'needs setup';
+}
+function alternativeRows(snapshot, adapters, selected) {
+  return ['Ways to reach this computer:', ...usableWays(snapshot, adapters).map(a => {
+    const way = ways[a.id], status = wayStatus(snapshot, a);
+    return `  ${a.id === selected?.id ? '●' : '○'} ${adapterName(a)} (${way.name})  ${status}  ${status === 'ready' ? way.summary : way.setup}`;
+  }), 'Pick one with --via <name>.'];
+}
+function lifetime(reply, selected, port, options) {
+  if (selected?.planVersion === 1) return `up to ${(reply.lifetimeMs ?? options.lifetimeMs ?? 900_000) / 60_000} minutes; you can stop it sooner`;
+  return selected?.ownership === 'external-owned' ? `your address stays under your control; stop checking with ${cliCommand('stop', port)}` : `until you run ${cliCommand('stop', port)}`;
+}
+function chosenCaveats(snapshot, adapters, selected) {
+  const catalog = new Set(adapters.flatMap(a => a.unknowns ?? []));
+  const own = new Set(selected?.unknowns ?? []);
+  return (snapshot.limitations ?? []).filter(text => !catalog.has(text) || own.has(text))
+    .map(text => plainCaveat(text)).filter(item => item.plain);
+}
+
+export function render(reply, adapters, options = {}) {
+  const { port, alternatives = false, verbose = false } = options;
+  const snapshot = reply.snapshot;
+  if (!snapshot) return `Status could not be checked. Run ${cliCommand('status', port)}.`;
+  const selected = adapters.find(a => a.id === (snapshot.adapterId ?? adapterId(snapshot.recommendations?.[0])));
+  const name = adapterName(selected), target = `http://127.0.0.1:${port ?? 'N'}`;
+  const caveats = chosenCaveats(snapshot, adapters, selected);
+  const failure = caveats.find(item => item.kind === 'failure');
+  const cleanupConfirmed = snapshot.phase === 'stopped' && Array.isArray(reply.localCleanupFailures) && !reply.localCleanupFailures.length &&
+    (snapshot.resources ?? []).every(resource => resource.ownership !== 'owned' || resource.cleanup === 'removed');
+  const cleanupPending = ['cleanup-pending', 'stopping'].includes(snapshot.phase) || Boolean(reply.localCleanupFailures?.length);
+  const lines = [];
+  if (cleanupPending) {
+    lines.push(failure ? `✗ ${failure.plain}` : 'Route removal is not confirmed.',
+      'A route or background process may still be in place.', `Retry: ${cliCommand('stop', port)}`);
+  } else if (snapshot.phase === 'stopped') {
+    if (failure && cleanupConfirmed) lines.push(`✗ ${failure.plain}`, 'No address is published now, and your server is unchanged.', `Next: ${cliCommand('expose', port)} --client-reach ${options.clientReach ?? 'internet'}`);
+    else if (failure) lines.push(`✗ ${failure.plain}`, 'A route or background process may still be in place.', `Stop: ${cliCommand('stop', port)}`);
+    else lines.push('Gozar · stopped', 'Exposure stopped.');
+  } else if (snapshot.phase === 'planned') {
+    if (alternatives) lines.push(...alternativeRows(snapshot, adapters, selected), '');
+    lines.push(`Gozar will make ${target} reachable from ${reachWords[options.clientReach ?? 'unknown']}.`, '',
+      `  Using    ${name}${snapshot.observations?.[selected?.id] === 'present' ? ' (already set up on this computer)' : ''}`,
+      `  Address  ${selected?.endpoint ?? ways[selected?.id]?.address ?? 'assigned when it starts'}`,
+      `  Lasts    ${lifetime(reply, selected, port, options)}`);
+    const note = caveats.find(item => item.decision);
+    if (note) lines.push('', `  Note: ${note.plain}`);
+    const others = usableWays(snapshot, adapters).filter(a => a.id !== selected?.id);
+    if (others.length) lines.push('', `Other ways: ${others.map(a => `${adapterName(a)} (${wayStatus(snapshot, a) === 'ready' ? ways[a.id].summary : 'needs setup'})`).join('; ')}. See --alternatives.`);
+  } else if (snapshot.phase === 'published-ready' && snapshot.published) {
+    let endpoint;
+    try { endpoint = safeOrigin(snapshot.published); } catch { endpoint = null; }
+    if (endpoint) {
+      const receipt = reply.validation?.probeReceipt;
+      if (receipt?.tls && receipt?.vantage === 'public') lines.push('✓ Reachable from the internet over HTTPS');
+      else if (receipt?.tls) lines.push('✓ HTTPS connection checked');
+      if (receipt?.sse) lines.push('✓ Streaming works');
+      lines.push(`Public URL: ${endpoint}`, `Forwarding to ${target}. Stop: ${cliCommand('stop', port)}`,
+        `Lasts: ${lifetime(reply, selected, port, options)}`, '', 'Add to MCP client', `URL: ${endpoint}/mcp`,
+        "Authentication: use your service's configured method.", 'For gozar demo-server only, select no authentication.',
+        'Your client connection and tool call still need checking.',
+        JSON.stringify({ mcpServers: { service: { url: `${endpoint}/mcp` } } }));
+      const template = reply.connectionProfile?.installLinkTemplate ?? selected?.clientProfile?.installLinkTemplate ?? selected?.profile?.installLinkTemplate;
+      const link = installLink(template, `${endpoint}/mcp`);
+      if (link) lines.push(`Install link: ${link}`);
+      lines.push(`After sleep or network loss: ${cliCommand('health', port)}`);
+    } else lines.push('The saved address is invalid. Recheck the route.', `Next: ${cliCommand('health', port)}`);
+  } else if (['failed', 'blocked', 'degraded'].includes(snapshot.phase)) {
+    lines.push(`✗ ${failure?.plain ?? 'Route check failed: Gozar could not verify the address and requested connections.'}`,
+      'A route or background process may still be in place.', `Stop: ${cliCommand('stop', port)}`);
+  } else if (snapshot.phase === 'unknown') {
+    lines.push('The background controller could not be reached.', `Next: ${cliCommand('status', port)}`);
+  } else {
+    lines.push(snapshot.phase === 'candidate-ready' ? `Address awaiting approval: ${snapshot.candidate ?? 'not assigned yet'}` : `${name}: ${snapshot.phase === 'needs-setup' ? 'setup needed' : 'checking the route'}.`);
+    const action = snapshot.plans?.find(plan => plan.adapterId === selected?.id)?.preconditionActions?.[0];
+    const setup = action && plainCaveat(action.reason);
+    if (setup?.plain) lines.push(setup.plain);
+    if (failure) lines.push(failure.plain);
+    if (reply.gateTarget && selected?.ownership === 'external-owned') lines.push(`Point your HTTPS proxy to ${reply.gateTarget}.`);
+    lines.push(`Next: ${cliCommand('health', port)}`, `Stop: ${cliCommand('stop', port)}`);
+  }
+  if (verbose) {
+    lines.push('', 'Full detail:', renderEngineering(reply, adapters, { port, alternatives: true }));
+    if (selected?.copy?.consent) lines.push(selected.copy.consent);
+    // The old stopped screen omitted limitations; retain them in the detail view too.
+    if (snapshot.phase === 'stopped') lines.push(...(snapshot.limitations ?? []));
   }
   return lines.join('\n');
 }

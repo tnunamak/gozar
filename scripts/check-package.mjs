@@ -20,7 +20,8 @@ const output = JSON.parse(packed.stdout);
 const files = new Set((Array.isArray(output) ? output[0] : Object.values(output)[0]).files.map(file => file.path));
 const manifest = JSON.parse(await readFile(new URL('../adapters/manifest.json', import.meta.url), 'utf8'));
 const required = ['adapters/manifest.json', 'packages/gozar-node/route-contract.d.ts', 'packages/gozar-node/adapter-contract.d.ts',
-  'packages/gozar-node/testing.mjs', 'runtime/route-catalog.schema.json', 'runtime/adapter.schema.json', 'runtime/error-normalization.json',
+  'packages/gozar-node/testing.mjs', 'runtime/route-catalog.schema.json', 'runtime/adapter.schema.json', 'runtime/error-normalization.json', 'runtime/plain-copy.json', 'runtime/plain-copy.schema.json',
+  'packages/gozar-node/plain-copy.mjs', 'packages/gozar-node/expose-copy.mjs',
   ...manifest.providers.flatMap(provider => [`adapters/${provider.module}`, `adapters/${provider.definition}`, `adapters/${provider.id}.definition.json`])];
 const missing = required.filter(path => !files.has(path));
 if (missing.length) throw new Error(`The package archive is missing: ${missing.join(', ')}`);

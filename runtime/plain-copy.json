@@ -1,0 +1,1358 @@
+{
+  "caveats": {
+    "A loopback listener cannot serve other devices.": {
+      "plain": "Choose a network interface with --bind-address IP.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "A successful HTTP response alone does not prove the correct application or external reach.": {
+      "plain": "Gozar must check that the address reaches your server from the client network.",
+      "decision": false,
+      "kind": "note"
+    },
+    "Absence readbacks expired; retry stop for a fresh check": {
+      "plain": "Removal check expired: run stop again for a fresh check.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Adapter bindings or admission requirements are unsupported; no operation executed": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Adapter has no admitted create recipe": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Adapter output did not provide a valid origin; cleanup remains tracked": {
+      "plain": "Address check failed: the provider did not return a usable address; removal may still be needed.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Adapter returned an origin without required HTTPS": {
+      "plain": "Address check failed: the provider returned HTTP when HTTPS was required.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Adapter unavailable": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "All explicit listener candidates are occupied or protected": {
+      "plain": "Port check failed: all allowed ports are already in use or reserved.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Allocation receipt has wrong resource kind": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "An owned interface forwarder exposes only the selected loopback service to the local network.": {
+      "plain": "Forward this server to your selected local network interface.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Audience or explicitly unsupported capability does not meet requirements": {
+      "plain": "Route check failed: this route cannot reach the requested clients or support their connections.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Binding authority missing, stale, or wrong type": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Browser users can encounter a warning page.": {
+      "plain": "People opening the address in a browser may see a warning page.",
+      "decision": false,
+      "kind": "note"
+    },
+    "CLI is absent.": {
+      "plain": "Install Tailscale before using this route.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "CLI version and config schema must be compatible.": {
+      "plain": "Use a supported CLI version and configuration format.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Cannot establish process ownership": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Capture nesting exceeded": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Capture record too wide": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Captured value does not match nonsecret type": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Client reach unknown; public HTTPS first, client validation still required": {
+      "plain": "Choose where your client runs so Gozar can check the right network.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Concurrent live probe challenge budget exhausted": {
+      "plain": "Connection check failed: Gozar could not verify the address and requested connections.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Core did not accept the fresh resource absence proof": {
+      "plain": "Removal check failed: Gozar could not confirm the background process has gone.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Core did not admit the readback predicate": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Core effect budget exceeded": {
+      "plain": "Route check stopped: too many operations are waiting to finish.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Create URL parser unavailable": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Create confirmed not applied": {
+      "plain": "Start check failed: the provider confirmed it did not create the route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Create has no immutable ownership receipt; outcome unresolved": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Create outcome uncertain; retain request for late completion or a not-applied receipt": {
+      "plain": "Start check failed: Gozar cannot tell whether the provider created the route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Create ownership receipt is invalid or wrong scope": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Create recipe unavailable": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Create returned an owned allocation but completion failed; cleanup debt retained": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Created allocation differs from consented ledger; owned cleanup debt retained": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Current capability requires a successful probe from the intended client network.": {
+      "plain": "Gozar must check the route from the client network before sharing it.",
+      "decision": false,
+      "kind": "note"
+    },
+    "Current host identity binding differs from owned baseline": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Current node policy and port allowance must permit :8443.": {
+      "plain": "Ask your Tailscale administrator to allow Funnel on port 8443 or 10000.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Current origin health proof failed or expired; external owner action required": {
+      "plain": "Connection check failed or expired: Gozar could not verify the address and requested connections.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "DNS and tunnel creation/removal remain owner-managed; no automatic overwrite.": {
+      "plain": "You manage DNS and tunnel changes; Gozar does not overwrite them.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Declared ownership ledger differs from actual local resource": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Dedicated unused HTTPS listener; existing shared routes stay under their owners.": {
+      "plain": "Use a free HTTPS port; existing routes stay in place.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Detection identifies the CLI; operational endpoint setup is a separate adapter capability.": {
+      "plain": "Finding the installed program does not mean Gozar can start a route with it.",
+      "decision": false,
+      "kind": "note"
+    },
+    "Detection identifies the named-tunnel CLI; operational connector setup is a separate adapter capability.": {
+      "plain": "Finding cloudflared does not mean Gozar can start a tunnel with it.",
+      "decision": false,
+      "kind": "note"
+    },
+    "Detection only; route creation is not available in this version.": {
+      "plain": "Starting this route is not supported yet.",
+      "decision": false,
+      "kind": "note"
+    },
+    "Duplicate owned resource handle": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Effect ID generation mismatch": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Effect already dispatched": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Effect already dispatched or out of order": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Effect identity mismatch": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Effect is outside admitted recipe scope": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Execution differs from acknowledged durable intent": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Existing account and an isolated CLI agent; exact transport is preserved without silent fallback.": {
+      "plain": "Use your existing account with the selected connection type.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Existing endpoint listing, online agent and HTTP 200 are separate from client readiness.": {
+      "plain": "An online tunnel still needs a connection check from the client network.",
+      "decision": false,
+      "kind": "note"
+    },
+    "Existing external origin not provided by typed authority": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "External origin requires HTTPS": {
+      "plain": "Address check failed: your proxy address must use HTTPS.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "External ownership permits validation only": {
+      "plain": "Setup check failed: Gozar can check your existing HTTPS proxy but cannot create or remove it.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "External route requires an existing valid endpoint": {
+      "plain": "Address check failed: supply your existing HTTPS address with --origin URL.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Feature setup can prompt despite --yes; closed stdin and bounded startup fail safely when prerequisites are unmet.": {
+      "plain": "Enable HTTPS in Tailscale first; setup that needs a prompt can prevent this route from starting.",
+      "decision": true,
+      "kind": "note"
+    },
+    "File exceeds output limit": {
+      "plain": "Settings check failed: the configuration file is too large to read.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Finite create commands require owned mapping readback guards; only persistent owned processes are admitted": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Firewall prerequisite: approve the exact interface before starting the forwarder": {
+      "plain": "Setup check failed: approve the selected interface with --firewall-ack IP.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Foreground CLI watcher cleanup is owned by immutable process identity; any leftover or administrator-created mapping remains cleanup debt.": {
+      "plain": "Gozar stops only the process it started; any remaining route needs attention.",
+      "decision": false,
+      "kind": "note"
+    },
+    "Foreground watcher cleanup uses immutable process identity. Remaining or administrator-created mappings remain cleanup debt.": {
+      "plain": "Gozar stops only the process it started; any remaining route needs attention.",
+      "decision": false,
+      "kind": "note"
+    },
+    "Forward target is outside approved port": {
+      "plain": "Target check failed: the target port differs from the one you approved.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Forward target must be loopback": {
+      "plain": "Target check failed: the target must be a server on this computer.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Forwarder ownership unavailable; reconcile required": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Forwarder requires an owned ephemeral port": {
+      "plain": "Port check failed: Gozar needs a free port for its local forwarder.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Fresh preflight expired while intent was being persisted": {
+      "plain": "Setup check expired before the route could start; retry for a fresh check.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Fresh preflight prerequisite failed": {
+      "plain": "Setup check failed: the current provider settings do not allow this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "HTTPS capability and CertDomains permit provisioning; they do not prove an issued or client-trusted certificate.": {
+      "plain": "The HTTPS certificate still needs to be checked from the client network.",
+      "decision": false,
+      "kind": "note"
+    },
+    "HTTPS probe requirement cannot use an HTTP origin": {
+      "plain": "Connection check failed: Gozar could not verify the address and requested connections.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Handle is not a regular file": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Health timer lacks a matching verified receipt": {
+      "plain": "Connection check failed: no current result confirms this route still works.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Host binding disappeared before mutation": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Host binding identity changed before mutation": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Host origin updates apply only to external-owned routes": {
+      "plain": "Address update failed: only a proxy address you manage can be updated this way.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Identity provisioning is not admitted": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Identity provisioning is not admitted by core": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Immutable local ownership handle unavailable": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Intrinsic ownership inspection scope mismatch": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Invalid binding name": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Invalid binding specs": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Invalid direct argv recipe": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Invalid effect ID": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Invalid effect sequence": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Invalid external origin": {
+      "plain": "Address check failed: supply a valid HTTPS address for your proxy.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Invalid map pointer": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Invalid occupied port facts": {
+      "plain": "Port check failed: Gozar could not confirm an available port or the current listener settings.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Invalid plan stage": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Invalid port map capture": {
+      "plain": "Port check failed: Gozar could not confirm an available port or the current listener settings.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Invalid probe URL": {
+      "plain": "Connection check failed: Gozar could not verify the address and requested connections.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Invalid required feature": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "JSON event origin requires negotiated feature": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Key-bound public trial; the relay terminates TLS and can read payloads.": {
+      "plain": "Public trial tied to your installation key; the relay can read traffic.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Legacy effect replay capacity exhausted": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Local immutable handle continuity or exact details changed": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Local network reach does not imply internet reach; firewall, routing and client DNS remain prerequisites.": {
+      "plain": "This route serves your local network; check your firewall and client address settings.",
+      "decision": false,
+      "kind": "note"
+    },
+    "Local resource continuity unavailable": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Lost adapter identity": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Mapping allocation requires exact ledger and readback": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Materialized credentials require an owned long-running process": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Missing allocation generation": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Missing binding value": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Missing explicit origin authority": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Missing ownership ledger": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Missing probe": {
+      "plain": "Connection check failed: Gozar could not verify the address and requested connections.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Mutation requires consent and durable intent": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Native connector CLI required.": {
+      "plain": "Install cloudflared before using this tunnel.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Network exposure needs a deliberate scoped firewall decision; no automatic global rule.": {
+      "plain": "Allow incoming traffic on the selected interface with --firewall-ack IP.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "No active route to rotate": {
+      "plain": "Address update failed: there is no active route to update.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "No admitted identity and absence readbacks are available for this owned process": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "No current candidate": {
+      "plain": "Address check failed: this session has no address to check.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "No operational recipe": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "No operational session selected": {
+      "plain": "Route check failed: no session is selected.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "No token in JSON, argv, output or global config.": {
+      "plain": "Supply the tunnel token through a private file, not a command argument.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "No verified CLI DNS inventory/delete command in scoped source; DNS ownership is a prerequisite.": {
+      "plain": "You must manage the domain and its DNS records yourself.",
+      "decision": false,
+      "kind": "note"
+    },
+    "No verified plan candidate origin": {
+      "plain": "Address check failed: the provider has not returned an address Gozar can verify.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Observation exceeds core byte limit": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Observation missing scoped fresh authority/time receipt": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Observation parser failed": {
+      "plain": "Settings check failed: Gozar could not read the provider response.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "OpenSSH client is absent.": {
+      "plain": "Install OpenSSH before using this route.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Operational mutation intent was not durably acknowledged": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Operational plan needs explicit admission": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Operational plan not admitted": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Operational recipe is active only after core/host feature admission.": {
+      "plain": "Gozar must support this route setup before it can start the route.",
+      "decision": false,
+      "kind": "note"
+    },
+    "Optional account certificate login opens an interactive flow; not required for a token-scoped connector.": {
+      "plain": "A tunnel token is enough; certificate login may open a browser.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Ordered observation failed": {
+      "plain": "Setup check failed: the provider did not return the required settings.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Origin health receipt expired; a fresh intended-vantage check is required": {
+      "plain": "Connection check expired: Gozar needs a fresh check from the client network.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned endpoint absence changed or expired; retry stop": {
+      "plain": "Removal check expired or changed: run stop again for a fresh check.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned ledger details invalid or too large": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned process exited before its initial output was collected": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned process removal unconfirmed": {
+      "plain": "Removal check failed: the background process may still be running.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned removal is unconfirmed; do not blindly reissue": {
+      "plain": "Removal check failed: Gozar could not confirm that the route was removed.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned resource has no removal recipe; manual cleanup required": {
+      "plain": "Removal check failed: this route needs to be removed manually.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned route adapter is not selected": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned route adapter mismatch": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned route changed its fixed address; stop and start a new session": {
+      "plain": "Address check failed: the route changed its fixed address. Stop this session and start a new one.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned route lacks immutable cleanup ledger": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned route resource identity mismatch": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned route resource is unknown": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned route session mismatch": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned-process accepts only scoped removal": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Ownership continuity unknown or changed": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Ownership details absent": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Persist binding scope mismatch": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Persist intent requires consent": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Persist intent scope mismatch": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Persist plan step mismatch": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Persist removal requires exact ownership": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Plan needs required feature set": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Plan step bound exceeded": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Plan step cursor out of bounds": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Port capture needs map paths": {
+      "plain": "Port check failed: Gozar could not confirm an available port or the current listener settings.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Port map has unknown schema": {
+      "plain": "Port check failed: Gozar could not confirm an available port or the current listener settings.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Port map pointer must be absolute": {
+      "plain": "Port check failed: Gozar could not confirm an available port or the current listener settings.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Preflight authority changed before mutation": {
+      "plain": "Setup check failed: the provider settings or permissions changed before the route could start.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Preflight expired before durable intent": {
+      "plain": "Setup check expired before the route could start; retry for a fresh check.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Private artifact declaration changed before dispatch": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Private artifact is outside its exact dispatch scope": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Private bindings accept opaque handles only": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Private handle lacks session-only permissions": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Private materialization authority expired while resolving": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Private materialization authority mismatch": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Private materialization feature admission failed": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Private materialization scope changed before mutation": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Private/transport binding requires its exact implemented feature and authority": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Probe authorization missing, stale or mismatched": {
+      "plain": "Connection check failed: Gozar could not verify the address and requested connections.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Probe cancelled": {
+      "plain": "Connection check stopped before it finished.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Probe challenge missing authority or expired": {
+      "plain": "Connection check failed: Gozar could not verify the address and requested connections.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Probe nonce was already used; a fresh challenge is required": {
+      "plain": "Connection check failed: Gozar could not verify the address and requested connections.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Probe origin does not meet requirements": {
+      "plain": "Connection check failed: Gozar could not verify the address and requested connections.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Probe output limit exceeded": {
+      "plain": "Connection check failed: Gozar could not verify the address and requested connections.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Probe redirects are not admitted": {
+      "plain": "Connection check failed: the address redirected to another address.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Probe timed out": {
+      "plain": "Connection check failed: the server did not respond in time.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Process output limit exceeded": {
+      "plain": "Provider check failed: the program returned more output than Gozar can check.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Process timed out": {
+      "plain": "Start check failed: the provider did not finish in time.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Public HTTPS and timed SSE require genuine intended-vantage instance proof before publication.": {
+      "plain": "Gozar checks HTTPS and streaming from the client network before sharing the address.",
+      "decision": false,
+      "kind": "note"
+    },
+    "Raw TLS may require a paid account; TCP verification and reservations are distinct.": {
+      "plain": "TLS passthrough may need a paid account; check the separate TCP plan.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Raw current record assertion failed; preserve administrator changes": {
+      "plain": "Settings check failed: the provider settings differ from the expected route; existing settings were left in place.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Record capture needs explicit fields": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Recorded process differs from the durable ownership ledger; inspect the session before retrying stop": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Recorded process is still running or its birth identity is unavailable": {
+      "plain": "Removal check failed: the process may still be running, or Gozar cannot confirm which process it is.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Recorded process is still running; absence cannot be proved": {
+      "plain": "Removal check failed: the background process is still running.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Recovery cannot mutate remote or unowned resources": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Recovery permits only owned local cleanup": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Remote configuration can override local --url; verify instance identity.": {
+      "plain": "Check the provider settings; they may replace the local target.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Remote validation required: configure a trusted executor on the client network.": {
+      "plain": "Connection check could not run: configure a trusted checker on the client network.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Remote validation required: this executor only observes the local network vantage.": {
+      "plain": "Connection check could not run: configure a trusted checker on the client network.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Removal adapter unavailable": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Removal lacks exact owned ledger/continuity guard": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Removal requires an exact owned resource in the selected adapter scope": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Replacement origin violates the admitted URL parser": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Required public HTTPS origin was not provided; no probe or publication": {
+      "plain": "Address check failed: a public HTTPS address is required.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Requires deliberate administrator action; certificate names enter public logs.": {
+      "plain": "Ask your Tailscale administrator to enable HTTPS and MagicDNS; certificate names are public.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Route rotation requires an admitted long-running owned process": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Route rotation requires the admitted create URL parser": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Run a connector for an existing named tunnel and explicitly configured stable hostname; never substitute a Quick Tunnel.": {
+      "plain": "Use an existing named tunnel and its configured domain.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "SSE content type missing": {
+      "plain": "Streaming check failed: the server did not return an event stream.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "SSE ended before a complete event": {
+      "plain": "Streaming check failed: the connection closed before a complete event arrived.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Saved host identity binding is unavailable": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Scoped private/transport authority is invalid": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Self-signed certificates are not automatically trusted.": {
+      "plain": "Your client must trust the HTTPS certificate.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Session is stopping": {
+      "plain": "The session is stopping; wait for removal to finish.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Session still owns resources or unresolved work": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Session stopped; observation or allocation dispatch is fenced": {
+      "plain": "The session has stopped; Gozar will not start more work for it.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Short-lived public trial; the relay terminates TLS and can read payloads.": {
+      "plain": "Free public trial; the relay can read traffic.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Some clients reject :8443; client compatibility is not implied by local status.": {
+      "plain": "Funnel uses port 8443 or 10000; some apps cannot connect to those ports.",
+      "decision": true,
+      "kind": "note"
+    },
+    "Stale effect generation": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Stopped session cannot refresh health": {
+      "plain": "The session has stopped; start a new session to check a route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Stopped session cannot rotate an owned route": {
+      "plain": "The session has stopped; start a new session for another address.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "TLS, instance identity and streaming must match before publication.": {
+      "plain": "Gozar checks HTTPS, the server and streaming before sharing the address.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Tailnet HTTPS and requested protocols require genuine remote tailnet instance proof before publication.": {
+      "plain": "Gozar checks the address and requested connections from your Tailscale network before sharing it.",
+      "decision": false,
+      "kind": "note"
+    },
+    "The address is bound to an installation key; an announced address change withdraws the route.": {
+      "plain": "The address depends on this installation key; Gozar stops sharing it if it changes.",
+      "decision": false,
+      "kind": "note"
+    },
+    "The daemon is not in Running state.": {
+      "plain": "Sign in to Tailscale and connect this computer.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "The relay can close quiet streams after about two minutes.": {
+      "plain": "The relay can close quiet streams after about two minutes.",
+      "decision": true,
+      "kind": "note"
+    },
+    "The relay sees plaintext; URL expiry or rotation requires a new connection.": {
+      "plain": "The relay can read traffic; reconnect if the address expires or changes.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "The relay sees plaintext; a changed address ends the route.": {
+      "plain": "The relay can read traffic; an address change ends this route.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "The route and certificate remain under your ownership.": {
+      "plain": "Point your HTTPS proxy here and supply its address with --origin URL.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "The trial accepts single-label HTTPS origins under lhr.life and validates their instance identity and timed streaming.": {
+      "plain": "Gozar accepts only the trial HTTPS addresses and checks that they reach your server and carry streams.",
+      "decision": false,
+      "kind": "note"
+    },
+    "This exact current capability-port key is source-shaped from installed 1.104.6; unknown policy formats deny safely.": {
+      "plain": "Gozar must recognize the Tailscale port permissions before starting Funnel.",
+      "decision": false,
+      "kind": "note"
+    },
+    "This plan supplies HTTP only. HTTPS-required clients are denied; separately established trusted TLS needs a separately admitted listener plan.": {
+      "plain": "This route uses HTTP; apps that require HTTPS cannot use it.",
+      "decision": true,
+      "kind": "note"
+    },
+    "Too many typed bindings": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Transport mapping does not authorize candidate origin": {
+      "plain": "Address check failed: the provider address does not match the approved connection settings.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Transport mapping must be a direct mutation prerequisite": {
+      "plain": "Route setup check failed: Gozar could not complete the requested step.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Transport mapping requires negotiated feature": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Trial uptime and URL lifetime are not guaranteed.": {
+      "plain": "The trial address can change or stop working during a run; the relay can read traffic.",
+      "decision": true,
+      "kind": "note"
+    },
+    "Trust-on-first-use applies only to isolated known_hosts; changed key fails closed.": {
+      "plain": "Gozar remembers the relay key separately and stops if that key changes.",
+      "decision": false,
+      "kind": "note"
+    },
+    "Trusted instance probe challenge unavailable": {
+      "plain": "Connection check failed: Gozar could not verify the address and requested connections.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Trusted outside validation pending or failed": {
+      "plain": "Connection check has not passed: the outside checker did not return a valid result.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Trusted remote probe returned an invalid or incomplete receipt": {
+      "plain": "Connection check failed: the outside checker returned an incomplete or invalid result.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Typed capture needs exactly one matching value": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unknown adapter": {
+      "plain": "Route check failed: the selected service is not in the catalog.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unknown intermediate listener map schema": {
+      "plain": "Port check failed: Gozar could not confirm an available port or the current listener settings.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unknown listener key format": {
+      "plain": "Port check failed: Gozar could not confirm an available port or the current listener settings.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unknown or malformed template binding": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unknown owned process": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unknown resource ownership": {
+      "plain": "Ownership check failed: Gozar could not confirm which route or process belongs to this session.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unknown scoped file handle": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unresolved argv binding": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unresolved pointer binding": {
+      "plain": "Settings check failed: Gozar could not confirm the provider settings needed for this route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unsupported binding guard; normalize the entire binding": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unsupported effect kind": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unsupported executable plan field or operation": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unsupported identity provisioning": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unsupported or duplicate observation step/guard/capture": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unsupported origin policy": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unsupported owned-process signal": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unsupported plan prerequisite": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unsupported recipe execution field; feature admission required": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unsupported removal prerequisite; absence cannot be proved": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unsupported typed binding": {
+      "plain": "Setup check failed: this version cannot run this part of the route plan.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unused port needs explicit candidates": {
+      "plain": "Port check failed: Gozar could not confirm an available port or the current listener settings.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Unused port needs protected list": {
+      "plain": "Port check failed: Gozar could not confirm an available port or the current listener settings.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Updated origin authority invalid or expired": {
+      "plain": "Permission check failed: Gozar could not confirm permission to use the route settings or credentials.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Use local DNS/mDNS only when proven from the client; an explicit checked interface IP also works.": {
+      "plain": "Use an interface IP address that your client can reach.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "Validate an existing owner-managed origin; no route is created or deleted.": {
+      "plain": "Check your existing HTTPS proxy; you manage its address and settings.",
+      "decision": false,
+      "kind": "setup"
+    },
+    "host clock moved backwards": {
+      "plain": "Timing check failed: the computer clock moved backwards; retry for fresh checks.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "Owned resources remain recorded; restart reconciliation is required.": {
+      "plain": "A route or background process may still be in place.",
+      "decision": true,
+      "kind": "failure"
+    }
+  },
+  "patterns": [
+    {
+      "prefix": "Unresolved typed binding: ",
+      "plain": "Settings check failed: a required provider setting is missing.",
+      "decision": false,
+      "kind": "failure"
+    },
+    {
+      "prefix": "Invalid typed binding ",
+      "plain": "Settings check failed: a required provider setting is invalid.",
+      "decision": false,
+      "kind": "failure"
+    },
+    {
+      "prefix": "Missing typed binding ",
+      "plain": "Settings check failed: a required provider setting is missing.",
+      "decision": false,
+      "kind": "failure"
+    },
+    {
+      "prefix": "Unsupported core/host plan feature: ",
+      "plain": "Setup check failed: this version cannot run a feature required by the route.",
+      "decision": false,
+      "kind": "failure"
+    },
+    {
+      "prefix": "Controller unavailable: ",
+      "plain": "The background controller could not be reached.",
+      "decision": false,
+      "kind": "failure"
+    },
+    {
+      "prefix": "Unbound recipe field: ",
+      "plain": "Settings check failed: a required provider setting is missing.",
+      "decision": false,
+      "kind": "failure"
+    },
+    {
+      "prefix": "Unsupported before readback;",
+      "plain": "Removal check failed: Gozar cannot check this route before removing it.",
+      "decision": false,
+      "kind": "failure"
+    },
+    {
+      "prefix": "Unsupported after readback;",
+      "plain": "Removal check failed: Gozar cannot check whether this route was removed.",
+      "decision": false,
+      "kind": "failure"
+    },
+    {
+      "prefix": "before readback failed;",
+      "plain": "Removal check failed: Gozar could not read the route settings before removal.",
+      "decision": false,
+      "kind": "failure"
+    },
+    {
+      "prefix": "after readback failed;",
+      "plain": "Removal check failed: Gozar could not confirm the route settings after removal.",
+      "decision": false,
+      "kind": "failure"
+    }
+  ],
+  "reaches": {
+    "internet": "the internet",
+    "tailnet": "your Tailscale network",
+    "lan": "your local network",
+    "this-device": "this computer",
+    "unknown": "the selected client network"
+  }
+}

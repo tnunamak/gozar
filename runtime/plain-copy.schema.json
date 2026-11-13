@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Human copy for legacy session output (not part of a reply)",
+  "type": "object",
+  "required": [
+    "caveats",
+    "patterns",
+    "reaches"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "caveats": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Copy"
+      }
+    },
+    "patterns": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Pattern"
+      }
+    },
+    "reaches": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "Copy": {
+      "type": "object",
+      "required": [
+        "plain",
+        "decision",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "plain": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decision": {
+          "type": "boolean"
+        },
+        "kind": {
+          "enum": [
+            "note",
+            "setup",
+            "failure"
+          ]
+        }
+      }
+    },
+    "Pattern": {
+      "type": "object",
+      "required": [
+        "prefix",
+        "plain",
+        "decision",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plain": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decision": {
+          "type": "boolean"
+        },
+        "kind": {
+          "enum": [
+            "note",
+            "setup",
+            "failure"
+          ]
+        }
+      }
+    }
+  }
+}

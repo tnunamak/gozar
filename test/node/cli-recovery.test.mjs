@@ -83,7 +83,7 @@ test('packed local recovery action executes without global gozar, including quot
   const recovery = human.split('After sleep or network loss: ')[1]?.split(';')[0];
   assert.ok(recovery, human);
   const rechecked = await run('/bin/sh',['-c',recovery],{env,timeout:10000});
-  assert.match(rechecked.stdout,/Route checks passed/);
+  assert.match(rechecked.stdout,/Public URL: https:\/\/a.tunnl.gg/);
   assert.equal(commands.at(-1),'health');
   for (const line of human.split('\n').filter(line => /^(Status|Stop): /.test(line))) {
     assert.ok(line.includes(installedCli.replaceAll("'", "'\\''")), line);

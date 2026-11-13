@@ -47,3 +47,9 @@ The route API sits on top of the engine described above. An app states requireme
 7. **Platform.** `packages/gozar-node/platform.mjs` is the one place that decides which operating systems Gozar supports: Linux and macOS. Any other value makes every candidate `unsupported`. Each adapter may still answer `unsupported` through `ctx.platform`.
 
 The CLI commands in the [README](../README.md#route-by-requirement) read the same requests from files and print the same results as the root exports.
+
+## Session presentation
+
+`expose --port`, `status`, `health` and `stop` share the human renderer. The selected adapter's `copy.human` holds address wording, a short selection name, an alternative summary and a setup step. These fields extend the legacy normalized plan definitions; they do not change the provider-definition schema or the public reply. `runtime/plain-copy.json` maps engineering caveats to plain copy, a decision flag and a note/setup/failure kind. Its schema is `runtime/plain-copy.schema.json`; the catalog test checks coverage of adapter caveats, core errors and host errors. Unexpected runtime error text stays in verbose and JSON output.
+
+`--alternatives` lists usable session plans from the recommendations and their detection status. It continues to the compact plan and existing approval flow. `--via` accepts the printed selection name or the adapter ID. `--verbose` appends the former full engineering view, including every provider's limitations. JSON serialization uses the original reply and does not run the human renderer.
