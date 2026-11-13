@@ -7,7 +7,8 @@ const MIN_INTERVAL_MS = 250;
 
 // Everything a person would act on. Proof timestamps move on every poll and are not a change.
 const fingerprint = view => JSON.stringify([view.handle, view.origin, view.published, view.state, view.ownership, view.properties,
-  view.ingress && { ...view.ingress, verifiedAt: undefined, validUntil: undefined }, view.verification.status, view.limits, view.cleanup]);
+  view.ingress && { ...view.ingress, verifiedAt: undefined, validUntil: undefined }, view.verification.status, view.limits, view.cleanup,
+  view.routeState, view.hostConfiguration, view.facts, view.actions]);
 
 function abortable(promise, signal) {
   if (signal.aborted) return Promise.resolve({ aborted: true });
@@ -45,7 +46,8 @@ export function watchRoutes(request, deps = {}) {
       } catch (cause) {
         const error = normalizeError(cause);
         if (error.code === 'route_not_found') { view = releasedView(last, handle); terminal = true; }
-        else if (error.code === 'provider_unavailable' && last) view = { ...last, state: 'unknown' };
+        else if (error.code === 'provider_unavailable' && last) view = { ...last, state: 'unknown', routeState: 'unknown', published: null,
+          verification: { ...last.verification, status: 'unverified', checks: [], results: [] } };
         else if (error.code !== 'busy') throw error;
       }
       if (view) {

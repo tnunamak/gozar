@@ -2307,7 +2307,76 @@
       ],
       "additionalProperties": false
     },
-    "ConfigurationField": {
+    "Configuration": {
+      "type": "object",
+      "properties": {
+        "values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "credentials": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "known",
+                  "value"
+                ],
+                "properties": {
+                  "known": {
+                    "const": true
+                  },
+                  "value": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": [
+                  "known",
+                  "reason"
+                ],
+                "properties": {
+                  "known": {
+                    "const": false
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Action"
+          }
+        },
+        "inputRequirements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRequirement"
+          }
+        }
+      },
+      "required": [
+        "inputRequirements",
+        "values",
+        "credentials",
+        "actions"
+      ],
+      "additionalProperties": false
+    },
+    "InputRequirement": {
       "type": "object",
       "properties": {
         "id": {
@@ -2317,12 +2386,6 @@
           "type": "string"
         },
         "kind": {
-          "enum": [
-            "secret",
-            "value"
-          ]
-        },
-        "format": {
           "enum": [
             "text",
             "domain",
@@ -2340,46 +2403,23 @@
         },
         "validation": {
           "const": "syntax-only"
+        },
+        "secret": {
+          "type": "boolean"
+        },
+        "help": {
+          "type": "string"
         }
       },
       "required": [
         "id",
         "label",
         "kind",
-        "format",
         "required",
         "obtainUrl",
-        "validation"
-      ],
-      "additionalProperties": false
-    },
-    "Configuration": {
-      "type": "object",
-      "properties": {
-        "fields": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ConfigurationField"
-          }
-        },
-        "values": {
-          "type": "object"
-        },
-        "credentials": {
-          "type": "object"
-        },
-        "actions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Action"
-          }
-        }
-      },
-      "required": [
-        "fields",
-        "values",
-        "credentials",
-        "actions"
+        "validation",
+        "secret",
+        "help"
       ],
       "additionalProperties": false
     }

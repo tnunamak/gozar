@@ -111,12 +111,6 @@ test('fakeRegistry checks its input, writes only under its own directory and rem
   await assert.rejects(access(registry.root));
 });
 
-test('red: an attached fake is refused, because expose would start a real controller process for it', async () => {
-  const error = await fakeRegistry({ id: fakeId(), kinds: ['attached'], reach: 'internet' }).then(() => null, e => e);
-  assert.equal(error?.code, 'invalid_input');
-  assert.match(error.message, /only session and durable fakes are supported/);
-});
-
 test('red: cleanup with a caller directory removes the providers directory it made, and leaves the caller directory and other fakes', async t => {
   const dir = await mkdtemp(join(homedir(), '.tmp', 'gozar-fake-dir-'));
   t.after(() => rm(dir, { recursive: true, force: true }));

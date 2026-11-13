@@ -6,6 +6,7 @@ import { createRouteApi, fakeRegistry, fakeReadContext, fakeRouteScenarios } fro
 import { storeSecret } from '@tnunamak/gozar';
 import { renderScreen } from '../../examples/remote-access-screen.mjs';
 import { loadAdapters } from '../../packages/gozar-node/adapter-runtime.mjs';
+import { projectSession } from '../../packages/gozar-node/route-view.mjs';
 import { assertShape, scratch, query } from './route-schema-check.mjs';
 
 test('every adapter fills availability and extensible facts without provider mutations', async t => {
@@ -44,6 +45,17 @@ test('fake states cover every admitted kind with expiry, checks and cleanup as d
   }
   const screen=renderScreen({candidates:[]},routes);
   for(const kind of ['session','attached','durable']) for(const state of ['detected','verified','expired','cleanup-unconfirmed']) assert.ok(screen.includes(`Route: ${kind} ${state}`));
+});
+
+test('session proof uses the recorded time, vantage and check results rather than the read clock', () => {
+  const fixture = fakeRouteScenarios()[1];
+  const receipt = { observedAtMs: 1000, expiresAtMs: 3000, vantage: 'public', tls: true, instanceMatched: true, sse: false };
+  const route = projectSession({ snapshot: {phase:'published-ready',published:fixture.origin}, validation:{probeReceipt:receipt} },
+    {handle:fixture.handle,properties:fixture.properties,now:2000});
+  assert.equal(route.verification.checkedAt, new Date(1000).toISOString());
+  assert.equal(route.verification.vantage,'public');
+  assert.equal(route.verification.validUntil.value,new Date(3000).toISOString());
+  assert.deepEqual(route.verification.checks,['tls','nonce']);
 });
 
 test('secret intake, read-back, edit and rotation never return a secret', async t => {

@@ -118,9 +118,9 @@ export type Fact = { id: string; label: string; value: string | number | boolean
 export type Availability = Record<Usage['kind'], { state: 'available' | 'detect-only' | 'unsupported'; reason: string }>;
 export type Prerequisite = { id: string; label: string; state: 'present' | 'missing' | 'unknown' | 'denied';
   observedAt: string; version: Observation<string>; remedy: Action | null };
-export type ConfigurationField = { id: string; label: string; kind: 'secret' | 'value'; format: 'text' | 'domain' | 'https-origin';
+export type InputRequirement = { id: string; label: string; kind: 'text' | 'domain' | 'https-origin'; secret: boolean; help: string;
   required: boolean; obtainUrl: string | null; validation: 'syntax-only' };
-export type Configuration = { fields: ConfigurationField[]; values: Record<string,string>;
+export type Configuration = { inputRequirements: InputRequirement[]; values: Record<string,string>;
   credentials: Record<string,Observation<boolean>>; actions: Action[] };
 
 export type Candidate = {
@@ -415,3 +415,13 @@ export function cancelHandBack(request: { routeId: string; transfer: string; hom
 
 /** Stores secret bytes privately; returns an opaque handle only. */
 export function storeSecret(request: {home: string; value: string | Uint8Array}): Promise<{handle: string}>;
+
+/** Trusted executable extension registry. Relative provider paths resolve under root/providers. */
+export function createGozar(options?: {manifest?: string | {providers: {id:string; module:string; definition:string}[]}; root?: string}): {
+ catalogRoutes: typeof catalogRoutes; expose: (request:ExposeRequest)=>Promise<RouteView>;
+ ensureRoute: typeof ensureRoute; adoptRoute: typeof adoptRoute; routeStatus: typeof routeStatus;
+ closeRoute: typeof closeRoute; suspendRoute: typeof suspendRoute; watchRoutes: typeof watchRoutes;
+ runSetupAction: typeof runSetupAction; inspectLegacyRoute: typeof inspectLegacyRoute;
+ getRoutePreferences: typeof getRoutePreferences; setRoutePreferences: typeof setRoutePreferences;
+ resolveClientAddress: typeof resolveClientAddress;
+};

@@ -51,8 +51,10 @@ function validate(schema, value, defs, path = '$') {
         if (kinds.object(value)) for (const [name, sub] of Object.entries(schema.properties)) if (name in value) errors.push(...validate(sub, value[name], defs, `${path}.${name}`));
         break;
       case 'additionalProperties':
-        if (schema.additionalProperties !== false) throw new Error('Only additionalProperties:false is supported');
-        if (kinds.object(value)) for (const name of Object.keys(value)) if (!(name in (schema.properties ?? {}))) errors.push(`${path}: unknown property ${name}`);
+        if (kinds.object(value)) for (const name of Object.keys(value)) if (!(name in (schema.properties ?? {}))) {
+          if (schema.additionalProperties === false) errors.push(`${path}: unknown property ${name}`);
+          else errors.push(...validate(schema.additionalProperties, value[name], defs, `${path}.${name}`));
+        }
         break;
       case 'items': if (Array.isArray(value)) value.forEach((item, i) => errors.push(...validate(schema.items, item, defs, `${path}[${i}]`))); break;
       case 'oneOf': {
@@ -82,7 +84,7 @@ test('both schemas parse, use only supported keywords and resolve every $ref', (
   }
 });
 
-test('schemaVersion is const 1 wherever a shape carries it', () => {
+test('request and response schema versions are explicit', () => {
   for (const shape of ['Query', 'Catalog', 'RouteView', 'GozarError', 'PreferenceRecord', 'SetupActionResult', 'WatchEvent', 'InspectLegacyRouteResult']) {
     assert.deepEqual(catalogSchema.$defs[shape].properties.schemaVersion, { const: ['Catalog','RouteView'].includes(shape) ? 2 : 1 }, shape);
   }

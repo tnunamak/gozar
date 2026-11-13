@@ -1458,7 +1458,7 @@ test('stopped durable removal succeeds repeatedly without provider calls while s
     assert.equal(closed.result?.state, 'released', JSON.stringify(closed));
     assert.equal(closed.result.origin, null);
     assert.equal(closed.result.published, null);
-    assert.deepEqual(closed.result.cleanup, { state: 'none' });
+    assert.deepEqual(closed.result.cleanup, { state: 'confirmed' });
     assertShape('RouteView', closed.result);
     assert.deepEqual((await w.run('release', { routeId: 'coordinator', mode: 'remove' })).result,
       { schemaVersion: 1, routeId: 'coordinator', removed: false, providerRemoved: false, cleanupDebt: null });
@@ -1499,7 +1499,7 @@ test('interrupted user stop removal uses compare-and-set and preserves foreign r
     assert.equal(reply.error, undefined, JSON.stringify(reply));
     if (operation === 'apiClose') {
       assert.equal(reply.result.state, foreign ? 'uncertain' : 'released');
-      assert.deepEqual(reply.result.cleanup, foreign ? { state: 'debt', message: 'rule-changed' } : { state: 'none' });
+      assert.deepEqual(reply.result.cleanup, foreign ? { state: 'unconfirmed', message: 'rule-changed' } : { state: 'confirmed' });
       assertShape('RouteView', reply.result);
     } else {
       assert.deepEqual(reply.result, { schemaVersion: 1, routeId: 'coordinator', removed: !foreign,

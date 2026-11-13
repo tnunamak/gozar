@@ -90,8 +90,13 @@ export function projectSession(reply, { handle, properties, ingress = null, limi
   const snapshot = reply.snapshot ?? {};
   const state = PHASES[snapshot.phase] ?? 'unknown';
   const published = state === 'usable' && typeof snapshot.published === 'string' ? snapshot.published : null;
+  const receipt = reply.validation?.probeReceipt;
+  const verification = verificationOf(state, state === 'usable' ? receipt?.observedAtMs ?? snapshot.checkedAtMs ?? null : null,
+    receipt ? ['tls', 'nonce', 'sse'].filter(check => ({ tls: receipt.tls, nonce: receipt.instanceMatched, sse: receipt.sse })[check] === true)
+      : checksFor(properties?.proof?.checks, { sse: reply.sseChecked === true, origin: published }));
+  if (receipt && ['public', 'tailnet', 'lan', 'this-device'].includes(receipt.vantage)) verification.vantage = receipt.vantage;
   return view({ target: reply.target ?? snapshot.target, expiresAt: snapshot.expiresAt ?? (Number.isFinite(snapshot.expiresAtMs) ? iso(snapshot.expiresAtMs) : undefined), validUntil: Number.isFinite(reply.validation?.probeReceipt?.expiresAtMs) ? iso(reply.validation.probeReceipt.expiresAtMs) : undefined, facts, now, handle, origin: snapshot.published ?? snapshot.candidate ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
-    verification: verificationOf(state, state === 'usable' ? reply.validation?.probeReceipt?.checkedAtMs ?? now : null, checksFor(properties?.proof?.checks, { sse: reply.sseChecked === true, origin: published })), limits: limitsOf(limits, 5_000),
+    verification, limits: limitsOf(limits, 5_000),
     cleanup: cleanupForSession(reply) });
 }
 
@@ -107,15 +112,18 @@ export function projectExternal(record, { handle, now = Date.now() }) {
 /** From an attached lease record kept by its controller. */
 export function projectAttached(lease, { handle, now = Date.now() }) {
   const state = STATES.has(lease.state) ? lease.state : 'unknown';
-  return view({ target: lease.target, expiresAt: lease.expiresAt ?? (Number.isFinite(lease.expiresAtMs) ? iso(lease.expiresAtMs) : undefined), validUntil: lease.ingress?.validUntil, now, handle, origin: lease.origin ?? null, published: state === 'usable' ? lease.origin ?? null : null, state, ownership: 'gozar-owned',
-    properties: lease.properties ? completeProperties(lease.properties) : lease.properties, ingress: lease.ingress ?? null, verification: verificationOf(state, state === 'usable' ? lease.checkedAtMs ?? now : lease.checkedAtMs ?? null, checksFor(lease.properties?.proof?.checks, { sse: lease.sseChecked === true, origin: lease.origin ?? null })),
+  const verification = lease.proof ? { status: state === 'usable' && lease.proof.status === 'verified' ? 'verified' : 'unverified', checkedAt: lease.proof.checkedAt,
+    vantage: lease.proof.vantage, checks: state === 'usable' ? lease.proof.checks : [] }
+    : verificationOf(state, state === 'usable' ? lease.checkedAtMs ?? now : lease.checkedAtMs ?? null, checksFor(lease.properties?.proof?.checks, { sse: lease.sseChecked === true, origin: lease.origin ?? null }));
+  return view({ target: lease.target, expiresAt: lease.expiresAt ?? (Number.isFinite(lease.expiresAtMs) ? iso(lease.expiresAtMs) : undefined), validUntil: lease.proof?.validUntil ?? lease.ingress?.validUntil, facts: lease.facts, now, handle, origin: lease.origin ?? null, published: state === 'usable' ? lease.origin ?? null : null, state, ownership: 'gozar-owned',
+    properties: lease.properties ? completeProperties(lease.properties) : lease.properties, ingress: lease.ingress ?? null, verification,
     limits: limitsOf(lease.limits, 5_000), cleanup: lease.cleanup?.state === 'debt' ? { ...lease.cleanup, state: 'unconfirmed' } : lease.cleanup ?? { state: 'none' } });
 }
 
 export function releasedView(last, handle) {
   const base = last ?? view({ handle, origin: null, published: null, state: 'released', ownership: handle.kind === 'external' ? 'external-owned' : 'gozar-owned',
     properties: unknownProperties(), verification: proven('unverified', null, []), limits: { recommendedPollIntervalMs: 60_000, idleTimeoutMs: null } });
-  return enrichRoute({ ...base, state: 'released', published: null, origin: null, ingress: null, cleanup: { state: 'confirmed' }, verification: proven('unverified', base.verification.checkedAt, []) });
+  return enrichRoute({ ...base, state: 'released', published: null, ingress: null, cleanup: { state: 'confirmed' }, verification: proven('unverified', base.verification.checkedAt, []) });
 }
 
 // --- Dispatch -----------------------------------------------------------------------------------

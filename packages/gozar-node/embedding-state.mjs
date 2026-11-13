@@ -21,12 +21,12 @@ export function prerequisitesFor(inspection, observedAt) {
 }
 
 export function configurationFor(actions, saved) {
-  const fields = actions.filter(action => ['provide-secret', 'provide-value'].includes(action.kind)).map(action => ({
+  const inputRequirements = actions.filter(action => ['provide-secret', 'provide-value'].includes(action.kind)).map(action => ({
     id: action.id, label: action.secretLabel ?? action.valueLabel ?? action.label,
-    kind: action.kind === 'provide-secret' ? 'secret' : 'value', format: action.valueFormat ?? 'text',
+    kind: action.valueFormat ?? 'text', secret: action.kind === 'provide-secret', help: action.help ?? action.label,
     required: action.required !== false, obtainUrl: action.obtainUrl ?? null, validation: 'syntax-only',
   }));
-  return { fields, values: saved.values, credentials: Object.fromEntries(fields.filter(field => field.kind === 'secret')
+  return { inputRequirements, values: saved.values, credentials: Object.fromEntries(inputRequirements.filter(field => field.secret)
     .map(field => [field.id, saved.credentials[field.id] ?? known(false)])),
     actions: actions.filter(action => ['provide-secret', 'provide-value'].includes(action.kind)) };
 }

@@ -20,6 +20,8 @@ export interface Adapter {
   properties(facts: unknown): Properties;
   setupActions(facts: unknown): Action[];
   configurationActions?(): Action[];
+  /** Prepares this attempt's protocol-specific challenge before provider creation. */
+  prepareProof?(ctx: ReadContext, request: AdapterRequest): Promise<AdapterProofSession>;
   setup(ctx: SetupContext, actionId: string, secretHandle?: string): Promise<SetupResult>;
   plan(ctx: ReadContext, request: AdapterRequest): Promise<AdapterPlan>;
   create(ctx: AdmittedEffectContext, plan: AdapterPlan): Promise<Receipt>;
@@ -39,6 +41,18 @@ export type AdapterDefinition = {
   prerequisites?: {id: string; label: string; observation: string; actionId?: string}[];
   supportedKinds: ('session' | 'attached' | 'durable')[];
   disclosure: Disclosure;
+  /** URL schemes accepted from this adapter, including the colon; default derives from transport. */
+  originSchemes?: string[];
+};
+
+/** The adapter binds verification to the fresh challenge and this attempt's endpoint. */
+export type AdapterProofSession = {
+  target: string;
+  verify(input: {origin: string; receipt: Receipt}): Promise<{
+    status: 'verified' | 'unverified'; checkedAt: string | null; validUntil?: string;
+    vantage: RouteView['verification']['vantage']; checks: RouteView['verification']['checks']; facts?: Fact[];
+  }>;
+  close(): Promise<void>;
 };
 
 export type AdapterRequest = {

@@ -176,18 +176,18 @@ test('a durable catalog asks the engine for plan facts with the loaded adapters 
 test('RouteView.verification says where the last check ran from and what it passed', () => {
   const handle = { kind: 'external', id: 'https://example.test', generation: 0 };
   const verified = projectExternal({ origin: 'https://example.test', verification: { status: 'verified', checkedAt: '2026-11-12T12:00:00.000Z' } }, { handle });
-  assert.deepEqual(verified.verification, { status: 'verified', checkedAt: '2026-11-12T12:00:00.000Z', vantage: 'this-device', checks: ['nonce', 'tls'] });
+  assert.deepEqual(verified.verification, { status: 'verified', checkedAt: '2026-11-12T12:00:00.000Z', vantage: 'this-device', checks: ['nonce', 'tls'], validUntil: {known: false, reason: 'not-observed'}, results: [{check:'nonce',status:'passed'},{check:'tls',status:'passed'}] });
   const failed = projectExternal({ origin: 'https://example.test', verification: { status: 'failed', checkedAt: '2026-11-12T12:00:00.000Z' } }, { handle });
-  assert.deepEqual(failed.verification, { status: 'unverified', checkedAt: '2026-11-12T12:00:00.000Z', vantage: 'this-device', checks: [] });
+  assert.deepEqual(failed.verification, { status: 'unverified', checkedAt: '2026-11-12T12:00:00.000Z', vantage: 'this-device', checks: [], validUntil: {known: false, reason: 'not-observed'}, results: [] });
   const props = { ...adapters.find(a => a.id === 'tailscale-funnel').definition.capabilities };
   const sessionHandle = { handle: { kind: 'session', id: 's', generation: 0 }, properties: props, now: 1_000 };
-  const session = projectSession({ snapshot: { phase: 'published-ready', published: 'https://example.test' }, sseChecked: true }, sessionHandle);
+  const session = projectSession({ snapshot: { phase: 'published-ready', published: 'https://example.test', checkedAtMs: 1000 }, sseChecked: true }, sessionHandle);
   assert.deepEqual(session.verification.checks, ['tls', 'nonce', 'sse']);
   assert.equal(session.verification.vantage, 'this-device');
   // The controller made no stream check, so the view claims none; an http origin claims no TLS.
   assert.deepEqual(projectSession({ snapshot: { phase: 'published-ready', published: 'https://example.test' } }, sessionHandle).verification.checks, ['tls', 'nonce']);
   assert.deepEqual(projectSession({ snapshot: { phase: 'published-ready', published: 'http://example.test' }, sseChecked: true }, sessionHandle).verification.checks, ['nonce', 'sse']);
   const starting = projectSession({ snapshot: { phase: 'starting' } }, { handle: { kind: 'session', id: 's', generation: 0 }, properties: props });
-  assert.deepEqual(starting.verification, { status: 'unverified', checkedAt: null, vantage: 'none', checks: [] });
+  assert.deepEqual(starting.verification, { status: 'unverified', checkedAt: null, vantage: 'none', checks: [], validUntil: {known: false, reason: 'not-observed'}, results: [] });
   for (const view of [verified, failed, session, starting, releasedView(null, handle)]) assertShape('RouteView', view);
 });

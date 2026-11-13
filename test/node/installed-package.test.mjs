@@ -53,7 +53,7 @@ console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeId
   const seen = JSON.parse(stdout);
   assert.deepEqual(seen.rootExports, seen.declared, 'the root exports exactly the functions route-contract.d.ts declares');
   assert.deepEqual(seen.serviceExports, ['addService', 'cancelHandBack', 'confirmHandBack', 'createServiceVerifier', 'releaseRoute', 'removeService', 'statusServices']);
-  assert.deepEqual(seen.testingExports, ['createReadContext', 'createRouteApi', 'fakeReadContext', 'fakeRegistry'], 'the testing export is in the archive and names its four helpers');
+  assert.deepEqual(seen.testingExports, ['createReadContext', 'createRouteApi', 'fakeReadContext', 'fakeRegistry', 'fakeRouteScenarios'], 'the testing export is in the archive and names its public helpers');
   assert.deepEqual(seen.fakeIds, ['fake-0a1b2c3d']);
   assert.deepEqual(seen.fakeEligible, [true], 'the fake provider is listed from the installed bytes');
   assert.equal(seen.types, './packages/gozar-node/route-contract.d.ts');
@@ -62,6 +62,17 @@ console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeId
   assert.deepEqual(seen.providers, JSON.parse(await readFile(new URL('../../adapters/manifest.json', import.meta.url), 'utf8')).providers.map(provider => provider.id), 'the installed registry is the source registry');
   assert.equal(seen.candidates, seen.providers.length, 'one candidate per installed registry entry');
   assert.equal(seen.tokens, 0, 'nothing is ready on a host with no provider tooling, so no token is issued');
+  const example = join(installed, 'examples/remote-access-screen.mjs');
+  const exampleEnv = { PATH: emptyBin, HOME: stateHome, GOZAR_HOME: stateHome };
+  const fakeScreen = await exec(process.execPath, [example, '--fakes'], { cwd: project, timeout: 60_000, env: exampleEnv });
+  for (const kind of ['session', 'attached', 'durable']) for (const state of ['detected', 'verified', 'expired', 'cleanup-unconfirmed']) {
+    assert.ok(fakeScreen.stdout.includes(`Route: ${kind} ${state}`), `${kind} ${state}`);
+  }
+  assert.match(fakeScreen.stdout, /Credential present.*true/);
+  assert.doesNotMatch(fakeScreen.stdout, /fixture-credential-value/);
+  const detectedScreen = await exec(process.execPath, [example, '--detect'], { cwd: project, timeout: 60_000, env: exampleEnv });
+  assert.match(detectedScreen.stdout, /detect-only/);
+  assert.match(detectedScreen.stdout, /needs-provider-call/);
   for (const path of ['packages/gozar-node/route-contract.d.ts', 'runtime/route-catalog.schema.json', 'runtime/error-normalization.json', 'adapters/providers/ngrok-https-edge/index.mjs']) {
     assert.ok((await readFile(join(installed, path), 'utf8')).length > 0, path);
   }

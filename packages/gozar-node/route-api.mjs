@@ -24,7 +24,7 @@ export function createRouteApi(deps = {}) {
   const platform = () => deps.platform ?? process.platform;
   let loaded;
   const adapters = async () => deps.adapters ?? (loaded ??= runtime().then(module => module.loadAdapters(deps.manifest ? { manifest: deps.manifest, root: deps.root } : undefined)).catch(error => { loaded = undefined; throw error; }));
-  const shared = async () => ({ adapters: await adapters(), platform: platform(), ...(deps.readContext ? { readContext: deps.readContext } : {}) });
+  const shared = async () => ({ adapters: await adapters(), platform: platform(), ...(deps.manifest ? { registry: { manifest: deps.manifest, root: deps.root } } : {}), ...(deps.readContext ? { readContext: deps.readContext } : {}) });
   const guard = async action => { try { return await action(); } catch (error) { throw normalizeError(error); } };
   // A `verify` option ({ origin, target }) replaces the challenge verifier for the durable calls below. It is for tests.
   const verified = async action => deps.verify ? (await engine()).withVerifier(deps.verify, action) : action();

@@ -209,6 +209,12 @@
             },
             "additionalProperties": false
           }
+        },
+        "originSchemes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false

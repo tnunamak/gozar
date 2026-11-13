@@ -28,7 +28,7 @@ function validate(node, value, defs, path = '$') {
       case 'pattern': if (typeof value === 'string' && !new RegExp(node.pattern).test(value)) errors.push(`${path}: pattern mismatch`); break;
       case 'required': if (kinds.object(value)) for (const name of node.required) if (!(name in value)) errors.push(`${path}: missing ${name}`); break;
       case 'properties': if (kinds.object(value)) for (const [name, sub] of Object.entries(node.properties)) if (name in value) errors.push(...validate(sub, value[name], defs, `${path}.${name}`)); break;
-      case 'additionalProperties': if (kinds.object(value)) for (const name of Object.keys(value)) if (!(name in (node.properties ?? {}))) errors.push(`${path}: unknown property ${name}`); break;
+      case 'additionalProperties': if (kinds.object(value)) for (const name of Object.keys(value)) if (!(name in (node.properties ?? {}))) { if (node.additionalProperties === false) errors.push(`${path}: unknown property ${name}`); else errors.push(...validate(node.additionalProperties, value[name], defs, `${path}.${name}`)); } break;
       case 'items': if (Array.isArray(value)) value.forEach((item, i) => errors.push(...validate(node.items, item, defs, `${path}[${i}]`))); break;
       case 'oneOf': { const hits = node.oneOf.filter(sub => validate(sub, value, defs, path).length === 0).length; if (hits !== 1) errors.push(`${path}: matches ${hits} oneOf branches`); break; }
       case 'anyOf': if (!node.anyOf.some(sub => validate(sub, value, defs, path).length === 0)) errors.push(`${path}: matches no anyOf branch`); break;

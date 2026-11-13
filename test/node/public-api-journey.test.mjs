@@ -16,13 +16,13 @@ test('journey: durable route by requirement, in separate processes, from catalog
   const w = await durableWorld(world, t);
   const { result: catalog, error } = await w.api('catalogRoutes', w.query());
   assert.equal(error, undefined, JSON.stringify(error));
-  assert.equal(catalog.schemaVersion, 1);
+  assert.equal(catalog.schemaVersion, 2);
   const { approval } = approvalFrom(catalog);
 
   const created = await w.api('ensureRoute', { ...w.query(), approval });
   assert.equal(created.error, undefined, JSON.stringify(created.error));
   const view = created.result;
-  assert.equal(view.schemaVersion, 1);
+  assert.equal(view.schemaVersion, 2);
   assert.deepEqual([view.handle.kind, view.handle.id], ['durable', 'coordinator']);
   assert.equal(view.state, 'usable');
   assert.equal(view.ownership, 'gozar-owned');

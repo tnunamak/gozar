@@ -14,7 +14,7 @@ Use availability[usage.kind] to decide whether Gozar can execute a choice.
 Detect-only candidates never receive candidate tokens, even when local software
 is present. Setup readiness alone does not establish executable support.
 
-Render prerequisites independently of route proof. Render configuration.fields
+Render prerequisites independently of route proof. Render configuration.inputRequirements
 as inputs. Read configuration.values for plain saved values and credentials for
 presence only. storeSecret({home,value}) returns {handle}; pass it as secretHandle
 to the approved runSetupAction. The same approved actions edit and rotate saved

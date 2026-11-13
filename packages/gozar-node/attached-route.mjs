@@ -139,7 +139,7 @@ export async function openAttachedRoute(request, deps = {}) {
       await trustedDirectory(directory, true);
       await privateDirectory(directory);
       await atomicWrite(join(directory, 'bootstrap.json'), { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
-        leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) });
+        ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) });
       const child = spawn(process.execPath, [here, '--controller', directory], { detached: true, stdio: 'ignore',
         env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
       child.unref();
@@ -190,8 +190,8 @@ export async function attachedStatus(request, deps = {}) {
     if (!error.gone) throw error;
     const state = await viewFromRecord(directory, handle);
     if (state.phase === 'released') return releasedView(state.lastView, handle);
-    return { ...state.lastView, state: 'uncertain', published: null, ingress: null,
-      cleanup: { state: 'debt', message: 'The route controller stopped before it removed the route' } };
+    return { ...state.lastView, state: 'uncertain', routeState: 'cleanup-unconfirmed', published: null, ingress: null,
+      cleanup: { state: 'unconfirmed', message: 'The route controller stopped before it removed the route' } };
   }
 }
 
@@ -208,20 +208,22 @@ export async function closeAttachedRoute(request, deps = {}) {
     // The controller died with the route up: remove it from the saved receipt, in this process.
     const adapters = await adaptersOf(deps);
     const adapter = adapters.find(item => item.id === state.adapterId);
-    if (!adapter || !state.receipt || !deps.effectContext) return { ...state.lastView, state: 'uncertain', published: null, ingress: null,
-      cleanup: { state: 'debt', message: 'The route controller stopped before it removed the route' } };
+    if (!adapter || !state.receipt || !deps.effectContext) return { ...state.lastView, state: 'uncertain', routeState: 'cleanup-unconfirmed', published: null, ingress: null,
+      cleanup: { state: 'unconfirmed', message: 'The route controller stopped before it removed the route' } };
     const read = bindConfiguration(await readContextFor(deps, await canonicalHome(request.home), deps.platform ?? process.platform), adapter.id);
     const observed = await adapter.observe(read, state.request);
     const removal = await adapter.remove(bindConfiguration({ ...read, generation: state.handle.generation, ...deps.effectContext({ adapter, readContext: read, request: state.request, plan: state.plan, generation: state.handle.generation }) }, adapter.id), state.receipt, observed);
     return removal.removed && !removal.debt ? releasedView(state.lastView, handle)
-      : { ...releasedView(state.lastView, handle), state: 'uncertain', cleanup: { state: 'debt', message: removal.debt?.message ?? 'The route could not be removed' } };
+      : { ...releasedView(state.lastView, handle), state: 'uncertain', cleanup: { state: 'unconfirmed', message: removal.debt?.message ?? 'The route could not be removed' } };
   }
 }
 
 // --- The controller -----------------------------------------------------------------------------
 
-const credentialFreeOrigin = value => {
-  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash ? url.origin : null; }
+const credentialFreeOrigin = (value, properties, schemes) => {
+  try { const url = new URL(value); const allowed = schemes ?? (properties?.transport === 'http' && ['lan', 'this-device'].includes(properties?.reach) ? ['http:'] : ['https:']);
+    return allowed.includes(url.protocol) && !url.username && !url.password && ['', '/'].includes(url.pathname) && !url.search && !url.hash && url.hostname
+      ? (url.origin === 'null' ? `${url.protocol}//${url.host}` : url.origin) : null; }
   catch { return null; }
 };
 // The origin the provider allocated at create is Receipt.origin (amendment 2); nothing else names a published address.
@@ -235,7 +237,7 @@ const GATE_LIFETIME_MS = 2_147_483_647;
  */
 export async function runAttachedController(directory, runtime = {}) {
   const bootstrap = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
-  const adapters = runtime.adapters ?? await (await loadRuntime())?.loadAdapters?.();
+  const adapters = runtime.adapters ?? await (await loadRuntime())?.loadAdapters?.(bootstrap.registry);
   const adapter = adapters?.find(item => item.id === bootstrap.adapterId);
   if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available');
   const read = bindConfiguration(await readContextFor(runtime, bootstrap.home, bootstrap.platform), adapter.id);
@@ -244,7 +246,7 @@ export async function runAttachedController(directory, runtime = {}) {
   const handle = { kind: 'attached', id: bootstrap.id, generation: 0 };
   const lease = { target: bootstrap.request.target, state: 'creating', origin: null, properties: adapter.definition.capabilities, ingress: null,
     limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
-  let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null;
+  let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null, proofSession = null;
   const nonce = randomBytes(32).toString('hex');
   const lastView = () => projectAttached(lease, { handle, now: now() });
   const save = () => atomicWrite(join(directory, 'state.json'), { schemaVersion: 1, adapterId: adapter.id, request: bootstrap.request, plan: bootstrap.plan,
@@ -267,10 +269,20 @@ export async function runAttachedController(directory, runtime = {}) {
   };
   const gated = runtime.validation !== 'none';
 
+  async function checkProof(sse) {
+    const checked = proofSession ? await proofSession.verify({ origin: lease.origin ?? receipt.origin, receipt })
+      : await adapter.verify(gated ? { ...read, verifyChallenge: gateChecked(sse) } : read, receipt);
+    if (proofSession) {
+      lease.proof = checked;
+      lease.facts = [...(adapter.definition.facts ?? []), ...(checked.facts ?? [])];
+    }
+    return checked;
+  }
+
   async function verify() {
     if (!receipt || releasing) return;
     try {
-      const verification = await adapter.verify(gated ? { ...read, verifyChallenge: gateChecked(false) } : read, receipt);
+      const verification = await checkProof(false);
       if (!releasing) { lease.state = verification.status === 'verified' ? 'usable' : 'unverified'; lease.checkedAtMs = now(); lease.sseChecked = false; await save(); }
     } catch { if (!releasing) { lease.state = 'unverified'; await save(); } }
   }
@@ -278,24 +290,27 @@ export async function runAttachedController(directory, runtime = {}) {
     const observed = await adapter.observe(read, bootstrap.request);
     return adapter.remove(context, receipt, observed);
   }
-  const debtOf = removal => ({ state: 'debt', message: removal.debt?.message ?? 'The route could not be removed' });
+  const debtOf = removal => ({ state: 'unconfirmed', message: removal.debt?.message ?? 'The route could not be removed' });
   const creation = (async () => {
     try {
       if (!admitted) throw gozarError('unsupported', 'No admitted effect context is wired for this route');
       let plan = bootstrap.plan;
-      if (gated) {
+      if (gated && adapter.prepareProof) {
+        proofSession = await adapter.prepareProof(read, bootstrap.request);
+        plan = retarget(plan, bootstrap.request.target, proofSession.target);
+      } else if (gated) {
         gate = await createGate(portOf(bootstrap.request.target), { lifetimeMs: GATE_LIFETIME_MS, onExpire: () => release().then(finish) });
         plan = retarget(plan, bootstrap.request.target, `127.0.0.1:${gate.port}`);
       }
       receipt = await adapter.create(context, plan);
       handle.generation = receipt.generation;
       const facts = await adapter.runtimeFacts(read, receipt);
-      const origin = credentialFreeOrigin(receipt.origin);
+      const origin = credentialFreeOrigin(receipt.origin, facts.properties, adapter.definition.originSchemes);
       if (!origin) throw gozarError('provider_unavailable', 'The provider returned no usable origin');
       Object.assign(lease, { properties: facts.properties, ingress: facts.ingress ?? null, limits: facts.limits, origin, state: 'unverified' });
       await save();
       // Nothing is reported published until the validation passes; a failed check withdraws the route.
-      const checked = await adapter.verify(gated ? { ...read, verifyChallenge: gateChecked(claimsSse) } : read, receipt);
+      const checked = await checkProof(claimsSse);
       if (checked.status !== 'verified') throw gozarError('verification_failed', 'The route did not pass publication validation and was withdrawn');
       lease.state = 'usable'; lease.checkedAtMs = now(); lease.sseChecked = gated && claimsSse;
       await save();
@@ -305,7 +320,7 @@ export async function runAttachedController(directory, runtime = {}) {
       lease.state = 'lost';
       if (receipt) {
         try { const removal = await removeRoute(); if (!removal.removed || removal.debt) Object.assign(lease, { state: 'uncertain', cleanup: debtOf(removal) }); }
-        catch { Object.assign(lease, { state: 'uncertain', cleanup: { state: 'debt', message: 'The route could not be withdrawn; close it again' } }); }
+        catch { Object.assign(lease, { state: 'uncertain', cleanup: { state: 'unconfirmed', message: 'The route could not be withdrawn; close it again' } }); }
       }
       await atomicWrite(join(directory, 'failure.json'), failure);
       await save().catch(() => {});
@@ -319,9 +334,9 @@ export async function runAttachedController(directory, runtime = {}) {
       lease.state = 'releasing'; await save().catch(() => {});
       try {
         const removal = await removeRoute();
-        if (removal.removed && !removal.debt) lease.state = 'released';
+        if (removal.removed && !removal.debt) { lease.state = 'released'; lease.cleanup = { state: 'confirmed' }; }
         else { lease.state = 'uncertain'; lease.cleanup = debtOf(removal); }
-      } catch (cause) { lease.state = 'uncertain'; lease.cleanup = { state: 'debt', message: `Removal failed (${normalizeError(cause).code})` }; }
+      } catch (cause) { lease.state = 'uncertain'; lease.cleanup = { state: 'unconfirmed', message: `Removal failed (${normalizeError(cause).code})` }; }
       await save();
     })();
     return releasing;
@@ -373,6 +388,7 @@ export async function runAttachedController(directory, runtime = {}) {
   // Let the reply to the last command leave before the socket goes away.
   await new Promise(resolve => setTimeout(resolve, 50));
   await gate?.close().catch(() => {});
+  await proofSession?.close().catch(() => {});
   for (const socket of sockets) socket.destroy();
   await new Promise(resolve => server.close(resolve));
   return lastView();

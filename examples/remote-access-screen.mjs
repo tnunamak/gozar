@@ -1,4 +1,4 @@
-import { catalogRoutes } from '@tnunamak/gozar';
+import { catalogRoutes, storeSecret } from '@tnunamak/gozar';
 import { createRouteApi, fakeReadContext, fakeRegistry, fakeRouteScenarios } from '@tnunamak/gozar/testing';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -20,7 +20,7 @@ export function renderScreen(catalog, routes = [], host = { password: 'host-owne
       `Address: ${choice.properties.address.stability}; ports=${JSON.stringify(choice.properties.address.ports)}`, `Cost: ${choice.properties.cost.kind}`,
       `Availability: ${JSON.stringify(choice.availability)}`, `Setup: ${choice.setup.state}`);
     for (const item of choice.prerequisites) lines.push(`Prerequisite: ${item.label}: ${item.state}; observed=${item.observedAt}; version=${show(item.version)}; fix=${item.remedy?.label ?? 'no automatic fix'}`);
-    for (const field of choice.configuration.fields) lines.push(`Field: ${field.label}; kind=${field.kind}; format=${field.format}; validation=${field.validation}; obtain=${field.obtainUrl ?? 'not supplied'}`);
+    for (const field of choice.configuration.inputRequirements) lines.push(`Input requirement: ${field.label}; kind=${field.kind}; secret=${field.secret}; help=${field.help}; validation=${field.validation}; obtain=${field.obtainUrl ?? 'not supplied'}`);
     for (const [id, present] of Object.entries(choice.configuration.credentials)) lines.push(`Credential present (${id}): ${show(present)}`);
     lines.push(`Saved values: ${JSON.stringify(choice.configuration.values)}`, `Edit/rotate: ${choice.configuration.actions.map(action => action.label).join(', ') || 'no stored fields'}`,
       ...renderFacts(choice.facts));
@@ -48,6 +48,14 @@ export async function main(flag) {
       const registry = await fakeRegistry({ setupActions, id: 'screen-fixture', kinds: ['session', 'durable'], reach: 'internet', dir: join(home, 'registry') });
       try {
         const api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home }), profileHome: join(home, 'profile') });
+        const initial = await api.catalogRoutes(query);
+        for (const action of initial.candidates[0].configuration.actions) {
+          const approval = { digest: action.digest, disclosureRevision: action.disclosure.revision };
+          if (action.kind === 'provide-secret') {
+            const { handle } = await storeSecret({ home, value: 'fixture-credential-value' });
+            await api.runSetupAction({ home, actionId: action.id, secretHandle: handle, approval });
+          } else await api.runSetupAction({ home, actionId: action.id, value: 'screen.example.invalid', approval });
+        }
         console.log(renderScreen(await api.catalogRoutes(query), fakeRouteScenarios({ target: query.target })));
       } finally { await registry.cleanup(); }
     }

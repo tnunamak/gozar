@@ -32,7 +32,7 @@ export function fakeRouteScenarios({ target = '127.0.0.1:18765', now = Date.pars
     const options = { handle, properties, now };
     const route = kind === 'durable' ? projectDurable({ state: verified ? 'usable' : 'unverified', origin, target, verification: { status: verified ? 'verified' : 'unverified', checkedAt, validUntil: expiry }, expiresAt: expiry }, options)
       : kind === 'attached' ? projectAttached({ state: verified ? 'usable' : 'unverified', origin, target, properties, checkedAtMs: now, expiresAt: expiry }, options)
-      : projectSession({ snapshot: { phase: verified ? 'published-ready' : 'candidate-ready', candidate: origin, published: verified ? origin : null, target, expiresAt: expiry } }, options);
+      : projectSession({ snapshot: { phase: verified ? 'published-ready' : 'candidate-ready', candidate: origin, published: verified ? origin : null, target, expiresAt: expiry, checkedAtMs: now } }, options);
     return enrichRoute({ ...route, cleanup: { state: state === 'cleanup-unconfirmed' ? 'unconfirmed' : 'none' } }, { target, expiresAt: expiry, validUntil: expiry, now });
   }));
 }
@@ -65,32 +65,44 @@ export function createRouteApi(deps = {}) {
   return createCoreRouteApi({ platform: 'linux', ...deps, ...(verify ? { verify } : {}), expose: { startSession: fakeStartSession, ...deps.expose } });
 }
 
-const KINDS = ['session', 'durable'];
+const KINDS = ['session', 'attached', 'durable'];
 const REACHES = ['internet', 'tailnet', 'lan', 'this-device'];
 
 const moduleSource = (actions = []) => `// A fake provider written by @tnunamak/gozar/testing. It does nothing outside memory.
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, appendFileSync } from 'node:fs';
+import http from 'node:http';
 const definition = JSON.parse(readFileSync(new URL('./definition.json', import.meta.url), 'utf8')).adapter;
 const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const servers = new Map();
+const mark = event => appendFileSync(new URL('./events.jsonl', import.meta.url), JSON.stringify({event}) + '\\n');
 export default {
   id: definition.id,
   definition,
-  async detect(ctx) { const seen = await ctx.probe({ fake: true }); return { state: seen?.ok === true ? 'ready' : 'unknown', facts: { fake: true, setupNeeded: false } }; },
+  async detect(ctx) { const seen = definition.supportedKinds.includes('attached') ? {ok:true} : await ctx.probe({ fake: true }); return { state: seen?.ok === true ? 'ready' : 'unknown', facts: { fake: true, setupNeeded: false } }; },
   properties: () => structuredClone(definition.capabilities),
   setupActions: () => ${JSON.stringify(actions)},
-  async setup() { return { state: 'complete', nextAction: null }; },
+  async setup() { mark('setup'); return { state: 'complete', nextAction: null }; },
   async plan(ctx, request) {
     const resourceKey = definition.id + ':' + sha({ target: request.target }).slice(0, 16);
-    return { digest: sha({ id: definition.id, target: request.target, usage: request.usage?.kind }), origin: request.origin ?? null, resourceKey, effects: [],
+    return { digest: sha({ id: definition.id, target: request.target, usage: request.usage?.kind }), origin: request.origin ?? null, resourceKey, effects: [{target: request.target}],
       readback: { kind: request.usage?.kind, origin: request.origin ?? null, target: request.target }, cleanup: { kind: 'fake' }, precondition: null };
   },
   async create(ctx, plan) {
+    if (plan.readback.kind === 'attached') {
+      const target = new URL('http://' + plan.effects[0].target);
+      const server = http.createServer((req,res) => {
+        const upstream = http.request({hostname:target.hostname,port:target.port,path:req.url,method:req.method,headers:req.headers}, reply => { res.writeHead(reply.statusCode,reply.headers); reply.pipe(res); });
+        upstream.on('error',()=>{res.writeHead(502);res.end();}); req.pipe(upstream);
+      });
+      await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
+      servers.set(plan.resourceKey,server); plan={...plan,origin:'http://127.0.0.1:'+server.address().port};mark('start');
+    }
     return { schemaVersion: 1, adapterId: definition.id, resourceKey: plan.resourceKey, generation: ctx.generation ?? 1, identity: null, readback: plan.readback, origin: plan.origin ?? 'https://' + definition.id + '.example.invalid' };
   },
   async observe(ctx, request) { return { present: false, resourceKey: definition.id + ':' + sha({ target: request.target }).slice(0, 16), identity: null, revision: null }; },
-  async verify(ctx, receipt) { return ctx.verifyChallenge(receipt?.readback?.origin ?? receipt?.origin ?? '', receipt?.readback?.target ?? ''); },
-  async remove() { return { removed: true, debt: null }; },
+  async verify(ctx, receipt) { mark('proof'); return ctx.verifyChallenge(receipt?.readback?.origin ?? receipt?.origin ?? '', receipt?.readback?.target ?? ''); },
+  async remove(ctx,receipt) { mark('stop'); const server=servers.get(receipt.resourceKey); if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));servers.delete(receipt.resourceKey);} mark('cleanup');return { removed: true, debt: null }; },
   async runtimeFacts() { return { properties: structuredClone(definition.capabilities), ingress: null, limits: { recommendedPollIntervalMs: 5000, idleTimeoutMs: null } }; },
 };
 `;
