@@ -183,3 +183,21 @@ test('the legacy→frozen error map matches the fixture normalization', () => {
   }
   assert.equal(normalizeError(Object.assign(new Error('x'), { code: 'definitely_unmapped' })).code, 'internal_error');
 });
+
+// A provider's cost summary is a sentence with its own full stop, and the description that quotes it adds one. A user
+// reads this text in the consent step, so no shipped provider may print a doubled full stop there.
+test('red: no shipped provider prints a doubled full stop in its description or disclosure', async t => {
+  const { loadAdapters } = await import('../../packages/gozar-node/adapter-runtime.mjs');
+  const adapters = await loadAdapters();
+  assert.ok(adapters.length >= 10, 'the gate reads the real registry');
+  const catalog = await catalogRoutes(await withHome(t), deps(adapters));
+  assert.equal(catalog.candidates.length, adapters.length);
+  for (const candidate of catalog.candidates) {
+    for (const [name, text] of [['description', candidate.display.description], ['disclosure', candidate.disclosure.text]]) {
+      assert.ok(!/\.\.|\.\s+\./.test(text), `${candidate.display.label} ${name}: ${text}`);
+      assert.match(text, /[^.]\.$|[.!?]$/, `${candidate.display.label} ${name} ends in one sentence stop`);
+    }
+  }
+  const funnel = catalog.candidates.find(item => item.display.label === 'Tailscale Funnel');
+  assert.ok(funnel.display.description.endsWith('non-configurable bandwidth limits.'), funnel.display.description);
+});

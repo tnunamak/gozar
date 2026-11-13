@@ -113,7 +113,8 @@ function unmetRequirements({ requirements: r, usage, definition, properties: p, 
   return unmet;
 }
 
-const describe = (definition, p) => `${definition.label}: ${p.reach === 'unknown' ? 'reach not established' : `reaches ${p.reach} clients`}, ${p.address.stability} address, ${p.cost.summary}.`;
+// The cost summary is a sentence and usually ends with its own full stop; the description adds exactly one.
+const describe = (definition, p) => `${definition.label}: ${p.reach === 'unknown' ? 'reach not established' : `reaches ${p.reach} clients`}, ${p.address.stability} address, ${p.cost.summary.replace(/[.\s]+$/, '')}.`;
 
 export const adapterRequest = (query, origin = query.origin ?? null) => ({ target: query.target, origin, usage: query.usage, requirements: query.requirements, configurationRef: query.route ?? null });
 
