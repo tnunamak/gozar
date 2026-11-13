@@ -37,7 +37,8 @@
       },
       "needsAccount": null,
       "lifetimes": [
-        "session"
+        "session",
+        "durable"
       ],
       "supervision": "controller",
       "protocols": {
@@ -55,13 +56,15 @@
       }
     },
     "supportedKinds": [
-      "session"
+      "session",
+      "durable"
     ],
     "disclosure": {
       "revision": "disc-6046ee9650c1",
       "text": "Validate an existing owner-managed HTTPS origin against this instance. The address, route and certificate stay under the owner’s control; Gozar creates and deletes nothing.",
       "links": []
-    }
+    },
+    "ownership": "external-owned"
   },
   "evidence": {
     "accessed": "2026-11-12",

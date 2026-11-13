@@ -3254,6 +3254,50 @@
         },
         "providerId": "example-route-id"
       }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Action",
+      "name": "provide-value",
+      "value": {
+        "id": "act_synthetic_1",
+        "kind": "provide-value",
+        "label": "Sign in to the provider",
+        "digest": "sha256:synthetic-action-1",
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "valueLabel": "Public address of your app",
+        "valuePlaceholder": "https://app.example.com",
+        "valueFormat": "https-origin",
+        "required": true
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Requirements",
+      "name": "lan, any transport",
+      "value": {
+        "reach": "lan",
+        "transport": "any",
+        "payloadAccess": "endpoint-only",
+        "address": "any",
+        "setup": "none",
+        "protocols": []
+      }
     }
   ],
   "invalid": [
@@ -7344,6 +7388,84 @@
         "cleanup": {
           "state": "none"
         }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Action",
+      "name": "unknown action kind",
+      "why": "kind must be one of the listed action kinds",
+      "value": {
+        "id": "act_synthetic_1",
+        "kind": "provide-text",
+        "label": "Sign in to the provider",
+        "digest": "sha256:synthetic-action-1",
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "valueLabel": "Public address of your app",
+        "valuePlaceholder": "https://app.example.com",
+        "valueFormat": "https-origin",
+        "required": true
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Requirements",
+      "name": "unknown transport word",
+      "why": "transport is 'https' or 'any'",
+      "value": {
+        "reach": "lan",
+        "transport": "http",
+        "payloadAccess": "endpoint-only",
+        "address": "any",
+        "setup": "none",
+        "protocols": []
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Action",
+      "name": "required is not a boolean",
+      "why": "required must be a boolean",
+      "value": {
+        "id": "act_synthetic_1",
+        "kind": "provide-value",
+        "label": "Sign in to the provider",
+        "digest": "sha256:synthetic-action-1",
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "valueLabel": "Public address of your app",
+        "valuePlaceholder": "https://app.example.com",
+        "valueFormat": "https-origin",
+        "required": "yes"
       }
     }
   ],

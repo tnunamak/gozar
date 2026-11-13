@@ -65,7 +65,9 @@ test('ports and proof of every shipped candidate equal the mapping of its plan d
     const checks = [v.tls !== undefined && 'tls', v.instanceNonce !== undefined && 'nonce', v.sse !== undefined && 'sse'].filter(Boolean);
     const vantage = ['public', 'tailnet', 'lan', 'this-device', 'none'].includes(v.vantage) ? v.vantage : checks.length ? 'this-device' : 'none';
     assert.deepEqual(candidate.properties.address.ports, expectedPorts, `${candidate.providerId} ports`);
-    assert.deepEqual(candidate.properties.proof, { vantage, checks }, `${candidate.providerId} proof`);
+    // An owner-kept address is checked from this device until it is verified; every other provider declares what its plan checks.
+    if (plan.ownership === 'external-owned') assert.equal(candidate.properties.proof.vantage, 'this-device', `${candidate.providerId} proof`);
+    else assert.deepEqual(candidate.properties.proof, { vantage, checks }, `${candidate.providerId} proof`);
   }
 });
 

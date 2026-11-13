@@ -83,7 +83,11 @@
           ]
         },
         "transport": {
-          "const": "https"
+          "type": "string",
+          "enum": [
+            "https",
+            "any"
+          ]
         },
         "payloadAccess": {
           "type": "string",
@@ -234,6 +238,7 @@
             "open-url",
             "instructions",
             "provide-secret",
+            "provide-value",
             "gozar-runs"
           ]
         },
@@ -254,6 +259,23 @@
         },
         "secretLabel": {
           "type": "string"
+        },
+        "valueLabel": {
+          "type": "string"
+        },
+        "valuePlaceholder": {
+          "type": "string"
+        },
+        "valueFormat": {
+          "type": "string",
+          "enum": [
+            "https-origin",
+            "domain",
+            "text"
+          ]
+        },
+        "required": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -1703,6 +1725,9 @@
           "additionalProperties": false
         },
         "secretHandle": {
+          "type": "string"
+        },
+        "value": {
           "type": "string"
         }
       },

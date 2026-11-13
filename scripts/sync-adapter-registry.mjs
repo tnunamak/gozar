@@ -6,6 +6,8 @@
 // consumer and no core code reads provider recipes:
 //   capabilities.address.ports  the plan's port binding `candidates`, in the order Gozar tries them, else null
 //   capabilities.proof          the plan's `validation` block: where Gozar checks from, and which checks it makes
+// and the definition's `ownership` ('gozar-owned', or 'external-owned' when the owner keeps the route), which is how
+// core tells an owner-run address from a route Gozar creates, so no provider id appears in core.
 // A provider that has no wrapped plan declares both in its own definition and is left alone.
 import { readFile, writeFile, access } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +32,9 @@ export function deriveProof(wrapped) {
   return { vantage, checks };
 }
 
+/** The route's owner, in the words RouteView.ownership uses. */
+export const deriveOwnership = wrapped => (wrapped?.ownership === 'external-owned' ? 'external-owned' : 'gozar-owned');
+
 const adaptersUrl = new URL('../adapters/', import.meta.url);
 // `--manifest FILE` checks another manifest (a test uses it); provider files are always read from adapters/.
 const custom = process.argv.indexOf('--manifest');
@@ -53,11 +58,15 @@ async function sync() {
     try { text = await readFile(file, 'utf8'); data = JSON.parse(text); } catch { continue; }
     const capabilities = data.adapter?.capabilities;
     if (!capabilities?.address) continue;
-    const ports = derivePorts(wrapped), proof = deriveProof(wrapped);
-    if (JSON.stringify(capabilities.address.ports) === JSON.stringify(ports) && JSON.stringify(capabilities.proof) === JSON.stringify(proof)) continue;
-    if (check) { problems.push(`${provider.id}: capabilities.address.ports and capabilities.proof differ from the wrapped plan definition; run node scripts/sync-adapter-registry.mjs`); continue; }
+    const ports = derivePorts(wrapped), proof = deriveProof(wrapped), ownership = deriveOwnership(wrapped);
+    if (JSON.stringify(capabilities.address.ports) === JSON.stringify(ports) && JSON.stringify(capabilities.proof) === JSON.stringify(proof) && data.adapter.ownership === ownership) continue;
+    if (check) { problems.push(`${provider.id}: ports, proof or ownership differ from the wrapped plan definition; run node scripts/sync-adapter-registry.mjs`); continue; }
     capabilities.address = { ...capabilities.address, ports };
     capabilities.proof = proof;
+    const { needs, ...rest } = data.adapter, ordered = {};
+    for (const [key, value] of Object.entries(rest)) { ordered[key] = value; if (key === 'label') { if (needs !== undefined) ordered.needs = needs; } }
+    data.adapter = ordered;
+    data.adapter.ownership = ownership;
     await writeFile(file, JSON.stringify(data, null, 2) + '\n');
   }
   for (const key of ['definitions', 'normalizedDefinitions']) {

@@ -78,7 +78,8 @@
           "href": "https://tailscale.com/privacy-policy"
         }
       ]
-    }
+    },
+    "ownership": "gozar-owned"
   },
   "evidence": {
     "accessed": "2026-11-12",

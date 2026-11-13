@@ -109,8 +109,9 @@ export async function conform(adapter) {
   assert.deepEqual(validateShape('Properties', adapter.properties(linux.facts)), [], `${id} properties`);
   for (const action of adapter.setupActions({ ...linux.facts, setupNeeded: true })) {
     assert.ok(action.id && action.label && /^[0-9a-f]{64}$/.test(action.digest) && action.disclosure?.revision, `${id} action ${action.id}`);
-    assert.ok(['open-url', 'instructions', 'provide-secret', 'gozar-runs'].includes(action.kind));
+    assert.ok(['open-url', 'instructions', 'provide-secret', 'provide-value', 'gozar-runs'].includes(action.kind));
     if (action.kind === 'provide-secret') assert.ok(action.secretLabel);
+    if (action.kind === 'provide-value') assert.ok(action.valueLabel && ['https-origin', 'domain', 'text'].includes(action.valueFormat), `${id} provide-value names what it asks for`);
   }
   await rejects(adapter.setup(readContext({ executeApprovedAction: async () => ({ state: 'complete', nextAction: null }), withSecret: async () => false }), 'no-such-action'), 'unsupported');
   const facts = await adapter.runtimeFacts(readContext(), { schemaVersion: 1, adapterId: id, resourceKey: 'k', generation: 1, identity: null, readback: null });
@@ -126,6 +127,16 @@ export async function conform(adapter) {
         await rejects(adapter.plan(readContext(), request(kind)), 'unsupported');
         await rejects(adapter.create(ctx, { digest: 'd', origin: null, resourceKey: 'k', effects: [], readback: { kind }, cleanup: null, precondition: null }), 'unsupported');
         assert.equal(state.writes, 0, `${id} undeclared ${kind} must not write`);
+        continue;
+      }
+      if (kind === 'durable' && definition.ownership === 'external-owned') {
+        // A route its owner keeps has no engine-owned listener: the adapter plans the record itself and changes nothing.
+        const origin = 'https://owner.example.test';
+        const plan = await adapter.plan(readContext({ origin }), request('durable', origin));
+        assert.equal(typeof plan.digest, 'string'); assert.equal(plan.origin, origin);
+        assert.deepEqual(plan.effects, [], `${id} an owner-kept plan holds no adapter-run effects`);
+        assert.equal(state.writes, 0, `${id} an owner-kept route is never written`);
+        await rejects(adapter.plan(readContext(), request('durable', null)), 'setup_required');
         continue;
       }
       if (kind === 'durable') {

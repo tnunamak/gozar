@@ -2,6 +2,7 @@ import { readdir, unlink, link, open } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
+import { readFileSync } from 'node:fs';
 import { atomicWrite } from './journal.mjs';
 import { statusRoutes, durableRouteAt } from './durable-route.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
@@ -30,11 +31,23 @@ function targetValue(value) {
         /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(label)))) throw refuse('invalid_input', 'Invalid service target');
   return value;
 }
+// A service route belongs to its owner. The adapter that stands for an owner-kept route is the registered adapter
+// whose definition says `ownership: 'external-owned'`; its id is read from the registry, never written in core.
+let ownerAdapterId;
+function externalOwnerId() {
+  if (ownerAdapterId) return ownerAdapterId;
+  const adapters = new URL('../../adapters/', import.meta.url);
+  for (const entry of JSON.parse(readFileSync(new URL('manifest.json', adapters), 'utf8')).providers) {
+    const { adapter } = JSON.parse(readFileSync(new URL(entry.definition, adapters), 'utf8'));
+    if (adapter.ownership === 'external-owned') return (ownerAdapterId = adapter.id);
+  }
+  throw refuse('internal_error', 'The registry has no adapter for an owner-kept route');
+}
 function config({ origin, target, verifyCmd = null }) {
   if (verifyCmd !== null && (typeof verifyCmd !== 'string' || !verifyCmd.trim() || verifyCmd.includes('\0')))
     throw refuse('invalid_input', 'Invalid verification command');
   const route = { schemaVersion: 1, origin: originValue(origin), target: targetValue(target),
-    adapterId: 'own-address', ownership: 'external-owned', verifyCmd };
+    adapterId: externalOwnerId(), ownership: 'external-owned', verifyCmd };
   if (Buffer.byteLength(JSON.stringify(route)) > 65536) throw refuse('invalid_input', 'Service record exceeds size limit');
   return route;
 }

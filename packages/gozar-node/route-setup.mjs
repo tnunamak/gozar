@@ -1,15 +1,31 @@
 // Setup actions a catalog candidate lists. The app passes back exactly what the user approved: the action's
 // digest and its disclosure revision. If either moved since, nothing runs (candidate_stale). Gozar runs only
 // what an adapter's own `setup` does (kinds gozar-runs and provide-secret); open-url and instructions are steps
-// for the user, and Gozar never runs an installer.
+// for the user, and Gozar never runs an installer. A provide-value action carries a plain, non-secret `value`
+// (a domain, an address): Gozar checks it against the action's `valueFormat` and keeps it as configuration.
 import { canonicalHome } from './service-state.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { inspectAdapter, catalogRevisionOf, readContextFor, loadRuntime } from './route-catalog.mjs';
 import { supportedPlatform } from './platform.mjs';
 import { storeSecret, withSecret, handlePattern } from './secret-store.mjs';
-import { bindSetupValue, discardUnboundSecret, bindConfiguration } from './adapter-configuration.mjs';
+import { bindSetupValue, bindSetupText, discardUnboundSecret, bindConfiguration } from './adapter-configuration.mjs';
 
 export { storeSecret, withSecret };
+
+const domainPattern = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
+/** The value a provide-value action accepts for a format, or null when it does not match. */
+export function checkValue(format, value) {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (format === 'domain') return domainPattern.test(text) ? text : null;
+  if (format === 'text') return text.length > 0 && text.length <= 1024 && !text.includes('\0') ? text : null;
+  if (format === 'https-origin') {
+    let url;
+    try { url = new URL(text); } catch { return null; }
+    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash && url.hostname && (text === url.origin || text === `${url.origin}/`) ? url.origin : null;
+  }
+  return null;
+}
 
 const refuseApproval = approval => {
   if (typeof approval?.digest !== 'string' || !approval.digest || typeof approval.disclosureRevision !== 'string' || !approval.disclosureRevision)
@@ -28,6 +44,7 @@ export async function runSetupAction(request, deps = {}) {
     if (typeof request?.home !== 'string' || !request.home || typeof request.actionId !== 'string' || !request.actionId)
       throw gozarError('invalid_input', 'runSetupAction needs home and actionId');
     refuseApproval(request.approval);
+    if (request.value !== undefined && typeof request.value !== 'string') throw gozarError('invalid_input', 'value must be a string');
     if (request.secretHandle !== undefined && !handlePattern.test(request.secretHandle)) throw gozarError('invalid_input', 'secretHandle is not a Gozar secret handle');
     const platform = deps.platform ?? process.platform;
     if (!supportedPlatform(platform)) throw gozarError('unsupported', `Gozar 0.2 does not support setup on ${platform}`);
@@ -47,7 +64,15 @@ export async function runSetupAction(request, deps = {}) {
     let result;
     if (action.kind === 'open-url' || action.kind === 'instructions') {
       result = { state: 'pending', nextAction: action };
+    } else if (action.kind === 'provide-value') {
+      if (request.secretHandle !== undefined) throw gozarError('invalid_input', 'A provide-value action takes value, not a secretHandle');
+      if (request.value === undefined) return { schemaVersion: 1, state: 'pending', nextAction: action, catalogRevision: catalogRevisionOf(await inspect(), platform) };
+      const value = checkValue(action.valueFormat, request.value);
+      if (value === null) throw gozarError('invalid_input', `The value does not match the format this action asks for (${action.valueFormat})`);
+      await bindSetupText({ home, adapterId: adapter.id, actionId: request.actionId, value });
+      result = { state: 'complete', nextAction: null };
     } else {
+      if (request.value !== undefined) throw gozarError('invalid_input', 'Only a provide-value action takes value');
       if (action.kind === 'provide-secret' && request.secretHandle === undefined) throw gozarError('invalid_input', 'This action needs a secretHandle from Gozar\'s private store');
       const execute = deps.executeApprovedAction ?? runtime?.executeApprovedAction ?? (async () => { throw gozarError('unsupported', 'No approved-action runner is wired in this build'); });
       const own = bindConfiguration(read, adapter.id);

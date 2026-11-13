@@ -72,7 +72,8 @@
           "href": "https://ngrok.com/privacy"
         }
       ]
-    }
+    },
+    "ownership": "gozar-owned"
   },
   "evidence": {
     "accessed": "2026-11-12",

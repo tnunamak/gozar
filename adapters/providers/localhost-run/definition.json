@@ -62,7 +62,8 @@
       "revision": "disc-8fd297ce7670",
       "text": "Start a public HTTPS trial through the localhost.run relay for the requested lifetime (15 minutes by default). The relay terminates TLS and can read payloads.",
       "links": []
-    }
+    },
+    "ownership": "gozar-owned"
   },
   "evidence": {
     "accessed": "2026-11-12",

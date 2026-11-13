@@ -59,7 +59,8 @@
       "revision": "disc-c02f07dea26d",
       "text": "Expose this service on a selected local network interface over plain HTTP through an owned forwarder. Anyone on that network path can read the traffic.",
       "links": []
-    }
+    },
+    "ownership": "gozar-owned"
   },
   "evidence": {
     "accessed": "2026-11-12",

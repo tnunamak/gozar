@@ -10,7 +10,7 @@ import { createNgrokAdapter } from '../../adapters/providers/ngrok-https-edge/in
 import { runAttachedController, controlAttached } from '../../packages/gozar-node/attached-route.mjs';
 import { createAttachedEffectContext } from '../../packages/gozar-node/adapter-runtime.mjs';
 import { storeSecret } from '../../packages/gozar-node/secret-store.mjs';
-import { bindSetupValue } from '../../packages/gozar-node/adapter-configuration.mjs';
+import { bindSetupValue, bindSetupText } from '../../packages/gozar-node/adapter-configuration.mjs';
 
 const DOMAIN = 'reserved.example.ngrok.app';
 const ORIGIN = `https://${DOMAIN}`;
@@ -49,8 +49,8 @@ async function world(t, { buffer }) {
   const sdk = stubSdk({ buffer });
   const adapter = createNgrokAdapter({ loadSdk: async () => sdk });
   // The controller reads the values the way production does: the ones this adapter's setup actions recorded.
-  for (const [actionId, value] of [['auth', 'stub-token'], ['reserved-domain', DOMAIN]])
-    await bindSetupValue({ home: dir, adapterId: adapter.id, actionId, handle: (await storeSecret({ home: dir, value })).handle });
+  await bindSetupValue({ home: dir, adapterId: adapter.id, actionId: 'auth', handle: (await storeSecret({ home: dir, value: 'stub-token' })).handle });
+  await bindSetupText({ home: dir, adapterId: adapter.id, actionId: 'reserved-domain', value: DOMAIN });
   t.after(async () => { for (const listener of sdk.open()) await listener.close(); await close(app); await rm(dir, { recursive: true, force: true }); });
   const read = { now: () => Date.now(), home: dir, platform: 'linux', configuration: async () => ({ auth: 'stub-token', 'reserved-domain': DOMAIN }),
     probe: async () => ({ ok: true }), verifyChallenge: async () => { throw new Error('the controller supplies its own verifier'); } };

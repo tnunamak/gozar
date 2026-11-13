@@ -1,8 +1,8 @@
 // ngrok HTTPS edge, attached kind: a listener opened through the ngrok SDK while the host process runs.
 //
 // The SDK is an optional dependency, injected as a module (`loadSdk`). The auth token and the reserved
-// domain are per-user setup values. Each is stored through a `provide-secret` action in Gozar's private
-// store. Gozar answers `ctx.configuration(null)` with the values this adapter's completed actions supplied,
+// domain are per-user setup values. The token is stored through a `provide-secret` action in Gozar's private
+// store; the reserved domain is not a secret, so it is a `provide-value` action kept as plain configuration. Gozar answers `ctx.configuration(null)` with the values this adapter's completed actions supplied,
 // keyed by action id: `{auth, 'reserved-domain'}`. The token never enters facts, plans, receipts, errors or
 // output: every failure below uses a fixed message and never the SDK's own text.
 import { recipeAdapter, effectError } from '../../../packages/gozar-node/adapter-runtime.mjs';
@@ -33,7 +33,11 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
         return { ...body, digest: sha(body) };
       };
       const authAction = action('auth', 'Provide your ngrok auth token', 'ngrok auth token');
-      const domainAction = action('reserved-domain', 'Provide your reserved ngrok domain', 'Reserved ngrok domain');
+      const domainAction = (() => {
+        const body = { id: 'reserved-domain', kind: 'provide-value', label: 'Provide your reserved ngrok domain', valueLabel: 'Reserved ngrok domain',
+          valuePlaceholder: 'example.ngrok.app', valueFormat: 'domain', required: true, disclosure: definition.disclosure };
+        return { ...body, digest: sha(body) };
+      })();
       const installAction = (() => {
         const body = { id: 'install-sdk', kind: 'instructions', label: 'Install the ngrok SDK', disclosure: definition.disclosure,
           instructions: 'Reinstall Gozar with optional dependencies enabled so the ngrok SDK is present.' };
@@ -54,12 +58,13 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
         setupActions: facts => (!facts?.setupNeeded ? [] : [...(facts.sdk ? [] : [installAction]), ...(facts.authSet ? [] : [authAction]), ...(facts.domainSet ? [] : [domainAction])]),
 
         async setup(ctx, actionId, secretHandle) {
-          const next = { auth: authAction, 'reserved-domain': domainAction }[actionId];
-          if (!next) throw unsupported(`setup action ${String(actionId).slice(0, 64)}`);
+          // The reserved domain is a provide-value action: Gozar checks and keeps it, and asks the adapter nothing.
+          if (actionId !== 'auth') throw unsupported(`setup action ${String(actionId).slice(0, 64)}`);
+          const next = authAction;
           if (typeof secretHandle !== 'string' || !secretHandle) return { state: 'pending', nextAction: next };
           let valid;
           try {
-            valid = await ctx.withSecret(secretHandle, async bytes => actionId === 'auth' ? bytes.length > 0 && bytes.length <= 512 : domainPattern.test(decode(bytes)));
+            valid = await ctx.withSecret(secretHandle, async bytes => bytes.length > 0 && bytes.length <= 512);
           } catch { throw effectError('setup_required', 'The private store did not release the value; run the setup action again'); }
           return valid ? { state: 'complete', nextAction: null } : { state: 'blocked', nextAction: next };
         },

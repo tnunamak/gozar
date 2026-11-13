@@ -43,6 +43,13 @@
         },
         "needs": {
           "type": "string"
+        },
+        "ownership": {
+          "type": "string",
+          "enum": [
+            "gozar-owned",
+            "external-owned"
+          ]
         }
       },
       "additionalProperties": false

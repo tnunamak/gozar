@@ -77,11 +77,17 @@ export default async function () {
     seen.push(JSON.stringify(result));
     return { result, handle };
   };
-  return { home, side, api, forwards, candidateOf, provide };
+  // A provide-value action takes a plain value, never a secret handle; it is kept as configuration.
+  const provideValue = async (candidate, actionId, value) => {
+    const step = candidate.setup.actions.find(item => item.id === actionId);
+    assert.equal(step.kind, 'provide-value');
+    return api.runSetupAction({ home, actionId, approval: approvalOf(step), value });
+  };
+  return { home, side, api, forwards, candidateOf, provide, provideValue };
 }
 
 test('ngrok setup journey: auth, then reserved domain, then ready; expose opens the listener with the stored values', async t => {
-  const { home, api, forwards, candidateOf, provide } = await ngrokWorld(t);
+  const { home, api, forwards, candidateOf, provide, provideValue } = await ngrokWorld(t);
   let candidate = await candidateOf();
   assert.equal(candidate.setup.state, 'action-required');
   assert.deepEqual(candidate.setup.actions.map(item => item.id), ['auth', 'reserved-domain']);
@@ -92,7 +98,7 @@ test('ngrok setup journey: auth, then reserved domain, then ready; expose opens 
   assert.deepEqual(candidate.setup.actions.map(item => item.id), ['reserved-domain'], 'only the missing value is asked for');
   assert.equal(candidate.setup.state, 'action-required');
 
-  assert.equal((await provide(candidate, 'reserved-domain', DOMAIN)).result.state, 'complete');
+  assert.equal((await provideValue(candidate, 'reserved-domain', DOMAIN)).state, 'complete');
   candidate = await candidateOf();
   assert.equal(candidate.setup.state, 'ready');
   assert.equal(typeof candidate.candidateToken, 'string');
@@ -109,7 +115,7 @@ test('ngrok setup journey: auth, then reserved domain, then ready; expose opens 
 });
 
 test('the token bytes never appear outside the secret store: files, catalog, errors, receipts, route views, CLI output', async t => {
-  const { home, side, api, candidateOf, provide } = await ngrokWorld(t);
+  const { home, side, api, candidateOf, provideValue } = await ngrokWorld(t);
   const surfaces = [];
   const secretFile = join(side, 'token'), approvalFile = join(side, 'approval.json'), queryFile = join(side, 'query.json');
   await writeFile(secretFile, `${TOKEN}\n`, { mode: 0o600 }); await chmod(secretFile, 0o600);
@@ -131,10 +137,8 @@ test('the token bytes never appear outside the secret store: files, catalog, err
   // Errors: a stale approval, a missing approval and an invalid reserved domain.
   candidate = await candidateOf(surfaces);
   const domainAction = candidate.setup.actions[0];
-  const wrong = await storeSecret({ home, value: TOKEN }); // the token offered as the domain: the adapter blocks it
-  const blocked = await api.runSetupAction({ home, actionId: 'reserved-domain', approval: approvalOf(domainAction), secretHandle: wrong.handle });
-  surfaces.push(JSON.stringify(blocked));
-  assert.equal(blocked.state, 'blocked');
+  // The token offered as the domain: Gozar checks the format and refuses, and the value goes nowhere.
+  await api.runSetupAction({ home, actionId: 'reserved-domain', approval: approvalOf(domainAction), value: TOKEN }).then(() => assert.fail('expected a rejection'), error => { assert.equal(error.code, 'invalid_input'); surfaces.push(error.message, JSON.stringify(error), String(error.stack)); });
   for (const request of [{ approval: { digest: 'sha256:stale', disclosureRevision: 'disc-stale' } }, {}]) {
     const handle = (await storeSecret({ home, value: TOKEN })).handle;
     await api.runSetupAction({ home, actionId: 'reserved-domain', secretHandle: handle, ...request }).then(() => assert.fail('expected a rejection'), error => { surfaces.push(error.message, JSON.stringify(error), String(error.stack)); });
@@ -143,7 +147,7 @@ test('the token bytes never appear outside the secret store: files, catalog, err
   surfaces.push(String(unset.message), JSON.stringify(unset));
 
   // Receipts and route views come from a route that is really open.
-  await provide(candidate, 'reserved-domain', DOMAIN, surfaces);
+  surfaces.push(JSON.stringify(await provideValue(candidate, 'reserved-domain', DOMAIN)));
   candidate = await candidateOf(surfaces);
   const view = await api.expose({ ...attachedQuery(home), approval: { candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision }, wait: 'verified' });
   surfaces.push(JSON.stringify(view), JSON.stringify(await api.routeStatus({ home, handle: view.handle })));

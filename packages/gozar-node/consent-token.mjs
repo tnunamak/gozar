@@ -95,6 +95,15 @@ export async function issueConsentToken({ home = defaultHome(), binding, grant, 
   return { token, expiresAt };
 }
 
+/** The grant a live token carries, without spending it; null when the token is unknown or expired. The bearer already holds the token. */
+export async function peekConsentGrant({ home = defaultHome(), token }) {
+  if (typeof token !== 'string' || !token || token.length > 256) return null;
+  try {
+    const stored = JSON.parse(await readFile(join(await consentDirectory(home, false), `${sha256(token)}.json`), 'utf8'));
+    return Date.parse(stored.expiresAt) > Date.now() ? checkGrant(stored.grant) : null;
+  } catch { return null; }
+}
+
 export async function redeemConsentToken({ home = defaultHome(), token, binding }) {
   if (typeof token !== 'string' || !token || token.length > 256) throw unknownToken();
   checkBinding(binding);

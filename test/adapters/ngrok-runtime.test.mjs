@@ -110,20 +110,23 @@ test('red: denied setup gives setup_required, and a missing configuration blocks
 test('setup validates the stored value without keeping it', async () => {
   const adapter = adapterWith(stubSdk());
   assert.deepEqual(await adapter.setup(context(), 'auth', 'auth-handle'), { state: 'complete', nextAction: null });
-  assert.deepEqual(await adapter.setup(context(), 'reserved-domain', 'domain-handle'), { state: 'complete', nextAction: null });
-  const blocked = await adapter.setup(context({ withSecret: async (handle, use) => use(new TextEncoder().encode('not a domain')) }), 'reserved-domain', 'h');
-  assert.equal(blocked.state, 'blocked'); assert.equal(blocked.nextAction.id, 'reserved-domain');
+  const blocked = await adapter.setup(context({ withSecret: async (handle, use) => use(new TextEncoder().encode('')) }), 'auth', 'h');
+  assert.equal(blocked.state, 'blocked'); assert.equal(blocked.nextAction.id, 'auth');
+  // The reserved domain is a provide-value action: Gozar checks and keeps it, so the adapter's own setup takes none.
+  await rejects(adapter.setup(context(), 'reserved-domain', 'domain-handle'), 'unsupported');
   assert.equal((await adapter.setup(context(), 'auth')).state, 'pending', 'no handle yet: the action is still to be done');
   await rejects(adapter.setup(context(), 'no-such-action'), 'unsupported');
 });
 
-test('setup actions follow the facts: token and domain are provide-secret actions', async () => {
+test('setup actions follow the facts: the token is a provide-secret action and the domain a provide-value action', async () => {
   const adapter = adapterWith(stubSdk());
   const fresh = await adapter.detect(context({ configuration: async () => null }));
   assert.equal(fresh.state, 'action-required');
   const actions = adapter.setupActions(fresh.facts);
   assert.deepEqual(actions.map(action => action.id), ['auth', 'reserved-domain']);
-  for (const action of actions) { assert.equal(action.kind, 'provide-secret'); assert.ok(action.secretLabel); }
+  const [auth, domain] = actions;
+  assert.equal(auth.kind, 'provide-secret'); assert.ok(auth.secretLabel);
+  assert.equal(domain.kind, 'provide-value'); assert.equal(domain.valueFormat, 'domain'); assert.equal(domain.required, true); assert.ok(domain.valueLabel);
   const ready = await adapter.detect(context());
   assert.equal(ready.state, 'ready'); assert.deepEqual(adapter.setupActions(ready.facts), []);
   const noSdk = await createNgrokAdapter({ loadSdk: async () => { throw new Error('not installed'); } }).detect(context());

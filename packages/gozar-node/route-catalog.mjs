@@ -28,9 +28,10 @@ export function validateQuery(query) {
   if (usage.kind === 'durable' && !text(usage.routeId)) bad('a durable usage needs routeId');
   if (usage.kind === 'session' && !(Number.isInteger(usage.lifetimeMs) && usage.lifetimeMs > 0)) bad('a session usage needs lifetimeMs');
   const r = query.requirements;
-  if (!REACH.includes(r?.reach) || r.transport !== 'https' || !['endpoint-only', 'allow-provider'].includes(r.payloadAccess) ||
+  if (!REACH.includes(r?.reach) || !['https', 'any'].includes(r.transport) || !['endpoint-only', 'allow-provider'].includes(r.payloadAccess) ||
       !['stable', 'any'].includes(r.address) || !['none', 'allow'].includes(r.setup) || !Array.isArray(r.protocols) ||
       r.protocols.some(item => !(item in PROTOCOL_KEY))) bad('requirements are incomplete or not in the closed vocabulary');
+  if (r.transport === 'any' && !['lan', 'this-device'].includes(r.reach)) bad("transport 'any' is valid only with reach 'lan' or 'this-device'");
   if (query.intent !== undefined && !['create', 'adopt'].includes(query.intent)) bad('intent must be create or adopt');
   for (const key of ['route', 'origin', 'migrationRef', 'providerId']) if (query[key] !== undefined && !text(query[key])) bad(`${key} must be a non-empty string`);
   if (query.providerId !== undefined && query.route !== undefined) bad('providerId and route are two ways to select; send one');
@@ -106,7 +107,7 @@ function unmetRequirements({ requirements: r, usage, definition, properties: p, 
   const add = (requirement, actual, reasonCode = 'not_met') => unmet.push({ requirement, actual, reasonCode });
   if (!definition.supportedKinds.includes(usage.kind)) add('usage', usage.kind);
   if (p.reach === 'unknown') add('reach', 'unknown', 'unknown'); else if (p.reach !== r.reach) add('reach', p.reach);
-  if (p.transport !== r.transport) add('transport', p.transport);
+  if (r.transport !== 'any' && p.transport !== r.transport) add('transport', p.transport);
   if (r.payloadAccess === 'endpoint-only') {
     const t = p.traffic;
     if (t.providerCanReadPayload === null || t.tlsTermination === 'unknown') add('payloadAccess', t.providerCanReadPayload, 'unknown');
@@ -135,7 +136,8 @@ async function collect(query, deps) {
   const { adapters, issue, durablePlanFacts, platform } = deps;
   const consentBinding = deps.consentBinding ?? (await import('./consent-token.mjs')).consentBinding;
   const home = await canonicalHome(query.home, true);
-  const context = await readContextFor(deps, home, platform);
+  // The origin the app named is part of what an adapter reads: an owner-run address is judged by it.
+  const context = { ...await readContextFor(deps, home, platform), origin: query.origin ?? null };
   // An unknown named route is an error before any provider is asked.
   if (query.route !== undefined && supportedPlatform(platform)) await context.configuration(query.route);
   const inspections = await Promise.all(selectAdapters(adapters, query.providerId).map(adapter => inspectAdapter(adapter, context, platform)));
@@ -151,7 +153,8 @@ async function collect(query, deps) {
       // A plan exists only for a candidate that could be used now; its digest and resource go into the token.
       if (!unmet.length && setupState === 'ready' && definition.supportedKinds.includes(query.usage.kind)) {
         try {
-          if (query.usage.kind === 'durable') {
+          // A durable plan comes from the durable engine, except for a route its owner keeps: that adapter plans for itself.
+          if (query.usage.kind === 'durable' && definition.ownership !== 'external-owned') {
             const plan = await durablePlanFacts({ home, adapterId: adapter.id, target: query.target, origin: query.origin ?? null, adapters });
             grant = { adapterId: adapter.id, planDigest: plan.planDigest, observedResource: plan.observedResource };
           } else {

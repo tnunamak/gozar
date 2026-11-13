@@ -18,7 +18,11 @@ export type Usage =
 export type Requirements = {
   /** A requirement can never ask for 'unknown' reach; only Properties.reach may be unknown. */
   reach: Exclude<Reach, 'unknown'>;
-  transport: 'https';
+  /**
+   * 'https' (the default use) needs an encrypted route. 'any' also accepts plain HTTP and is valid only with reach
+   * 'lan' or 'this-device'; with any other reach the query fails with invalid_input.
+   */
+  transport: 'https' | 'any';
   payloadAccess: 'endpoint-only' | 'allow-provider';
   address: 'stable' | 'any';
   /** 'none' means ready now; 'allow' permits a candidate that still needs a setup action. */
@@ -56,13 +60,18 @@ export type Disclosure = {
 
 export type Action = {
   id: string;
-  kind: 'open-url' | 'instructions' | 'provide-secret' | 'gozar-runs';
+  kind: 'open-url' | 'instructions' | 'provide-secret' | 'provide-value' | 'gozar-runs';
   label: string;
   digest: string;
   disclosure: Disclosure;
   href?: string;
   instructions?: string;
   secretLabel?: string;
+  /** For 'provide-value' only: a plain, non-secret input (a domain, an address). Answer it with runSetupAction `value`. */
+  valueLabel?: string;
+  valuePlaceholder?: string;
+  valueFormat?: 'https-origin' | 'domain' | 'text';
+  required?: boolean;
 };
 
 export type Properties = {
@@ -295,8 +304,10 @@ export type RunSetupActionRequest = {
   home: string;
   actionId: string;
   approval: { digest: string; disclosureRevision: string };
-  /** Points into Gozar's private store; never a token value. */
+  /** Points into Gozar's private store; never a token value. For 'provide-secret'. */
   secretHandle?: string;
+  /** For 'provide-value': checked against the action's valueFormat, then kept as configuration (not in the secret store). */
+  value?: string;
 };
 
 /** Transport-derived facts only. The exact member types are not fixed by the plan; see Open contract questions. */
