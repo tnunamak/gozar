@@ -10,7 +10,7 @@ import { lstat, readFile } from 'node:fs/promises';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { defaultHome } from './default-home.mjs';
 
-export const ROUTE_COMMANDS = ['catalog', 'ensure', 'adopt', 'setup', 'preference', 'watch'];
+export const ROUTE_COMMANDS = ['catalog', 'ensure', 'adopt', 'setup', 'preference', 'watch', 'suspend'];
 const MAX_FILE_BYTES = 1 << 20;
 const REQUIREMENT_CODES = new Set(['requirements_unsatisfied', 'setup_required', 'unsupported']);
 const APPROVAL_CODES = new Set(['consent_required', 'consent_unknown', 'consent_expired', 'consent_mismatch', 'candidate_stale', 'route_not_found']);
@@ -25,6 +25,7 @@ const specs = {
   expose: { values: ['query-file', 'approval-file', 'wait', 'route', 'provider-id', 'home'], flags: ['json'] },
   setup: { values: ['approval-file', 'secret-file', 'value', 'home'], flags: ['json'], positional: 'action id' },
   preference: { values: ['profile-home', 'expected-revision', 'on-unavailable'], multi: ['prefer'], flags: ['json'], positional: 'show or set' },
+  suspend: { values: ['handle-file', 'route', 'home'], flags: ['json'] },
   watch: { values: ['handle-file', 'home', 'interval-ms'], flags: ['json'] },
 };
 
@@ -158,6 +159,24 @@ const commandsRun = {
     const revision = options['expected-revision'];
     if (!/^\d+$/.test(revision ?? '')) throw gozarError('invalid_input', '--expected-revision must be the revision you read, a whole number');
     out(await api.setRoutePreferences({ profileHome, expectedRevision: Number(revision), adapterPreference: options.prefer ?? [], onUnavailable: options['on-unavailable'] ?? 'ask' }));
+    return 0;
+  },
+
+  async suspend({ options, api, out, err }) {
+    if (Boolean(options.route) === Boolean(options['handle-file'])) throw gozarError('invalid_input', 'Supply exactly one of --route or --handle-file');
+    const home = options.home ?? defaultHome();
+    let ref;
+    if (options['handle-file']) {
+      const file = await readJson(options['handle-file'], 'The handle file');
+      ref = file?.handle ? { home: file.home ?? home, handle: file.handle } : { home, handle: file };
+    } else {
+      const { statusRoutes } = await import('./durable-route.mjs');
+      const route = (await statusRoutes({ home, routeId: options.route })).routes[0];
+      if (!route) throw gozarError('route_not_found', 'No durable route has this ID');
+      ref = { home, handle: { kind: 'durable', id: route.routeId, generation: route.generation } };
+    }
+    err('Suspending the durable route');
+    out(await api.suspendRoute(ref));
     return 0;
   },
 

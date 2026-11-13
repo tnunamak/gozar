@@ -6,7 +6,7 @@ import { createRouteApi } from './route-api.mjs';
 
 // The route API: by requirement, never by provider. See route-contract.d.ts.
 const routes = createRouteApi();
-export const { catalogRoutes, inspectLegacyRoute, ensureRoute, adoptRoute, routeStatus, closeRoute, watchRoutes,
+export const { catalogRoutes, inspectLegacyRoute, ensureRoute, adoptRoute, routeStatus, closeRoute, suspendRoute, watchRoutes,
   getRoutePreferences, setRoutePreferences, runSetupAction, resolveClientAddress } = routes;
 /** Alias of catalogRoutes. */
 export const detect = catalogRoutes;

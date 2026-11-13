@@ -5,7 +5,7 @@
 // `createRouteApi(deps)` exists so a test can replace the adapter registry, platform or state loaders; the
 // package root exports the instance with real dependencies. Nothing here names a provider.
 import { catalogRoutes as buildCatalog } from './route-catalog.mjs';
-import { routeStatus as viewStatus, closeRoute as viewClose, projectDurable, propertiesFor } from './route-view.mjs';
+import { routeStatus as viewStatus, closeRoute as viewClose, suspendRoute as viewSuspend, projectDurable, propertiesFor } from './route-view.mjs';
 import { watchRoutes as pollRoutes } from './route-watch.mjs';
 import { getRoutePreferences, setRoutePreferences } from './route-preferences.mjs';
 import { runSetupAction as runSetup } from './route-setup.mjs';
@@ -73,6 +73,7 @@ export function createRouteApi(deps = {}) {
 
     routeStatus: request => guard(() => verified(async () => viewStatus(request, { adapters: await adapters(), ...deps.view }))),
     closeRoute: request => guard(() => verified(async () => viewClose(request, { adapters: await adapters(), ...deps.view }))),
+    suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }))),
     watchRoutes: request => pollRoutes(request, { routeStatus: r => verified(async () => viewStatus(r, { adapters: await adapters(), ...deps.view })), ...deps.watch }),
     getRoutePreferences, setRoutePreferences,
     runSetupAction: request => guard(async () => runSetup(request, { ...deps.setup, ...await shared() })),

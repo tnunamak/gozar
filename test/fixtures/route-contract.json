@@ -3298,6 +3298,170 @@
         "setup": "none",
         "protocols": []
       }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "RouteView",
+      "name": "suspending: published null",
+      "value": {
+        "schemaVersion": 1,
+        "handle": {
+          "kind": "durable",
+          "id": "example-main",
+          "generation": 4
+        },
+        "origin": "https://example.invalid",
+        "published": null,
+        "state": "suspending",
+        "ownership": "gozar-owned",
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ],
+            "ports": null
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
+          }
+        },
+        "ingress": null,
+        "verification": {
+          "status": "verified",
+          "checkedAt": "2026-11-12T12:00:00.000Z",
+          "vantage": "this-device",
+          "checks": [
+            "nonce"
+          ]
+        },
+        "limits": {
+          "recommendedPollIntervalMs": 60000,
+          "idleTimeoutMs": null
+        },
+        "cleanup": {
+          "state": "none"
+        }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "RouteView",
+      "name": "suspended: published null",
+      "value": {
+        "schemaVersion": 1,
+        "handle": {
+          "kind": "durable",
+          "id": "example-main",
+          "generation": 4
+        },
+        "origin": "https://example.invalid",
+        "published": null,
+        "state": "suspended",
+        "ownership": "gozar-owned",
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ],
+            "ports": null
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
+          }
+        },
+        "ingress": null,
+        "verification": {
+          "status": "verified",
+          "checkedAt": "2026-11-12T12:00:00.000Z",
+          "vantage": "this-device",
+          "checks": [
+            "nonce"
+          ]
+        },
+        "limits": {
+          "recommendedPollIntervalMs": 60000,
+          "idleTimeoutMs": null
+        },
+        "cleanup": {
+          "state": "none"
+        }
+      }
     }
   ],
   "invalid": [

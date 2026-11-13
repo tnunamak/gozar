@@ -992,6 +992,8 @@
             "unverified",
             "unknown",
             "lost",
+            "suspending",
+            "suspended",
             "address_changed",
             "uncertain",
             "releasing",

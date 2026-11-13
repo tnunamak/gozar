@@ -11,12 +11,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, chmod, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createServiceVerifier } from '../../packages/gozar-node/service.mjs';
 import { portHolders, reserveSession } from '../../packages/gozar-node/durable-route.mjs';
 import { selectAdoptable } from '../../adapters/providers/_shared/tailscale-adopt.mjs';
 import { redeemConsentToken, consentBinding } from '../../packages/gozar-node/consent-token.mjs';
+import { assertShape } from './route-schema-check.mjs';
 import { startFakeLocalApi, forwardTarget } from './fake-localapi.mjs';
 
 const exec = promisify(execFile);
@@ -30,8 +31,7 @@ const close = server => { server.closeAllConnections(); return new Promise(resol
 let root, certificate, helper;
 
 before(async () => {
-  await mkdir(join(homedir(), '.tmp'), { recursive: true });
-  root = await mkdtemp(join(homedir(), '.tmp', 'gozar-durable-'));
+  root = await mkdtemp(join(tmpdir(), 'gozar-durable-'));
   certificate = { cert: join(root, 'cert.pem'), key: join(root, 'key.pem') };
   // Operations the shared runner does not have: mint a consent token (what the catalog does), read
   // plan facts, inspect a legacy route. Each runs in a fresh process like every other operation.
@@ -1214,4 +1214,179 @@ test('33. an adopted rule on the adopt-only port 9443 that another program chang
   assert.equal(released.result.cleanupDebt.reason, 'rule-changed');
   assert.deepEqual(w.state.config, changed, 'nor removed');
   assert.deepEqual(w.writes(), []);
+});
+
+const suspend = w => w.run('suspend', { routeId: 'coordinator' });
+const clearProvider = w => w.edit(state => { state.config = {}; });
+
+test('34. S1 suspend deletes only its exact receipt with CAS; foreign edits and changed identity survive', async t => {
+  for (const scenario of ['exact', 'changed', 'identity', 'race', 'identity-race']) {
+    const w = await world(t);
+    await w.ensure();
+    if (scenario === 'changed') w.edit(foreignRule(8443, 'http://127.0.0.1:9'));
+    if (scenario === 'identity') w.edit(state => { state.dnsName = 'other.tailnet.test'; });
+    if (scenario === 'race') w.state.beforePost = foreignRule(8443, 'http://127.0.0.1:9');
+    if (scenario === 'identity-race') w.state.beforePost = state => { state.dnsName = 'other.tailnet.test'; };
+    const before = structuredClone(w.state.config), writes = w.writes().length;
+    const reply = await suspend(w);
+    if (scenario === 'exact') {
+      assert.equal(reply.result?.route.state, 'suspended', JSON.stringify(reply));
+      assert.equal(w.state.config.Web?.[`${dnsName}:8443`], undefined);
+      assert.equal(w.writes().length, writes + 1);
+    } else {
+      assert.equal(reply.error?.code, scenario.startsWith('identity') ? 'address_changed' : 'uncertain', JSON.stringify(reply));
+      assert.equal(w.writes().length, writes);
+      if (!scenario.endsWith('race')) assert.deepEqual(w.state.config, before);
+      if (scenario === 'race') assert.deepEqual(w.state.config.Web[`${dnsName}:8443`], listener('http://127.0.0.1:9'));
+    }
+    assert.deepEqual(await w.cliCalls(), []);
+  }
+});
+
+test('35. S2 a suspended route keeps its pin, intent, consent and slot reservation', async t => {
+  const w = await world(t, { funnelPorts: [8443, 10000] });
+  await w.ensure();
+  const before = await w.record();
+  assert.equal((await suspend(w)).result?.route.state, 'suspended');
+  const after = await w.record();
+  assert.deepEqual(after, { ...before, state: 'suspended', receipt: null });
+  const other = await w.ensure({ target: '127.0.0.1:9', usage: { kind: 'durable', routeId: 'other-app' } });
+  assert.equal(other.result?.route.allocatedOrigin, `https://${dnsName}:10000`, JSON.stringify(other));
+  assert.equal(w.state.config.Web?.[`${dnsName}:8443`], undefined);
+  const holders = await portHolders({ home: w.home, providerResource: after.providerResource, ports: [8443] });
+  assert.equal(holders[0]?.routeId, 'coordinator');
+});
+
+test('36. S3 resume without approval verifies only the pin and refuses foreign rules, identity and digest drift', async t => {
+  for (const scenario of ['resume', 'foreign', 'identity', 'digest']) {
+    const w = await world(t, { funnelPorts: [8443, 10000] });
+    await w.ensure();
+    await suspend(w);
+    if (scenario === 'foreign') w.edit(foreignRule(8443, 'http://127.0.0.1:9'));
+    if (scenario === 'identity') w.edit(state => { state.dnsName = 'other.tailnet.test'; });
+    if (scenario === 'digest') {
+      const record = await w.record();
+      await writeFile(join(w.home, 'routes', (await w.records())[0]), JSON.stringify({ ...record, planDigest: 'sha256:changed' }));
+    }
+    const writes = w.writes().length, config = structuredClone(w.state.config);
+    const reply = await w.run('ensure', w.request);
+    if (scenario === 'resume') {
+      assert.equal(reply.result?.route.state, 'usable', JSON.stringify(reply));
+      assert.equal(reply.result.route.origin, w.origin);
+      assert.equal(reply.result.route.verification.status, 'verified');
+      assert.equal(w.writes().length, writes + 1);
+      assert.equal(w.state.config.Web?.[`${dnsName}:10000`], undefined);
+      await suspend(w);
+      const file = join(w.home, 'query.json');
+      await writeFile(file, JSON.stringify(w.request));
+      const resumed = await w.gozar('ensure', '--query-file', file, '--json');
+      assert.equal(resumed.code, 0, resumed.stdout);
+      assertShape('RouteView', resumed.json);
+      assert.equal(resumed.json.state, 'usable');
+      assert.equal(resumed.json.published, w.origin);
+      assert.equal(resumed.json.verification.status, 'verified');
+    } else {
+      assert.equal(reply.error?.code, { foreign: 'port_occupied', identity: 'address_changed', digest: 'adapter_changed' }[scenario], JSON.stringify(reply));
+      assert.equal(w.writes().length, writes);
+      assert.deepEqual(w.state.config, config);
+    }
+  }
+});
+
+test('37. S4 suspend refuses an adopt-only port before any write with address_changed', async t => {
+  const w = await world(t, { funnelPorts: [] });
+  w.edit(foreignRule(9443, `http://${w.target}`));
+  assert.equal((await w.adopt({ origin: `https://${dnsName}:9443` }, { adapterId: 'tailscale-private' })).result?.route.state, 'usable');
+  const before = await w.record(), config = structuredClone(w.state.config);
+  const reply = await suspend(w);
+  assert.equal(reply.error?.code, 'address_changed', JSON.stringify(reply));
+  assert.match(reply.error.message, /adopt-only.*cannot restore/);
+  assert.deepEqual(w.writes(), []);
+  assert.deepEqual(w.state.config, config);
+  assert.deepEqual(await w.record(), before);
+});
+
+test('38. S5 suspend is idempotent and RouteView and CLI publish nothing', async t => {
+  const w = await world(t);
+  await w.ensure();
+  const handle = { kind: 'durable', id: 'coordinator', generation: 1 };
+  const file = join(w.home, 'handle.json');
+  await writeFile(file, JSON.stringify(handle));
+  const first = await w.gozar('suspend', '--handle-file', file, '--json');
+  assert.equal(first.code, 0, first.stdout);
+  assertShape('RouteView', first.json);
+  assert.equal(first.json.state, 'suspended');
+  assert.equal(first.json.published, null);
+  assert.equal(first.json.origin, w.origin);
+  const writes = w.writes().length, record = await w.record();
+  assert.deepEqual((await suspend(w)).result.route, (await suspend(w)).result.route);
+  const again = await w.gozar('suspend', '--route', 'coordinator', '--json');
+  assert.equal(again.code, 0, again.stdout);
+  assert.deepEqual(again.json, first.json);
+  assert.equal((await w.run('status')).result.routes[0].state, 'suspended');
+  const status = await w.run('apiStatus', { handle });
+  assert.equal(status.result?.state, 'suspended', JSON.stringify(status));
+  assert.equal(status.result.published, null);
+  assert.equal((await w.run('apiSuspend', { handle: { ...handle, generation: 0 } })).error?.code, 'route_conflict');
+  assert.equal((await w.run('apiSuspend', { handle: { ...handle, kind: 'session' } })).error?.code, 'unsupported');
+  assert.deepEqual(await w.record(), record);
+  assert.equal(w.writes().length, writes);
+  const missing = await w.gozar('suspend', '--route', 'missing', '--json');
+  assert.equal(missing.code, 3);
+  assert.equal(missing.json.error.code, 'route_not_found');
+  const invalid = await w.gozar('suspend', '--json');
+  assert.equal(invalid.code, 1);
+  await writeFile(file, JSON.stringify({ ...handle, kind: 'session' }));
+  const unsupported = await w.gozar('suspend', '--handle-file', file, '--json');
+  assert.equal(unsupported.code, 2);
+  assert.equal(unsupported.json.error.code, 'unsupported');
+});
+
+test('39. S6 user stop drops a suspended record without provider writes and blocks resume', async t => {
+  const w = await world(t);
+  await w.ensure();
+  await suspend(w);
+  w.edit(foreignRule(8443, 'http://127.0.0.1:9'));
+  const config = structuredClone(w.state.config), writes = w.writes().length;
+  const reply = await w.run('stop', { routeId: 'coordinator' });
+  assert.equal(reply.result?.stopped, true);
+  assert.equal(reply.result.removed, true);
+  assert.equal(reply.result.providerRemoved, false);
+  assert.deepEqual(await w.records(), []);
+  assert.equal((await w.run('ensure', w.request)).error?.code, 'stopped_by_user');
+  assert.deepEqual(w.state.config, config);
+  assert.equal(w.writes().length, writes);
+});
+
+test('40. S7 release drops a suspended record, preserves foreign rules and refuses hand-back', async t => {
+  const w = await world(t);
+  await w.ensure();
+  await suspend(w);
+  w.edit(foreignRule(8443, 'http://127.0.0.1:9'));
+  const config = structuredClone(w.state.config), writes = w.writes().length;
+  assert.equal((await w.run('release', { routeId: 'coordinator', mode: 'hand-back' })).error?.code, 'not_owned');
+  const reply = await w.run('release', { routeId: 'coordinator' });
+  assert.equal(reply.result?.removed, true, JSON.stringify(reply));
+  assert.equal(reply.result.providerRemoved, false);
+  assert.deepEqual(await w.records(), []);
+  assert.deepEqual(w.state.config, config);
+  assert.equal(w.writes().length, writes);
+});
+
+test('41. S8 crashes before and after delete retain the receipt until confirmed; retry and ensure recover', async t => {
+  for (const crash of ['before-apply', 'after-apply']) for (const next of ['suspend', 'ensure']) {
+    const w = await world(t);
+    await w.ensure();
+    const receipt = (await w.record()).receipt;
+    w.state.crash = crash;
+    assert.equal((await suspend(w)).crashed, 'SIGKILL');
+    const interrupted = await w.record();
+    assert.equal(interrupted.state, 'suspending');
+    assert.deepEqual(interrupted.receipt, receipt);
+    const reply = next === 'suspend' ? await suspend(w) : await w.run('ensure', w.request);
+    assert.equal(reply.result?.route.state, next === 'suspend' ? 'suspended' : 'usable', JSON.stringify(reply));
+    assert.equal(reply.result.route.origin, w.origin);
+    assert.equal((await w.record()).receipt === null, next === 'suspend');
+    assert.equal(Boolean(w.state.config.Web?.[`${dnsName}:8443`]), next === 'ensure');
+  }
 });

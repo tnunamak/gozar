@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3
+
+- Suspend a durable route before closing an app's listener with `suspendRoute({ home, handle })` or `gozar suspend`. Forwarding is removed by exact compare-and-set, while the origin, consent and slot reservation remain. The next `ensureRoute` restores and verifies only that origin without new approval. Interrupted suspension keeps its receipt until a fresh read confirms deletion; user stop still blocks recreation. Adopt-only ports are refused because Gozar cannot restore their rules.
+
 ## 0.3.2
 
 ### Added

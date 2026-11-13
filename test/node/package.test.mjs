@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { dirname, posix } from 'node:path';
+import { dirname, posix, join } from 'node:path';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const cli = fileURLToPath(new URL('../../bin/gozar.mjs', import.meta.url));
@@ -34,4 +34,27 @@ test('ordinary CLI commands never resolve the demo harness', () => {
     assert.doesNotMatch(result.stderr + result.stdout, /Unexpected demo import/);
     assert.ok([0, 1].includes(result.status), result.stderr);
   }
+});
+
+
+test('documented package install pins match the package version', async () => {
+  const { version } = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
+  const documents = ['README.md'];
+  async function collect(directory) {
+    for (const entry of await readdir(join(root, directory), { withFileTypes: true })) {
+      const path = posix.join(directory, entry.name);
+      if (entry.isDirectory()) await collect(path);
+      else if (entry.name.endsWith('.md')) documents.push(path);
+    }
+  }
+  await collect('docs');
+  let pins = 0;
+  for (const path of documents) {
+    const text = await readFile(join(root, path), 'utf8');
+    for (const match of text.matchAll(/@tnunamak\/gozar@(\d+\.\d+\.\d+)/g)) {
+      assert.equal(match[1], version, `${path}: stale install pin ${match[0]}`);
+      pins++;
+    }
+  }
+  assert.ok(pins > 0, 'documentation includes versioned install examples');
 });

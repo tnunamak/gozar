@@ -305,12 +305,13 @@ async function reconcile(record, facet, observed, { verify = true } = {}) {
   if (['releasing', 'handing-back', 'address_changed'].includes(record.state)) return { state: record.state };
   const pin = record.receipt ?? record.intent;
   if (observed.identity !== pin.dnsName) return { state: 'address_changed' };
+  if (record.state === 'suspended') return { state: 'suspended' };
   const current = facet.read(observed.snapshot, pin.port);
   // Intent without a receipt proves only that Gozar meant to create the rule.
   if (!record.receipt) return current === null ? { state: 'lost' } : { state: 'uncertain', cleanupDebt: { reason: 'unattributed-rule', port: pin.port } };
   if (current === null) return { state: 'lost' };
   if (!isDeepStrictEqual(current, record.receipt.rule)) return { state: 'uncertain', cleanupDebt: { reason: 'rule-changed', port: pin.port } };
-  if (!verify) return { state: record.state };
+  if (!verify || record.state === 'suspending') return { state: record.state };
   const checked = await runVerifier({ origin: record.origin ?? record.intent.origin, target: record.target, verifyCmd: null });
   return { state: checked.status === 'verified' ? 'usable' : 'unverified', verification: checked };
 }
@@ -337,7 +338,7 @@ function view(record, current = {}, extra = {}) {
   const reply = { routeId: record.routeId, generation: record.generation, owner: record.owner, createdAt: record.createdAt, origin: record.origin ?? null,
     allocatedOrigin: record.origin ?? record.receipt?.origin ?? record.intent?.origin ?? null, target: record.target,
     adapterId: record.adapterId, ownership: record.ownership, provenance: record.provenance ?? 'created', lifetime: record.lifetime,
-    exposure: 'owner-run', forwards: `forwards to ${record.target} whether or not ${record.owner} is running`,
+    exposure: 'owner-run', forwards: state === 'suspended' ? 'suspended; no provider forwarding rule' : `forwards to ${record.target} whether or not ${record.owner} is running`,
     idleTimeoutMs: record.idleTimeoutMs ?? null, state, verification: current.verification ?? null,
     cleanupDebt: current.cleanupDebt ?? record.cleanupDebt ?? null, ...extra };
   if (record.state === 'handing-back') reply.handBack = { transfer: record.handBack.transfer, claim: record.handBack.claim };
@@ -442,7 +443,7 @@ async function publish(dir, record, checked) {
   checked ??= await runVerifier({ origin: record.origin ?? record.intent.origin, target: record.target, verifyCmd: null });
   // Fence: a concurrent release or hand-back that moved the generation wins.
   const fresh = await load(dir, record.routeId);
-  if (!fresh || fresh.generation !== record.generation || ['releasing', 'handing-back'].includes(fresh.state))
+  if (!fresh || fresh.generation !== record.generation || ['releasing', 'handing-back', 'suspending', 'suspended'].includes(fresh.state))
     throw refuse('route_releasing', 'The route was released during this call; it was not published');
   const state = checked.status === 'verified' ? 'usable' : 'unverified';
   record = { ...record, state, origin: state === 'usable' ? record.origin ?? record.intent.origin : record.origin ?? null };
@@ -515,13 +516,17 @@ export async function ensureRoute(request, deps) {
       if (['address_changed', 'uncertain'].includes(record.state)) throw refuse(record.state, `Route is ${record.state}; release or adopt it first`);
       const entry = durableEntry(adapters, record.adapterId);
       const { capability } = entry;
+      if (record.state === 'suspending') {
+        await removeListener(dir, record, adapters, ctx, { suspend: true });
+        record = await load(dir, routeId);
+      }
       const observed = await entry.facet.observe(ctx);
       const current = await reconcile(record, entry.facet, observed);
       if (current.state === 'usable' || current.state === 'unverified') {
         const published = await publish(dir, record, current.verification);
         return finish(published.record, published.verification);
       }
-      if (current.state !== 'lost') {
+      if (!['lost', 'suspended'].includes(current.state)) {
         await save(dir, { ...record, state: current.state, cleanupDebt: current.cleanupDebt ?? null });
         throw refuse(current.state, `Route is ${current.state}; nothing was changed`);
       }
@@ -554,12 +559,22 @@ export async function ensureRoute(request, deps) {
 
 // Remove by exact compare-and-set from the receipt. A rule Gozar cannot attribute stays in place,
 // and the record stays as visible cleanup debt until the rule is gone or the user dismisses it.
-async function removeListener(dir, record, adapters, ctx) {
-  record = { ...record, state: 'releasing' };
+async function removeListener(dir, record, adapters, ctx, { suspend = false } = {}) {
+  if (!suspend && record.state === 'suspended') {
+    await drop(dir, record.routeId);
+    return { removed: true, providerRemoved: false, cleanupDebt: null };
+  }
+  record = { ...record, state: suspend ? 'suspending' : 'releasing' };
   // Withdraw publication durably before touching the provider.
   await save(dir, record);
   const pin = record.receipt ?? record.intent;
+  const complete = async providerRemoved => {
+    if (suspend) await save(dir, { ...record, state: 'suspended', receipt: null, cleanupDebt: null });
+    else await drop(dir, record.routeId);
+    return { removed: true, providerRemoved, cleanupDebt: null };
+  };
   const keep = async (reason, providerRemoved = false) => {
+    if (suspend) throw refuse(reason === 'address_changed' ? reason : 'uncertain', `Cannot suspend: ${reason}; the rule was left in place`);
     const cleanupDebt = { reason, port: pin.port };
     await save(dir, { ...record, cleanupDebt });
     return { removed: false, providerRemoved, cleanupDebt };
@@ -571,6 +586,7 @@ async function removeListener(dir, record, adapters, ctx) {
   if (!entry) return keep('adapter-unavailable');
   const facet = entry.durable;
   const { decision, written } = await compareAndSet(facet, ctx, async observed => {
+    if (suspend && observed.identity !== pin.dnsName) return { result: 'address_changed' };
     // Read at the identity the rule was written under, not the provider's current one: after a rename the
     // receipted rule may still sit under the old identity, and an equal rule under the new one is not ours.
     const current = facet.read(observed.snapshot, pin.port, pin.dnsName);
@@ -580,13 +596,35 @@ async function removeListener(dir, record, adapters, ctx) {
     return { write: { op: 'delete', slot: pin.port, rule: record.receipt.rule, identity: pin.dnsName } };
   });
   if (!written) {
-    if (decision.result === 'absent') { await drop(dir, record.routeId); return { removed: true, providerRemoved: false, cleanupDebt: null }; }
+    if (decision.result === 'absent') return complete(false);
     return keep(decision.result);
   }
   const after = await facet.observe(ctx);
   if (facet.read(after.snapshot, pin.port, pin.dnsName) !== null) return keep('post-removal-mismatch', true);
-  await drop(dir, record.routeId);
-  return { removed: true, providerRemoved: true, cleanupDebt: null };
+  return complete(true);
+}
+
+// Withdraw the provider rule while retaining the origin, consent and slot reservation.
+export async function suspendRoute({ routeId, home = defaultHome(), expectedGeneration }, deps) {
+  routeId = routeIdValue(routeId);
+  const adapters = await adaptersOf(deps), ctx = durableContext(home);
+  return reserved(home, async dir => {
+    let record = await load(dir, routeId);
+    if (!record) throw refuse('not_found', 'No durable route has this ID');
+    if (expectedGeneration !== undefined && record.generation !== expectedGeneration) throw refuse('route_conflict', 'The route was replaced; this handle is stale');
+    if (record.state === 'suspended') return { schemaVersion: 1, route: view(record) };
+    if (record.state === 'handing-back') throw refuse('handing_back', 'Confirm or cancel the hand-back before suspending');
+    if (record.state === 'releasing') throw refuse('route_releasing', 'Route is releasing; finish releasing it first');
+    const { facet } = durableEntry(adapters, record.adapterId);
+    const observed = await facet.observe(ctx);
+    const current = await reconcile(record, facet, observed, { verify: false });
+    if (['uncertain', 'address_changed'].includes(current.state)) throw refuse(current.state, `Route is ${current.state}; nothing was changed`);
+    if (facet.slots(observed.snapshot, { target: record.target }).find(item => item.slot === record.intent.port)?.adoptOnly)
+      throw refuse('address_changed', 'Cannot suspend an adopt-only port: Gozar cannot restore its rule; leave it running or release it');
+    await removeListener(dir, record, adapters, ctx, { suspend: true });
+    record = await load(dir, routeId);
+    return { schemaVersion: 1, route: view(record) };
+  });
 }
 
 // mode 'remove': compare-and-set removal. mode 'hand-back': phase 1 of a two-phase hand-back.
@@ -782,7 +820,7 @@ export async function statusRoutes({ routeId, home = defaultHome(), canonical = 
   for (let record of records) {
     const check = await targetCheck(record);
     const extra = { targetCheck: check };
-    if (check === 'another program is listening') Object.assign(extra, {
+    if (check === 'another program is listening' && record.state !== 'suspended') Object.assign(extra, {
       warning: `Another program is listening on ${record.target}; the provider forwards traffic for this route to it.`,
       nextAction: `gozar stop --route ${record.routeId}` });
     let entry = null;

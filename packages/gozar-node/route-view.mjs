@@ -53,7 +53,7 @@ export const checksFor = (checks, { sse = false, origin = null } = {}) =>
   (checks ?? []).filter(check => (check !== 'sse' || sse) && (check !== 'tls' || typeof origin !== 'string' || origin.startsWith('https://')));
 
 const iso = ms => new Date(ms).toISOString();
-const STATES = new Set(['creating', 'usable', 'unverified', 'unknown', 'lost', 'address_changed', 'uncertain', 'releasing', 'released', 'handing-back']);
+const STATES = new Set(['creating', 'usable', 'unverified', 'unknown', 'lost', 'suspending', 'suspended', 'address_changed', 'uncertain', 'releasing', 'released', 'handing-back']);
 // What the last check proved, and from where. Every check Gozar runs for a route runs from this computer, so the
 // vantage is 'this-device' once a check ran and 'none' before. Checks are listed only while the route is verified.
 const proven = (status, checkedAt, checks) => ({ status, checkedAt, vantage: checkedAt === null ? 'none' : 'this-device', checks: status === 'verified' ? [...checks] : [] });
@@ -219,4 +219,13 @@ export async function closeRoute(request, deps = {}) {
       }
     }
   } catch (error) { throw normalizeError(error); }
+}
+
+/** Pauses a durable route without releasing its address or consent. */
+export async function suspendRoute(request, deps = {}) {
+  const handle = checkRef(request);
+  if (handle.kind !== 'durable') throw gozarError('unsupported', 'Only durable routes can be suspended');
+  const { suspendRoute: suspend } = await import('./durable-route.mjs');
+  const reply = await suspend({ home: request.home, routeId: handle.id, expectedGeneration: handle.generation }, { adapters: deps.adapters });
+  return projectDurable(reply.route, { handle, ...await propertiesFor(reply.route.adapterId, deps, 'durable') });
 }

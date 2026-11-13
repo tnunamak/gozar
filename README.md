@@ -144,6 +144,15 @@ await watching;
 - `getRoutePreferences` and `setRoutePreferences` keep the user's provider order as `preferenceRef` values or `providerId` values. `runSetupAction` runs one setup action the user approved. `resolveClientAddress` turns a proven connection into a client address, or says why it cannot.
 - The route functions behave the same on Linux and macOS. On any other platform every candidate is `unsupported`.
 
+For a durable route, suspend before closing the local listener. This removes forwarding while keeping the address and consent for the next start. A crash does not suspend automatically. See [Suspend and resume](docs/design/durable-routes.md#suspend-and-resume) for refusal and recovery details.
+
+| Route API | What it does |
+| --- | --- |
+| `ensureRoute(query)` | Creates with approval, or resumes the pinned durable route without new approval and verifies it. |
+| `suspendRoute({ home, handle })` | Removes a durable route's rule and retains its reservation. Returns `suspended` with `published: null`. |
+| `routeStatus({ home, handle })` | Reads current state; a suspended route stays suspended. |
+| `closeRoute({ home, handle, mode: 'remove' })` | Releases the route and its reservation. A later creation needs approval. |
+
 The same requests run from the command line. Each command reads its request from files, prints one JSON envelope on stdout (`watch` prints one event per line) and writes progress to stderr. Files that hold an approval or a secret must be private (mode 0600). In the table, `gozar` stands for `npx --package=@tnunamak/gozar@0.3.2 gozar` (or a global install), and FILE, NAME, ACTION_ID, DIR, N and REF are your values.
 
 | Command | What it does |
@@ -155,6 +164,8 @@ The same requests run from the command line. Each command reads its request from
 | `gozar setup ACTION_ID --approval-file FILE [--secret-file FILE] [--value VALUE] --json` | Runs one approved setup action. A `provide-value` action takes `--value`; a secret takes `--secret-file`. |
 | `gozar preference show [--profile-home DIR] --json` | Reads the user's provider order and its revision. |
 | `gozar preference set --expected-revision N [--prefer REF ...] [--profile-home DIR] --json` | Replaces the provider order. N is the revision `show` returned. |
+| `gozar suspend --route ID --json` | Suspends a durable route; `ensure` resumes it without new approval. |
+| `gozar suspend --handle-file FILE --json` | Suspends the durable handle saved in FILE, with generation checking. |
 | `gozar watch --handle-file FILE --json` | Streams route changes until the route is gone. |
 
 Exit codes: `0` success; `2` requirements, setup or `unsupported`; `3` missing, stale or unknown approval, or no such route; `1` any other failure. There is no `--yes` for these commands: the approval is the private file that holds the token the catalog issued. The session commands in [Share a local service](#share-a-local-service) and [Embed Gozar in your app](#embed-gozar-in-your-app) are a different form of `gozar expose`: they take `--port` and `--client-reach`, use `--yes` for approval, and do not take the files above.

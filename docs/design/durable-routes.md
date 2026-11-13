@@ -96,7 +96,7 @@ What makes this acceptable:
 `ensureRoute` takes the reservation lock, then loads the record for `routeId` **before** it computes any candidate or chooses a port.
 - **No record:** this is a first allocation. It needs an approval token (see "Approval tokens"). The adapter is the one in the token's grant. `origin` may be absent.
 - **Record exists:** the record is the **pin**: its origin and adapter never move. A caller `origin` that differs is refused with `origin_changed`. An absent `origin` means "the recorded one", never "unpinned". No token is needed, and a token that is passed is not used. A different preference, a different catalog order or a token for another adapter never moves the pin.
-- **Record in `lost`, `address_changed`, `uncertain` or `releasing`:** never treated as a new allocation. `lost` may be restored at the pinned origin (below); the other states need `releaseRoute` or `adoptRoute` first.
+- **Record in `lost`, `suspended`, `address_changed`, `uncertain` or `releasing`:** never treated as a new allocation. `lost` and `suspended` may be restored at the pinned origin (below); the other states need `releaseRoute` or `adoptRoute` first.
 
 A restore re-computes the recipe digest for the recorded adapter. If it differs from the digest saved on the record, the recipe changed since the route was made, and the call fails with `adapter_changed`. Gozar mutates nothing.
 
@@ -120,6 +120,58 @@ An adapter can offer a durable route only if it declares `addressStability: 'sta
 - `address_changed`: the provider would give, or gives, a different origin. **Terminal for publication.** Gozar never reports the new origin as the route's origin. The host must release, then create a new route with new consent.
 - `unverified`: the receipt exists (Gozar made the rule), but the challenge through the origin failed. No origin is published. The next `ensureRoute` or `statusServices` re-verifies. Because the receipt proves ownership, `releaseRoute` may remove the rule.
 - `uncertain`: Gozar saved its intent but cannot prove it made the mutation (see below), **or** a `lost` route's pinned port now holds a rule Gozar cannot tell apart from its own changed rule. Not owned. Reported as cleanup debt. The route is never moved to another port.
+
+### Suspend and resume
+
+Before closing its local listener, an app can call the root API's
+`suspendRoute({ home, handle })` with its durable handle. The CLI equivalents are
+`gozar suspend --route ID --json` and `gozar suspend --handle-file FILE --json`.
+A handle file holds the handle itself or `{ home, handle }`. Suspend returns a
+RouteView with `state: 'suspended'`, the pinned `origin`, and `published: null`.
+Wait for success before closing the listener: a failed suspend can leave traffic
+forwarding to that listener. Suspension is explicit; an app crash does not invoke it.
+
+The transition is `usable | unverified | lost → suspending → suspended`.
+Suspend reads fresh provider state and removes only the exact receipted rule by
+compare-and-set. It keeps the route ID, owner, target, adapter, origin, intent,
+plan digest, consent and reservation. A suspended route reserves its listener and
+provider slot even though it has no receipt or forwarding rule. Repeating suspend
+returns the same suspended view without a provider write.
+
+Call `ensureRoute` with the same query on the next start, with the app answering
+the challenge. No approval is needed. A suspended record enters the existing lost
+route restore path: check the recipe digest, identity and reservation, write only
+the pinned slot, read back, save a receipt and verify before publishing. There is
+no fallback allocation. Status and watch do not resume routes.
+
+Suspend saves and fsyncs `suspending` with the receipt before requesting deletion.
+A crash before deletion leaves an attributable rule and a reservation. A crash
+after deletion but before its readback leaves the same receipt; a retry can
+confirm absence. Only a fresh read confirming absence permits saving `suspended`
+with a null receipt. A retry of suspend finishes that transaction. `ensureRoute`
+first finishes an interrupted suspend, then restores through the same pinned path.
+A failed or conflicting delete retains the receipt; it never abandons ownership.
+
+The table names engine refusals. At the route API and CLI boundary, `uncertain`
+becomes `cleanup_debt`; `adapter_changed`, `port_occupied`, `reserved` and
+`route_releasing` become `route_conflict`. Other listed codes pass through.
+
+| Refusal | Meaning and next step |
+| --- | --- |
+| `uncertain` | The rule changed or has no receipt proving ownership. Nothing foreign is deleted; inspect the route and release or adopt as appropriate. |
+| `address_changed` | The node identity changed, or the port is adopt-only. Gozar cannot promise restoration there. An adopt-only rule (private Serve 9443) is refused before suspension changes anything. Leave it running or release it. |
+| `adapter_changed` | Resume found a changed plan digest. Release and obtain approval for a new route. |
+| `port_occupied` | Resume found another rule on the pinned slot. Leave it untouched; retry only after its owner frees it. |
+| `reserved` | Another route or session holds the listener or slot. Resolve that reservation before resuming. |
+| `route_conflict` | The handle generation is stale. Read the current route before acting. |
+| `handing_back`, `route_releasing` | Finish the hand-back or release before suspending. |
+| `stopped_by_user` | Resume is blocked by a user stop. Only renewed consent or `gozar allow` can clear it. |
+
+Provider failures keep the recorded intent and receipt for retry. Hand-back of a
+suspended route is refused because there is no receipt to transfer (`not_owned`,
+normalized to `invalid_input`). Release drops the suspended record without a
+provider write, even if a foreign rule appeared on its slot. User stop does the
+same after durably recording its tombstone, so a later ensure cannot resume it.
 
 ### Pinned origin fails closed
 

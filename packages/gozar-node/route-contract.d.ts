@@ -182,7 +182,7 @@ export type RouteView = {
   handle: Handle;
   origin: string | null;
   published: string | null;
-  state: 'creating' | 'usable' | 'unverified' | 'unknown' | 'lost' | 'address_changed' | 'uncertain' | 'releasing' | 'released' | 'handing-back';
+  state: 'creating' | 'usable' | 'unverified' | 'unknown' | 'lost' | 'suspending' | 'suspended' | 'address_changed' | 'uncertain' | 'releasing' | 'released' | 'handing-back';
   ownership: 'gozar-owned' | 'external-owned';
   properties: Properties;
   ingress: Ingress | null;
@@ -294,6 +294,7 @@ export type ExposeRequest = Query & {
 };
 
 export type RouteRef = { home: string; handle: Handle };
+export type SuspendRouteRequest = RouteRef & { handle: Handle & { kind: 'durable' } };
 export type CloseRouteRequest = RouteRef & { mode: 'remove' };
 export type WatchRoutesRequest = RouteRef & { signal: AbortSignal; intervalMs?: number };
 export type SetRoutePreferencesRequest = {
@@ -339,6 +340,8 @@ export function adoptRoute(request: AdoptRouteRequest): Promise<RouteView>;
  * and returns the normalized RouteView (ownership 'external-owned'); there is no separate projection export.
  */
 export function routeStatus(request: RouteRef): Promise<RouteView>;
+/** Removes forwarding but keeps the pin and consent. Resume with ensureRoute. */
+export function suspendRoute(request: SuspendRouteRequest): Promise<RouteView>;
 export function closeRoute(request: CloseRouteRequest): Promise<RouteView>;
 export function watchRoutes(request: WatchRoutesRequest): AsyncIterable<WatchEvent>;
 export function getRoutePreferences(request: { profileHome: string }): Promise<PreferenceRecord>;
