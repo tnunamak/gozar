@@ -359,6 +359,42 @@
       },
       "additionalProperties": false
     },
+    "Receipt": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "adapterId",
+        "resourceKey",
+        "generation",
+        "identity",
+        "readback",
+        "origin"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "adapterId": {
+          "type": "string"
+        },
+        "resourceKey": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "identity": {},
+        "readback": {},
+        "origin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "AdapterEffectError": {
       "type": "object",
       "required": [

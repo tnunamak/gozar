@@ -94,13 +94,16 @@ export async function conform(adapter) {
   assert.equal(definition.id, id);
   assert.match(definition.disclosure.revision, /^disc-/);
 
-  // Detection: honest on Linux, unsupported elsewhere (platform injected, never read here).
+  // Detection: honest on Linux and macOS, unsupported elsewhere (platform injected, never read here).
   const linux = await adapter.detect(readContext());
   assert.ok(['ready', 'action-required', 'unsupported', 'unknown'].includes(linux.state), `${id} detect state`);
   secretFree(linux, `${id} facts`);
+  const win = await adapter.detect(readContext({ platform: 'win32' }));
+  assert.equal(win.state, 'unsupported', `${id} on win32`);
+  assert.deepEqual(adapter.setupActions(win.facts), [], `${id} offers no setup on win32`);
+  // macOS is a supported platform: neither the core nor the adapter turns it away; the provider commands are the same.
   const mac = await adapter.detect(readContext({ platform: 'darwin' }));
-  assert.equal(mac.state, 'unsupported', `${id} on macOS`);
-  assert.deepEqual(adapter.setupActions(mac.facts), [], `${id} offers no setup on macOS`);
+  assert.equal(mac.state, linux.state, `${id} detects the same on macOS as on Linux`);
 
   // Properties and actions follow the frozen shapes.
   assert.deepEqual(validateShape('Properties', adapter.properties(linux.facts)), [], `${id} properties`);
@@ -187,7 +190,7 @@ test('honest declarations: kinds match the working recipes, unsupported provider
   assert.deepEqual(kinds['ngrok-https-edge'], ['attached']);
   for (const id of ['ngrok-tls-passthrough', 'ngrok-tcp-passthrough', 'cloudflare-named']) assert.deepEqual(kinds[id], [], `${id} has no admitted create recipe`);
   const mac = await loadAdapters({ manifest: tenManifest, root: adaptersRoot });
-  for (const adapter of mac) assert.equal((await adapter.detect(readContext({ platform: 'darwin' }))).state, 'unsupported');
+  for (const adapter of mac) assert.equal((await adapter.detect(readContext({ platform: 'win32' }))).state, 'unsupported');
 });
 
 test('disclosure revisions change with the text they name', async () => {
@@ -316,11 +319,11 @@ test('unknown provider: an empty registry loads nothing, so the fake appears onl
   assert.equal((await loadAdapters({ manifest: unknownManifest })).length, 1);
 });
 
-test('macOS: detect reports unsupported on a non-Linux platform and plan refuses', async () => {
+test('win32: detect reports unsupported on an unsupported platform and plan refuses', async () => {
   const [adapter] = await loadAdapters({ manifest: unknownManifest });
-  const mac = await adapter.detect(readContext({ platform: 'darwin' }));
+  const mac = await adapter.detect(readContext({ platform: 'win32' }));
   assert.equal(mac.state, 'unsupported');
-  await rejects(adapter.plan(readContext({ platform: 'darwin' }), request('session')), 'unsupported');
+  await rejects(adapter.plan(readContext({ platform: 'win32' }), request('session')), 'unsupported');
 });
 
 test('red: platform, home and generation are required context fields, never defaulted', async () => {

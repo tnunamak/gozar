@@ -116,18 +116,18 @@ export async function withExclusiveLock(path, action, { waitSeconds = 0 } = {}) 
 }
 // HTTPS authority semantics on both the direct HTTP and public HTTPS witness.
 export function canonicalAuthority(value) {
-  if (typeof value !== 'string' || !value || /[\s\\/@?#%,]/.test(value)) throw new Error('Invalid service Host');
+  if (typeof value !== 'string' || !value || /[\s\\/@?#%,]/.test(value)) throw Object.assign(new Error('Invalid service Host'), { code: 'invalid_input' });
   const match = /^(\[[^\]]+\]|[a-zA-Z0-9.-]+)(?::([0-9]+))?$/.exec(value);
-  if (!match) throw new Error('Invalid service Host');
+  if (!match) throw Object.assign(new Error('Invalid service Host'), { code: 'invalid_input' });
   const hostname = match[1];
   if (hostname.startsWith('[')) {
-    if (isIP(hostname.slice(1, -1)) !== 6) throw new Error('Invalid service Host');
+    if (isIP(hostname.slice(1, -1)) !== 6) throw Object.assign(new Error('Invalid service Host'), { code: 'invalid_input' });
   } else if (!isIP(hostname) && (hostname.length > 253 || /^[0-9.]+$/.test(hostname) ||
       !hostname.replace(/\.$/, '').split('.').every(label => /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(label)))) {
-    throw new Error('Invalid service Host');
+    throw Object.assign(new Error('Invalid service Host'), { code: 'invalid_input' });
   }
   if (match[2] !== undefined && (!Number.isInteger(Number(match[2])) || Number(match[2]) < 1 || Number(match[2]) > 65535))
-    throw new Error('Invalid service Host');
+    throw Object.assign(new Error('Invalid service Host'), { code: 'invalid_input' });
   return new URL('https://' + value).host;
 }
 export const transcript = (nonce, instanceId, authority, localPort) =>

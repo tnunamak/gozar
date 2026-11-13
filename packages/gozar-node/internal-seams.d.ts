@@ -90,6 +90,6 @@ export function buildCatalog(query: Query, deps: {
   preferences: string[];
   issue: typeof issueConsentToken;
   durablePlanFacts: typeof durablePlanFacts;
-  /** 'linux' is the only supported platform in 0.2.0; every other value makes every candidate unsupported. */
+  /** 'linux' and 'darwin' are supported in 0.2.0; every other value makes every candidate unsupported. An adapter may still answer unsupported for a supported platform. */
   platform: string;
 }): Promise<{ candidates: Candidate[] }>;

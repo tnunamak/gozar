@@ -1,6 +1,7 @@
 // watchRoutes: a polling AsyncIterable of snapshot, changed and terminal events for one handle. It is not an
 // audit log: states that come and go between two polls are missed. Abort ends it at once and leaves no timer.
-import { CODES, gozarError, normalizeError, routeStatus as defaultStatus, checkRef, releasedView } from './route-view.mjs';
+import { gozarError, normalizeError } from './error-normalizer.mjs';
+import { routeStatus as defaultStatus, checkRef, releasedView } from './route-view.mjs';
 
 const MIN_INTERVAL_MS = 250;
 
@@ -29,8 +30,8 @@ function sleep(ms, signal) {
 export function watchRoutes(request, deps = {}) {
   const handle = checkRef(request);
   const { signal } = request;
-  if (!(signal instanceof AbortSignal)) throw gozarError(CODES.invalidInput, 'watchRoutes needs an AbortSignal');
-  if (request.intervalMs !== undefined && !(Number.isFinite(request.intervalMs) && request.intervalMs > 0)) throw gozarError(CODES.invalidInput, 'intervalMs must be a positive number');
+  if (!(signal instanceof AbortSignal)) throw gozarError('invalid_input', 'watchRoutes needs an AbortSignal');
+  if (request.intervalMs !== undefined && !(Number.isFinite(request.intervalMs) && request.intervalMs > 0)) throw gozarError('invalid_input', 'intervalMs must be a positive number');
   const status = deps.routeStatus ?? defaultStatus;
   const floor = deps.minIntervalMs ?? MIN_INTERVAL_MS;
   return (async function* watch() {
@@ -43,9 +44,9 @@ export function watchRoutes(request, deps = {}) {
         view = polled.value;
       } catch (cause) {
         const error = normalizeError(cause);
-        if (error.code === CODES.routeNotFound) { view = releasedView(last, handle); terminal = true; }
-        else if (error.code === CODES.providerUnavailable && last) view = { ...last, state: 'unknown' };
-        else if (error.code !== CODES.busy) throw error;
+        if (error.code === 'route_not_found') { view = releasedView(last, handle); terminal = true; }
+        else if (error.code === 'provider_unavailable' && last) view = { ...last, state: 'unknown' };
+        else if (error.code !== 'busy') throw error;
       }
       if (view) {
         terminal ||= view.state === 'released';
