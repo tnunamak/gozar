@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { launch } from '../../packages/gozar-node/daemon.mjs';
 import { processIdentity } from '../../packages/gozar-node/process-identity.mjs';
-import { recordController, stopController } from '../../packages/gozar-node/controller-start.mjs';
+import { recordController, stopController, withCleanupOutcome } from '../../packages/gozar-node/controller-start.mjs';
 
 const fakeController = fileURLToPath(new URL('./fixtures/fake-controller.mjs', import.meta.url));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -88,6 +88,28 @@ test('a reused PID is not signalled', async t => {
   assert.equal(outcome.state, 'foreign');
   assert.deepEqual(signals, []);
   assert.ok(await processIdentity(bystander.pid), 'the bystander must still be running');
+});
+
+test('red: a group signal refused with EPERM (macOS, group already exiting) still stops the controller and reports it stopped', async t => {
+  const child = detachedChild(t);
+  await new Promise(resolve => child.once('spawn', resolve));
+  const record = await recordController(child);
+  const signals = [];
+  const kill = (pid, signal) => {
+    signals.push([pid, signal]);
+    if (pid < 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM', syscall: 'kill' });
+    process.kill(pid, signal);
+  };
+  const outcome = await stopController(record, { kill, graceMs: 2000 });
+  assert.equal(outcome.state, 'stopped', JSON.stringify(outcome));
+  assert.deepEqual(signals, [[-child.pid, 'SIGTERM'], [child.pid, 'SIGTERM']]);
+  assert.equal(await processIdentity(child.pid), null);
+});
+
+test('an unconfirmed cleanup message keeps both sentences apart', () => {
+  const wrapped = withCleanupOutcome(Object.assign(new Error('The route could not be started'), { code: 'provider_unavailable' }), { state: 'unconfirmed', pid: 42 });
+  assert.match(wrapped.message, /^The route could not be started\. The controller \(pid 42\)/);
+  assert.equal(wrapped.code, 'provider_unavailable');
 });
 
 test('the recorded controller is stopped by SIGTERM, and a stopped one reads as gone', async t => {

@@ -55,8 +55,14 @@ export async function stopController(record, { identity = processIdentity, kill 
   const observe = () => observeController(record, { identity });
   const send = signal => {
     // The controller is detached, so it leads its own process group: -pid reaches its descendants too.
+    // macOS answers EPERM, not ESRCH, when every member of the group is already exiting. Then signal the leader
+    // itself; whether it is gone is decided by observing its identity, never by the signal's result.
     try { kill(-record.pid, signal); }
-    catch (error) { if (error.code !== 'ESRCH') throw error; }
+    catch (error) {
+      if (error.code === 'ESRCH') return;
+      if (error.code !== 'EPERM') throw error;
+      try { kill(record.pid, signal); } catch (inner) { if (!['ESRCH', 'EPERM'].includes(inner.code)) throw inner; }
+    }
   };
   const waitGone = async ms => {
     const deadline = Date.now() + ms;
@@ -84,7 +90,7 @@ export async function stopController(record, { identity = processIdentity, kill 
 /** Reports the original error after cleanup. An unproven cleanup is stated in the message; the cause stays the original. */
 export function withCleanupOutcome(error, outcome) {
   if (outcome.state === 'unconfirmed') {
-    const wrapped = new Error(`${error.message} The controller (pid ${outcome.pid}) could not be confirmed stopped; inspect it and stop it by hand.`, { cause: error });
+    const wrapped = new Error(`${error.message.replace(/[.\s]*$/, '.')} The controller (pid ${outcome.pid}) could not be confirmed stopped; inspect it and stop it by hand.`, { cause: error });
     for (const key of ['code', 'provider', 'nextAction']) if (error[key] !== undefined) wrapped[key] = error[key];
     wrapped.controllerCleanup = outcome;
     return wrapped;
