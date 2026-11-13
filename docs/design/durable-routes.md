@@ -276,7 +276,7 @@ The session path does not change.
 
 ## Not in scope
 - Finite lifetimes for durable routes (see "Lifetimes").
-- macOS host (plan R12) and ngrok operational recipes (slice S1). Durable routes are designed for them but ship first for Tailscale on Linux. **On macOS the LocalAPI transport differs**: the Mac App Store and standalone Tailscale apps do not expose the Linux unix socket; the LocalAPI is reached on loopback with a token. The Linux transport does not carry over (recorded under R12).
+- macOS host (plan R12) and ngrok operational recipes (slice S1). Durable routes are designed for them but ship first for Tailscale on Linux. **On macOS the LocalAPI transport differs**: the Mac App Store and standalone Tailscale apps do not expose the Linux unix socket; the LocalAPI is reached on loopback with a token. 0.2.0 implements that transport below the same LocalAPI client, with discovery that follows Tailscale's own CLI (`packages/gozar-node/tailscale-app-discovery.mjs`). It is proven by fixture tests only; see [service-routes.md](../service-routes.md#durable-routes-gozar-owned).
 - Authentication for the app's own routes (plan R5).
 - Authenticated origin migration. An app that wants to move clients to a new origin signs that itself. Gozar only refuses to move silently.
 
