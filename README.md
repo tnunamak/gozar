@@ -2,13 +2,15 @@
 
 Give a local service an HTTPS address a remote client can reach, or a private route inside your Tailscale network. Gozar can use Tailscale Funnel, Tailscale Serve, localhost.run, your own HTTPS proxy, or a selected LAN interface.
 
-**Start with the built-in echo demo, or your own service.** On Linux or macOS with Node.js 22.13 or newer, start the demo in one terminal:
+**Will it fit your app?** You need Linux or macOS with Node.js 22.13 or newer, a local service on a port you choose, and a client that reaches it over the internet, your tailnet or your LAN. Windows is not supported: every route answers `unsupported`. Gozar adds no authentication to your app.
+
+**Start with the built-in echo demo, or your own service.** Start the demo in one terminal:
 
 ```sh
 npx --package=@tnunamak/gozar@0.3.2 gozar demo-server --port 18765
 ```
 
-Then, in a second terminal, expose it (or replace `18765` with your own service's port):
+Then, in a second terminal, expose it to the public internet (or replace `18765` with your own service's port; `--client-reach tailnet` or `lan` reaches private clients instead):
 
 ```sh
 npx --package=@tnunamak/gozar@0.3.2 gozar expose --port 18765 --client-reach internet
@@ -16,7 +18,7 @@ npx --package=@tnunamak/gozar@0.3.2 gozar expose --port 18765 --client-reach int
 
 Gozar finds eligible routes, shows the provider it chose and the exact local target, and asks for approval before making the service reachable. To see every candidate first, run `npx --package=@tnunamak/gozar@0.3.2 gozar detect --port 18765 --alternatives`. Provider setup or an outside-network verification step may still be required. Only share an address once Gozar verifies it; the address can change or expire. **Gozar does not add authentication to your app.**
 
-For a persistent service behind your existing HTTPS proxy, use a [service route](#keep-an-existing-service-address). To embed Gozar in an app, start with [Route by requirement](#route-by-requirement): the app states what it needs, and Gozar lists the providers that meet it. [Embed Gozar in your app](#embed-gozar-in-your-app) shows the shorter session commands. MCP is supported, but not required.
+There are three paths. **A quick session:** `expose` above, a temporary address that lasts 15 minutes by default. **A persistent service:** a [service route](#keep-an-existing-service-address) behind your own HTTPS proxy, with no expiry. **Gozar inside an app:** [Route by requirement](#route-by-requirement), where the app states what it needs and Gozar lists the providers that meet it, or the shorter session commands in [Embed Gozar in your app](#embed-gozar-in-your-app). MCP is supported, but not required.
 
 ## Install
 
@@ -48,7 +50,7 @@ Start your own service on port 3000, then:
 npx --package=@tnunamak/gozar@0.3.2 gozar expose --port 3000 --client-reach internet
 ```
 
-Review the displayed provider and exact local target. Approve only the route you want. Gozar creates the route when its provider is ready and checks it before publishing an address; outside-client verification can require additional setup.
+Review the displayed provider and exact local target. Approve only the route you want. localhost.run, tunnl.gg and the ngrok HTTPS edge terminate TLS and can read your traffic; for sensitive data, use Tailscale Funnel, which ends TLS on this computer, or your own proxy. Gozar creates the route when its provider is ready and checks it before publishing an address; outside-client verification can require additional setup.
 
 ```sh
 npx --package=@tnunamak/gozar@0.3.2 gozar status --port 3000
@@ -159,7 +161,7 @@ Exit codes: `0` success; `2` requirements, setup or `unsupported`; `3` missing, 
 
 ## Embed Gozar in your app
 
-Use the JavaScript API below, or execute CLI commands with `--json`:
+Use the JavaScript API below, or execute CLI commands with `--json`. `expose` has two forms: `expose --port N --client-reach ...` is the session form shown here, approved with `--yes`; `expose --query-file FILE` is the [route-contract](#route-by-requirement) form, approved with `--approval-file` and never `--yes`.
 
 ```sh
 npx --package=@tnunamak/gozar@0.3.2 gozar detect --port 3000 --json
