@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildCatalog, catalogRoutes, preferenceRefFor } from '../../packages/gozar-node/route-catalog.mjs';
+import { adoptDisclosureRevision, buildCatalog, catalogRoutes, preferenceRefFor } from '../../packages/gozar-node/route-catalog.mjs';
 import { normalizeError } from '../../packages/gozar-node/error-normalizer.mjs';
 import { action, assertShape, codeOf, fixtures, properties, query, scratch, stubAdapter, tokenStubs } from './route-schema-check.mjs';
 
@@ -208,5 +208,24 @@ test('durable target rejects URL and invalid ports before detecting any provider
     const q = await withHome(t, { target, usage: { kind: 'durable', routeId: 'app' } });
     await assert.rejects(catalogRoutes(q, deps([adapter])), error => error.code === 'invalid_input' && /target/.test(error.message));
     assert.equal(adapter.calls.detect, 0);
+  }
+});
+
+test('adoption approval and candidate copy explain takeover and removal on release or stop', async t => {
+  const q = await withHome(t, { usage: { kind: 'durable', routeId: 'route-1' }, intent: 'adopt', origin: 'https://node.test' });
+  const catalog = await catalogRoutes(q, deps([stubAdapter('alpha')]));
+  const [candidate] = catalog.candidates;
+  assertShape('Candidate', candidate);
+  assert.equal(candidate.eligible, true);
+  assert.equal(candidate.disclosure.revision, adoptDisclosureRevision(stubAdapter('alpha').definition));
+  const issued = deps([stubAdapter('alpha')]);
+  const check = (await catalogRoutes(q, issued)).candidates[0];
+  assert.equal(issued.tokens.live.get(check.candidateToken).binding.disclosureRevision, check.disclosure.revision);
+  const create = (await catalogRoutes({ ...q, intent: 'create' }, deps([stubAdapter('alpha')]))).candidates[0];
+  assert.equal(create.disclosure.revision, 'disc-alpha');
+  assert.doesNotMatch(create.disclosure.text, /takes over/);
+  for (const copy of [candidate.disclosure.text, candidate.display.description]) {
+    assert.match(copy, /takes over the existing rule/);
+    assert.match(copy, /removes it when the route is released or stopped/);
   }
 });

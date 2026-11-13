@@ -50,7 +50,7 @@ export function tailscaleDurable(definition, { transport = localapi } = {}) {
       return [...recipe.candidatePorts.map(port => slot(port, false)), ...(definition.durableAdoptOnlyPorts ?? []).map(port => slot(port, true))];
     },
     read,
-    foreign: (snapshot, slot) => Boolean(foreground(snapshot.config, snapshot.dnsName, slot)),
+    foreign: (snapshot, slot, identity = snapshot.dnsName) => Boolean(foreground(snapshot.config, identity, slot)),
     occupied: (snapshot, slot) => occupied(snapshot.config, snapshot.dnsName, slot),
     expand: target => expandRule(recipe, target),
     async put(ctx, { snapshot, slot, rule, version }) {

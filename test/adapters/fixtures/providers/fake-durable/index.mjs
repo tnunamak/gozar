@@ -28,8 +28,15 @@ function durableFacet(definition) {
     },
     slots: snapshot => slotIds.map(slot => ({ slot, origin: `https://${slot}.fake.test`, permitted: true })),
     // Every rule lives under the one store identity, so a rule pinned to another identity is not here.
-    read: (snapshot, slot, identity = snapshot.identity) => identity === snapshot.identity ? snapshot.entries[slot]?.rule ?? null : null,
-    foreign: (snapshot, slot) => snapshot.entries[slot]?.foreign === true || snapshot.claims.includes(slot),
+    read: (snapshot, slot, identity = snapshot.identity) => {
+      const entry = snapshot.entries[slot];
+      return (identity === snapshot.identity || entry?.identity === identity) ? entry?.rule ?? null : null;
+    },
+    foreign: (snapshot, slot, identity = snapshot.identity) => {
+      const entry = snapshot.entries[slot];
+      return (identity === snapshot.identity || entry?.identity === identity) &&
+        (entry?.foreign === true || snapshot.claims.includes(slot));
+    },
     occupied: (snapshot, slot) => snapshot.entries[slot] !== undefined,
     expand: target => ({ forward: target }),
     expiresAt: (snapshot, slot) => snapshot.entries[slot]?.expiresAt ?? null,

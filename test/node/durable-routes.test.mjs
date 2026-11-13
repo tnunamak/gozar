@@ -40,6 +40,8 @@ before(async () => {
 import { issueConsentToken, consentBinding } from ${JSON.stringify(packageUrl('consent-token.mjs'))};
 import { inspectLegacyRoute } from ${JSON.stringify(packageUrl('legacy-import.mjs'))};
 import { canonicalHome } from ${JSON.stringify(packageUrl('service-state.mjs'))};
+import { loadAdapters } from ${JSON.stringify(packageUrl('adapter-runtime.mjs'))};
+import { adoptDisclosureRevision } from ${JSON.stringify(packageUrl('adopt-disclosure.mjs'))};
 const [operation, input] = process.argv.slice(2);
 const args = JSON.parse(input);
 try {
@@ -52,6 +54,10 @@ try {
     const binding = consentBinding({ ...query, intent }, await canonicalHome(home, true), disclosureRevision);
     result = { ...await issueConsentToken({ home, binding, grant, ttlMs }), grant };
   } else if (operation === 'facts') result = await durablePlanFacts(args);
+  else if (operation === 'adoptRevision') {
+    const adapters = await loadAdapters();
+    result = adoptDisclosureRevision(adapters.find(item => item.id === args.adapterId).definition);
+  }
   else if (operation === 'inspect') result = await inspectLegacyRoute(args);
   else throw Object.assign(new Error(operation + ' is not implemented'), { code: 'not_implemented' });
   console.log(JSON.stringify({ result }));
@@ -100,7 +106,7 @@ async function world(t, provider = {}) {
     try { const { stdout } = await pending; return { code: 0, stdout }; }
     catch (error) { if (error.stdout === undefined) throw error; return { code: error.code, signal: error.signal, stdout: error.stdout }; }
   };
-  const helperOperations = new Set(['issue', 'facts', 'inspect']);
+  const helperOperations = new Set(['issue', 'facts', 'inspect', 'adoptRevision']);
   const run = async (operation, input = {}, extraEnv) => {
     const reply = await child([helperOperations.has(operation) ? helper : runner, operation, JSON.stringify({ home, ...input })], extraEnv);
     return reply.signal ? { crashed: reply.signal } : JSON.parse(reply.stdout);
@@ -114,8 +120,9 @@ async function world(t, provider = {}) {
   const query = (extra = {}) => ({ schemaVersion: 1, owner: 'example-app', target, usage: { kind: 'durable', routeId: 'coordinator' }, requirements, home, ...extra });
   const request = query();
   // What the catalog does: observe, then issue a single-use token whose grant names the adapter.
-  const mint = async (extra = {}, { adapterId = 'tailscale-funnel', intent = 'create', disclosureRevision = 'disclosure-1', grant, ttlMs } = {}) => {
+  const mint = async (extra = {}, { adapterId = 'tailscale-funnel', intent = 'create', disclosureRevision, grant, ttlMs } = {}) => {
     const q = query(extra);
+    disclosureRevision ??= intent === 'adopt' ? (await run('adoptRevision', { adapterId })).result : 'disclosure-1';
     const reply = await run('issue', { query: q, adapterId, intent, disclosureRevision, grant, ttlMs });
     if (reply.error) throw Object.assign(new Error(reply.error.message), reply.error);
     return { query: q, approval: { candidateToken: reply.result.token, disclosureRevision }, grant: reply.result.grant };
@@ -158,7 +165,7 @@ test('1. ensure creates a background rule by compare-and-set, writes a receipt, 
   const path = join(w.home, 'routes', (await w.records())[0]);
   assert.equal((await stat(path)).mode & 0o777, 0o600);
   const record = await w.record();
-  assert.deepEqual(record.intent, { dnsName, port: 8443, mode: 'funnel', origin: w.origin,
+  assert.deepEqual(record.intent, { dnsName, port: 8443, mode: 'funnel', origin: w.origin, slotWasEmpty: true,
     rule: { tcp: { HTTPS: true }, web: listener(`http://${w.target}`), funnel: true } });
   assert.deepEqual(record.receipt.rule, record.intent.rule);
   assert.equal(record.receipt.port, 8443);
@@ -373,10 +380,10 @@ test('11. crash after intent, before the provider write, gives lost', async t =>
   assert.deepEqual(w.state.config, {});
 });
 
-test('12. crash after intent, then an identical foreign rule appears: uncertain, not claimed, not removed, kept visible as debt', async t => {
+test('12. crash after intent, then a different foreign rule appears: uncertain, not claimed, not removed, kept visible as debt', async t => {
   const w = await world(t, { crash: 'before-apply' });
   assert.equal((await w.ensure()).crashed, 'SIGKILL');
-  w.edit(state => { foreignRule(8443, `http://${w.target}`)(state); state.config.AllowFunnel = { [`${dnsName}:8443`]: true }; });
+  w.edit(state => { foreignRule(8443, 'http://127.0.0.1:9')(state); state.config.AllowFunnel = { [`${dnsName}:8443`]: true }; });
   const foreign = structuredClone(w.state.config);
   const status = await w.run('status', {});
   assert.equal(status.result.routes[0].state, 'uncertain');
@@ -403,12 +410,38 @@ test('12. crash after intent, then an identical foreign rule appears: uncertain,
   assert.deepEqual(await again.records(), []);
 });
 
-test('13. crash after the provider write, before the receipt, gives uncertain', async t => {
-  const w = await world(t, { crash: 'after-apply' });
-  assert.equal((await w.ensure()).crashed, 'SIGKILL');
-  assert.equal((await w.run('status', {})).result.routes[0].state, 'uncertain');
-  assert.equal((await w.record()).receipt, null);
-});
+for (const failure of ['crash', 'readback-error']) {
+  for (const action of ['remove', 'stop', 'resume']) {
+    test(`interrupted create: ${failure} before receipt is recoverable by ${action}`, async t => {
+      const w = await world(t, failure === 'crash' ? { crash: 'after-apply' } : { failReadback: true });
+      const first = await w.ensure();
+      if (failure === 'crash') assert.equal(first.crashed, 'SIGKILL');
+      else assert.ok(first.error, 'readback observe failed after the provider wrote');
+      assert.equal((await w.record()).receipt, null);
+      assert.equal(w.writes().length, 1);
+      const status = (await w.run('status', {})).result.routes[0];
+      assert.equal(status.state, 'creating');
+      assert.equal(status.cleanupDebt, null);
+      assert.equal(status.origin, null);
+      if (action === 'resume') {
+        const next = await w.run('ensure', w.request);
+        assert.equal(next.result.route.state, 'usable');
+        assert.equal(next.result.route.origin, w.origin);
+        assert.deepEqual((await w.record()).receipt.rule, (await w.record()).intent.rule);
+        assert.equal(w.writes().length, 1, 'recovery does not rewrite the rule');
+      } else {
+        const removed = action === 'stop' ? (await w.gozar('stop', '--route', 'coordinator', '--json')).json
+          : (await w.run('release', { routeId: 'coordinator' })).result;
+        assert.equal(removed.providerRemoved, true, JSON.stringify(removed));
+        assert.equal(forwardTarget(w.state.config, dnsName, 8443), null);
+        assert.deepEqual(await w.records(), []);
+        const dismissed = await w.run('release', { routeId: 'coordinator', mode: 'dismiss' });
+        if (action === 'stop') assert.equal(dismissed.error.code, 'stopped_by_user');
+        else assert.equal(dismissed.result.removed, false, 'there is no cleanup debt left to dismiss');
+      }
+    });
+  }
+}
 
 test('13. crash after the receipt, before verification: the next ensure verifies the pinned origin and publishes it', async t => {
   const w = await world(t);
@@ -566,6 +599,26 @@ test('18. adopt of an exact rule with a handover makes no provider mutation and 
   assert.equal(adopted.result.route.adapterId, 'tailscale-funnel');
   assert.deepEqual((await w.record()).handover, { from: 'example-app', generation: 1 });
   assert.deepEqual(w.writes(), []);
+});
+
+test('adopt refuses an approval for the old disclosure before spending its token, and accepts the current revision', async t => {
+  const w = await world(t);
+  w.edit(state => { foreignRule(8443, `http://${w.target}`)(state); state.config.AllowFunnel = { [`${dnsName}:8443`]: true }; });
+  const old = await w.mint({ origin: w.origin }, { intent: 'adopt', disclosureRevision: 'disc-alpha' });
+  const handover = { from: 'example-app', generation: 1 };
+  const stale = await w.run('adopt', { ...old.query, approval: old.approval, handover });
+  assert.equal(stale.error.code, 'claim_mismatch');
+  assert.match(stale.error.message, /Ask the user again/);
+  assert.deepEqual(w.writes(), [], 'stale disclosure is rejected before any provider mutation');
+  const oldBinding = consentBinding({ ...old.query, intent: 'adopt' }, w.home, old.approval.disclosureRevision);
+  assert.equal((await redeemConsentToken({ home: w.home, token: old.approval.candidateToken, binding: oldBinding })).adapterId, 'tailscale-funnel',
+    'the stale revision check did not spend the token');
+
+  const current = await w.mint({ origin: w.origin }, { intent: 'adopt' });
+  assert.match(current.approval.disclosureRevision, /^disc-[a-f0-9]+:adopt-removal-1$/);
+  const adopted = await w.run('adopt', { ...current.query, approval: current.approval, handover });
+  assert.equal(adopted.error, undefined, JSON.stringify(adopted.error));
+  assert.equal(adopted.result.route.provenance, 'adopted');
 });
 
 test('18. adopt with a token granted for a different adapter than the rule\'s gives candidate_stale (claim_mismatch) and changes nothing', async t => {
@@ -1105,13 +1158,13 @@ test('R4. plan facts are read-only, stable, and cover the recipe, the target, th
   assert.equal((await facts({ target: 'example.test:80' })).error.code, 'invalid_input');
 });
 
-test('R5. a crash after intent and before the write, with a token, gives uncertainty after a foreign rule appears, never a claim', async t => {
+test('R5. a crash after intent and before the write, with a token, gives uncertainty after a different foreign rule appears, never a claim', async t => {
   const w = await world(t, { crash: 'before-apply' });
   assert.equal((await w.ensure()).crashed, 'SIGKILL');
-  const foreign = foreignRule(8443, `http://${w.target}`);
+  const foreign = foreignRule(8443, 'http://127.0.0.1:9');
   w.edit(state => { foreign(state); state.config.AllowFunnel = { [`${dnsName}:8443`]: true }; });
   const config = structuredClone(w.state.config);
-  // A fresh ensure needs no token (the record is the pin) and must not claim the identical foreign rule.
+  // A fresh ensure needs no token (the record is the pin) and must not claim the different foreign rule.
   const again = await w.run('ensure', w.request);
   assert.equal(again.error.code, 'uncertain');
   assert.deepEqual(w.state.config, config);
@@ -1458,4 +1511,13 @@ test('interrupted user stop removal uses compare-and-set and preserves foreign r
     assert.equal((await w.records()).length, foreign ? 1 : 0);
     assert.equal((await w.run('ensure', w.request)).error?.code, 'stopped_by_user');
   }
+});
+
+test('adoption transfers removal ownership: release deletes the existing rule', async t => {
+  const w = await world(t);
+  w.edit(state => { foreignRule(8443, `http://${w.target}`)(state); state.config.AllowFunnel = { [`${dnsName}:8443`]: true }; });
+  assert.equal((await w.adopt()).result.route.provenance, 'adopted');
+  assert.equal(w.writes().length, 0);
+  assert.equal((await w.run('release', { routeId: 'coordinator' })).result.providerRemoved, true);
+  assert.equal(forwardTarget(w.state.config, dnsName, 8443), null);
 });

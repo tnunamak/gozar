@@ -8,6 +8,9 @@ import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { loopbackTarget } from './durable-route.mjs';
 import { checksFor, completeProperties, needsFor } from './route-view.mjs';
+import { adoptDisclosureRevision } from './adopt-disclosure.mjs';
+
+export { adoptDisclosureRevision } from './adopt-disclosure.mjs';
 
 const sha = text => createHash('sha256').update(text).digest('hex');
 /** Stable opaque handles for an adapter; apps store the preferenceRef and show the label. */
@@ -188,8 +191,14 @@ async function collect(query, deps) {
       display: { label: definition.label, description: describe(definition, properties), needs: needsFor(definition, query.usage.kind) }, properties,
       setup: { state: setupState, actions: setupState === 'action-required' ? actions : [] }, disclosure: definition.disclosure,
       candidateToken: null, expiresAt: null };
+    if (query.usage.kind === 'durable' && query.intent === 'adopt') {
+      const takeover = 'Gozar takes over the existing rule and removes it when the route is released or stopped.';
+      candidate.display.description += ` ${takeover}`;
+      candidate.disclosure = { ...definition.disclosure, revision: adoptDisclosureRevision(definition),
+        text: `${definition.disclosure.text} ${takeover}` };
+    }
     if (eligible && setupState === 'ready' && grant) {
-      const issued = await issue({ home, binding: consentBinding(query, home, definition.disclosure.revision), grant });
+      const issued = await issue({ home, binding: consentBinding(query, home, candidate.disclosure.revision), grant });
       candidate.candidateToken = issued.token; candidate.expiresAt = issued.expiresAt;
     }
     return candidate;

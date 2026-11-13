@@ -5,6 +5,8 @@
 ### Fixes
 
 - `expose` now states that sessions run in the background, labels planned addresses as patterns, and separates detected routes from verified connections. The plan names who can reach the service, who can read its traffic and what Gozar owns. It promises reach only after checks pass. An owner-managed HTTPS address keeps proxy, DNS, TLS and cleanup with its owner. Published output starts with the URL and reports only recorded route checks; MCP instructions require `--verbose`. Failures state whether cleanup is confirmed and suggest inspection before retrying. `--alternatives` lists usable ways for the requested audience; `--via` picks one by name. `--json` is unchanged.
+- Adoption approval and candidate copy now say that Gozar takes over the existing rule and removes it when the route is released or stopped. An adopt approval issued for the earlier wording is refused with `claim_mismatch`, before its token is spent, so the user is asked again.
+- An interrupted durable create can now finish or remove its exact intended rule after a crash or readback failure before the receipt is saved. The check for another program's rule reads at the route's pinned machine identity.
 
 - Suspend of a user-stopped durable route now reports `stopped_by_user` where 0.3.3 reported `route_not_found`. Removing a route the user already stopped succeeds without a provider call; an interrupted stop finishes the normal compare-and-set removal.
 - An invalid owner-run query origin is named in the unmet setup entry's `actual` value, without throwing or adding error codes.

@@ -119,7 +119,8 @@ An adapter can offer a durable route only if it declares `addressStability: 'sta
 - `lost`: the provider route is absent. Gozar does **not** re-create it on its own. The host decides, normally by calling `ensureRoute` on start. That restores the route only if the result would have the pinned origin.
 - `address_changed`: the provider would give, or gives, a different origin. **Terminal for publication.** Gozar never reports the new origin as the route's origin. The host must release, then create a new route with new consent.
 - `unverified`: the receipt exists (Gozar made the rule), but the challenge through the origin failed. No origin is published. The next `ensureRoute` or `statusServices` re-verifies. Because the receipt proves ownership, `releaseRoute` may remove the rule.
-- `uncertain`: Gozar saved its intent but cannot prove it made the mutation (see below), **or** a `lost` route's pinned port now holds a rule Gozar cannot tell apart from its own changed rule. Not owned. Reported as cleanup debt. The route is never moved to another port.
+- `creating`: an interrupted create with an exact empty-slot intent match can be finished by ensure or removed by release, even before a receipt exists.
+- `uncertain`: Gozar has an intent without empty-slot evidence or the slot has a foreign claim, **or** a `lost` route's pinned port now holds a rule Gozar cannot tell apart from its own changed rule. Not owned. Reported as cleanup debt. The route is never moved to another port.
 
 ### Suspend and resume
 
@@ -158,7 +159,7 @@ becomes `cleanup_debt`; `adapter_changed`, `port_occupied`, `reserved` and
 
 | Refusal | Meaning and next step |
 | --- | --- |
-| `uncertain` | The rule changed or has no receipt proving ownership. Nothing foreign is deleted; inspect the route and release or adopt as appropriate. |
+| `uncertain` | The rule changed or neither a receipt nor an exact empty-slot intent attributes it. Nothing foreign is deleted; inspect the route and release or adopt as appropriate. |
 | `address_changed` | The node identity changed, or the port is adopt-only. Gozar cannot promise restoration there. An adopt-only rule (private Serve 9443) is refused before suspension changes anything. Leave it running or release it. |
 | `adapter_changed` | Resume found a changed plan digest. Release and obtain approval for a new route. |
 | `port_occupied` | Resume found another rule on the pinned slot. Leave it untouched; retry only after its owner frees it. |
@@ -212,14 +213,22 @@ Rules:
 
 **Cheap refusals come first.** `stopped_by_user`, a listener reserved by another route, and a missing token (`consent_required`) are all decided **before** a token is spent.
 
-### Ownership: intent is not proof
+### Ownership: recover an exact empty-slot intent
 
-The record, with intent `creating` and the exact rule to be created, is written and fsynced before the provider command runs. After the command, Gozar writes a **receipt** (the provider resource identity it created and the readback that confirmed it) before it publishes the origin.
+The record and its exact intended rule are written and fsynced before the provider write. Each create attempt records `slotWasEmpty: true` only after observing that the chosen slot is empty and has no foreign claim; its compare-and-set uses that observation's version. This includes restoration of a lost or suspended route. After the write, Gozar saves a receipt from readback before verification and publication.
 
-An intent without a receipt proves only that Gozar meant to create the rule, not that it did: after a crash before the command, another program may create an identical rule. So on recovery:
-- intent, no receipt, rule absent → `lost` (nothing to clean);
-- intent, no receipt, rule present → `uncertain`. Gozar does not claim, verify into `usable`, or remove that rule. The host can take it with an explicit `adoptRoute` (fresh approval) or drop the record with `releaseRoute`, which then leaves the rule in place and reports it;
-- receipt present → normal reconciliation.
+| Recovery observation | Status and next action |
+|---|---|
+| Intent, no receipt, rule absent | `lost`; ensure may restore only the pinned origin. |
+| Intent with empty-slot evidence, exact deep-equal rule at the pinned identity and slot, no foreign claim | `creating`; ensure reads back, saves a receipt, verifies and publishes without another provider write. Release or user stop removes by exact compare-and-delete. |
+| Intent with missing empty-slot evidence, a different rule, or a foreign claim | `uncertain`; release keeps cleanup debt and dismiss may drop that released record while leaving the rule. |
+| Receipt present | Normal reconciliation and exact compare-and-delete. |
+
+Existing records without empty-slot evidence remain conservative. Status does not save a receipt or publish an interrupted create. A different provider identity remains `address_changed` for publication; removal reads only the pinned identity, including after a node rename.
+
+Both shipped durable adapters, Tailscale Funnel and private Serve, use the same TCP/Web/AllowFunnel listener format, which has no per-rule description or metadata field for a Gozar marker; Foreground represents another controller and is left alone. The synthetic durable fixture also has a separate foreign-owner flag, which blocks intent attribution. ngrok has no durable facet here, so endpoint metadata cannot close this window for the shipped adapters.
+
+Another program can write an identical rule at the same identity and slot during the crash window, and Gozar will attribute that rule to its intent.
 
 ### Visibility replaces a lifetime
 
@@ -252,7 +261,7 @@ Until phase 2, `gozar status` lists the route as `handing-back`. `gozar stop --r
 
 ### Adoption
 
-`adoptRoute` takes ownership of a provider route that exists now, with **no teardown**. Matching the config proves the route is the right one. It does not prove the caller has the authority to take it from its previous owner. So adoption needs all of these:
+`adoptRoute` takes ownership of a provider route that exists now, with **no teardown**. Gozar removes that existing rule when the route is released or stopped. The catalog approval and adopt candidate description both say: "Gozar takes over the existing rule and removes it when the route is released or stopped." Adopt disclosures use a separate revision so approval binds to these words. Matching the config proves the route is the right one. It does not prove the caller has the authority to take it from its previous owner. So adoption needs all of these:
 
 1. **Exact match, found by Gozar.** The caller names no provider and no rule. Under the reservation lock, Gozar reads fresh provider config and, for each adapter that declares a durable capability, looks at each candidate port whose origin equals `origin`. A port matches when its rule deep-equals the adapter's rule for this target (same mode, same proxy target, no other handler) and no foreground session uses it. Exactly one match: proceed. No match: `claim_mismatch`. More than one: `ambiguous_route`. Nothing changes in either refusal.
 2. **Fenced handover.** `handover: { from, generation }` asserts that the previous owner has already fenced itself: it has recorded that generation as handed over and will no longer create, re-create or remove that rule. Gozar stores `from` and `generation` in the record with provenance `adopted`. Gozar cannot fence another program, so this is a precondition the caller must meet. A missing handover is `handover_required`. **If the previous owner cannot record the fence, the caller must not adopt**, and the route is migrated by release and re-creation instead.
@@ -376,12 +385,12 @@ Approval tokens (consent-token and R tests; each fails under the stated mutation
 - R2. drift between issue and redeem → `claim_mismatch`, token spent, zero provider writes. Mutation: skip the digest comparison.
 - R3. an unrelated foreign edit on another port does not make a token stale, and the edit survives. Mutation: let `observedResource` cover the whole config.
 - R4. `durablePlanFacts` is read-only, stable, and changes with the recipe, target, origin and candidate listener.
-- R5. a crash after intent and before the write, with a token, gives uncertainty once a foreign rule appears, never a claim.
+- R5. a crash after intent and before the write, with a token, gives uncertainty once a different or provider-marked foreign rule appears, never a claim.
 
 Crashes and races:
 11. crash after intent, before the command → `lost`;
-12. crash after intent, then an identical foreign rule appears → `uncertain`, not claimed, not removed;
-13. crash after the command, before the receipt → `uncertain`;
+12. crash after intent, then a different foreign rule appears → `uncertain`, not claimed, not removed; an identical unmarked rule falls within the residual race above;
+13. crash or readback error after the command, before the receipt → `creating`; ensure finishes receipt and publication, while release or user stop removes the exact intended rule;
 14. release with a changed rule keeps cleanup debt, foreign rule untouched, record stays; an edit between readback and removal makes the conditional removal fail (412) and the foreign edit survives;
 15. release racing a late create or verification → the route is not re-published, and debt is kept;
 16. concurrent ensure, adopt and session for one listener or port with distinct origins → exactly one wins;
@@ -417,4 +426,4 @@ Legacy inspection (`legacy-import.test.mjs`):
 34. a state file (known, missing, unreadable) gives `unrecognized_format` and a `sign in again` action; the output holds no file content, no path and no token; the files and their access times are unchanged, and every provider request is a GET.
 
 ## Expect it to work because:
-Both halves exist and are tested. Service routes already persist 0600 records under locks and verify with an HMAC challenge inside the app, with no gate. The plan engine already computes provider rules, readback and cleanup debt. A durable route joins them through a small new host transaction (create with receipt, rehydrate, compare-and-remove) instead of the session driver, with three rules on top: the record is authoritative for the origin, intent without a receipt is never ownership, and adoption needs a fenced handover. The design review showed the session driver cannot run a durable route as a one-shot, so the first implementation step is a spike of exactly that transaction: finite create → persisted receipt → process exit → fresh rehydrate → exact remove, with service-verifier proof, no gate and no timer, against the fake provider, including foreign-rule preservation and crash uncertainty. If the receipt cannot be made to rehydrate without the session controller, the spike shows it before the rest is built.
+Both halves exist and are tested. Service routes already persist 0600 records under locks and verify with an HMAC challenge inside the app, with no gate. The plan engine already computes provider rules, readback and cleanup debt. A durable route joins them through a small new host transaction (create with receipt, rehydrate, compare-and-remove) instead of the session driver, with three rules on top: the record is authoritative for the origin, an exact empty-slot intent can recover ownership, and adoption needs a fenced handover. The design review showed the session driver cannot run a durable route as a one-shot, so the first implementation step is a spike of exactly that transaction: finite create → persisted receipt → process exit → fresh rehydrate → exact remove, with service-verifier proof, no gate and no timer, against the fake provider, including foreign-rule preservation and crash uncertainty. If the receipt cannot be made to rehydrate without the session controller, the spike shows it before the rest is built.
