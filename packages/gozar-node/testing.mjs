@@ -83,7 +83,9 @@ const durableModuleSource = runtime => `// A fake durable provider written by @t
 import { recipeAdapter } from ${JSON.stringify(runtime)};
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
-import plain from './plain.mjs';
+// The session methods live in plain.mjs, written beside this file; it is loaded by URL so the text of this template is
+// never mistaken for an import of the testing module itself.
+const { default: plain } = await import(new URL('./plain.mjs', import.meta.url));
 
 const storePath = new URL('./store.json', import.meta.url);
 const read = () => JSON.parse(readFileSync(storePath, 'utf8'));
