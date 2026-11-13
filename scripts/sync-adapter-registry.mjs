@@ -20,12 +20,17 @@ export function derivePorts(wrapped) {
   return Array.isArray(candidates) && candidates.length && candidates.every(Number.isInteger) ? [...candidates] : null;
 }
 
-/** What the plan checks before it publishes. A vantage that is not one of the five words is `this-device` when any check exists. */
-export function deriveProof(wrapped) {
+/**
+ * What the plan checks before it publishes. A vantage that is not one of the five words is `this-device` when any check exists.
+ * The plan's TLS check applies "when HTTPS", so a provider whose transport is plain HTTP makes no TLS check. The stream
+ * check applies "when required": it is listed here as a check the provider can make, and the catalog keeps it only for a
+ * request that needs SSE.
+ */
+export function deriveProof(wrapped, transport) {
   const validation = wrapped?.validation;
   if (!validation || typeof validation !== 'object') return { vantage: 'none', checks: [] };
   const checks = [];
-  if (validation.tls !== undefined) checks.push('tls');
+  if (validation.tls !== undefined && transport === 'https') checks.push('tls');
   if (validation.instanceNonce !== undefined) checks.push('nonce');
   if (validation.sse !== undefined) checks.push('sse');
   const vantage = VANTAGES.includes(validation.vantage) ? validation.vantage : checks.length ? 'this-device' : 'none';
@@ -58,7 +63,7 @@ async function sync() {
     try { text = await readFile(file, 'utf8'); data = JSON.parse(text); } catch { continue; }
     const capabilities = data.adapter?.capabilities;
     if (!capabilities?.address) continue;
-    const ports = derivePorts(wrapped), proof = deriveProof(wrapped), ownership = deriveOwnership(wrapped);
+    const ports = derivePorts(wrapped), proof = deriveProof(wrapped, capabilities.transport), ownership = deriveOwnership(wrapped);
     if (JSON.stringify(capabilities.address.ports) === JSON.stringify(ports) && JSON.stringify(capabilities.proof) === JSON.stringify(proof) && data.adapter.ownership === ownership) continue;
     if (check) { problems.push(`${provider.id}: ports, proof or ownership differ from the wrapped plan definition; run node scripts/sync-adapter-registry.mjs`); continue; }
     capabilities.address = { ...capabilities.address, ports };

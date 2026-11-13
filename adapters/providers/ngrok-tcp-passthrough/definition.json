@@ -46,7 +46,6 @@
       "proof": {
         "vantage": "public",
         "checks": [
-          "tls",
           "nonce",
           "sse"
         ]

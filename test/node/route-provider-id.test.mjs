@@ -57,18 +57,37 @@ test('red: Funnel shows its ordered ports and a public proof with the tls and no
 });
 
 test('ports and proof of every shipped candidate equal the mapping of its plan definition (the contract rule, written out independently)', async t => {
-  const { candidates } = await catalog(await withHome(t));
+  for (const protocols of [[], ['sse']]) await provesTheMapping(t, protocols);
+});
+
+async function provesTheMapping(t, protocols) {
+  const { candidates } = await catalog(await withHome(t, { requirements: { ...query().requirements, protocols } }));
   for (const candidate of candidates) {
     const plan = wrapped(candidate.providerId);
     const expectedPorts = plan.bindings?.port?.candidates ?? null;
     const v = plan.validation ?? {};
-    const checks = [v.tls !== undefined && 'tls', v.instanceNonce !== undefined && 'nonce', v.sse !== undefined && 'sse'].filter(Boolean);
+    // TLS is checked only on an https provider; the stream check runs only when the request needs SSE.
+    const https = candidate.properties.transport === 'https';
+    const checks = [v.tls !== undefined && https && 'tls', v.instanceNonce !== undefined && 'nonce', v.sse !== undefined && protocols.includes('sse') && 'sse'].filter(Boolean);
     const vantage = ['public', 'tailnet', 'lan', 'this-device', 'none'].includes(v.vantage) ? v.vantage : checks.length ? 'this-device' : 'none';
     assert.deepEqual(candidate.properties.address.ports, expectedPorts, `${candidate.providerId} ports`);
     // An owner-kept address is checked from this device until it is verified; every other provider declares what its plan checks.
     if (plan.ownership === 'external-owned') assert.equal(candidate.properties.proof.vantage, 'this-device', `${candidate.providerId} proof`);
     else assert.deepEqual(candidate.properties.proof, { vantage, checks }, `${candidate.providerId} proof`);
   }
+}
+
+test('red: proof.checks never claims TLS for a plain-HTTP provider, nor a stream check the request did not ask for', async t => {
+  const plain = await catalog(await withHome(t));
+  const streaming = await catalog(await withHome(t, { requirements: { ...query().requirements, protocols: ['sse'] } }));
+  const httpProviders = plain.candidates.filter(c => c.properties.transport === 'http').map(c => c.providerId);
+  assert.ok(httpProviders.includes('lan'), 'lan is a plain-HTTP provider');
+  for (const candidate of plain.candidates) {
+    if (httpProviders.includes(candidate.providerId)) assert.ok(!candidate.properties.proof.checks.includes('tls'), `${candidate.providerId} has no TLS`);
+    assert.ok(!candidate.properties.proof.checks.includes('sse'), `${candidate.providerId}: no stream check without SSE`);
+  }
+  const funnel = streaming.candidates.find(c => c.providerId === 'tailscale-funnel');
+  assert.deepEqual(funnel.properties.proof.checks, ['tls', 'nonce', 'sse'], 'a request that needs SSE gets the stream check');
 });
 
 test('every candidate carries a providerId equal to its registry id and a non-empty needs line, whether or not setup is ready', async t => {
@@ -149,9 +168,13 @@ test('RouteView.verification says where the last check ran from and what it pass
   const failed = projectExternal({ origin: 'https://example.test', verification: { status: 'failed', checkedAt: '2026-11-12T12:00:00.000Z' } }, { handle });
   assert.deepEqual(failed.verification, { status: 'unverified', checkedAt: '2026-11-12T12:00:00.000Z', vantage: 'this-device', checks: [] });
   const props = { ...adapters.find(a => a.id === 'tailscale-funnel').definition.capabilities };
-  const session = projectSession({ snapshot: { phase: 'published-ready', published: 'https://example.test' } }, { handle: { kind: 'session', id: 's', generation: 0 }, properties: props, now: 1_000 });
+  const sessionHandle = { handle: { kind: 'session', id: 's', generation: 0 }, properties: props, now: 1_000 };
+  const session = projectSession({ snapshot: { phase: 'published-ready', published: 'https://example.test' }, sseChecked: true }, sessionHandle);
   assert.deepEqual(session.verification.checks, ['tls', 'nonce', 'sse']);
   assert.equal(session.verification.vantage, 'this-device');
+  // The controller made no stream check, so the view claims none; an http origin claims no TLS.
+  assert.deepEqual(projectSession({ snapshot: { phase: 'published-ready', published: 'https://example.test' } }, sessionHandle).verification.checks, ['tls', 'nonce']);
+  assert.deepEqual(projectSession({ snapshot: { phase: 'published-ready', published: 'http://example.test' }, sseChecked: true }, sessionHandle).verification.checks, ['nonce', 'sse']);
   const starting = projectSession({ snapshot: { phase: 'starting' } }, { handle: { kind: 'session', id: 's', generation: 0 }, properties: props });
   assert.deepEqual(starting.verification, { status: 'unverified', checkedAt: null, vantage: 'none', checks: [] });
   for (const view of [verified, failed, session, starting, releasedView(null, handle)]) assertShape('RouteView', view);

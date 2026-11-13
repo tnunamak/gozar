@@ -271,7 +271,7 @@ export async function runAttachedController(directory, runtime = {}) {
     if (!receipt || releasing) return;
     try {
       const verification = await adapter.verify(gated ? { ...read, verifyChallenge: gateChecked(false) } : read, receipt);
-      if (!releasing) { lease.state = verification.status === 'verified' ? 'usable' : 'unverified'; lease.checkedAtMs = now(); await save(); }
+      if (!releasing) { lease.state = verification.status === 'verified' ? 'usable' : 'unverified'; lease.checkedAtMs = now(); lease.sseChecked = false; await save(); }
     } catch { if (!releasing) { lease.state = 'unverified'; await save(); } }
   }
   async function removeRoute() {
@@ -297,7 +297,7 @@ export async function runAttachedController(directory, runtime = {}) {
       // Nothing is reported published until the validation passes; a failed check withdraws the route.
       const checked = await adapter.verify(gated ? { ...read, verifyChallenge: gateChecked(claimsSse) } : read, receipt);
       if (checked.status !== 'verified') throw gozarError('verification_failed', 'The route did not pass publication validation and was withdrawn');
-      lease.state = 'usable'; lease.checkedAtMs = now();
+      lease.state = 'usable'; lease.checkedAtMs = now(); lease.sseChecked = gated && claimsSse;
       await save();
     } catch (cause) {
       const error = normalizeError(cause);

@@ -6,7 +6,7 @@ import { canonicalHome } from './service-state.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
-import { completeProperties } from './route-view.mjs';
+import { checksFor, completeProperties } from './route-view.mjs';
 
 const sha = text => createHash('sha256').update(text).digest('hex');
 /** Stable opaque handles for an adapter; apps store the preferenceRef and show the label. */
@@ -145,7 +145,9 @@ async function collect(query, deps) {
 
   const candidates = await Promise.all(inspections.map(async inspection => {
     const { adapter, state, actions } = inspection, definition = adapter.definition;
-    const properties = completeProperties(inspection.properties);
+    // The proof lists the checks Gozar makes for this request, so the stream check appears only when the request needs SSE.
+    const declared = completeProperties(inspection.properties);
+    const properties = { ...declared, proof: { ...declared.proof, checks: checksFor(declared.proof.checks, { sse: query.requirements.protocols.includes('sse') }) } };
     let setupState = state, grant = null;
     const unmet = [];
     if (supportedPlatform(platform)) {

@@ -46,7 +46,6 @@
       "proof": {
         "vantage": "lan",
         "checks": [
-          "tls",
           "nonce",
           "sse"
         ]

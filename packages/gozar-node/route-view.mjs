@@ -32,6 +32,13 @@ export const unknownProperties = () => ({
 export const completeProperties = properties => ({ ...properties,
   address: { ...properties.address, ports: properties.address.ports ?? null }, proof: properties.proof ?? { vantage: 'none', checks: [] } });
 
+/**
+ * The declared checks that run for one request: the stream check only when the request needs SSE, and the TLS check
+ * only when the origin is https (an origin not known yet keeps it; the registry already drops it for plain-HTTP providers).
+ */
+export const checksFor = (checks, { sse = false, origin = null } = {}) =>
+  (checks ?? []).filter(check => (check !== 'sse' || sse) && (check !== 'tls' || typeof origin !== 'string' || origin.startsWith('https://')));
+
 const iso = ms => new Date(ms).toISOString();
 const STATES = new Set(['creating', 'usable', 'unverified', 'unknown', 'lost', 'address_changed', 'uncertain', 'releasing', 'released', 'handing-back']);
 // What the last check proved, and from where. Every check Gozar runs for a route runs from this computer, so the
@@ -71,7 +78,7 @@ export function projectSession(reply, { handle, properties, ingress = null, limi
   const published = state === 'usable' && typeof snapshot.published === 'string' ? snapshot.published : null;
   const debt = state === 'uncertain' || reply.localCleanupFailures?.length;
   return view({ handle, origin: snapshot.published ?? snapshot.candidate ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
-    verification: verificationOf(state, state === 'usable' ? now : null, properties?.proof?.checks), limits: limitsOf(limits, 5_000),
+    verification: verificationOf(state, state === 'usable' ? now : null, checksFor(properties?.proof?.checks, { sse: reply.sseChecked === true, origin: published })), limits: limitsOf(limits, 5_000),
     cleanup: debt ? { state: 'debt', message: 'Cleanup is incomplete; stop the route again' } : { state: 'none' } });
 }
 
@@ -88,7 +95,7 @@ export function projectExternal(record, { handle, now = Date.now() }) {
 export function projectAttached(lease, { handle, now = Date.now() }) {
   const state = STATES.has(lease.state) ? lease.state : 'unknown';
   return view({ handle, origin: lease.origin ?? null, published: state === 'usable' ? lease.origin ?? null : null, state, ownership: 'gozar-owned',
-    properties: lease.properties ? completeProperties(lease.properties) : lease.properties, ingress: lease.ingress ?? null, verification: verificationOf(state, state === 'usable' ? lease.checkedAtMs ?? now : lease.checkedAtMs ?? null, lease.properties?.proof?.checks),
+    properties: lease.properties ? completeProperties(lease.properties) : lease.properties, ingress: lease.ingress ?? null, verification: verificationOf(state, state === 'usable' ? lease.checkedAtMs ?? now : lease.checkedAtMs ?? null, checksFor(lease.properties?.proof?.checks, { sse: lease.sseChecked === true, origin: lease.origin ?? null })),
     limits: limitsOf(lease.limits, 5_000), cleanup: lease.cleanup ?? { state: 'none' } });
 }
 

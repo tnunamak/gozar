@@ -94,7 +94,10 @@ export type Properties = {
   lifetimes: ('session' | 'attached' | 'durable')[];
   supervision: 'controller' | 'provider-persistent' | 'host-supervised';
   protocols: { sse: boolean; streamableHttp: boolean; oauthDcr: boolean };
-  /** What Gozar checks before it publishes: where the check runs from, and which checks it makes. */
+  /**
+   * What Gozar checks before it publishes: where the check runs from, and which checks it makes for this request.
+   * `tls` appears only for an https provider, and `sse` only when the request asks for SSE.
+   */
   proof: { vantage: ProofVantage; checks: ProofCheck[] };
 };
 
@@ -183,7 +186,7 @@ export type RouteView = {
   ownership: 'gozar-owned' | 'external-owned';
   properties: Properties;
   ingress: Ingress | null;
-  /** `vantage` is where the last check actually ran from; a check made from this computer is 'this-device'. */
+  /** `vantage` is where the last check actually ran from; a check made from this computer is 'this-device'. `checks` lists what that check made. */
   verification: { status: 'verified' | 'unverified'; checkedAt: string | null; vantage: ProofVantage; checks: ProofCheck[] };
   limits: { recommendedPollIntervalMs: number; idleTimeoutMs: number | null };
   cleanup: { state: 'none' | 'debt'; message?: string };
