@@ -158,7 +158,7 @@ test('1. ensure creates a background rule by compare-and-set, writes a receipt, 
   const path = join(w.home, 'routes', (await w.records())[0]);
   assert.equal((await stat(path)).mode & 0o777, 0o600);
   const record = await w.record();
-  assert.deepEqual(record.intent, { dnsName, port: 8443, mode: 'funnel', origin: w.origin,
+  assert.deepEqual(record.intent, { dnsName, port: 8443, mode: 'funnel', origin: w.origin, slotWasEmpty: true,
     rule: { tcp: { HTTPS: true }, web: listener(`http://${w.target}`), funnel: true } });
   assert.deepEqual(record.receipt.rule, record.intent.rule);
   assert.equal(record.receipt.port, 8443);
@@ -373,10 +373,10 @@ test('11. crash after intent, before the provider write, gives lost', async t =>
   assert.deepEqual(w.state.config, {});
 });
 
-test('12. crash after intent, then an identical foreign rule appears: uncertain, not claimed, not removed, kept visible as debt', async t => {
+test('12. crash after intent, then a different foreign rule appears: uncertain, not claimed, not removed, kept visible as debt', async t => {
   const w = await world(t, { crash: 'before-apply' });
   assert.equal((await w.ensure()).crashed, 'SIGKILL');
-  w.edit(state => { foreignRule(8443, `http://${w.target}`)(state); state.config.AllowFunnel = { [`${dnsName}:8443`]: true }; });
+  w.edit(state => { foreignRule(8443, 'http://127.0.0.1:9')(state); state.config.AllowFunnel = { [`${dnsName}:8443`]: true }; });
   const foreign = structuredClone(w.state.config);
   const status = await w.run('status', {});
   assert.equal(status.result.routes[0].state, 'uncertain');
@@ -403,12 +403,38 @@ test('12. crash after intent, then an identical foreign rule appears: uncertain,
   assert.deepEqual(await again.records(), []);
 });
 
-test('13. crash after the provider write, before the receipt, gives uncertain', async t => {
-  const w = await world(t, { crash: 'after-apply' });
-  assert.equal((await w.ensure()).crashed, 'SIGKILL');
-  assert.equal((await w.run('status', {})).result.routes[0].state, 'uncertain');
-  assert.equal((await w.record()).receipt, null);
-});
+for (const failure of ['crash', 'readback-error']) {
+  for (const action of ['remove', 'stop', 'resume']) {
+    test(`interrupted create: ${failure} before receipt is recoverable by ${action}`, async t => {
+      const w = await world(t, failure === 'crash' ? { crash: 'after-apply' } : { failReadback: true });
+      const first = await w.ensure();
+      if (failure === 'crash') assert.equal(first.crashed, 'SIGKILL');
+      else assert.ok(first.error, 'readback observe failed after the provider wrote');
+      assert.equal((await w.record()).receipt, null);
+      assert.equal(w.writes().length, 1);
+      const status = (await w.run('status', {})).result.routes[0];
+      assert.equal(status.state, 'creating');
+      assert.equal(status.cleanupDebt, null);
+      assert.equal(status.origin, null);
+      if (action === 'resume') {
+        const next = await w.run('ensure', w.request);
+        assert.equal(next.result.route.state, 'usable');
+        assert.equal(next.result.route.origin, w.origin);
+        assert.deepEqual((await w.record()).receipt.rule, (await w.record()).intent.rule);
+        assert.equal(w.writes().length, 1, 'recovery does not rewrite the rule');
+      } else {
+        const removed = action === 'stop' ? (await w.gozar('stop', '--route', 'coordinator', '--json')).json
+          : (await w.run('release', { routeId: 'coordinator' })).result;
+        assert.equal(removed.providerRemoved, true, JSON.stringify(removed));
+        assert.equal(forwardTarget(w.state.config, dnsName, 8443), null);
+        assert.deepEqual(await w.records(), []);
+        const dismissed = await w.run('release', { routeId: 'coordinator', mode: 'dismiss' });
+        if (action === 'stop') assert.equal(dismissed.error.code, 'stopped_by_user');
+        else assert.equal(dismissed.result.removed, false, 'there is no cleanup debt left to dismiss');
+      }
+    });
+  }
+}
 
 test('13. crash after the receipt, before verification: the next ensure verifies the pinned origin and publishes it', async t => {
   const w = await world(t);
@@ -1105,13 +1131,13 @@ test('R4. plan facts are read-only, stable, and cover the recipe, the target, th
   assert.equal((await facts({ target: 'example.test:80' })).error.code, 'invalid_input');
 });
 
-test('R5. a crash after intent and before the write, with a token, gives uncertainty after a foreign rule appears, never a claim', async t => {
+test('R5. a crash after intent and before the write, with a token, gives uncertainty after a different foreign rule appears, never a claim', async t => {
   const w = await world(t, { crash: 'before-apply' });
   assert.equal((await w.ensure()).crashed, 'SIGKILL');
-  const foreign = foreignRule(8443, `http://${w.target}`);
+  const foreign = foreignRule(8443, 'http://127.0.0.1:9');
   w.edit(state => { foreign(state); state.config.AllowFunnel = { [`${dnsName}:8443`]: true }; });
   const config = structuredClone(w.state.config);
-  // A fresh ensure needs no token (the record is the pin) and must not claim the identical foreign rule.
+  // A fresh ensure needs no token (the record is the pin) and must not claim the different foreign rule.
   const again = await w.run('ensure', w.request);
   assert.equal(again.error.code, 'uncertain');
   assert.deepEqual(w.state.config, config);

@@ -29,6 +29,7 @@ export async function startFakeLocalApi(socketPath, initial = {}) {
       }
       if (req.url !== '/localapi/v0/serve-config') return send(res, 404, '404 page not found');
       if (req.method === 'GET') {
+        if (state.pendingReadbackFailure) { state.pendingReadbackFailure = false; return send(res, 500, 'readback failed'); }
         if (state.failure === 'bad-shape') return send(res, 200, '[1,2]', { Etag: etag() });
         const empty = !Object.keys(state.config).length;
         return send(res, 200, empty ? 'null' : JSON.stringify(state.config), state.failure === 'no-etag' ? {} : { Etag: etag() });
@@ -49,6 +50,7 @@ export async function startFakeLocalApi(socketPath, initial = {}) {
       state.writes.push(structuredClone(state.config));
       state.etag++;
       if (state.crash === 'after-apply') { state.crash = null; state.client?.kill('SIGKILL'); return req.socket.destroy(); }
+      if (state.failReadback) { state.failReadback = false; state.pendingReadbackFailure = true; }
       send(res, 200, '');
     });
   });

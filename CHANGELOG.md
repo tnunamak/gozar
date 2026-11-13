@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- An interrupted durable create can now finish or remove its exact intended rule after a crash or readback failure before the receipt is saved.
+
 - The default `expose` output says what will happen in a few plain lines. `--alternatives` lists usable ways with their setup status; `--via` picks one by name. `--verbose` prints the full engineering detail. `--json` is unchanged.
 
 - Suspend of a user-stopped durable route now reports `stopped_by_user` where 0.3.3 reported `route_not_found`. Removing a route the user already stopped succeeds without a provider call; an interrupted stop finishes the normal compare-and-set removal.

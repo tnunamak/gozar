@@ -313,13 +313,21 @@ export async function portHolders({ home = defaultHome(), providerResource, port
 // Derive current state from the record plus a fresh observation. Never trusts saved readiness.
 // While nothing is published, the pinned intent origin is what verification checks.
 // The record's `dnsName` and `port` fields are the provider identity and slot (names kept for stored records).
+// A receipt or a write-ahead intent taken on an empty slot attributes this exact rule.
+// Provider-side foreign ownership (for example a foreground Serve rule) still wins.
+function matchesEmptyIntent(record, facet, observed, current) {
+  return record.intent?.slotWasEmpty === true && !facet.foreign(observed.snapshot, record.intent.port) &&
+    isDeepStrictEqual(current, record.intent.rule);
+}
+
 async function reconcile(record, facet, observed, { verify = true } = {}) {
   if (['releasing', 'handing-back', 'address_changed'].includes(record.state)) return { state: record.state };
   const pin = record.receipt ?? record.intent;
   if (observed.identity !== pin.dnsName) return { state: 'address_changed' };
   if (record.state === 'suspended') return { state: 'suspended' };
   const current = facet.read(observed.snapshot, pin.port);
-  // Intent without a receipt proves only that Gozar meant to create the rule.
+  // An exact intent match is a recoverable create; publication still requires a receipt and verification.
+  if (!record.receipt && matchesEmptyIntent(record, facet, observed, current)) return { state: 'creating' };
   if (!record.receipt) return current === null ? { state: 'lost' } : { state: 'uncertain', cleanupDebt: { reason: 'unattributed-rule', port: pin.port } };
   if (current === null) return { state: 'lost' };
   if (!isDeepStrictEqual(current, record.receipt.rule)) return { state: 'uncertain', cleanupDebt: { reason: 'rule-changed', port: pin.port } };
@@ -407,11 +415,12 @@ async function createListener(dir, record, entry, { table, firstAllocation, expe
       // to another slot during a retry makes that approval stale; it never publishes elsewhere.
       if (expectedOrigin !== undefined && expectedOrigin !== candidate) return { result: 'stale' };
       record = { ...record, planDigest: planDigestOf(record.adapterId, capability, record.target, candidate),
-        intent: { dnsName: observed.identity, port: slot, mode: capability.mode, origin: candidate, rule: intendedRule } };
+        intent: { dnsName: observed.identity, port: slot, mode: capability.mode, origin: candidate, rule: intendedRule, slotWasEmpty: true } };
     } else {
       if (observed.identity !== record.intent.dnsName) return { result: 'address_changed' };
       slot = record.intent.port;
       if (facet.occupied(observed.snapshot, slot) || facet.foreign(observed.snapshot, slot)) return { result: 'occupied' };
+      record = { ...record, intent: { ...record.intent, slotWasEmpty: true } };
     }
     const admitted = effectFor(record, entry, observed.snapshot, 'create');
     // Intent is durable before the provider write.
@@ -433,6 +442,10 @@ async function createListener(dir, record, entry, { table, firstAllocation, expe
   }
   const { dnsName, port, rule } = record.intent;
   const readback = await facet.observe(ctx);
+  if (readback.identity !== dnsName) {
+    await save(dir, { ...record, state: 'address_changed' });
+    throw refuse('address_changed', 'Provider identity changed during readback; nothing was published');
+  }
   const current = facet.read(readback.snapshot, port);
   if (!isDeepStrictEqual(current, rule)) {
     if (current === null) {
@@ -534,6 +547,16 @@ export async function ensureRoute(request, deps) {
       }
       const observed = await entry.facet.observe(ctx);
       const current = await reconcile(record, entry.facet, observed);
+      if (current.state === 'creating' && !record.receipt) {
+        const pin = record.intent;
+        // Reconcile just read the exact rule at this identity and slot. Finish the interrupted create.
+        record = { ...record, state: 'creating', cleanupDebt: null,
+          receipt: { dnsName: pin.dnsName, port: pin.port, mode: pin.mode, origin: pin.origin,
+            rule: entry.facet.read(observed.snapshot, pin.port), observedAt: new Date().toISOString() } };
+        await save(dir, record);
+        const published = await publish(dir, record);
+        return finish(published.record, published.verification);
+      }
       if (current.state === 'usable' || current.state === 'unverified') {
         const published = await publish(dir, record, current.verification);
         return finish(published.record, published.verification);
@@ -569,7 +592,7 @@ export async function ensureRoute(request, deps) {
   });
 }
 
-// Remove by exact compare-and-set from the receipt. A rule Gozar cannot attribute stays in place,
+// Remove by exact compare-and-set from the receipt or empty-slot intent. A rule Gozar cannot attribute stays in place,
 // and the record stays as visible cleanup debt until the rule is gone or the user dismisses it.
 async function removeListener(dir, record, adapters, ctx, { suspend = false } = {}) {
   if (!suspend && record.state === 'suspended') {
@@ -603,9 +626,9 @@ async function removeListener(dir, record, adapters, ctx, { suspend = false } = 
     // receipted rule may still sit under the old identity, and an equal rule under the new one is not ours.
     const current = facet.read(observed.snapshot, pin.port, pin.dnsName);
     if (current === null) return { result: 'absent' };
-    if (!record.receipt) return { result: 'unattributed-rule' };
-    if (!isDeepStrictEqual(current, record.receipt.rule)) return { result: 'rule-changed' };
-    return { write: { op: 'delete', slot: pin.port, rule: record.receipt.rule, identity: pin.dnsName } };
+    if (!record.receipt && !matchesEmptyIntent(record, facet, observed, current)) return { result: 'unattributed-rule' };
+    if (!isDeepStrictEqual(current, pin.rule)) return { result: 'rule-changed' };
+    return { write: { op: 'delete', slot: pin.port, rule: pin.rule, identity: pin.dnsName } };
   });
   if (!written) {
     if (decision.result === 'absent') return complete(false);

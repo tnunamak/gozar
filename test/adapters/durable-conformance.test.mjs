@@ -3,7 +3,7 @@
 // against the facet interface, not any real provider. The challenge verifier is faked.
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -164,3 +164,35 @@ test('a conflict on every attempt ends in provider_conflict after the bound, wit
   assert.equal(store.entries.size, 0);
   assert.deepEqual((await statusRoutes({ home }, deps)).routes, [], 'the intent of the failed first allocation was dropped');
 });
+
+for (const variant of ['exact', 'missing-evidence', 'foreign', 'different']) {
+  test(`interrupted fake create attributes only an exact empty-slot intent: ${variant}`, async () => {
+    const facet = adapters.find(a => a.id === adapterId).durable;
+    const put = facet.put;
+    facet.put = async (...args) => {
+      await put(...args);
+      throw new Error('crash after write');
+    };
+    await assert.rejects(ensureRoute(await approved(), deps), /crash after write/);
+    facet.put = put;
+    if (variant === 'missing-evidence') {
+      const dir = join(home, 'routes');
+      const path = join(dir, (await readdir(dir)).find(name => name.endsWith('.json')));
+      const record = JSON.parse(await readFile(path, 'utf8'));
+      delete record.intent.slotWasEmpty;
+      await writeFile(path, JSON.stringify(record));
+    }
+    if (variant === 'foreign') store.entries.get('a').foreign = true;
+    if (variant === 'different') store.edit('a', { forward: '127.0.0.1:9', extra: true });
+    assert.equal((await status()).state, variant === 'exact' ? 'creating' : 'uncertain');
+    const before = store.view();
+    const removed = await release();
+    assert.equal(removed.providerRemoved, variant === 'exact');
+    if (variant !== 'exact') {
+      assert.deepEqual(store.view(), before);
+      assert.ok(removed.cleanupDebt);
+      await releaseRoute({ home, routeId: 'coordinator', mode: 'dismiss' }, deps);
+      assert.deepEqual(store.view(), before);
+    }
+  });
+}
