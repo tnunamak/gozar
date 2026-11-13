@@ -30,6 +30,6 @@ The tests use an injected SDK, real local TCP/TLS servers and a synthetic certif
 
 These tests establish local behavior. They do not establish ngrok account permission, public DNS, provider acceptance of passthrough options, provider cleanup under network failure, or a real application's TLS identity.
 
-Recorded commands: the two dedicated files passed 16 tests. The earlier command that also included `test/adapters/ngrok-runtime.test.mjs` and `test/adapters/ngrok-attached-validation.test.mjs` passed 31 tests before four additional dedicated tests were added. The full project suite is left to the integration gate.
+Recorded commands: the two dedicated files passed 17 tests. The earlier command that also included `test/adapters/ngrok-runtime.test.mjs` and `test/adapters/ngrok-attached-validation.test.mjs` passed 31 tests before five additional dedicated tests were added. The full project suite is left to the integration gate.
 
 SDK option names were checked against the [ngrok JavaScript 1.7.0 declarations](https://github.com/ngrok/ngrok-javascript/blob/v1.7.0/index.d.ts): `proto`, `domain`, `remote_addr`, and `addr`. Its `crt` and `key` options configure edge termination; this implementation supplies neither. This is source inspection, not evidence of provider acceptance.

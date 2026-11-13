@@ -7,8 +7,18 @@ const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('
 const domainPattern = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 const unavailable = () => effectError('provider_unavailable', 'The ngrok stream listener could not complete the operation');
 
-export function createNgrokStreamAdapter(definitionUrl, { loadSdk = () => import('@ngrok/ngrok'), certificate, certificateTool = hasProofCertificateTool } = {}) {
+export function createNgrokStreamAdapter(definitionUrl, { loadSdk = () => import('@ngrok/ngrok'), certificate, certificateTool = hasProofCertificateTool, closeTimeoutMs = 5000 } = {}) {
   const listeners = new Map(), prepared = new Map(), pending = new Set();
+  const closeListener = async listener => {
+    let timer;
+    try {
+      await Promise.race([Promise.resolve().then(() => listener.close()), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(unavailable()), closeTimeoutMs);
+      })]);
+      return true;
+    } catch { return false; }
+    finally { clearTimeout(timer); }
+  };
   return recipeAdapter({ definition: definitionUrl, extend: ({ definition, platformOf, unsupported }) => {
     const transport = definition.capabilities.transport;
     const read = async (ctx, ref = null) => {
@@ -83,7 +93,7 @@ export function createNgrokStreamAdapter(definitionUrl, { loadSdk = () => import
           const opening = Promise.resolve((sdk.forward ?? sdk.default.forward)({ addr: effect.target, authtoken: config.auth, proto: transport,
             ...(transport === 'tls' ? { domain: config.domain } : effect.origin ? { remote_addr: streamAddress(effect.origin, 'tcp').origin.slice(6) } : {}) }));
           // A late SDK result owns a real resource even when its caller already stopped waiting.
-          opening.then(value => { if (abandoned) void Promise.resolve().then(() => value.close()).catch(() => {}); }, () => {});
+          opening.then(value => { if (abandoned) void closeListener(value); }, () => {});
           listener = await Promise.race([opening, new Promise((_, reject) => {
             aborted = () => { abandoned = true; reject(unavailable()); };
             timer = setTimeout(aborted, Math.max(1, Math.min(30000, attempt.deadlineMs - ctx.now())));
@@ -104,8 +114,9 @@ export function createNgrokStreamAdapter(definitionUrl, { loadSdk = () => import
           return receipt;
         } catch {
           abandoned = true;
-          if (listener) await Promise.resolve().then(() => listener.close()).catch(() => {});
+          const cleaned = !listener || await closeListener(listener);
           await session.close();
+          if (!cleaned) throw effectError('provider_unavailable', 'The ngrok listener failed and provider cleanup could not be confirmed');
           throw unavailable();
         } finally { clearTimeout(timer); attempt.signal.removeEventListener('abort', aborted); pending.delete(plan.resourceKey); }
       },
@@ -122,7 +133,7 @@ export function createNgrokStreamAdapter(definitionUrl, { loadSdk = () => import
         if (JSON.stringify(record.receipt) !== JSON.stringify(receipt)) throw unavailable();
         await record.entry.session.close();
         prepared.delete(record.entry.session.target);
-        try { await record.listener.close(); } catch { return { removed: false, debt: { code: 'close_failed', message: 'The ngrok listener did not confirm closing' } }; }
+        if (!await closeListener(record.listener)) return { removed: false, debt: { code: 'close_failed', message: 'The ngrok listener did not confirm closing' } };
         listeners.delete(receipt.resourceKey);
         return { removed: true, debt: null };
       },

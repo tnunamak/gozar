@@ -150,3 +150,13 @@ test('failed SDK removal reports debt and closes the forwarding gate; retry can 
   await assert.rejects(new Promise((resolve, reject) => { const s = net.connect({ host, port: Number(p) }); s.once('connect', () => { s.destroy(); resolve(); }); s.once('error', reject); }));
   fail = false; assert.deepEqual(await adapter.remove(ctx, receipt), { removed: true, debt: null });
 });
+
+test('provider close timeout returns cleanup debt instead of hanging stop', async t => {
+  const adapter = createNgrokTcpAdapter({ closeTimeoutMs: 20,
+    loadSdk: async () => ({ forward: async () => ({ url: () => 'tcp://127.0.0.1:9999', close: () => new Promise(() => {}) }) }) });
+  const proof = await adapter.prepareProof(ctx, request, attempt()); t.after(() => proof.close());
+  const plan = await adapter.plan(ctx, request), receipt = await adapter.create(ctx, { ...plan, effects: plan.effects.map(e => ({ ...e, target: proof.target })) });
+  const started = Date.now(), removal = await adapter.remove(ctx, receipt);
+  assert.equal(removal.removed, false); assert.equal(removal.debt.code, 'close_failed');
+  assert.ok(Date.now() - started < 1000);
+});
