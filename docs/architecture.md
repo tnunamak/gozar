@@ -33,3 +33,17 @@ Client identity is optional host-supplied data. The core filters on `clientReach
 A host passes requirements it already knows. Otherwise the CLI asks, “Where does the app that will use this run?”. An optional profile can supply requirements and an HTTPS `installLinkTemplate` containing `{url}`. The renderer encodes the endpoint into the template; profile names never choose code paths or relax proof requirements.
 
 The machine-readable contract is [core-protocol.json](../runtime/core-protocol.json). [PLAN-PROTOCOL.md](../crates/gozar-core/PLAN-PROTOCOL.md) describes ordered steps, typed captures and ownership records.
+
+## Route API layers
+
+The route API sits on top of the engine described above. An app states requirements and never names a provider.
+
+1. **Registry.** `adapters/manifest.json` lists each provider as `{id, module, definition}`. `loadAdapters` validates the definition and the module against `packages/gozar-node/adapter-contract.d.ts` and rejects a half-built adapter.
+2. **Catalog.** `catalogRoutes` filters the registry by hard requirements (reach, transport, payload access, address stability, setup, protocols, usage kind, platform), ranks by the user's preference order, and reads provider state without changing it. For an eligible, ready candidate it issues a consent token.
+3. **Consent token.** A token is single-use bearer data bound to owner, home, target, usage, intent, requirements, route name, origin, disclosure revision, plan digest and the observed provider resource. The engine redeems it under the reservation lock and re-observes before any effect. Drift fails with `candidate_stale` and no provider write.
+4. **Engines.** Durable routes use the Tailscale LocalAPI engine (ETag compare-and-set). Session routes use the controller and core described above. Attached routes use a detached controller that the calling process keeps alive with heartbeats (5 s beat, 20 s expiry). Before an attached route reports an origin, the controller runs the same timed-SSE validation as a recipe route through a gate in front of the app, and withdraws the route if it fails.
+5. **Views.** `routeStatus`, `closeRoute` and `watchRoutes` dispatch by handle kind (durable, session, attached or external) and always return the same `RouteView`.
+6. **Errors.** One normaliser (`packages/gozar-node/error-normalizer.mjs`, table in `runtime/error-normalization.json`) maps every internal error to the frozen set of codes at each public export and in the CLI envelope. A code the table does not know becomes `internal_error`; the original error stays on `cause` and is never in the message.
+7. **Platform.** `packages/gozar-node/platform.mjs` is the one place that decides which operating systems Gozar supports: Linux and macOS. Any other value makes every candidate `unsupported`. Each adapter may still answer `unsupported` through `ctx.platform`.
+
+The CLI commands in the [README](../README.md#route-by-requirement) read the same requests from files and print the same results as the root exports.

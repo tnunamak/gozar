@@ -2,7 +2,7 @@
 
 Give a local service an HTTPS address a remote client can reach, or a private route inside your Tailscale network. Gozar can use Tailscale Funnel, Tailscale Serve, localhost.run, your own HTTPS proxy, or a selected LAN interface.
 
-**Start with a service already listening on port 3000.** On Linux with Node.js 24+, run:
+**Start with a service already listening on port 3000.** On Linux or macOS with Node.js 22.13 or newer, run:
 
 ```sh
 npx --package=@tnunamak/gozar@0.2.0 gozar expose --port 3000 --client-reach internet
@@ -14,7 +14,7 @@ For a persistent service behind your existing HTTPS proxy, use a [service route]
 
 ## Install
 
-Use Linux with Node.js 24 or newer.
+Use Linux or macOS with Node.js 22.13 or newer. On any other platform, such as Windows, every route answers `unsupported`.
 
 For a one-off command, use the scoped package explicitly:
 
@@ -32,7 +32,7 @@ The examples below use npx with an explicit package, so they do not require a gl
 
 The npm package includes the compiled WASM core and JavaScript bindings. You do not need Rust or wasm-bindgen to use it.
 
-Providers have their own prerequisites: localhost.run needs OpenSSH; Tailscale needs a signed-in client and permission for the selected route. The stable tunnl.gg key lease and adding or removing service-route records need Linux `flock` from util-linux.
+Providers have their own prerequisites: localhost.run needs OpenSSH; Tailscale needs a signed-in client and permission for the selected route. The stable tunnl.gg key lease and adding or removing service-route records need `flock`.
 
 ## Share a local service
 
@@ -62,9 +62,10 @@ Status tells you what is currently published. Health rechecks it. Stop attempts 
 | tunnl.gg stable | Public internet | Explicit opt-in with an installation key. The relay can read traffic, may show a browser warning, and can close quiet streams after about two minutes. |
 | LAN | Selected local network | Explicit non-loopback interface and firewall approval. **HTTP only**; not a public HTTPS route. |
 | Your HTTPS proxy | Clients that reach your configured proxy | You own DNS, TLS, reverse proxy, service uptime and cleanup. Gozar verifies the route, but does not deploy your proxy. |
-| ngrok; Cloudflare named Tunnel | Not creatable by Gozar 0.2.0 | Detection only; a detected CLI is not evidence of account permission or a usable route. |
+| ngrok HTTPS edge | Public internet | **Attached routes only** (the route lives while your app runs). Needs the optional `@ngrok/ngrok` package, a reserved ngrok domain and an auth token. The ngrok edge terminates TLS and can read traffic. In 0.2.0 Gozar lists its setup steps, but there is no wired way yet to keep the token and domain it asks for, so it stays `action-required`. |
+| ngrok TLS and TCP passthrough; Cloudflare named Tunnel | Not creatable by Gozar 0.2.0 | Detection only; a detected CLI is not evidence of account permission or a usable route. |
 
-Use `npx --package=@tnunamak/gozar@0.2.0 gozar detect --port 3000 --alternatives` to inspect candidates before making changes. A visible candidate does not prove login, permission, correct routing, client reachability or address stability. For a long-running origin that Gozar must not manage, use [service routes](docs/service-routes.md). For a Tailscale origin that Gozar creates and keeps fixed across restarts, use [durable routes](docs/service-routes.md#durable-routes-gozar-owned).
+`docs/providers.md` lists every provider the registry ships, with its reach, address stability and cost. Use `npx --package=@tnunamak/gozar@0.2.0 gozar detect --port 3000 --alternatives` to inspect candidates before making changes. A visible candidate does not prove login, permission, correct routing, client reachability or address stability. For a long-running origin that Gozar must not manage, use [service routes](docs/service-routes.md). For a Tailscale origin that Gozar creates and keeps fixed across restarts, use [durable routes](docs/service-routes.md#durable-routes-gozar-owned).
 
 ## Keep an existing service address
 
@@ -78,7 +79,52 @@ npx --package=@tnunamak/gozar@0.2.0 gozar service status --origin https://servic
 npx --package=@tnunamak/gozar@0.2.0 gozar service remove --origin https://service.example --json
 ```
 
-Replace the example origin and target. The target port must be the port your backend actually receives; the reverse proxy must preserve the public Host header. A saved record is not a passing verification result: read the returned status. Each status invocation probes afresh. Removing the record removes only Gozar metadata; your service, DNS and proxy continue running. Linux `flock` from util-linux is needed when adding or removing records.
+Replace the example origin and target. The target port must be the port your backend actually receives; the reverse proxy must preserve the public Host header. A saved record is not a passing verification result: read the returned status. Each status invocation probes afresh. Removing the record removes only Gozar metadata; your service, DNS and proxy continue running. `flock` is needed when adding or removing records.
+
+## Route by requirement
+
+An app that needs a route states what it needs and never names a provider. Gozar's catalog lists the providers that meet the requirements. The app shows the user the chosen candidate's disclosure and passes the approval back. The route-contract types are in `packages/gozar-node/route-contract.d.ts`, and `package.json` exposes them to TypeScript through `types`.
+
+```js
+import { catalogRoutes, ensureRoute, routeStatus, watchRoutes, closeRoute } from '@tnunamak/gozar';
+
+const query = {
+  schemaVersion: 1, owner: 'example-app', target: '127.0.0.1:3000', home: stateDirectory,
+  usage: { kind: 'durable', routeId: 'coordinator' },        // or { kind: 'session', lifetimeMs } or { kind: 'attached' }
+  requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'stable', setup: 'none', protocols: [] },
+};
+const catalog = await catalogRoutes(query);                    // read-only: nothing is exposed
+const candidate = catalog.candidates.find(item => item.eligible && item.candidateToken);
+if (!candidate) throw new Error(catalog.noMatch?.code ?? 'setup needed');   // candidate.setup.actions says what the user can do
+// Show candidate.disclosure to the user. After they agree:
+const route = await ensureRoute({ ...query, approval: { candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision } });
+
+const controller = new AbortController();
+for await (const event of watchRoutes({ home: stateDirectory, handle: route.handle, signal: controller.signal })) {
+  console.log(event.type, event.route.state, event.route.origin);   // snapshot, changed, terminal
+}
+await closeRoute({ home: stateDirectory, handle: route.handle, mode: 'remove' });
+```
+
+- `candidateToken` is private bearer data. It is single-use, expires after 10 minutes, and is bound to the query, the disclosure revision and what Gozar observed at the provider. If the provider changed, the call fails with `candidate_stale` and changes nothing: ask the catalog again. Do not log it.
+- `ensureRoute` (durable), `adoptRoute` (takes over an existing rule) and `expose` (session or attached) all return a `RouteView`. With attached usage the calling process holds the route: the library sends a heartbeat every 5 seconds, the route ends within 20 seconds of the process exiting, and `closeRoute` ends it early.
+- Every failure has a code from a closed list (`invalid_input`, `requirements_unsatisfied`, `setup_required`, `consent_required`, `consent_unknown`, `consent_expired`, `consent_mismatch`, `candidate_stale`, `preference_conflict`, `route_not_found`, `route_conflict`, `address_changed`, `stopped_by_user`, `handing_back`, `verification_failed`, `provider_unavailable`, `cleanup_debt`, `unsupported`, `ambiguous_route`, `busy`, `internal_error`) and an optional `nextAction`. Provider diagnostics never reach the app.
+- `getRoutePreferences` and `setRoutePreferences` keep the user's provider order as opaque `preferenceRef` values. `runSetupAction` runs one setup action the user approved. `resolveClientAddress` turns a proven connection into a client address, or says why it cannot.
+- The route functions behave the same on Linux and macOS. On any other platform every candidate is `unsupported`.
+
+The same requests run from the command line. Each command reads its request from files, prints one JSON envelope on stdout (`watch` prints one event per line) and writes progress to stderr. Files that hold an approval or a secret must be private (mode 0600).
+
+| Command | What it does |
+| --- | --- |
+| `gozar catalog --query-file FILE [--route NAME] --json` | Lists candidates for the query. |
+| `gozar ensure --query-file FILE [--approval-file FILE] [--reconsent] --json` | Creates or confirms a durable route. |
+| `gozar adopt --query-file FILE --approval-file FILE --handover-file FILE --json` | Takes over an existing rule. |
+| `gozar expose --query-file FILE --approval-file FILE [--wait allocated\|verified] --json` | Opens a session or attached route. For an attached route this process holds it; close stdin to end it. |
+| `gozar setup ACTION_ID --approval-file FILE [--secret-file FILE] --json` | Runs one approved setup action. |
+| `gozar preference show\|set [--profile-home DIR] [--expected-revision N] [--prefer REF ...]` | Reads or changes the provider order. |
+| `gozar watch --handle-file FILE --json` | Streams route changes until the route is gone. |
+
+Exit codes: `0` success; `2` requirements, setup or `unsupported`; `3` missing, stale or unknown approval, or no such route; `1` any other failure. There is no `--yes` for these commands: the approval is the private file that holds the token the catalog issued.
 
 ## Embed Gozar in your app
 
@@ -97,7 +143,7 @@ Use CLI `health` to recheck a route and `stop` for cleanup. A passing route chec
 
 ## JavaScript API
 
-Install into your Node.js 24+ project:
+Install into your Node.js 22.13+ project:
 
 ```sh
 npm install @tnunamak/gozar@0.2.0
@@ -139,7 +185,7 @@ Each call runs the packaged CLI. The optional `home` sets `GOZAR_HOME`; use the 
 
 Accepted camelCase options include `probeDirectory`, `probeWaitMs`, `streamableHttp` and `oauthDcr`. Invalid/unknown options throw (sometimes before a promise is returned), so keep the invocation inside `try`. JSON CLI failures surface as `error.reply` plus `error.code`; other failures may contain only a message.
 
-The root package exports `expose`, `status`, `stop`, `addService`, `statusServices`, `removeService`, `createServiceVerifier` and the durable route functions `ensureRoute`, `adoptRoute`, `releaseRoute`, `statusRoutes`, `confirmHandBack`, `cancelHandBack` and `durableConsentText`. Service and durable route functions are also available at `@tnunamak/gozar/service`. There are no root JavaScript `health` or `detect` exports in 0.2.0; invoke the CLI for those, using `@tnunamak/gozar/bin/gozar.mjs` if you need a resolved executable inside a package.
+The root package exports the route functions `catalogRoutes` (also `detect`), `inspectLegacyRoute`, `ensureRoute`, `adoptRoute`, `expose`, `routeStatus`, `closeRoute`, `watchRoutes`, `getRoutePreferences`, `setRoutePreferences`, `runSetupAction` and `resolveClientAddress`, plus `status`, `stop`, `addService`, `statusServices`, `removeService`, `createServiceVerifier`, `releaseRoute`, `confirmHandBack` and `cancelHandBack`. `@tnunamak/gozar/service` exports the service and hand-back functions and `createServiceVerifier`. `expose` takes the route request shown in [Route by requirement](#route-by-requirement) when `schemaVersion` is 1, and the session options above otherwise. The 0.2.0 durable signatures `statusRoutes` and `durableConsentText` and the earlier `ensureRoute` and `adoptRoute` inputs are gone from the package root. For the legacy session commands `health`, use the CLI, with `@tnunamak/gozar/bin/gozar.mjs` if you need a resolved executable inside a package.
 
 ## Try the echo server
 
@@ -231,7 +277,7 @@ npx --package=@tnunamak/gozar@0.2.0 gozar health --port 3000 --json
 ```
 Use only the current verified `snapshot.published`. If it is `null`, remove the old link from your app. Anonymous relay URLs can change within minutes even within the requested session lifetime.
 
-**Noninteractive approval required:** Collect the user's approval of the chosen provider and exact local target, then retry with `--yes`. A JSON response is not consent.
+**Noninteractive approval required:** Collect the user's approval of the chosen provider and exact local target, then retry with `--yes`. A JSON response is not consent. The route-contract commands above have no `--yes`.
 
 **Expired session or cleanup debt:**
 ```sh
