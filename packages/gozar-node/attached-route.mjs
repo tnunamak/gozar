@@ -301,7 +301,7 @@ export async function runAttachedController(directory, runtime = {}) {
   const handle = { kind: 'attached', id: bootstrap.id, generation: 0 };
   const lease = { target: bootstrap.request.target, state: 'creating', origin: null, properties: adapter.definition.capabilities, ingress: null, identity:bootstrap.identity??null,
     limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
-  let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null, proofSession = null,initialSettled=false;
+  let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null, proofSession = null,initialSettled=false,initialVerified=false;
   const nonce = randomBytes(32).toString('hex');
   const lastView = () => ({...projectAttached(lease, { handle, now: now() }),operationId:bootstrap.operationId??null,...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
   const save = () => atomicWrite(join(directory, 'state.json'), { schemaVersion: 1, adapterId: adapter.id, request: bootstrap.request, plan: bootstrap.plan,
@@ -368,7 +368,8 @@ export async function runAttachedController(directory, runtime = {}) {
   }
 
   async function verify() {
-    if (!receipt || releasing || !initialSettled) return;
+    // A settled startup failure must never become a nonce-only status refresh.
+    if (!receipt || releasing || !initialSettled || !initialVerified || failure) return;
     const facts=await adapter.runtimeFacts(read,receipt);
     Object.assign(lease,{properties:facts.properties,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
     if(!await enforceConsent())return;
@@ -417,6 +418,10 @@ export async function runAttachedController(directory, runtime = {}) {
       const checked = await checkProof(claimsSse);
       if (checked.status !== 'verified') throw gozarError('verification_failed', 'The route did not pass publication validation and was withdrawn');
       if(!await enforceConsent())return;
+      // Close or resolver loss can arrive while the consent check is pending.
+      if (releasing || attempt.signal.aborted || resolverLost || now() >= attempt.deadlineMs)
+        throw gozarError('verification_failed', 'The route proof was withdrawn before publication');
+      initialVerified = true;
       lease.state = 'usable'; lease.checkedAtMs = Date.parse(checked.checkedAt); lease.sseChecked = gated && claimsSse;
       await save();
     } catch (cause) {
