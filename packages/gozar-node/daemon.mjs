@@ -1,3 +1,4 @@
+import {validateSessionRecipe} from './adapter-runtime.mjs';
 import net from 'node:net';
 import { cliCommand } from './cli-command.mjs';
 import { chmod, readFile, unlink, open, mkdir } from 'node:fs/promises';
@@ -81,6 +82,7 @@ export async function stopSession(directory) {
 
 // options is a test seam: { identity, kill, startupTimeoutMs, graceMs }.
 export async function launch(directory, configuration, executable, options = {}) {
+  if(configuration.embedding || configuration.recipeMapping || configuration.recipeRegistry || configuration.recipeRegistryId)await validateSessionRecipe(configuration);
   const identity = options.identity ?? processIdentity;
   if (configuration.lifetimeMs !== undefined) validateLifetimeMs(configuration.lifetimeMs);
   try {
@@ -138,6 +140,8 @@ export async function launch(directory, configuration, executable, options = {})
 
 export async function serve(directory, { step: suppliedStep, probeExecutor, hostAuthorities, processOutputObserver } = {}) {
   const config = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
+  const recipeBound=!!(config.embedding || config.recipeMapping || config.recipeRegistry || config.recipeRegistryId);
+  if(recipeBound)await validateSessionRecipe(config);
   if (config.lifetimeMs !== undefined) validateLifetimeMs(config.lifetimeMs);
   const publishingAdapter = config.adapters?.find(adapter => adapter.id === config.adapterId);
   if (config.consent === true && publishingAdapter && publishingAdapter.planVersion !== 1) {
@@ -185,8 +189,15 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   } catch (error) { await abandon(error); }
   controller.driver.lifetimeMs = config.lifetimeMs;
   if(embedding?.spawnProcess)controller.driver.spawnProcess=embedding.spawnProcess;
-  if(embedding)controller.beforeEffect=embedding.beforeEffect;
-  if(embedding)controller.beforePublication=embedding.check;
+  if(embedding || recipeBound)controller.beforeEffect=async effect=>{
+    // A changed registry cannot create more resources, but must never prevent removal.
+    if(recipeBound && ['create','start'].includes(effect.operation))await validateSessionRecipe(config);
+    await embedding?.beforeEffect(effect);
+  };
+  if(embedding || recipeBound)controller.beforePublication=async()=>{
+    if(recipeBound)await validateSessionRecipe(config);
+    await embedding?.check();
+  };
   controller.driver.probeWaitMs = config.probeWaitMs;
   controller.driver.observeProcessOutput = config.observeProcessOutput === true;
   controller.driver.onProcessOutput = event => {

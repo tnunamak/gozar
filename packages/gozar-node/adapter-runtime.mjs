@@ -123,6 +123,7 @@ function declaredContext(context,definition){
 }
 function scopedAdapter(adapter){
   const wrapped={...adapter};
+  if(sessionRecipes.has(adapter))sessionRecipes.set(wrapped,sessionRecipes.get(adapter));
   for(const name of ['detect','setup','plan','create','observe','verify','remove','runtimeFacts','prepareProof'])if(typeof adapter[name]==='function')wrapped[name]=(...args)=>adapter[name](bindConfiguration(declaredContext(args[0],adapter.definition),adapter.id),...args.slice(1));
   if(adapter.durable){wrapped.durable={...adapter.durable};for(const name of ['observe','put','delete'])wrapped.durable[name]=(...args)=>adapter.durable[name](bindConfiguration(declaredContext(args[0],adapter.definition),adapter.id),...args.slice(1));}
   return wrapped;
@@ -179,6 +180,40 @@ export async function loadAdapters({ manifest, root } = {}) {
 
 // --- recipeAdapter ------------------------------------------------------------------------------------
 
+const sessionRecipes = new WeakMap();
+// Provenance is private to recipeAdapter; callers receive data, never executable closures.
+export function sessionRecipeFor(adapter) {
+  const source = sessionRecipes.get(adapter);
+  const definition = source?.wrapped;
+  const current = source && readDefinition(source.location);
+  if (!definition || !isDeepStrictEqual(current.wrapped, definition) ||
+      !isDeepStrictEqual(current.adapter, adapter.definition) || definition.id !== adapter.id ||
+      definition.planVersion !== 1 || definition.admission?.state !== 'admitted' ||
+      !Array.isArray(definition.admission.requiredFeatures) ||
+      !definition.admission.requiredFeatures.every(feature => typeof feature === 'string') ||
+      !definition.recipes?.create || !definition.recipes?.remove)
+    throw Object.assign(new Error('Selected adapter has no current admitted session recipe mapping'), {code:'artifact_integrity_failed'});
+  return {schemaVersion:1,adapterId:adapter.id,digest:sha(definition),definition:structuredClone(definition)};
+}
+
+// Recheck on both sides of bootstrap, including cached modules' underlying definition files.
+export async function validateSessionRecipe(configuration) {
+  const mapping=configuration.recipeMapping, registry=configuration.recipeRegistry;
+  const reject=()=>{throw Object.assign(new Error('Session recipe registry binding changed'), {code:'artifact_integrity_failed'});};
+  if(mapping?.schemaVersion!==1 || mapping.adapterId!==configuration.adapterId ||
+      !registry || typeof configuration.recipeRegistryId!=='string' ||
+      !mapping.definition || mapping.digest!==sha(mapping.definition))reject();
+  const {registryIdentity}=await import('./registry-identity.mjs');
+  if(configuration.embedding && configuration.embedding.registryId!==configuration.recipeRegistryId)reject();
+  if(await registryIdentity(registry)!==configuration.recipeRegistryId)reject();
+  const adapter=(await loadAdapters(registry)).find(item=>item.id===configuration.adapterId);
+  if(!adapter)reject();
+  const current=sessionRecipeFor(adapter);
+  if(await registryIdentity(registry)!==configuration.recipeRegistryId ||
+      !isDeepStrictEqual(current,mapping) || !isDeepStrictEqual(configuration.adapters,[current.definition]))reject();
+  return current.definition;
+}
+
 // `load` loads the durable engine. `serve` optionally loads a transport module handed to the facet's `inspect`; a facet
 // that has its own transport uses it when none is given.
 const durableState = { load: () => import('./durable-route.mjs'), serve: null };
@@ -220,7 +255,9 @@ function readDefinition(location) {
   let wrapped = null;
   if (file.wraps) {
     if (!/^(\.\/|(\.\.\/)+)[A-Za-z0-9_.-]+\.definition\.json$/.test(file.wraps)) throw loadError(file.adapter.id, 'wraps must name an adapters/*.definition.json file');
-    wrapped = JSON.parse(readFileSync(new URL(file.wraps, url), 'utf8')).definition;
+    const recipeFile = JSON.parse(readFileSync(new URL(file.wraps, url), 'utf8'));
+    if(recipeFile.schemaVersion!==1)throw loadError(file.adapter.id,'unsupported wrapped recipe schema');
+    wrapped = recipeFile.definition;
     if (wrapped?.id !== file.adapter.id) throw loadError(file.adapter.id, 'wrapped recipe definition has a different id');
   }
   return { adapter: file.adapter, wrapped };
@@ -351,7 +388,9 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
         limits: { recommendedPollIntervalMs: idle ? Math.max(1000, Math.floor(idle / 2)) : 60000, idleTimeoutMs: idle } };
     },
   };
-  return extend ? Object.assign(adapter, extend({ base: { ...adapter }, definition, wrapped, allActions, platformOf, unsupported })) : adapter;
+  const result = extend ? Object.assign(adapter, extend({ base: { ...adapter }, definition, wrapped, allActions, platformOf, unsupported })) : adapter;
+  if(wrapped?.recipes?.create)sessionRecipes.set(result,{location,wrapped:structuredClone(wrapped)});
+  return result;
 }
 
 // --- ReadContext -----------------------------------------------------------------------------------------

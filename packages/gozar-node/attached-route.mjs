@@ -1,3 +1,4 @@
+import {sessionRecipeFor, validateSessionRecipe} from './adapter-runtime.mjs';
 // Attached routes: one provider runtime held by a Gozar controller process, for as long as the process that
 // asked for it holds the lease.
 //
@@ -644,13 +645,12 @@ export async function runAttachedController(directory, runtime = {}) {
 
 // --- Session usage ------------------------------------------------------------------------------
 
-async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs, origin, requirements,owner,operationId,sessionId,embedding }) {
+async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs, origin, requirements,owner,operationId,sessionId,embedding,recipeMapping,recipeRegistry,recipeRegistryId }) {
   const root = fileURLToPath(new URL('../../', import.meta.url));
-  const { loadCatalog, loadDefinition } = await import('./catalog.mjs');
   const { launch } = await import('./daemon.mjs');
-  const catalog = await loadCatalog(root, { operational: true });
-  const definition = await loadDefinition(root, adapterId);
-  return launch(directory, { adapters: [...catalog.filter(item => item.id !== definition.id), definition],
+  const handoff={adapterId,recipeMapping,recipeRegistry,recipeRegistryId,adapters:recipeMapping?.definition?[recipeMapping.definition]:[]};
+  const definition=await validateSessionRecipe(handoff);
+  return launch(directory, { ...handoff,
     requirements: { clientReach: requirements.reach, httpsRequired: requirements.transport === 'https', sse: requirements.protocols.includes('sse'),
       streamableHttp: requirements.protocols.includes('streamable-http'), oauthDcr: requirements.protocols.includes('oauth-dcr') },
     targetPort: port, adapterId, lifetimeMs,owner,operationId:operationId??null,...(sessionId?{sessionId}:{}),...(embedding?{embedding}:{}),origin: origin ?? undefined, operational: definition.planVersion === 1, consent: true, approveOrigin: true },
@@ -679,6 +679,13 @@ export async function openSessionRoute(request, deps = {}) {
       if (!Number.isFinite(expiresAtMs)||request.usage.lifetimeMs<=0) throw gozarError('invalid_input','A session needs a finite positive lifetime');
       return await openAttachedRoute(request,{...deps,sessionExecution:{redeemed,handle:stableHandle,directory,expiresAtMs}});
     }
+    let recipeHandoff;
+    if(!deps.startSession){
+      const recipeMapping=sessionRecipeFor(redeemed.adapter);
+      recipeHandoff={adapterId:redeemed.adapter.id,recipeMapping,recipeRegistry:deps.registry??{},recipeRegistryId:deps.registryId,
+        adapters:[recipeMapping.definition]};
+      await validateSessionRecipe(recipeHandoff);
+    }
     let embedding;
     if(deps.embeddingServices){
       const broker=await startEmbeddingBroker({services:deps.embeddingServices,home,identity:await deps.embeddingServices.resolveIdentity({home}),dispatchEffect:deps.dispatchEffect,
@@ -689,7 +696,7 @@ export async function openSessionRoute(request, deps = {}) {
       embedding={resolver:descriptor,identity:{instanceId:descriptor.instanceId,bootId:descriptor.bootId},...(deps.registry?{registry:deps.registry}:{}),registryId:deps.registryId,request:{...redeemed.request,home,owner:request.owner,...(request.intent?{intent:request.intent}:{})},consentReview:redeemed.consentReview,handle:stableHandle,fixtureEffects:!!deps.dispatchEffect};
     }
     let reply = await (deps.startSession ?? legacyStartSession)({ home, directory, adapterId: redeemed.adapter.id, port, lifetimeMs: request.usage.lifetimeMs,
-      owner:request.owner,operationId:request.operationId,sessionId:stableHandle.id.split(':').slice(1).join(':'),embedding,
+      ...recipeHandoff,owner:request.owner,operationId:request.operationId,sessionId:stableHandle.id.split(':').slice(1).join(':'),embedding,
       origin: request.origin ?? redeemed.plan.origin ?? null, requirements: request.requirements, wait: request.wait });
     const sessionId = reply.snapshot?.sessionId;
     const handle = { kind: 'session', id: sessionId ? `port-${port}:${sessionId}` : `port-${port}`, generation: 1 };
