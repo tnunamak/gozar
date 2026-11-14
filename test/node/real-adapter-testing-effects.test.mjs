@@ -8,13 +8,13 @@ import {createTestingGozar} from '@tnunamak/gozar/testing';
 import {scratch,query} from './route-schema-check.mjs';
 async function exercise(t,transport,{buffered=false}={}){
  let harness;t.after(()=>harness?.close());
- const home=await scratch(t),owner='fixture-owner',ledger=new Map();let serial=0;
+ const home=await scratch(t),owner='fixture-owner',ledger=new Map(),removed=[];let serial=0;
  const effects=[
   {kind:'recipe',operation:'probe',handle:async()=>({ok:false})},
   {kind:'sdk-listener',operation:'detect',handle:async()=>({available:true})},
   {kind:'sdk-listener',operation:'open',handle:async({options})=>{const handle=`owned-${++serial}`,url=options.proto==='tls'?`tls://${options.domain}:443`:options.proto==='tcp'?'tcp://isolated.invalid:12345':`https://${options.domain}`;ledger.set(handle,{url,target:options.addr});return {handle,url};}},
   {kind:'sdk-listener',operation:'read',handle:async({handle})=>ledger.has(handle)?{present:true,url:ledger.get(handle).url}:{present:false}},
-  {kind:'sdk-listener',operation:'close',handle:async({handle})=>{ledger.delete(handle);return {closed:true};}},
+  {kind:'sdk-listener',operation:'close',handle:async({handle})=>{if(ledger.delete(handle))removed.push(handle);return {closed:!ledger.has(handle)};}},
   {kind:'network',operation:'fetch',handle:async request=>{
     const parsed=new URL(request.url),resource=[...ledger.values()].find(r=>r.url===parsed.origin);assert.ok(resource);
     const response=await fetch('http://'+resource.target+parsed.pathname+parsed.search,{method:request.method,headers:request.headers});
@@ -31,7 +31,23 @@ async function exercise(t,transport,{buffered=false}={}){
   }},
  ];
  harness=await createTestingGozar({effects});const api=harness.gozar;
- const inventory=await api.listProviders({home,owner});const provider=inventory.providers.find(p=>p.transport===transport&&p.availability.attached.state!=='unsupported');assert.ok(provider);
+ const inventory=await api.listProviders({home,owner});const provider=inventory.providers.find(p=>p.transport===transport&&(transport==='https'?p.availability.attached.state!=='unsupported':p.providerId===`ngrok-${transport}-passthrough`));assert.ok(provider);
+ if(transport!=='https'){
+  assert.equal(provider.availability.attached.state,'unsupported');
+  assert.equal(provider.availability.attached.reason,'deferred-protocol-execution');
+  const q=query({home,owner,providerId:provider.providerId,usage:{kind:'attached'},target:'127.0.0.1:1',requirements:{reach:provider.reach,transport,payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}});
+  const catalog=await api.catalogRoutes(q);
+  for(const candidate of catalog.candidates){
+   assert.notEqual(candidate.eligible,true);
+   assert.ok(!candidate.candidateToken,'deferred transport must not receive create approval');
+  }
+  assert.equal(serial,0,'catalog must not allocate a listener');
+  assert.equal(ledger.size,0);
+  assert.deepEqual(removed,[],'catalog must not remove a listener');
+  assert.deepEqual((await api.listRoutes({home,owner})).routes,[],'catalog must not publish a route');
+  assert.ok(!harness.events.some(e=>(e.kind==='sdk-listener'&&['open','close'].includes(e.operation))||e.kind==='network'));
+  return;
+ }
  let config=provider.configuration;
  for(const requirement of config.inputRequirements){const action=config.actions.find(a=>a.id===requirement.actionId);let input;
   if(requirement.secret){const {handle}=await api.storeSecret({home,owner,providerId:provider.providerId,inputId:requirement.id,scopeId:config.scopeId,expectedConfigurationRevision:config.revision,bytes:new TextEncoder().encode('synthetic-canary')});input={secretHandle:handle};}else input={value:'fixture.example.invalid'};
@@ -52,10 +68,12 @@ async function exercise(t,transport,{buffered=false}={}){
  if(transport!=='https')assert.equal((await api.routeStatus({home,handle:route.handle})).verification.observedAt,before);
  if(transport!=='https'){await assert.rejects(api.reviewRouteConsent({home,handle:route.handle}),{code:'proof_refresh_unsupported'});assert.equal((await api.routeStatus({home,handle:route.handle})).published,null);}
  assert.equal((await api.closeRoute({home,handle:route.handle,mode:'remove'})).cleanup.state,'confirmed');assert.equal(ledger.size,0);
+ assert.deepEqual(removed,['owned-1'],'fixture must observe removal of the allocated listener');
  const replay=await api.expose(request);assert.equal(replay.state,'released',JSON.stringify({state:replay.state,cleanup:replay.cleanup,failure:await readFile(`${home}/attached/${route.handle.id}/failure.json`,'utf8').catch(()=>null)}));assert.equal(serial,1);
  assert.equal((await api.closeRoute({home,handle:route.handle,mode:'remove'})).cleanup.state,'confirmed');
  assert.doesNotMatch(JSON.stringify(harness.events),/synthetic-canary/);
  assert.ok(harness.events.some(e=>e.kind==='network'&&e.operation===(transport==='https'?'fetch':'exchange')));
 }
-for(const transport of ['https','tcp','tls'])test(`public testing harness runs shipped ${transport} adapter through controller and witnessed proof`,t=>exercise(t,transport));
+test('public testing harness runs shipped HTTPS through controller and witnessed proof',t=>exercise(t,'https'));
+for(const transport of ['tcp','tls'])test(`release 0.4 detects ${transport} passthrough but issues no create approval`,t=>exercise(t,transport));
 test('public initial streaming proof cannot be bypassed by fresh status while frames are buffered',t=>exercise(t,'https',{buffered:true}));

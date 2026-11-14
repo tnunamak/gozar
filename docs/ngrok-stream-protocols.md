@@ -1,5 +1,17 @@
 # ngrok raw stream adapters
 
+## Release 0.4: detected, not executable
+
+Release 0.4 executes HTTP(S) only. None of host gaps G3 through G10 requires raw TCP or TLS passthrough. Both passthrough adapters remain discoverable but attached usage is unsupported with reason `deferred-protocol-execution`. Cataloging them must not issue create approval or allocate, publish or remove a route.
+
+This reverses earlier admission through adapter data, without provider-specific conditions in core. The implementation and protocol-neutral fixture extension proof remain for post-release work. Extension capability is not production admission. Re-admission needs separate review of application readiness, identity, consent, cleanup and provider entitlement. HTTPS retains its existing executable consent and witnessed-proof path.
+
+Offline regression: `node --test test/node/real-adapter-testing-effects.test.mjs`. Authored but not run in this worker. The regression checks unsupported passthrough and no catalog side effects while retaining HTTPS execution and independently observed listener removal. No account, real exposure or provider installation was used.
+
+## Retained implementation and historical evidence
+
+The following describes retained implementation, not release 0.4 execution support. Recorded test counts below are historical, not validation of this change.
+
 `ngrok-tcp-passthrough` and `ngrok-tls-passthrough` support attached routes. They use the optional `@ngrok/ngrok` SDK and Gozar-stored credentials. Use Gozar CLI setup to provide the token; TLS also requires a reserved domain. Account entitlement, billing and quota remain unknown until the provider accepts the request. No live account check was used to develop these adapters.
 
 Request `transport: 'tcp'` or `transport: 'tls'` through the ordinary route API. Origins have explicit ports: `tcp://host:port` or `tls://host:443`. These are raw stream addresses, not HTTP URLs. The adapters do not claim SSE, Streamable HTTP or OAuth discovery support. TCP payload confidentiality stays unknown; plaintext TCP can be visible to the relay.

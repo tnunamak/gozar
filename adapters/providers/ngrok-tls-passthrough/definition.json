@@ -78,8 +78,8 @@
         "reason": "usage-not-supported"
       },
       "attached": {
-        "state": "available",
-        "reason": "admitted"
+        "state": "unsupported",
+        "reason": "deferred-protocol-execution"
       },
       "durable": {
         "state": "unsupported",
