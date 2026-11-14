@@ -18,7 +18,7 @@ import { canonicalHome, trustedDirectory, privateDirectory, withExclusiveLock } 
 import { gozarError, instructionAction, normalizeError } from './error-normalizer.mjs';
 import { cliCommand } from './cli-command.mjs';
 import { createGate } from './gate.mjs';
-import { projectAttached, projectSession, releasedView, checkRef } from './route-view.mjs';
+import { projectAttached, projectSession, releasedView, recoveryHistory, checkRef } from './route-view.mjs';
 import { validateQuery, adapterRequest, readContextFor, loadRuntime, consentDisclosureRevision,inspectAdapter } from './route-catalog.mjs';
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
@@ -245,8 +245,7 @@ export async function attachedStatus(request, deps = {}) {
     if (!error.gone) throw error;
     const state = await viewFromRecord(directory, handle);
     if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') return releasedView(state.lastView, handle);
-    return { ...state.lastView, state: 'uncertain', routeState: 'cleanup-unconfirmed', published: null, ingress: null,
-      cleanup: { state: 'unconfirmed', message: 'The route controller stopped before it removed the route' } };
+    return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
   }
 }
 
@@ -263,8 +262,7 @@ export async function closeAttachedRoute(request, deps = {}) {
     // The controller died with the route up: remove it from the saved receipt, in this process.
     const adapters = await adaptersOf(deps);
     const adapter = adapters.find(item => item.id === state.adapterId);
-    if (!adapter || !state.receipt || !deps.effectContext) return { ...state.lastView, state: 'uncertain', routeState: 'cleanup-unconfirmed', published: null, ingress: null,
-      cleanup: { state: 'unconfirmed', message: 'The route controller stopped before it removed the route' } };
+    if (!adapter || !state.receipt || !deps.effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
     const read = bindConfiguration(await readContextFor(deps, await canonicalHome(request.home), deps.platform ?? process.platform), adapter.id);
     const observed = await adapter.observe(read, state.request);
     const removal = await adapter.remove(bindConfiguration({ ...read, generation: state.handle.generation, ...deps.effectContext({ adapter, readContext: read, request: state.request, plan: state.plan, generation: state.handle.generation }) }, adapter.id), state.receipt, observed);

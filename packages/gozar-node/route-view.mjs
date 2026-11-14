@@ -129,6 +129,14 @@ export function projectAttached(lease, { handle, now = Date.now() }) {
     limits: limitsOf(lease.limits, 5_000), cleanup: lease.cleanup?.state === 'debt' ? { ...lease.cleanup, state: 'unconfirmed' } : lease.cleanup ?? { state: 'none' } });
 }
 
+
+/** Retain old proof as history; loss is not a fresh observation or proof of absence. */
+export function recoveryHistory(last, message) {
+  return { ...last, state: 'uncertain', routeState: 'cleanup-unconfirmed', published: null, ingress: null,
+    verification: { ...last.verification, status: 'unverified', checks: [] },
+    cleanup: { state: 'unconfirmed', message } };
+}
+
 export function releasedView(last, handle) {
   const base = last ?? view({ handle, origin: null, published: null, state: 'released', ownership: handle.kind === 'external' ? 'external-owned' : 'gozar-owned',
     properties: unknownProperties(), verification: proven('unverified', null, []), limits: { recommendedPollIntervalMs: 60_000, idleTimeoutMs: null } });
