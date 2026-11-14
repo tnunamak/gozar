@@ -134,7 +134,7 @@ export function projectAttached(lease, { handle, now = Date.now() }) {
 export function recoveryHistory(last, message) {
   return { ...last, state: 'uncertain', routeState: 'cleanup-unconfirmed', published: null, ingress: null,
     verification: { ...last.verification, status: 'unverified', checks: [] },
-    cleanup: { state: 'unconfirmed', message } };
+    cleanup: cleanupRecovery({ state: 'unconfirmed', message }, last.handle) };
 }
 
 export function releasedView(last, handle) {

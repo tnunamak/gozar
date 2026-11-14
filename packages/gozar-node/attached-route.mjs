@@ -281,6 +281,8 @@ export async function closeAttachedRoute(request, deps = {}) {
     if (!error.gone) throw error;
     const state = await viewFromRecord(directory, handle);
     if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') return releasedView(state.lastView, handle);
+    // Without an owned receipt or recovery effects, retain debt without loading transient runtime.
+    if (!state.receipt || !deps.effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
     // The controller died with the route up: remove it from the saved receipt, in this process.
     const adapters = await adaptersOf(deps);
     const adapter = adapters.find(item => item.id === state.adapterId);
