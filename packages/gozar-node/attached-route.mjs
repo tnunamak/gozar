@@ -69,6 +69,8 @@ export async function preflightExpose(request, deps = {}) {
       throw gozarError('unsupported', 'This usage is not admitted for execution in this release');
   }
   checkExpose(request, request.usage.kind);
+  if (deps.registryId && deps.registry && await registryIdentity(deps.registry) !== deps.registryId)
+    throw gozarError('artifact_integrity_failed','The route registry content changed');
 }
 
 async function adaptersOf(deps) {
