@@ -94,7 +94,7 @@ async function authorizeRecord(record,request,adapter,grant){
 }
 
 function reviewBinding(record,current,handle){
- const review=consentReview({scope:{...current.review.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation},typedDisclosures:current.review.canonicalInput.typedDisclosures,facts:current.facts});
+ const review=consentReview({scope:{...current.review.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation},typedDisclosures:current.review.canonicalInput.typedDisclosures,facts:current.review.canonicalInput.facts});
  return {review,binding:{...consentBinding(record.reviewQuery,record.reviewQuery.home,`runtime-review:${review.consentFactsDigest}`,review.consentFactsDigest),handle,subject:record.verification?.subject??null}};
 }
 const reviewAction=()=>instructionAction('review-route-consent','Review changed route consent','Call reviewRouteConsent for this handle and show its current snapshot before approval.');

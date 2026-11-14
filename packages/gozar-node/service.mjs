@@ -164,7 +164,7 @@ async function externalReview(route,handle){
  const current=await currentExternal(route);if(!current)throw refuse('unsupported','This owner route has no current consent authority');
  const runtime=serviceContext.getStore(),identity=await runtime.embeddingServices.resolveIdentity({home:route.embedding.request.home});
  const subject={origin:route.origin,target:route.target,...identity,handleGeneration:handle.generation};
- const review=consentReview({scope:{...current.review.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation},typedDisclosures:current.review.canonicalInput.typedDisclosures,facts:current.facts});
+ const review=consentReview({scope:{...current.review.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation},typedDisclosures:current.review.canonicalInput.typedDisclosures,facts:current.review.canonicalInput.facts});
  const binding={...consentBinding(route.embedding.request,route.embedding.request.home,`runtime-review:${review.consentFactsDigest}`,review.consentFactsDigest),handle,subject};
  return {current,review,subject,binding};
 }

@@ -584,7 +584,7 @@ export async function runAttachedController(directory, runtime = {}) {
           const current=await currentConsent();if(!current)throw gozarError('unsupported','This route has no current consent snapshot');
           const scope={...current.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation};
           const {consentReview}=await import('./consent-facts.mjs');
-          const review=consentReview({...current.canonicalInput,scope,typedDisclosures:current.canonicalInput.typedDisclosures,facts:lease.facts??adapter.definition.facts??[]});
+          const review=consentReview({...current.canonicalInput,scope,typedDisclosures:current.canonicalInput.typedDisclosures,facts:current.canonicalInput.facts});
           const token=randomBytes(32).toString('base64url'),expiresAt=new Date(now()+600000).toISOString();
           const snapshot={...consentSnapshot(review),subject:lease.proofSubject??null,approvalToken:token,expiresAt};
           reviewTokens.set(token,{snapshot,current});return reply({review:snapshot});

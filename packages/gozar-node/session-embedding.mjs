@@ -49,7 +49,7 @@ export async function connectSessionEmbedding(config,{onLoss}){
   async review(){
    blocked=true;await refresh();
    const scope={...current.review.canonicalInput.scope,reviewHandle:saved.handle.id,handleGeneration:saved.handle.generation};
-   const review=consentReview({scope,typedDisclosures:current.review.canonicalInput.typedDisclosures,facts:current.facts});
+   const review=consentReview({scope,typedDisclosures:current.review.canonicalInput.typedDisclosures,facts:current.review.canonicalInput.facts});
    const snapshot={...consentSnapshot(review),subject,approvalToken:randomBytes(32).toString('base64url'),expiresAt:new Date(Date.now()+600000).toISOString()};
    tokens.set(snapshot.approvalToken,{snapshot,review:current.review});return snapshot;
   },
