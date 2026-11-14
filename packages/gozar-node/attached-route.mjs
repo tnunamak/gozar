@@ -48,6 +48,23 @@ function checkExpose(request, kind) {
   if (!['allocated', 'verified'].includes(request.wait)) throw gozarError('invalid_input', "wait must be 'allocated' or 'verified'");
 }
 
+// Static availability is an execution boundary, not an approval. Never redeem or
+// inspect provider state to reject a named detect-only choice.
+export async function preflightExpose(request, deps = {}) {
+  validateQuery(request);
+  if (!['attached', 'session'].includes(request.usage.kind) ||
+      !['allocated', 'verified'].includes(request.wait))
+    throw gozarError('invalid_input', 'expose needs attached/session usage and allocated/verified wait');
+  if (request.providerId !== undefined) {
+    const adapter = (await adaptersOf(deps)).find(item => item.id === request.providerId);
+    const availability = adapter?.definition.availability?.[request.usage.kind]?.state;
+    if (adapter && (!adapter.definition.supportedKinds.includes(request.usage.kind) ||
+        availability === 'detect-only' || availability === 'unsupported'))
+      throw gozarError('unsupported', 'This usage is not admitted for execution in this release');
+  }
+  checkExpose(request, request.usage.kind);
+}
+
 async function adaptersOf(deps) {
   if (deps.adapters) return deps.adapters;
   const runtime = await loadRuntime();
@@ -166,6 +183,7 @@ async function startFailure(directory,deps,request) {
 
 /** Opens one attached route and returns its RouteView. The calling process holds the lease from here on. */
 export async function openAttachedRoute(request, deps = {}) {
+  await preflightExpose(request, deps);
   try {
     const session = deps.sessionExecution;
     checkExpose(request, session ? 'session' : 'attached');
@@ -631,6 +649,7 @@ async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs
  * request; the legacy controller (startSession) enforces the lifetime.
  */
 export async function openSessionRoute(request, deps = {}) {
+  await preflightExpose(request, deps);
   try {
     checkExpose(request, 'session');
     if (!supportedPlatform(deps.platform ?? process.platform)) throw gozarError('unsupported', 'Gozar 0.2 does not support routes on this platform');
