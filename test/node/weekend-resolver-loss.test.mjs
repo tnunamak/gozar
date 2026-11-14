@@ -93,3 +93,68 @@ test('metadata release preserves a live applied secret reference and backend byt
  assert.equal(new TextDecoder().decode(records.get(stored.handle)),canary);
  records.get(stored.handle).fill(0);
 });
+
+test('internal JSON reservation identities release exactly and allow commit',async t=>{
+ const home=await scratch(t);let touches=0;
+ const backend=new Proxy({}, {get:()=>async()=>{touches++;throw new Error('unexpected backend');}});
+ const services=createEmbeddingServices({registryId:'identity-pair',secretBackend:backend});
+ const identities=[handle,{route:'synthetic-route'},['opaque',1,null],null,'opaque',42,true,{a:1,b:2}];
+ for(const [index,identity]of identities.entries()){
+  const scope={home,owner:'owner',providerId:'provider-'+index};
+  const c=await services.readConfiguration(scope);
+  await services.registerConfigurationUse({...scope,revision:c.revision,handle:identity});
+  const second={reservation:'second'};
+  await services.registerConfigurationUse({...scope,revision:c.revision,handle:second});
+  const draft=await services.beginConfigurationDraft({...scope,expectedConfigurationRevision:c.revision});
+  const commit=()=>services.commitConfigurationDraft({...scope,draftId:draft.draftId,expectedConfigurationRevision:draft.configuration.revision});
+  await assert.rejects(commit(),{code:'configuration_in_use'});
+  const before=await readFile(join(home,'embedding-state.json'),'utf8');
+  // Wrong scope and unrelated (including reordered) JSON never release a hold.
+  await services.releaseConfigurationUse({...scope,owner:'other',handle:identity});
+  await services.releaseConfigurationUse({...scope,providerId:'absent',handle:identity});
+  await createEmbeddingServices({registryId:'foreign',secretBackend:backend}).releaseConfigurationUse({...scope,handle:identity});
+  await services.releaseConfigurationUse({...scope,handle:{b:2,a:1}});
+  assert.equal(await readFile(join(home,'embedding-state.json'),'utf8'),before);
+  await services.releaseConfigurationUse({...scope,handle:JSON.parse(JSON.stringify(identity))});
+  await assert.rejects(commit(),{code:'configuration_in_use'},'second exact reservation remains');
+  await services.releaseConfigurationUse({...scope,handle:second});
+  const released=await readFile(join(home,'embedding-state.json'),'utf8');
+  await services.releaseConfigurationUse({...scope,handle:identity});
+  assert.equal(await readFile(join(home,'embedding-state.json'),'utf8'),released);
+  const applied=await commit();assert.notEqual(applied.revision,c.revision);
+ }
+ assert.equal(touches,0);
+});
+
+test('unsupported identities fail symmetrically before metadata mutation',async t=>{
+ const home=await scratch(t),services=createEmbeddingServices({registryId:'invalid-identities'});
+ const scope={home,owner:'owner',providerId:'provider'};
+ const cycle={};cycle.self=cycle;
+ let getterCalls=0;
+ const accessor=Object.defineProperty({},'identity',{enumerable:true,get(){getterCalls++;return 'bad';}});
+ const inherited=new(class extends Array{toJSON(){return 'changing';}})(1);
+ const invalid=[undefined,()=>{},Symbol('identity'),1n,NaN,Infinity,
+  {value:undefined},{value:()=>{}},{value:Symbol('identity')},[undefined],new Array(1),
+  cycle,new Date(),new Map(),accessor,inherited,{toJSON(){return 'changing';}},
+  {[Symbol('hidden')]:1},Object.assign([1],{extra:true})];
+ for(const identity of invalid){
+  await assert.rejects(services.registerConfigurationUse({...scope,revision:'absent',handle:identity}),{code:'invalid_input'});
+  await assert.rejects(services.releaseConfigurationUse({...scope,handle:identity}),{code:'invalid_input'});
+  await assert.rejects(readFile(join(home,'embedding-state.json')),{code:'ENOENT'});
+ }
+ const c=await services.readConfiguration(scope);
+ const before=await readFile(join(home,'embedding-state.json'),'utf8');
+ for(const identity of invalid){
+  await assert.rejects(services.registerConfigurationUse({...scope,revision:c.revision,handle:identity}),{code:'invalid_input'});
+  await assert.rejects(services.releaseConfigurationUse({...scope,handle:identity}),{code:'invalid_input'});
+  assert.equal(await readFile(join(home,'embedding-state.json'),'utf8'),before);
+ }
+ assert.equal(getterCalls,0,'validation does not invoke identity accessors');
+ const shared={part:'shared'},identity={left:shared,right:shared};
+ await services.registerConfigurationUse({...scope,revision:c.revision,handle:identity});
+ const draft=await services.beginConfigurationDraft({...scope,expectedConfigurationRevision:c.revision});
+ const commit=()=>services.commitConfigurationDraft({...scope,draftId:draft.draftId,expectedConfigurationRevision:draft.configuration.revision});
+ await assert.rejects(commit(),{code:'configuration_in_use'});
+ await services.releaseConfigurationUse({...scope,handle:identity});
+ await commit();
+});

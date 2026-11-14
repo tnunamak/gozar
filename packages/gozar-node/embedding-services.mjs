@@ -11,6 +11,31 @@ const fail=code=>{throw embeddingError(code);};
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const fresh=()=>randomUUID();
 const clone=value=>structuredClone(value);
+// Internal holds are JSON data, not public RouteHandles. Keep the existing
+// JSON.stringify representation (including key order); never normalize identity.
+function reservationKey(value){
+ const ancestors=new Set();
+ const check=item=>{
+  if(item===null||typeof item==='string'||typeof item==='boolean')return;
+  if(typeof item==='number'){if(!Number.isFinite(item))fail('invalid_input');return;}
+  if(typeof item!=='object'||ancestors.has(item))fail('invalid_input');
+  const array=Array.isArray(item),prototype=Object.getPrototypeOf(item);
+  if(array?prototype!==Array.prototype:prototype!==Object.prototype&&prototype!==null)fail('invalid_input');
+  ancestors.add(item);
+  const descriptors=Object.getOwnPropertyDescriptors(item),keys=Reflect.ownKeys(descriptors);
+  if(array&&keys.length!==item.length+1)fail('invalid_input');
+  for(const key of keys){
+   if(array&&key==='length')continue;
+   const descriptor=descriptors[key];
+   if(typeof key!=='string'||!descriptor.enumerable||!Object.hasOwn(descriptor,'value'))fail('invalid_input');
+   if(array&&(!/^(0|[1-9][0-9]*)$/.test(key)||Number(key)>=item.length))fail('invalid_input');
+   check(descriptor.value);
+  }
+  ancestors.delete(item);
+ };
+ try{check(value);const key=JSON.stringify(value);if(typeof key!=='string')fail('invalid_input');return key;}
+ catch{fail('invalid_input');}
+}
 export function createEmbeddingServices({registryId,secretBackend,hostCapabilities={},identity}={}){
  if(identity&&(!identity.instanceId||typeof identity.instanceId!=='string'||!identity.bootId||typeof identity.bootId!=='string'))fail('invalid_input');
  if(typeof registryId!=='string'||!registryId)fail('invalid_input');
@@ -119,11 +144,15 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
    return {discarded:!!d};
   }),
   discardSecret:r=>transaction(r.home,(s,h)=>remove(s,h,r.handle)),
-  registerConfigurationUse:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner);compare(c,r.revision);const key=JSON.stringify(r.handle);if(!c.uses.includes(key))c.uses.push(key);}),
+  registerConfigurationUse:async r=>{
+   if(!r||typeof r.home!=='string'||!r.home)fail('invalid_input');
+   const key=reservationKey(r.handle);
+   scope(r.home,r.providerId,r.owner);
+   return transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner);compare(c,r.revision);if(!c.uses.includes(key))c.uses.push(key);});
+  },
   releaseConfigurationUse:async r=>{
-   if(!r||typeof r.home!=='string'||!r.home||!r.handle||typeof r.handle!=='object'||
-      typeof r.handle.kind!=='string'||!r.handle.kind||typeof r.handle.id!=='string'||!r.handle.id||
-      !Number.isSafeInteger(r.handle.generation)||r.handle.generation<1)fail('invalid_input');
+   if(!r||typeof r.home!=='string'||!r.home)fail('invalid_input');
+   const key=reservationKey(r.handle);
    // Validate scope before storage; never call config() or a credential backend.
    scope(r.home,r.providerId,r.owner);
    try{
@@ -137,7 +166,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
      const scopeId=scope(home,r.providerId,r.owner),c=state.configs[scopeId];
      if(c===undefined)return;
      if(c?.scopeId!==scopeId||!Array.isArray(c.uses)||!c.uses.every(x=>typeof x==='string'))fail('secret_backend_unavailable');
-     const uses=c.uses.filter(x=>x!==JSON.stringify(r.handle));
+     const uses=c.uses.filter(x=>x!==key);
      if(uses.length===c.uses.length)return;
      c.uses=uses;await atomicWrite(join(home,'embedding-state.json'),state);
     },{waitSeconds:30});
