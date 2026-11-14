@@ -58,7 +58,20 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   return {scopeId:c.scopeId,revision:c.revision,values:clone(c.values),credentials};
  }
  const referenced=(state,handle)=>Object.values(state.configs).some(c=>Object.values(c.bindings).includes(handle)||Object.values(c.drafts).some(d=>Object.values(d.bindings).includes(handle)));
- async function remove(state,home,handle){const ref=state.secrets[handle];if(!ref||ref.registryId!==registryId)return {discarded:false};if(referenced(state,handle))fail('secret_in_use');await call(home,'delete',{scopeId:ref.scopeId,handle});delete state.secrets[handle];return {discarded:true};}
+ async function remove(state,home,handle){
+  const ref=state.secrets[handle];if(!ref||ref.registryId!==registryId)return {discarded:false};
+  if(referenced(state,handle))fail('secret_in_use');
+  const presence=async()=>{
+   const result=await call(home,'presence',{scopeId:ref.scopeId,handle});
+   if(result?.known!==true||typeof result.value!=='boolean')fail(result?.reason==='secret_backend_locked'?'secret_backend_locked':'secret_backend_unavailable');
+   return result.value;
+  };
+  if(await presence()){
+   await call(home,'delete',{scopeId:ref.scopeId,handle});
+   if(await presence())fail('secret_backend_unavailable');
+  }
+  delete state.secrets[handle];return {discarded:true};
+ }
  const api={hostCapabilities,
   readConfiguration:r=>transaction(r.home,async(s,h)=>redacted(h,select(await config(s,h,r.providerId,r.owner),r.draftId))),
   readConfigurationDraft:r=>transaction(r.home,async(s,h)=>{if(!r.draftId)fail('invalid_input');const c=await config(s,h,r.providerId,r.owner),d=select(c,r.draftId);return {draftId:r.draftId,scopeId:d.scopeId,baseRevision:d.baseRevision,configuration:await redacted(h,d)};},{readOnly:true}),
