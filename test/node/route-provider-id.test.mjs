@@ -12,13 +12,14 @@ import { redeemApproval } from '../../packages/gozar-node/attached-route.mjs';
 import { setRoutePreferences, getRoutePreferences } from '../../packages/gozar-node/route-preferences.mjs';
 import { projectExternal, projectSession, releasedView } from '../../packages/gozar-node/route-view.mjs';
 import { assertShape, codeOf, query, scratch } from './route-schema-check.mjs';
+import {createEmbeddingServices} from '../../packages/gozar-node/embedding-services.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const manifest = JSON.parse(readFileSync(`${root}adapters/manifest.json`, 'utf8'));
 const adapters = await loadAdapters();
 const ids = manifest.providers.map(provider => provider.id);
 const readContext = { now: () => 0, configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified', checkedAt: null }) };
-const catalog = (q, over = {}) => catalogRoutes(q, { adapters, platform: 'linux', readContext, ...over });
+const catalog = (q, over = {}) => catalogRoutes(q, { adapters, registryId:'provider-fixture',embeddingServices:createEmbeddingServices({registryId:'provider-fixture'}),platform: 'linux', readContext, ...over });
 const withHome = async (t, over = {}) => query({ home: await scratch(t), ...over });
 const wrapped = id => JSON.parse(readFileSync(`${root}adapters/${id}.definition.json`, 'utf8')).definition;
 
@@ -140,9 +141,9 @@ test('red: a token from a catalog without providerId redeems with the chosen pro
   const issueFor = async q => {
     const { candidates } = await catalog(q);
     const candidate = candidates.find(c => c.providerId === 'tailscale-funnel');
-    return { token: candidate.candidateToken, revision: candidate.disclosure.revision };
+    return { token: candidate.candidateToken, revision: candidate.disclosure.revision,digest:candidate.consentFactsDigest };
   };
-  const spend = (q, issued) => redeemConsentToken({ home, token: issued.token, binding: consentBinding(q, home, issued.revision), providerId: q.providerId });
+  const spend = (q, issued) => redeemConsentToken({ home, token: issued.token, binding: consentBinding(q, home, issued.revision,issued.digest), providerId: q.providerId });
 
   // The app flow: list every provider, the user picks one, the app sends its id back with the token.
   const listed = await issueFor(plain);
@@ -159,14 +160,14 @@ test('the plan digest the token carries is the same with and without providerId 
   const home = await scratch(t);
   const viaId = await withHome(t, { home, providerId: 'tailscale-funnel' });
   const { candidates: [candidate] } = await catalog(viaId);
-  const request = { ...viaId, approval: { candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision }, wait: 'allocated' };
+  const request = { ...viaId, approval: { kind:'route',consentFactsDigest:candidate.consentFactsDigest,candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision }, wait: 'allocated' };
   const { grant, plan } = await redeemApproval(request, { adapters, readContext, platform: 'linux' });
   assert.equal(grant.adapterId, 'tailscale-funnel');
   assert.equal(plan.digest, grant.planDigest);
 
   const plain = await withHome(t, { home });
   const issued = (await catalog(plain)).candidates.find(c => c.providerId === 'tailscale-funnel');
-  const again = await redeemApproval({ ...plain, approval: { candidateToken: issued.candidateToken, disclosureRevision: issued.disclosure.revision }, wait: 'allocated' }, { adapters, readContext, platform: 'linux' });
+  const again = await redeemApproval({ ...plain, approval: { kind:'route',consentFactsDigest:issued.consentFactsDigest,candidateToken: issued.candidateToken, disclosureRevision: issued.disclosure.revision }, wait: 'allocated' }, { adapters, readContext, platform: 'linux' });
   assert.equal(again.grant.planDigest, grant.planDigest);
 });
 
@@ -182,19 +183,20 @@ test('a durable catalog asks the engine for plan facts with the loaded adapters 
 
 test('RouteView.verification says where the last check ran from and what it passed', () => {
   const handle = { kind: 'external', id: 'https://example.test', generation: 0 };
-  const verified = projectExternal({ origin: 'https://example.test', verification: { status: 'verified', checkedAt: '2026-11-12T12:00:00.000Z' } }, { handle });
-  assert.deepEqual(verified.verification, { status: 'verified', checkedAt: '2026-11-12T12:00:00.000Z', vantage: 'this-device', checks: ['nonce', 'tls'], validUntil: {known: false, reason: 'not-observed'}, results: [{check:'nonce',status:'passed'},{check:'tls',status:'passed'}] });
+  const subject={origin:handle.id,target:'127.0.0.1:8799',instanceId:'fixture',bootId:'fixture-boot',handleGeneration:0},checkedAt='2026-11-12T12:00:00.000Z';
+  const verified = projectExternal({ origin:handle.id, verification: { status: 'verified', checkedAt,observedAt:checkedAt,subject } }, { handle });
+  assert.deepEqual(verified.verification, { status: 'verified', checkedAt,observedAt:checkedAt,subject, vantage: 'this-device', checks: ['nonce', 'tls'], validUntil: {known: false, reason: 'not-observed'}, results: [{check:'nonce',status:'passed'},{check:'tls',status:'passed'}] });
   const failed = projectExternal({ origin: 'https://example.test', verification: { status: 'failed', checkedAt: '2026-11-12T12:00:00.000Z' } }, { handle });
-  assert.deepEqual(failed.verification, { status: 'unverified', checkedAt: '2026-11-12T12:00:00.000Z', vantage: 'this-device', checks: [], validUntil: {known: false, reason: 'not-observed'}, results: [] });
+  assert.deepEqual(failed.verification, { status: 'unverified', checkedAt,observedAt:checkedAt,subject:null, vantage: 'this-device', checks: [], validUntil: {known: false, reason: 'not-observed'}, results: [] });
   const props = { ...adapters.find(a => a.id === 'tailscale-funnel').definition.capabilities };
   const sessionHandle = { handle: { kind: 'session', id: 's', generation: 0 }, properties: props, now: 1_000 };
-  const session = projectSession({ snapshot: { phase: 'published-ready', published: 'https://example.test', checkedAtMs: 1000 }, sseChecked: true }, sessionHandle);
+  const session = projectSession({proofSubject:subject, snapshot: { phase: 'published-ready', published: 'https://example.test', checkedAtMs: 1000 }, sseChecked: true }, sessionHandle);
   assert.deepEqual(session.verification.checks, ['tls', 'nonce', 'sse']);
   assert.equal(session.verification.vantage, 'this-device');
   // The controller made no stream check, so the view claims none; an http origin claims no TLS.
   assert.deepEqual(projectSession({ snapshot: { phase: 'published-ready', published: 'https://example.test' } }, sessionHandle).verification.checks, ['tls', 'nonce']);
   assert.deepEqual(projectSession({ snapshot: { phase: 'published-ready', published: 'http://example.test' }, sseChecked: true }, sessionHandle).verification.checks, ['nonce', 'sse']);
   const starting = projectSession({ snapshot: { phase: 'starting' } }, { handle: { kind: 'session', id: 's', generation: 0 }, properties: props });
-  assert.deepEqual(starting.verification, { status: 'unverified', checkedAt: null, vantage: 'none', checks: [], validUntil: {known: false, reason: 'not-observed'}, results: [] });
+  assert.deepEqual(starting.verification, { status: 'unverified', checkedAt: null,subject:null,observedAt:null, vantage: 'none', checks: [], validUntil: {known: false, reason: 'not-observed'}, results: [] });
   for (const view of [verified, failed, session, starting, releasedView(null, handle)]) assertShape('RouteView', view);
 });

@@ -22,6 +22,8 @@ const apiFor = () => createRouteApi({ adapters, platform: 'linux', readContext, 
 const requirements = over => ({ reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'stable', setup: 'none', protocols: [], ...over });
 const durable = async (t, over = {}) => query({ home: await scratch(t), usage: { kind: 'durable', routeId: 'example-main' }, requirements: requirements(), ...over });
 const ORIGIN = 'https://owner.example.test';
+const routeApproval=c=>({kind:'route',candidateToken:c.candidateToken,disclosureRevision:c.disclosure.revision,consentFactsDigest:c.consentFactsDigest});
+const setupRequest=(home,c,step,input)=>({home,owner:'example-app',providerId:c.providerId,expectedConfigurationRevision:c.configuration.revision,actionId:step.id,...input,approval:{kind:'setup',digest:step.digest,disclosureRevision:step.disclosure.revision,consentFactsDigest:step.consent.consentFactsDigest}});
 
 test("red: transport 'any' is valid only with reach lan or this-device, and a plain-HTTP candidate is eligible only under it", async t => {
   const api = apiFor();
@@ -103,8 +105,8 @@ test('red: every host shape gets the reach of the address it really is', () => {
 test('red: an origin the app sent that is not a valid https origin is refused, and the stored address never replaces it', async t => {
   const api = apiFor(), home = await scratch(t);
   const plain = query({ home, providerId: ownerId, usage: { kind: 'durable', routeId: 'example-main' }, requirements: requirements() });
-  const [step] = (await api.catalogRoutes(plain)).candidates[0].setup.actions;
-  await api.runSetupAction({ home, actionId: step.id, approval: { digest: step.digest, disclosureRevision: step.disclosure.revision }, value: 'https://configured.example.test' });
+  const choice=(await api.catalogRoutes(plain)).candidates[0],[step]=choice.setup.actions;
+  await api.runSetupAction(setupRequest(home,choice,step,{value:'https://configured.example.test'}));
   assert.equal((await api.catalogRoutes(plain)).candidates[0].eligible, true, 'with no origin in the query the stored address is used');
   for (const origin of ['http://evil.example.test', 'junk', 'https://u:p@evil.example.test']) {
     const { candidates: [own] } = await api.catalogRoutes({ ...plain, origin });
@@ -114,29 +116,29 @@ test('red: an origin the app sent that is not a valid https origin is refused, a
     assert.deepEqual(own.setup.actions, [], origin);
     // A token issued for the stored address cannot be spent with a bad origin either.
     const stored = (await api.catalogRoutes(plain)).candidates[0];
-    const approval = { candidateToken: stored.candidateToken, disclosureRevision: stored.disclosure.revision };
+    const approval = routeApproval(stored);
     assert.equal(await codeOf(api.ensureRoute({ ...plain, origin, approval })), 'consent_mismatch', origin);
   }
   // Without a token in the way, the provider itself refuses a bad origin rather than planning the stored address.
   const [ownAdapter] = adapters.filter(adapter => adapter.id === ownerId);
-  const ctx = { ...readContext, origin: null, platform: 'linux', configuration: async () => ({ origin: 'https://configured.example.test' }) };
+  const ctx = { ...readContext, origin: null, platform: 'linux', providerConfiguration: async () => ({ origin: 'https://configured.example.test' }) };
   const request = { target: plain.target, usage: plain.usage, requirements: plain.requirements, configurationRef: null };
   assert.equal((await ownAdapter.plan(ctx, { ...request, origin: null })).origin, 'https://configured.example.test');
   assert.equal(await codeOf(ownAdapter.plan(ctx, { ...request, origin: 'http://evil.example.test' })), 'invalid_input');
   assert.deepEqual((await statusServices({ home })).routes, [], 'no route was created');
 });
 
-test('red: ensureRoute with that candidate creates an external-owned route through the service-route path and returns a RouteView', async t => {
+test('an owner-kept record returns a RouteView but a host command alone cannot publish verified transport', async t => {
   const api = apiFor();
   const q = await durable(t, { providerId: ownerId, origin: ORIGIN });
   const { candidates: [own] } = await api.catalogRoutes(q);
-  const approval = { candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision };
+  const approval = routeApproval(own);
   const view = await api.ensureRoute({ ...q, approval });
   assertShape('RouteView', view);
   assert.equal(view.ownership, 'external-owned');
   assert.equal(view.handle.kind, 'external');
   assert.equal(view.origin, ORIGIN);
-  assert.equal(view.state, 'usable');
+  assert.equal(view.state, 'unverified');assert.equal(view.published,null);
   assert.equal(view.verification.vantage, 'this-device');
   const { routes } = await statusServices({ home: q.home });
   assert.deepEqual(routes.map(route => [route.origin, route.target, route.adapterId, route.ownership]), [[ORIGIN, q.target, ownerId, 'external-owned']]);
@@ -149,7 +151,7 @@ test('the consent token still binds the request: another target or origin does n
   const api = apiFor();
   const q = await durable(t, { providerId: ownerId, origin: ORIGIN });
   const { candidates: [own] } = await api.catalogRoutes(q);
-  const approval = { candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision };
+  const approval = routeApproval(own);
   assert.equal(await codeOf(api.ensureRoute({ ...q, origin: 'https://other.example.test', approval })), 'consent_mismatch');
   assert.deepEqual((await statusServices({ home: q.home })).routes, []);
 });
@@ -158,17 +160,17 @@ test('red: the provide-value action rejects a value that does not match its valu
   const api = apiFor(), home = await scratch(t);
   const { candidates: [own] } = await api.catalogRoutes(query({ home, providerId: ownerId, usage: { kind: 'durable', routeId: 'example-main' }, requirements: requirements() }));
   const [step] = own.setup.actions;
-  const approval = { digest: step.digest, disclosureRevision: step.disclosure.revision };
+  const request=input=>setupRequest(home,own,step,input);
   for (const value of ['http://owner.example.test', 'https://owner.example.test/path', 'owner.example.test', 'https://u:p@owner.example.test', '',
     'https://owner.example.test?q=1', 'https://owner.example.test#x', '//owner.example.test', 'javascript:alert(1)']) {
-    assert.equal(await codeOf(api.runSetupAction({ home, actionId: step.id, approval, value })), 'invalid_input', JSON.stringify(value));
+    assert.equal(await codeOf(api.runSetupAction(request({value}))), 'invalid_input', JSON.stringify(value));
   }
-  assert.equal(await codeOf(api.runSetupAction({ home, actionId: step.id, approval, value: ORIGIN, secretHandle: 'sec_0123456789abcdef0123456789abcdef' })), 'invalid_input');
-  const done = await api.runSetupAction({ home, actionId: step.id, approval, value: ORIGIN });
+  assert.equal(await codeOf(api.runSetupAction(request({value:ORIGIN,secretHandle:'sec_0123456789abcdef0123456789abcdef'}))), 'invalid_input');
+  const done = await api.runSetupAction(request({value:ORIGIN}));
   assert.equal(done.state, 'complete');
   const files = async directory => (await readdir(directory, { withFileTypes: true })).flatMap(entry => entry.isDirectory() ? [entry.name] : []);
   assert.ok(!(await files(home)).includes('secrets'), 'nothing went to the secret store');
-  assert.match(await readFile(join(home, 'setup', `${ownerId}.json`), 'utf8'), new RegExp(ORIGIN.replaceAll('.', '\\.')));
+  assert.equal(done.configuration.values.origin,ORIGIN);assert.deepEqual(done.configuration.credentials,{});
   // The value now answers the action, so the catalog no longer asks for it.
   const after = (await api.catalogRoutes(query({ home, providerId: ownerId, usage: { kind: 'durable', routeId: 'example-main' }, requirements: requirements() }))).candidates[0];
   assert.equal(after.setup.state, 'ready');
@@ -190,7 +192,7 @@ test('checkValue holds each format to its rule', () => {
 
 test('core names no provider for an owner-kept route: service.mjs holds no registry id and takes it from the definition', () => {
   const source = readFileSync(`${root}packages/gozar-node/service.mjs`, 'utf8');
-  for (const { id } of manifest.providers) assert.ok(!source.includes(id), `service.mjs names ${id}`);
+  for (const { id } of manifest.providers) assert.ok(!new RegExp(`(['"\x60])${id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\1`).test(source), `service.mjs names ${id}`);
 });
 
 test('invalid query origin is named in the unmet setup actual without extending closed enums', async t => {

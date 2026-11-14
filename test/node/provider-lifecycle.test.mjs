@@ -26,7 +26,7 @@ test('a new fixture provider loads through the public factory and crosses setup,
   assert.match(renderScreen(catalog),/Input requirement: Fixture credential/);
   const route=await api.expose({...q,wait:'verified',approval:{kind:'route',candidateToken:selected.candidateToken,disclosureRevision:selected.disclosure.revision,consentFactsDigest:selected.consentFactsDigest}});
   t.after(async()=>{await api.closeRoute({home,handle:route.handle,mode:'remove'}).catch(()=>{});});
-  assertShape('RouteView',route); assert.equal(route.routeState,'verified');
+  assertShape('RouteView',route); assert.equal(route.routeState,'verified');assert.equal(route.handle.generation,1);
   const stopped=await api.closeRoute({home,handle:route.handle,mode:'remove'});
   assert.equal(stopped.cleanup.state,'confirmed');assert.equal(stopped.published,null);
   const events=(await readFile(join(root,'providers','extension-fixture','events.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line).event);

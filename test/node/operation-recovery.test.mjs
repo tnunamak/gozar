@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {readFile} from 'node:fs/promises';
+import {readFile,readdir,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createGozar} from '@tnunamak/gozar';
@@ -24,4 +24,19 @@ test('host crash before saving its handle recovers by operation enumeration and 
  const events=(await readFile(join(registry.root,'providers','crash-recovery','events.jsonl'),'utf8')).trim().split('\n').map(v=>JSON.parse(v).event);
  assert.equal(events.filter(v=>v==='start').length,1);assert.ok(events.includes('cleanup'));
  await assert.rejects(api.listRoutes({home:join(home,'missing')}));
+});
+test('concurrent operation replay allocates once, conflicts before effects and stays terminal after close',async t=>{
+ const home=await scratch(t),registry=await fakeRegistry({id:'operation-replay',dir:join(home,'registry'),kinds:['attached'],reach:'this-device',transport:'tcp',proofProtocol:'echo'});t.after(registry.cleanup);
+ const api=createGozar({manifest:registry.manifest,root:registry.root}),q=query({home,owner:'operation-host',operationId:'journalled-intent',usage:{kind:'attached'},target:'127.0.0.1:1',requirements:{reach:'this-device',transport:'tcp',payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}});
+ const choice=(await api.catalogRoutes(q)).candidates[0],request={...q,wait:'verified',approval:{kind:'route',candidateToken:choice.candidateToken,disclosureRevision:choice.disclosure.revision,consentFactsDigest:choice.consentFactsDigest}};
+ let route;t.after(async()=>{if(route)await api.closeRoute({home,handle:route.handle,mode:'remove'}).catch(()=>{});});
+ const [first,second]=await Promise.all([api.expose(request),api.expose(request)]);route=first;
+ assert.deepEqual(first.handle,second.handle);assert.equal(first.handle.generation,1);
+ await assert.rejects(api.expose({...request,target:'127.0.0.1:2'}),{code:'operation_conflict'});
+ const listed=await api.listRoutes({home,owner:q.owner});assert.equal(listed.routes.length,1);assert.equal(listed.routes[0].published,null);assert.equal(listed.routes[0].operationId,q.operationId);
+ assert.equal((await api.closeRoute({home,handle:first.handle,mode:'remove'})).cleanup.state,'confirmed');
+ assert.equal((await api.expose(request)).state,'released');
+ const events=await readFile(join(registry.root,'providers','operation-replay','events.jsonl'),'utf8');assert.equal(events.split('"start"').length-1,1);
+ const files=await readdir(join(home,'operations'));const record=files.find(name=>name.endsWith('.json'));await writeFile(join(home,'operations',record),'{unreadable');
+ await assert.rejects(api.listRoutes({home,owner:q.owner}),error=>typeof error.code==='string');
 });

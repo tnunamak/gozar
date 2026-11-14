@@ -336,7 +336,7 @@
           "type": "string"
         },
         "consent": {
-          "$ref": "#/$defs/ConsentSnapshot"
+          "$ref": "#/$defs/SetupConsentSnapshot"
         },
         "review": {
           "type": "object",
@@ -798,7 +798,7 @@
           "type": "string"
         },
         "consent": {
-          "$ref": "#/$defs/ConsentSnapshot"
+          "$ref": "#/$defs/RouteConsentSnapshot"
         },
         "review": {
           "type": "object",
@@ -1215,7 +1215,9 @@
             "vantage",
             "checks",
             "validUntil",
-            "results"
+            "results",
+            "observedAt",
+            "subject"
           ],
           "properties": {
             "status": {
@@ -1357,7 +1359,8 @@
         "cleanup": {
           "type": "object",
           "required": [
-            "state"
+            "state",
+            "nextAction"
           ],
           "properties": {
             "state": {
@@ -3076,38 +3079,14 @@
       ]
     },
     "ConsentSnapshot": {
-      "type": "object",
-      "properties": {
-        "scope": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/SetupConsentScope"
-            },
-            {
-              "$ref": "#/$defs/RouteConsentScope"
-            }
-          ]
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SetupConsentSnapshot"
         },
-        "consentFactsDigest": {
-          "type": "string"
-        },
-        "facts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Fact"
-          }
-        },
-        "disclosures": {
-          "$ref": "#/$defs/ConsentDisclosures"
+        {
+          "$ref": "#/$defs/RouteConsentSnapshot"
         }
-      },
-      "required": [
-        "scope",
-        "consentFactsDigest",
-        "facts",
-        "disclosures"
-      ],
-      "additionalProperties": false
+      ]
     },
     "ProofSubject": {
       "type": "object",
@@ -3325,6 +3304,236 @@
           "additionalProperties": false
         }
       },
+      "additionalProperties": false
+    },
+    "SetupConsentSnapshot": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/SetupConsentScope"
+        },
+        "consentFactsDigest": {
+          "type": "string"
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fact"
+          }
+        },
+        "disclosures": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/ConsentAction"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "scope",
+        "consentFactsDigest",
+        "facts",
+        "disclosures"
+      ],
+      "additionalProperties": false
+    },
+    "RouteConsentSnapshot": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/RouteConsentScope"
+        },
+        "consentFactsDigest": {
+          "type": "string"
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fact"
+          }
+        },
+        "disclosures": {
+          "type": "object",
+          "properties": {
+            "reach": {
+              "$ref": "#/$defs/Reach"
+            },
+            "transport": {
+              "type": "string",
+              "enum": [
+                "http",
+                "https",
+                "tcp",
+                "tls"
+              ]
+            },
+            "traffic": {
+              "type": "object",
+              "required": [
+                "tlsTermination",
+                "providerCanReadPayload",
+                "readers",
+                "metadataVisibleTo",
+                "evidenceRef"
+              ],
+              "properties": {
+                "tlsTermination": {
+                  "type": "string",
+                  "enum": [
+                    "endpoint",
+                    "provider",
+                    "unknown"
+                  ]
+                },
+                "providerCanReadPayload": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "readers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "metadataVisibleTo": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "evidenceRef": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "address": {
+              "type": "object",
+              "required": [
+                "stability",
+                "scope",
+                "conditions"
+              ],
+              "properties": {
+                "stability": {
+                  "type": "string",
+                  "enum": [
+                    "stable",
+                    "ephemeral",
+                    "unknown"
+                  ]
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "conditions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "ports": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "cost": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "free",
+                    "paid",
+                    "unknown"
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            "lifetimes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "session",
+                  "attached",
+                  "durable"
+                ]
+              }
+            },
+            "supervision": {
+              "type": "string",
+              "enum": [
+                "controller",
+                "provider-persistent",
+                "host-supervised"
+              ]
+            },
+            "protocols": {
+              "type": "object",
+              "required": [
+                "sse",
+                "streamableHttp",
+                "oauthDcr"
+              ],
+              "properties": {
+                "sse": {
+                  "type": "boolean"
+                },
+                "streamableHttp": {
+                  "type": "boolean"
+                },
+                "oauthDcr": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "disclosure": {
+              "$ref": "#/$defs/Disclosure"
+            }
+          },
+          "required": [
+            "reach",
+            "transport",
+            "traffic",
+            "address",
+            "cost",
+            "lifetimes",
+            "supervision",
+            "protocols",
+            "disclosure"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "scope",
+        "consentFactsDigest",
+        "facts",
+        "disclosures"
+      ],
       "additionalProperties": false
     }
   }

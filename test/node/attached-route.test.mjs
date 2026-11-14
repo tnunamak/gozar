@@ -20,10 +20,13 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch { return
 /** A controller module that holds a stub adapter whose create/remove leave marks a test can read from outside the process. */
 async function controllerFixture(t) {
   const dir = await scratch(t), marks = join(dir, 'marks.log'), module = join(dir, 'controller.mjs');
-  await writeFile(module, `import { appendFileSync } from 'node:fs';
+  await writeFile(module, `import { appendFileSync,readFileSync,writeFileSync } from 'node:fs';
+import {randomUUID} from 'node:crypto';
 import { stubAdapter } from ${JSON.stringify(helperUrl)};
 const mark = event => appendFileSync(${JSON.stringify(marks)}, event + '\\n');
 export default async function () {
+  const file=process.argv[3]+'/bootstrap.json',bootstrap=JSON.parse(readFileSync(file,'utf8'));
+  writeFileSync(file,JSON.stringify({...bootstrap,identity:{instanceId:'fixture-instance',bootId:randomUUID()}}));
   const adapter = stubAdapter('stub-a');
   const { create, remove } = adapter;
   adapter.create = async (...args) => { mark('created'); return create(...args); };

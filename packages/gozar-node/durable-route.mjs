@@ -776,6 +776,7 @@ export async function releaseRoute({ routeId, mode = 'remove', home = defaultHom
     const record = await load(dir, routeId);
     // A handle names one generation of a route; a replaced route is not ended by a stale handle.
     if (expectedGeneration !== undefined && record && record.generation !== expectedGeneration) throw refuse('route_conflict', 'The route was replaced; this handle is stale');
+    if(expectedGeneration!==undefined&&!record&&!await stopped(dir,routeId))throw refuse('route_not_found','No retained ownership record exists for this route handle');
     if (mode === 'hand-back') return handBack(dir, record, routeId);
     if (!record) return { schemaVersion: 1, routeId, removed: false, providerRemoved: false, cleanupDebt: null };
     if (record.state === 'handing-back') throw refuse('handing_back', 'This route is being handed back; confirm or cancel the hand-back first');

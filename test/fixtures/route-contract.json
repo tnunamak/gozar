@@ -2770,14 +2770,23 @@
             "known": false,
             "reason": "not-observed"
           },
-          "results": []
+          "results": [],
+          "observedAt": "2026-11-12T12:00:00.000Z",
+          "subject": {
+            "origin": "https://example.invalid",
+            "target": "127.0.0.1:8799",
+            "instanceId": "fixture-instance",
+            "bootId": "fixture-boot",
+            "handleGeneration": 4
+          }
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
           "idleTimeoutMs": null
         },
         "cleanup": {
-          "state": "none"
+          "state": "none",
+          "nextAction": null
         },
         "routeState": "verified",
         "expiresAt": {
@@ -2887,14 +2896,17 @@
             "known": false,
             "reason": "not-observed"
           },
-          "results": []
+          "results": [],
+          "observedAt": null,
+          "subject": null
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
           "idleTimeoutMs": null
         },
         "cleanup": {
-          "state": "none"
+          "state": "none",
+          "nextAction": null
         },
         "routeState": "detected",
         "expiresAt": {
@@ -3012,14 +3024,23 @@
             "known": false,
             "reason": "not-observed"
           },
-          "results": []
+          "results": [],
+          "observedAt": "2026-11-12T12:00:00.000Z",
+          "subject": {
+            "origin": "https://example.invalid",
+            "target": "127.0.0.1:8799",
+            "instanceId": "fixture-instance",
+            "bootId": "fixture-boot",
+            "handleGeneration": 4
+          }
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
           "idleTimeoutMs": null
         },
         "cleanup": {
-          "state": "none"
+          "state": "none",
+          "nextAction": null
         },
         "routeState": "verified",
         "expiresAt": {
@@ -3137,7 +3158,9 @@
             "known": false,
             "reason": "not-observed"
           },
-          "results": []
+          "results": [],
+          "observedAt": "2026-11-12T12:00:00.000Z",
+          "subject": null
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
@@ -3145,7 +3168,8 @@
         },
         "cleanup": {
           "state": "unconfirmed",
-          "message": "Provider rule not removed."
+          "message": "Provider rule not removed.",
+          "nextAction": null
         },
         "routeState": "verified",
         "expiresAt": {
@@ -3423,14 +3447,23 @@
               "known": false,
               "reason": "not-observed"
             },
-            "results": []
+            "results": [],
+            "observedAt": "2026-11-12T12:00:00.000Z",
+            "subject": {
+              "origin": "https://example.invalid",
+              "target": "127.0.0.1:8799",
+              "instanceId": "fixture-instance",
+              "bootId": "fixture-boot",
+              "handleGeneration": 4
+            }
           },
           "limits": {
             "recommendedPollIntervalMs": 60000,
             "idleTimeoutMs": null
           },
           "cleanup": {
-            "state": "none"
+            "state": "none",
+            "nextAction": null
           },
           "routeState": "verified",
           "expiresAt": {
@@ -3553,14 +3586,23 @@
               "known": false,
               "reason": "not-observed"
             },
-            "results": []
+            "results": [],
+            "observedAt": "2026-11-12T12:00:00.000Z",
+            "subject": {
+              "origin": "https://example.invalid",
+              "target": "127.0.0.1:8799",
+              "instanceId": "fixture-instance",
+              "bootId": "fixture-boot",
+              "handleGeneration": 4
+            }
           },
           "limits": {
             "recommendedPollIntervalMs": 60000,
             "idleTimeoutMs": null
           },
           "cleanup": {
-            "state": "none"
+            "state": "none",
+            "nextAction": null
           },
           "routeState": "verified",
           "expiresAt": {
@@ -3683,14 +3725,23 @@
               "known": false,
               "reason": "not-observed"
             },
-            "results": []
+            "results": [],
+            "observedAt": "2026-11-12T12:00:00.000Z",
+            "subject": {
+              "origin": "https://example.invalid",
+              "target": "127.0.0.1:8799",
+              "instanceId": "fixture-instance",
+              "bootId": "fixture-boot",
+              "handleGeneration": 4
+            }
           },
           "limits": {
             "recommendedPollIntervalMs": 60000,
             "idleTimeoutMs": null
           },
           "cleanup": {
-            "state": "none"
+            "state": "none",
+            "nextAction": null
           },
           "routeState": "verified",
           "expiresAt": {
@@ -4711,14 +4762,23 @@
             "known": false,
             "reason": "not-observed"
           },
-          "results": []
+          "results": [],
+          "observedAt": "2026-11-12T12:00:00.000Z",
+          "subject": {
+            "origin": "https://example.invalid",
+            "target": "127.0.0.1:8799",
+            "instanceId": "fixture-instance",
+            "bootId": "fixture-boot",
+            "handleGeneration": 4
+          }
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
           "idleTimeoutMs": null
         },
         "cleanup": {
-          "state": "none"
+          "state": "none",
+          "nextAction": null
         },
         "routeState": "verified",
         "expiresAt": {
@@ -4836,14 +4896,23 @@
             "known": false,
             "reason": "not-observed"
           },
-          "results": []
+          "results": [],
+          "observedAt": "2026-11-12T12:00:00.000Z",
+          "subject": {
+            "origin": "https://example.invalid",
+            "target": "127.0.0.1:8799",
+            "instanceId": "fixture-instance",
+            "bootId": "fixture-boot",
+            "handleGeneration": 4
+          }
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
           "idleTimeoutMs": null
         },
         "cleanup": {
-          "state": "none"
+          "state": "none",
+          "nextAction": null
         },
         "routeState": "verified",
         "expiresAt": {

@@ -327,7 +327,7 @@ export async function runAttachedController(directory, runtime = {}) {
   const read = bindConfiguration(await readContextFor(runtime, bootstrap.home, bootstrap.platform), adapter.id);
   const now = runtime.now ?? Date.now;
   const expiryMs = bootstrap.leaseExpiryMs ?? LEASE_EXPIRY_MS;
-  const handle = { kind: 'attached', id: bootstrap.id, generation: 0 };
+  const handle = { kind: 'attached', id: bootstrap.id, generation: 1 };
   const lease = { target: bootstrap.request.target, state: 'creating', origin: null, properties: adapter.definition.capabilities, ingress: null, identity:bootstrap.identity??null,
     limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
   let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null, proofSession = null,initialSettled=false;

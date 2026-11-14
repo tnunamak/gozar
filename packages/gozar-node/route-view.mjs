@@ -1,9 +1,10 @@
 // Consumer-side route views: errors an app may see, projections of every route kind to RouteView,
 // and routeStatus / closeRoute, which dispatch on handle.kind. Apps never learn which provider
-// answered; provider diagnostics stay on error.cause.
+// answered; the public factory strips raw provider diagnostics from thrown errors.
 import { join } from 'node:path';
 import {readRecord} from './service-state.mjs';
 import { enrichRoute, cleanupForSession } from './embedding-state.mjs';
+import {cleanupRecovery} from './embedding-projections.mjs';
 
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 export { gozarError, normalizeError };
@@ -224,7 +225,7 @@ export async function closeRoute(request, deps = {}) {
         catch { /* Exact retained ownership is checked again by release; fresh proof is not cleanup authority. */ }
         const reply = await (deps.durable ?? defaults.durable).close(request, { adapters: deps.adapters });
         const debt = reply?.cleanupDebt ?? null;
-        return { ...releasedView(before, handle), state: debt ? 'uncertain' : 'released', cleanup: debt ? { state: 'unconfirmed', message: debtMessage(debt) } : { state: 'confirmed' }, routeState: debt ? 'cleanup-unconfirmed' : 'inactive' };
+        return { ...releasedView(before, handle), state: debt ? 'uncertain' : 'released', cleanup: cleanupRecovery(debt ? { state: 'unconfirmed', message: debtMessage(debt) } : { state: 'confirmed' },handle), routeState: debt ? 'cleanup-unconfirmed' : 'inactive' };
       }
       case 'session': {
         let before;try{before=await routeStatus({home:request.home,handle},deps);}catch{}
