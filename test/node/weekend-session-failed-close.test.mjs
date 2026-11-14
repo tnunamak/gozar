@@ -1,18 +1,52 @@
 // Bounded recovery regressions; not the full public failed-start fault matrix.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, mkdir, writeFile, rm} from 'node:fs/promises';
+import {mkdtemp, mkdir, writeFile, rm, lstat, statfs} from 'node:fs/promises';
+import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {createHash} from 'node:crypto';
-import {closeAttachedRoute} from '../../packages/gozar-node/attached-route.mjs';
-import {startingRoute, listRecordedRoutes} from '../../packages/gozar-node/route-operations.mjs';
-import {recordController, stopController} from '../../packages/gozar-node/controller-start.mjs';
+const repositoryRoot = new URL('../../', import.meta.url);
+const {closeAttachedRoute} = await import(new URL('packages/gozar-node/attached-route.mjs', repositoryRoot));
+const {startingRoute, listRecordedRoutes} = await import(new URL('packages/gozar-node/route-operations.mjs', repositoryRoot));
+const {recordController, stopController} = await import(new URL('packages/gozar-node/controller-start.mjs', repositoryRoot));
+
+async function checkedDirectory(path, {create = false, privateMode = false} = {}) {
+  if (create) await mkdir(path, {mode:0o700}).catch(error => {
+    if (error.code !== 'EEXIST') throw error;
+  });
+  const info = await lstat(path);
+  assert.ok(info.isDirectory() && !info.isSymbolicLink(), 'fixture scratch must be a real directory');
+  assert.equal(info.uid, process.getuid(), 'fixture scratch must belong to the invoking user');
+  assert.equal(info.mode & 0o022, 0, 'fixture scratch must not be group/other writable');
+  if (privateMode) assert.equal(info.mode & 0o777, 0o700, 'fixture scratch must be mode 0700');
+}
+
+async function fixtureHome() {
+  assert.equal(typeof process.getuid, 'function', 'fixture requires POSIX ownership checks');
+  const userHome = homedir();
+  await checkedDirectory(userHome);
+  const scratch = join(userHome, '.tmp');
+  await checkedDirectory(scratch, {create:true});
+  const filesystem = await statfs(scratch);
+  assert.ok(![0x01021994, 0x858458f6].includes(Number(filesystem.type) >>> 0),
+    'fixture scratch must be disk-backed, not tmpfs/ramfs');
+  const parent = join(scratch, 'gozar-weekend-failed-close');
+  await checkedDirectory(parent, {create:true, privateMode:true});
+  const home = await mkdtemp(join(parent, 'home-'));
+  try {
+    await checkedDirectory(home, {privateMode:true});
+    return home;
+  } catch (error) {
+    await rm(home, {recursive:true, force:true});
+    throw error;
+  }
+}
 
 for (const receipt of [null, {generation: 1, resourceKey: 'synthetic-owned'}]) {
   test('repeated close retains failed-start debt without transient runtime: ' + Boolean(receipt), async () => {
-    const home = await mkdtemp(join(process.cwd(), '.failed-close-'));
+    const home = await fixtureHome();
     const handle = {kind:'session', id:'port-43219:synthetic-failure', generation:1};
     const directory = join(home, 'port-43219');
     try {
