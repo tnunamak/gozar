@@ -2,7 +2,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {routeConsentReview} from '../../packages/gozar-node/consent-facts.mjs';
+const repositoryRoot = new URL('../../', import.meta.url);
+const {routeConsentReview,consentSnapshot,setupConsentReview} =
+ await import(new URL('packages/gozar-node/consent-facts.mjs',repositoryRoot));
 function offer(){
  return {registryId:randomUUID(),providerId:randomUUID(),usage:{kind:'session',lifetimeMs:60000},
   configuration:{scopeId:randomUUID(),revision:randomUUID()},target:'http://127.0.0.1:32100',
@@ -48,4 +50,44 @@ test('canonical boundary: scoped route changes bind the digest',()=>{
   const changed=structuredClone(base);mutate(changed);
   assert.notEqual(digest(changed),digest(base));
  }
+});
+
+test('unit route price rows are visible declared facts with zero and unknown preserved',()=>{
+ const data=offer();data.properties.cost.amount=0;data.properties.cost.currency=null;
+ delete data.properties.cost.period;
+ const review=routeConsentReview(data),snapshot=consentSnapshot(review);
+ const prices=snapshot.facts.filter(row=>row.id.startsWith('gozar.route-cost.'));
+ assert.deepEqual(prices,[
+  {id:'gozar.route-cost.amount',label:'Declared amount',group:'cost',source:'declared-route-properties',
+   affectsConsent:true,asOf:null,known:true,value:0,reason:null},
+  {id:'gozar.route-cost.currency',label:'Declared currency',group:'cost',source:'declared-route-properties',
+   affectsConsent:true,asOf:null,known:false,value:null,reason:'cost-not-disclosed'},
+  {id:'gozar.route-cost.period',label:'Declared billing period',group:'cost',source:'declared-route-properties',
+   affectsConsent:true,asOf:null,known:false,value:null,reason:'cost-not-disclosed'},
+ ]);
+ assert.equal(snapshot.consentFactsDigest,review.consentFactsDigest);
+ assert.deepEqual(snapshot.disclosures.cost,{kind:'paid'});
+ assert.deepEqual(snapshot.facts.filter(row=>!row.id.startsWith('gozar.route-cost.')),
+  data.facts.map(row=>({...row,reason:null})).sort((a,b)=>a.id.localeCompare(b.id)));
+ assert.equal(review.canonicalInput.version,'consent-v1');
+});
+test('unit reserved route cost IDs refuse collisions even for irrelevant provider facts',()=>{
+ for(const field of ['amount','currency','period']){
+  const data=offer();data.facts.push({...data.facts[0],id:'gozar.route-cost.'+field,affectsConsent:false});
+  assert.throws(()=>routeConsentReview(data),{code:'invalid_input'});
+ }
+});
+test('unit declared pricing rejects malformed values without coercion',()=>{
+ for(const [field,value] of [['amount',NaN],['amount',Infinity],['amount',{}],
+  ['amount','1'],['amount',false],['currency',42],['currency',{}],['period',false]]){
+  const data=offer();data.properties.cost[field]=value;
+  assert.throws(()=>routeConsentReview(data),{code:'invalid_input'});
+ }
+});
+test('unit setup review gains no intrinsic route pricing facts',()=>{
+ const data=offer();
+ const review=setupConsentReview({registryId:data.registryId,providerId:data.providerId,
+  configuration:data.configuration,action:{id:'fixture',digest:'fixture',kind:'instructions',
+   label:'Fixture',disclosure:data.disclosure},facts:data.facts});
+ assert.equal(consentSnapshot(review).facts.some(row=>row.id.startsWith('gozar.route-cost.')),false);
 });

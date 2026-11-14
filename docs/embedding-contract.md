@@ -117,3 +117,24 @@ rewrites the state file. Every setup result also includes `configuration` for
 the actual applied or draft scope; its revision and scope ID agree with the
 result's `configurationRevision` and `scopeId`. Use its offered actions for the
 next step, or call the draft reader after restart. Do not reconstruct digests.
+
+## Declared route pricing in consent
+
+Route consent reserves `gozar.route-cost.amount`, `gozar.route-cost.currency`
+and `gozar.route-cost.period`. Supplied facts colliding with these IDs refuse
+with `invalid_input`, including non-consent rows. The shared encoder adds
+visible affectsConsent facts labeled Declared amount, Declared currency and
+Declared billing period, group cost, source declared-route-properties.
+Their consentSnapshot shows the same rows covered by its digest; hosts do not
+compute the digest. Other provider facts remain unchanged.
+
+Declared non-null values are known, including amount zero. Missing/null values
+are unknown, with null value and reason cost-not-disclosed. Amount is finite
+numeric data; currency and billing period are strings, never coerced.
+These are declared properties, not live account entitlement, quota or actual bills.
+
+The consent-v1 envelope, canonicalization, hash and typed cost.kind stay unchanged.
+These are new open fact data, not a new schema or setup consent requirement.
+Refresh current offers before approval; old authority does not grandfather
+changed pricing. Catalog, redemption and runtime review share the route encoder.
+Pure canonical tests do not establish public zero-effect refusal or proof/cleanup.

@@ -49,13 +49,33 @@ export function consentReview({ scope, typedDisclosures, facts }) {
   return { canonicalInput, canonicalJson, consentFactsDigest: `consent-v1:${createHash('sha256').update(canonicalJson, 'utf8').digest('hex')}` };
 }
 
+// Intrinsic visible route facts, not a new consent-v1 encoding.
+function declaredRouteCostFacts(cost,facts) {
+  if(!Array.isArray(facts)||!cost||typeof cost!=='object')return invalid();
+  const dimensions=[['amount','Declared amount','number'],['currency','Declared currency','string'],['period','Declared billing period','string']];
+  const ids=new Set(dimensions.map(([field])=>'gozar.route-cost.'+field));
+  if(facts.some(fact=>ids.has(fact?.id)))return invalid();
+  return dimensions.map(([field,label,type])=>{
+    const descriptor=Object.getOwnPropertyDescriptor(cost,field);
+    if(descriptor&&!('value' in descriptor))return invalid();
+    const value=descriptor?.value;
+    const known=value!==undefined&&value!==null;
+    if(known&&(typeof value!==type||(type==='number'&&!Number.isFinite(value))))return invalid();
+    return {id:'gozar.route-cost.'+field,label,group:'cost',affectsConsent:true,
+      source:'declared-route-properties',asOf:null,known,value:known?value:null,
+      reason:known?null:'cost-not-disclosed'};
+  });
+}
+
 // Keep the selected fields explicit: observations and polling dates do not grant authority.
 export function routeConsentReview({ registryId, providerId, usage, configuration, target, origin, properties, disclosure, facts }) {
+  const priceFacts=declaredRouteCostFacts(properties.cost,facts);
   return consentReview({ scope: { kind: 'route', registryId, providerId, configurationRevision: configuration.revision,
     scopeId: configuration.scopeId, query: { usage, reach: properties.reach, transport: properties.transport, target, expectedOrigin: origin ?? null } },
   typedDisclosures: { reach: properties.reach, transport: properties.transport, traffic: properties.traffic,
     address: properties.address, cost: { kind: properties.cost.kind }, lifetimes: properties.lifetimes,
-    supervision: properties.supervision, protocols: properties.protocols, disclosure }, facts });
+    supervision: properties.supervision, protocols: properties.protocols, disclosure },
+    facts:[...facts,...priceFacts] });
 }
 
 export function setupConsentReview({ registryId, providerId, configuration, draftId = null, action, facts }) {
