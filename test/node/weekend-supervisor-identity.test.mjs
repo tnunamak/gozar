@@ -146,6 +146,23 @@ function processEffects() {
   ] };
 }
 
+// Dedicated cloudflare-named conformance input, not a generic text-input rule.
+async function freeConnectorPort(target) {
+  const probe = net.createServer();
+  try {
+    await new Promise((resolve, reject) => {
+      probe.once('error', reject); probe.listen(0, '127.0.0.1', resolve);
+    });
+    const port = probe.address().port;
+    assert.ok(Number.isInteger(port) && port >= 1024 && port <= 65535, 'connector port is in the provider range');
+    assert.notEqual(port, Number(target.split(':').at(-1)), 'connector port differs from the foreign app port');
+    return String(port);
+  } finally {
+    // Await release before setup/proof can bind this port, including assertion failures.
+    await new Promise(resolve => probe.close(() => resolve()));
+  }
+}
+
 async function configure(api, q, candidate) {
   const providerId = candidate.providerId;
   // Draft CAS and every later read/mutation use the catalog's explicit owner.
@@ -167,10 +184,13 @@ async function configure(api, q, candidate) {
       draft = await api.readConfigurationDraft({ home: q.home, owner: q.owner, providerId, draftId: draft.draftId });
       action = draft.configuration.actions.find(row => row.id === input.actionId);
       assert.ok(action?.consent);
+    } else if (input.kind === 'text') {
+      assert.equal(providerId, 'cloudflare-named', 'port answer belongs only to this conformance fixture');
+      assert.equal(input.actionId, 'gate-port', 'only the declared connector-port input receives a port');
+      answer = { value: await freeConnectorPort(q.target) };
     } else {
-      assert.ok(['https-origin', 'domain', 'text'].includes(input.kind));
-      answer = { value: input.kind === 'https-origin' ? 'https://fixture.example.invalid'
-        : input.kind === 'domain' ? 'fixture.example.invalid' : randomUUID() };
+      assert.ok(['https-origin', 'domain'].includes(input.kind));
+      answer = { value: input.kind === 'https-origin' ? 'https://fixture.example.invalid' : 'fixture.example.invalid' };
     }
     await api.runSetupAction({ home: q.home, owner: q.owner, providerId, actionId: action.id,
       draftId: draft.draftId, expectedConfigurationRevision: draft.configuration.revision, ...answer,
@@ -198,6 +218,16 @@ test('shipped process adapter public proof uses exact supervisor and actual gate
     assert.ok(candidate);
     await configure(api, q, candidate);
     candidate = (await api.catalogRoutes(q)).candidates.find(row => row.providerId === q.providerId);
+    // Public prerequisite metadata only: never include approval, config values or handles.
+    const premise = JSON.stringify({
+      setup: candidate?.setup?.state ?? 'candidate-missing',
+      unmet: candidate?.unmet?.map(row => ({ requirement: row.requirement, reasonCode: row.reasonCode })),
+      prerequisites: candidate?.prerequisites?.map(row => ({ id: row.id, state: row.state })),
+      inputs: candidate?.configuration?.inputRequirements?.map(row => ({ id: row.id, kind: row.kind, secret: !!row.secret })),
+    });
+    assert.equal(candidate?.setup?.state, 'ready', 'process fixture setup incomplete: ' + premise);
+    assert.equal(candidate?.unmet?.length, 0, 'process fixture requirements unmet: ' + premise);
+    assert.equal(typeof candidate?.candidateToken, 'string', 'ready fixture needs actual runtime approval: ' + premise);
     assert.ok(candidate?.eligible);
     route = await api.expose({ ...q, operationId: randomUUID(), wait: 'verified', approval: approval(candidate) });
     assertIdentity(route, identity, q.target);
