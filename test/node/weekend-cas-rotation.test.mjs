@@ -133,3 +133,171 @@ test('independent services enforce draft CAS and separate owner scope', async ()
     await rm(home, { recursive: true, force: true });
   }
 });
+
+async function cleanupFixture(run) {
+  const scratch = join(homedir(), '.tmp');
+  await mkdir(scratch, { recursive: true, mode: 0o700 });
+  const home = await mkdtemp(join(scratch, 'cleanup-authority-'));
+  const entries = new Map();
+  const calls = { deletes: [], presence: [] };
+  const fault = { presence: 'normal', deletion: 'normal' };
+  const backend = {
+    async put({ bytes }) {
+      const handle = randomUUID();
+      entries.set(handle, new Uint8Array(bytes));
+      return { handle };
+    },
+    async withSecret({ handle }, use) {
+      assert.ok(entries.has(handle));
+      return use(entries.get(handle));
+    },
+    async presence({ handle }) {
+      calls.presence.push(handle);
+      if (fault.presence === 'locked') throw { code: 'secret_backend_locked' };
+      if (fault.presence === 'unavailable') throw new Error('synthetic unavailable');
+      if (fault.presence === 'unknown') return { known: false, reason: 'not_observed' };
+      if (fault.presence === 'invalid') return { known: true, value: 'false' };
+      return { known: true, value: entries.has(handle) };
+    },
+    async delete({ handle }) {
+      calls.deletes.push(handle);
+      if (fault.deletion === 'lie') return { deleted: true };
+      entries.get(handle)?.fill(0);
+      entries.delete(handle);
+      if (fault.deletion === 'after-delete') throw new Error('synthetic interrupted acknowledgement');
+      return { deleted: true };
+    },
+  };
+  const registryId = randomUUID();
+  const service = (registry = registryId) => createEmbeddingServices({ registryId: registry, secretBackend: backend });
+  const scope = { home, owner: randomUUID(), providerId: randomUUID() };
+  async function stage(s, target = scope, inputId = 'staged') {
+    const applied = await s.readConfiguration(target);
+    const draft = await s.beginConfigurationDraft({ ...target, expectedConfigurationRevision: applied.revision });
+    const request = { ...target, draftId: draft.draftId, expectedConfigurationRevision: draft.configuration.revision };
+    const bytes = new TextEncoder().encode('synthetic-cleanup-fixture');
+    let stored;
+    try {
+      stored = await s.storeSecret({ ...request, scopeId: draft.scopeId, inputId, bytes });
+    } finally { bytes.fill(0); }
+    const changed = await s.mutateConfiguration(request, tx => tx.bindSecret(inputId, stored.handle));
+    return { applied, draft, request, handle: stored.handle, configuration: changed.configuration };
+  }
+  try { await run({ service, scope, stage, entries, calls, fault }); }
+  finally {
+    for (const bytes of entries.values()) bytes.fill(0);
+    entries.clear();
+    await rm(home, { recursive: true, force: true });
+  }
+}
+
+const normalized = code => error =>
+  error.code === code && error.message === code.replaceAll('_', ' ') && error.nextAction === null;
+
+test('delete then throw reconciles known absence after restart without duplicate deletion', async () => {
+  await cleanupFixture(async ({ service, scope, stage, entries, calls, fault }) => {
+    const item = await stage(service());
+    fault.deletion = 'after-delete';
+    await assert.rejects(service().discardConfigurationDraft(item.request), normalized('secret_backend_unavailable'));
+    assert.equal(entries.size, 0);
+    assert.deepEqual(calls.deletes, [item.handle]);
+    await assert.rejects(service().readConfigurationDraft(item.request), normalized('configuration_stale'));
+    fault.deletion = 'normal';
+    assert.deepEqual(await service().discardConfigurationDraft(item.request), { discarded: false });
+    assert.deepEqual(calls.deletes, [item.handle]);
+    const observed = calls.presence.length;
+    assert.deepEqual(await service().discardConfigurationDraft(item.request), { discarded: false });
+    assert.equal(calls.presence.length, observed, 'confirmed absent debt is durably cleared');
+    assert.deepEqual(await service().readConfiguration(scope), item.applied);
+  });
+});
+
+for (const mode of ['unknown', 'locked', 'unavailable', 'invalid']) {
+  test('discard preserves cleanup authority on ' + mode + ' presence until recovery', async () => {
+    await cleanupFixture(async ({ service, scope, stage, entries, calls, fault }) => {
+      const item = await stage(service());
+      fault.presence = mode;
+      const expected = mode === 'locked' ? 'secret_backend_locked' : 'secret_backend_unavailable';
+      await assert.rejects(service().discardConfigurationDraft(item.request), normalized(expected));
+      assert.deepEqual(calls.deletes, []);
+      assert.equal(entries.size, 1);
+      await assert.rejects(service().readConfigurationDraft(item.request), normalized('configuration_stale'));
+      await assert.rejects(service().discardConfigurationDraft(item.request), normalized(expected));
+      assert.deepEqual(calls.deletes, []);
+      fault.presence = 'normal';
+      assert.deepEqual(await service().discardConfigurationDraft(item.request), { discarded: false });
+      assert.deepEqual(calls.deletes, [item.handle], 'positive recovery removes the exact orphan once');
+      assert.equal(entries.size, 0);
+      const observed = calls.presence.length;
+      assert.deepEqual(await service().discardConfigurationDraft(item.request), { discarded: false });
+      assert.equal(calls.presence.length, observed);
+      assert.deepEqual(await service().readConfiguration(scope), item.applied);
+    });
+  });
+}
+
+test('false deletion acknowledgement retains debt until verified physical removal', async () => {
+  await cleanupFixture(async ({ service, scope, stage, entries, calls, fault }) => {
+    const item = await stage(service());
+    fault.deletion = 'lie';
+    await assert.rejects(service().discardConfigurationDraft(item.request), normalized('secret_backend_unavailable'));
+    assert.equal(entries.size, 1);
+    assert.deepEqual(calls.deletes, [item.handle]);
+    await assert.rejects(service().readConfigurationDraft(item.request), normalized('configuration_stale'));
+    fault.deletion = 'normal';
+    assert.deepEqual(await service().discardConfigurationDraft(item.request), { discarded: false });
+    assert.equal(entries.size, 0);
+    assert.deepEqual(calls.deletes, [item.handle, item.handle], 'one false acknowledgement then one real removal');
+    const observed = calls.presence.length;
+    await service().discardConfigurationDraft(item.request);
+    assert.equal(calls.presence.length, observed);
+    assert.equal(calls.deletes.length, 2);
+    assert.deepEqual(await service().readConfiguration(scope), item.applied);
+  });
+});
+
+test('discard respects applied use, inherited references and foreign cleanup authority', async () => {
+  await cleanupFixture(async ({ service, scope, stage, entries, calls }) => {
+    const s = service();
+    const promoted = await stage(s, scope, 'live');
+    const applied = await s.commitConfigurationDraft({
+      ...promoted.request, expectedConfigurationRevision: promoted.configuration.revision,
+    });
+    const use = { route: 'synthetic-route' };
+    await s.registerConfigurationUse({ ...scope, revision: applied.revision, handle: use });
+    const inherited = await s.beginConfigurationDraft({ ...scope, expectedConfigurationRevision: applied.revision });
+    await assert.rejects(s.commitConfigurationDraft({
+      ...scope, draftId: inherited.draftId, expectedConfigurationRevision: inherited.configuration.revision,
+    }), normalized('configuration_in_use'));
+    // Committed credentials retain their original draft metadata. Matching metadata
+    // alone must never authorize deleting a currently referenced applied credential.
+    assert.deepEqual(await service().discardConfigurationDraft(promoted.request), { discarded: false });
+    assert.deepEqual(await service().discardConfigurationDraft({ ...scope, draftId: inherited.draftId }), { discarded: true });
+    assert.deepEqual(calls.deletes, []);
+    const victim = await stage(s, scope, 'orphan');
+    const otherOwner = await stage(s, { ...scope, owner: randomUUID() });
+    const otherProvider = await stage(s, { ...scope, providerId: randomUUID() });
+    const otherDraft = await stage(s);
+    const foreign = service(randomUUID());
+    const otherRegistry = await stage(foreign);
+    for (const foreignService of [service(), foreign]) {
+      const targets = foreignService === foreign ? [scope] : [otherOwner.request, otherProvider.request];
+      for (const target of targets) {
+        assert.deepEqual(await foreignService.discardConfigurationDraft({ ...target, draftId: victim.draft.draftId }), { discarded: false });
+      }
+    }
+    assert.deepEqual(calls.deletes, [], 'foreign scope/registry cannot acquire victim cleanup authority');
+    assert.deepEqual(await service().discardConfigurationDraft(victim.request), { discarded: true });
+    assert.deepEqual(calls.deletes, [victim.handle]);
+    assert.equal(entries.has(victim.handle), false);
+    for (const protectedItem of [promoted, otherOwner, otherProvider, otherDraft, otherRegistry]) {
+      assert.equal(entries.has(protectedItem.handle), true, 'unrelated and applied bytes stay present');
+    }
+    assert.deepEqual(await service().readConfiguration(scope), applied);
+    await service().readConfigurationDraft(otherOwner.request);
+    await service().readConfigurationDraft(otherProvider.request);
+    await service().readConfigurationDraft(otherDraft.request);
+    await foreign.readConfigurationDraft(otherRegistry.request);
+    await service().releaseConfigurationUse({ ...scope, handle: use });
+  });
+});
