@@ -108,7 +108,8 @@ export function projectSession(reply, { handle, properties, ingress = null, limi
 
 /** From an external service record (owner-managed ingress). Privacy and stability stay unknown. */
 export function projectExternal(record, { handle, now = Date.now() }) {
-  const verified = record.verification?.status === 'verified'&&record.verification.method!=='host-command'&&!!record.verification.subject;
+  if(handle.generation!==(record.generation??0))throw gozarError('route_conflict','The external tracking generation does not match');
+  const verified = record.generation===1&&record.verification?.status === 'verified'&&record.verification.method!=='host-command'&&!!record.verification.subject;
   const checkedAt = typeof record.verification?.checkedAt === 'string' ? Date.parse(record.verification.checkedAt) : null;
   const proof={...proven(verified?'verified':'unverified',Number.isFinite(checkedAt)?iso(checkedAt):null,challengeChecks(record.origin)),subject:record.verification?.subject??null,observedAt:record.verification?.observedAt??null};
   return view({operationId:record.embedding?.operationId,consentChange:record.consentChange,consentFactsDigest:record.embedding?.consentReview.consentFactsDigest, target: record.target, validUntil: record.verification?.validUntil, now, handle, origin: record.origin, published: verified ? record.origin : null, state: verified ? 'usable' : 'unverified',
@@ -192,7 +193,7 @@ const defaults = {
     },
     async close({ home, handle }) {
       const { removeService } = await import('./service.mjs');
-      return removeService({ origin: handle.id, home });
+      return removeService({ origin: handle.id, home,expectedGeneration:handle.generation });
     },
   },
 };

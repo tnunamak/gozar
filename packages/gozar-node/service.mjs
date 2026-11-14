@@ -50,11 +50,12 @@ function externalOwnerId() {
   }
   throw refuse('internal_error', 'The registry has no adapter for an owner-kept route');
 }
-function config({ origin, target, verifyCmd = null,embedding }) {
+function config({ origin, target, verifyCmd = null,embedding,generation }) {
+  if(generation!==undefined&&generation!==0&&generation!==1)throw refuse('invalid_input','Invalid external tracking generation');
   if (verifyCmd !== null && (typeof verifyCmd !== 'string' || !verifyCmd.trim() || verifyCmd.includes('\0')))
     throw refuse('invalid_input', 'Invalid verification command');
   const route = { schemaVersion: 1, origin: originValue(origin), target: targetValue(target),
-    adapterId: externalOwnerId(), ownership: 'external-owned', verifyCmd,...(embedding?{embedding}: {}) };
+    adapterId: externalOwnerId(), ownership: 'external-owned', verifyCmd,...(embedding?{embedding}: {}),...(generation!==undefined?{generation}: {}) };
   if (Buffer.byteLength(JSON.stringify(route)) > 65536) throw refuse('invalid_input', 'Service record exceeds size limit');
   return route;
 }
@@ -86,6 +87,8 @@ async function currentExternal(route){
  return currentRouteReview(route.embedding.request,adapter,runtime);
 }
 async function present(route) {
+ // Records without a generation predate the current handle contract: history only.
+ if((route.generation??0)===0)return {...route,verification:{status:'unverified',checkedAt:null,observedAt:null,subject:null}};
  const runtime=serviceContext.getStore(),current=await currentExternal(route);
  let checked;
  if(current&&current.review.consentFactsDigest!==route.embedding.consentReview.consentFactsDigest){
@@ -94,11 +97,11 @@ async function present(route) {
  }
  if(current&&route.embedding.reviewRequired)checked={status:'unverified',checkedAt:null,observedAt:null,subject:null};
  else checked=await (runtime?.verify??verification)(route);
- if(current){const identity=await runtime.embeddingServices.resolveIdentity({home:route.embedding.request.home});checked={...checked,observedAt:checked.checkedAt??null,subject:{origin:route.origin,target:route.target,...identity,handleGeneration:0},validUntil:checked.checkedAt?new Date(Date.parse(checked.checkedAt)+15000).toISOString():null};}
+ if(current){const identity=await runtime.embeddingServices.resolveIdentity({home:route.embedding.request.home});checked={...checked,observedAt:checked.checkedAt??null,subject:{origin:route.origin,target:route.target,...identity,handleGeneration:route.generation},validUntil:checked.checkedAt?new Date(Date.parse(checked.checkedAt)+15000).toISOString():null};}
  return {...route,verification:checked,...(current&&checked.status!=='verified'?{consentChange:{oldDigest:route.embedding.consentReview.consentFactsDigest,newDigest:current.review.consentFactsDigest,reason:'consent-or-proof-changed',nextAction:instructionAction('review-route-consent','Review changed route consent','Call reviewRouteConsent for this handle and show its current snapshot before approval.')}}:{})};
 }
 async function addServiceUnguarded({ origin, target, verifyCmd = null, home = defaultHome(),embedding }) {
-  const route = config({ origin, target, verifyCmd,embedding });
+  const route = config({ origin, target, verifyCmd,embedding,generation:1 });
   await mutate(home, route.origin, async dir => {
     const name = filename(route.origin), path = join(dir, name);
     try {
@@ -138,7 +141,7 @@ async function statusServicesUnguarded({ origin, home = defaultHome() } = {}) {
   const durable = (await statusRoutes({ home, canonical: true })).routes.filter(route => !normalized || route.origin === normalized);
   return { schemaVersion: 1, routes: [...await Promise.all(routes.map(present)), ...durable] };
 }
-async function removeServiceUnguarded({ origin, home = defaultHome() }) {
+async function removeServiceUnguarded({ origin, home = defaultHome(),expectedGeneration }) {
   origin = originValue(origin);
   const removed = await mutate(home, origin, async dir => {
     // A Gozar-owned record must never be deleted while its provider route stays live.
@@ -147,8 +150,9 @@ async function removeServiceUnguarded({ origin, home = defaultHome() }) {
     const name = filename(origin), path = join(dir, name);
     let record;try { record=await stored(path, name); }
     catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    if(expectedGeneration!==undefined&&expectedGeneration!==(record.generation??0))throw refuse('route_conflict','The external tracking generation does not match');
     await unlink(path);
-    const runtime=serviceContext.getStore();if(record.embedding&&runtime?.embeddingServices)await releaseRecordedConfigurationUse({registryId:record.embedding.consentReview?.canonicalInput.scope.registryId,home,owner:record.embedding.request.owner,providerId:record.adapterId,handle:{kind:'external',id:origin,generation:0}},runtime);
+    const runtime=serviceContext.getStore();if(record.embedding&&runtime?.embeddingServices)await releaseRecordedConfigurationUse({registryId:record.embedding.consentReview?.canonicalInput.scope.registryId,home,owner:record.embedding.request.owner,providerId:record.adapterId,handle:{kind:'external',id:origin,generation:record.generation??0}},runtime);
     const fd = await open(dir, 'r');
     try { await fd.sync(); } finally { await fd.close(); }
     return true;
@@ -156,6 +160,7 @@ async function removeServiceUnguarded({ origin, home = defaultHome() }) {
   return { schemaVersion: 1, origin, removed };
 }
 async function externalReview(route,handle){
+ if(route.generation!==1||handle.generation!==route.generation)throw refuse('route_conflict','Legacy or mismatched external tracking cannot receive current consent');
  const current=await currentExternal(route);if(!current)throw refuse('unsupported','This owner route has no current consent authority');
  const runtime=serviceContext.getStore(),identity=await runtime.embeddingServices.resolveIdentity({home:route.embedding.request.home});
  const subject={origin:route.origin,target:route.target,...identity,handleGeneration:handle.generation};

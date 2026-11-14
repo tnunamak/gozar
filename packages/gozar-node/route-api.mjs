@@ -82,11 +82,11 @@ export function createRouteApi(deps = {}) {
     if (request.usage?.kind !== 'durable' || (request.intent !== undefined && request.intent !== 'create')) throw gozarError('invalid_input', 'An owner-run route is created with usage durable and intent create');
     const redeemed = await redeemApproval(request, await shared(request));
     const service = deps.service?.addService ?? (await import('./service.mjs')).addService;
-    const context=await shared(request),handle={kind:'external',id:redeemed.plan.origin,generation:0};
+    const context=await shared(request),handle={kind:'external',id:redeemed.plan.origin,generation:1};
     await context.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:adapter.id,revision:redeemed.grant.configurationRevision,handle});
     const {approval,wait,...query}=request;
     const { route } = await service({ origin: redeemed.plan.origin, target: request.target, home: redeemed.home,embedding:{request:query,consentReview:redeemed.consentReview,operationId:request.operationId??null} });
-    return projectExternal(route, { handle: { kind: 'external', id: route.origin, generation: 0 } });
+    return projectExternal(route, { handle: { kind: 'external', id: route.origin, generation: route.generation } });
   }
 
   const api = {
