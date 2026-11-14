@@ -120,7 +120,29 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   }),
   discardSecret:r=>transaction(r.home,(s,h)=>remove(s,h,r.handle)),
   registerConfigurationUse:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner);compare(c,r.revision);const key=JSON.stringify(r.handle);if(!c.uses.includes(key))c.uses.push(key);}),
-  releaseConfigurationUse:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner);c.uses=c.uses.filter(x=>x!==JSON.stringify(r.handle));}),
+  releaseConfigurationUse:async r=>{
+   if(!r||typeof r.home!=='string'||!r.home||!r.handle||typeof r.handle!=='object'||
+      typeof r.handle.kind!=='string'||!r.handle.kind||typeof r.handle.id!=='string'||!r.handle.id||
+      !Number.isSafeInteger(r.handle.generation)||r.handle.generation<1)fail('invalid_input');
+   // Validate scope before storage; never call config() or a credential backend.
+   scope(r.home,r.providerId,r.owner);
+   try{
+    const home=await canonicalHome(r.home,false);
+    return await withExclusiveLock(join(home,'.embedding-lock'),async()=>{
+     let file;
+     try{file=await checkedFile(join(home,'embedding-state.json'),constants.O_RDONLY,'embedding state');}
+     catch(error){if(error.code==='ENOENT')return;throw error;}
+     let state;try{state=JSON.parse(await file.readFile('utf8'));}finally{await file.close();}
+     if(state?.schemaVersion!==1||!state.configs||typeof state.configs!=='object'||Array.isArray(state.configs))fail('secret_backend_unavailable');
+     const scopeId=scope(home,r.providerId,r.owner),c=state.configs[scopeId];
+     if(c===undefined)return;
+     if(c?.scopeId!==scopeId||!Array.isArray(c.uses)||!c.uses.every(x=>typeof x==='string'))fail('secret_backend_unavailable');
+     const uses=c.uses.filter(x=>x!==JSON.stringify(r.handle));
+     if(uses.length===c.uses.length)return;
+     c.uses=uses;await atomicWrite(join(home,'embedding-state.json'),state);
+    },{waitSeconds:30});
+   }catch(error){if(error?.code==='invalid_input')throw error;throw embeddingError('secret_backend_unavailable');}
+  },
  };
  const boot=fresh();return api;
 }
