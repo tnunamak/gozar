@@ -45,17 +45,30 @@ export async function withRouteOperation(request,{registryId,embeddingServices,r
   const value={schemaVersion:1,owner:request.owner,operationId:request.operationId,intent,intentDigest,phase:'starting',view:startingRoute(handle,request.target,request.operationId)};
   await atomicWrite(path,value);winner=true;return value;
  },{waitSeconds:30});
+ // A stop can complete while the allocating caller awaits its result. Never let that
+ // caller replace durable terminal evidence with its stale successful snapshot.
+ const persist=async(value)=>withExclusiveLock(join(dir,'.reservation-lock'),async()=>{
+  const current=checkRecord(await readRecord(path));
+  if(current.view.cleanup.state==='confirmed')return structuredClone(current.view);
+  await atomicWrite(path,value);return structuredClone(value.view);
+ },{waitSeconds:30});
  if(!winner){
   if(record.view.cleanup.state==='confirmed')return structuredClone(record.view);
   try{return {...await status({home,handle:record.view.handle}),operationId:request.operationId};}
-  catch(error){if(!['route_not_found','provider_unavailable',...(record.phase==='starting'?['route_conflict']:[])].includes(error.code))throw error;return structuredClone(record.view);}
+  catch(error){
+   if(!['route_not_found','provider_unavailable',...(record.phase==='starting'?['route_conflict']:[])].includes(error.code))throw error;
+   // No answering creator is not evidence that allocation never happened, nor
+   // authority to replay a previously published address as current proof.
+   return {...structuredClone(record.view),state:'uncertain',routeState:'cleanup-unconfirmed',published:null,ingress:null,
+    verification:{...record.view.verification,status:'unverified'},cleanup:{state:'unconfirmed',nextAction:null}};
+  }
  }
- try{const view={...await run(record.view.handle),operationId:request.operationId};record.view=view;record.phase='allocated';await atomicWrite(path,record);return view;}
+ try{const view={...await run(record.view.handle),operationId:request.operationId};record.view=view;record.phase='allocated';return await persist(record);}
  catch(error){
   record.phase='recovery';let recovered=error.route;
   if(!recovered)try{recovered=await status({home,handle:record.view.handle});}catch{}
   record.view=recovered?{...recovered,operationId:request.operationId}:{...record.view,state:'uncertain',routeState:'cleanup-unconfirmed',cleanup:{state:'unconfirmed',nextAction:null},published:null};
-  await atomicWrite(path,record);error.route=record.view;throw error;
+  error.route=await persist(record);throw error;
  }
 }
 
