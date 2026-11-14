@@ -33,9 +33,11 @@ function assertSnapshot(review,candidate,route) {
     if(!actual.known)assert.equal(actual.value,null);
     if(expected.value===0)assert.equal(actual.value,0);
   }
-  const providerRows=candidate.consent.facts.filter(row=>!costIds.includes(row.id));
-  assert.ok(providerRows.length,'fixture must carry independent provider consent facts');
-  for(const expected of providerRows)assert.deepEqual(rows.find(row=>row.id===expected.id),expected);
+  const expectedRows=candidate.consent.facts;
+  assert.equal(new Set(expectedRows.map(row=>row.id)).size,expectedRows.length);
+  // Compare the complete canonical set, including providers with no extra rows.
+  const byId=facts=>[...facts].sort((a,b)=>a.id.localeCompare(b.id));
+  assert.deepEqual(byId(rows),byId(expectedRows),'no missing or unexpected canonical facts');
 }
 async function localApp(t) {
   const verifier=createServiceVerifier();
