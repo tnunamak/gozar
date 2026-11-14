@@ -48,20 +48,28 @@ export async function withRouteOperation(request,{registryId,embeddingServices,a
   const value={schemaVersion:1,owner:request.owner,operationId:request.operationId,intent,intentDigest,phase:'starting',view:startingRoute(handle,request.target,request.operationId)};
   await atomicWrite(path,value);winner=true;return value;
  },{waitSeconds:30});
+ // Allocation completion and Stop persist under the same reservation lock.
+ const persist=async value=>withExclusiveLock(join(dir,'.reservation-lock'),async()=>{
+  const current=checkRecord(await readRecord(path));
+  if(current.view.cleanup.state==='confirmed')return structuredClone(current.view);
+  await atomicWrite(path,value);return structuredClone(value.view);
+ },{waitSeconds:30});
  if(!winner){
   if(record.view.cleanup.state==='confirmed')return structuredClone(record.view);
   try{return {...await status({home,handle:record.view.handle}),operationId:request.operationId};}
   catch(error){
    if(error.code==='route_conflict'){const reference=await operationReferenceForRoute({home,handle:record.view.handle});if(reference?.owner===record.owner&&reference.operationId===record.operationId)return {...await status({home,handle:reference.handle}),operationId:request.operationId};}
-   if(!['route_not_found','provider_unavailable',...(record.phase==='starting'?['route_conflict']:[])].includes(error.code))throw error;return structuredClone(record.view);
+   if(!['route_not_found','provider_unavailable',...(record.phase==='starting'?['route_conflict']:[])].includes(error.code))throw error;
+   return {...structuredClone(record.view),state:'uncertain',routeState:'cleanup-unconfirmed',published:null,ingress:null,
+    verification:{...record.view.verification,status:'unverified'},cleanup:{state:'unconfirmed',nextAction:null}};
   }
  }
- try{const view={...await run(record.view.handle),operationId:request.operationId};record.view=view;record.phase='allocated';await atomicWrite(path,record);return view;}
+ try{const view={...await run(record.view.handle),operationId:request.operationId};record.view=view;record.phase='allocated';return await persist(record);}
  catch(error){
   record.phase='recovery';let recovered=error.route;
   if(!recovered)try{recovered=await status({home,handle:record.view.handle});}catch{}
   record.view=recovered?{...recovered,operationId:request.operationId}:{...record.view,state:'uncertain',routeState:'cleanup-unconfirmed',cleanup:{state:'unconfirmed',nextAction:null},published:null};
-  await atomicWrite(path,record);error.route=record.view;throw error;
+  error.route=await persist(record);throw error;
  }
 }
 
@@ -97,7 +105,7 @@ export async function listRecordedRoutes({home,owner}={},deps={}){
   if(view.state!=='released'&&(!controller||await processIdentity(controller.pid)!==controller.startIdentity))view={...view,state:'uncertain',published:null,routeState:'cleanup-unconfirmed',verification:{...view.verification,status:'unverified'},cleanup:{state:'unconfirmed',nextAction:null}};
   put({...view,operationId:bootstrap.operationId??routes.get(routeKey(view.handle))?.operationId??null});
  }
- for(const entry of await names(join(home,'routes'))){if(!entry.isFile()||!/[a-f0-9]{64}\.json$/.test(entry.name))continue;const record=await readRecord(join(home,'routes',entry.name));if(!record.routeId||!Number.isSafeInteger(record.generation))throw gozarError('provider_unavailable','The durable route record is unreadable');if(owner!==undefined&&record.owner!==owner)continue;const handle={kind:'durable',id:record.routeId,generation:record.generation};const previous=routes.get(routeKey(handle));put({...projectDurable(record,{handle,properties:unknownProperties()}),operationId:record.operationId??previous?.operationId??null});}
+ for(const entry of await names(join(home,'routes'))){if(!entry.isFile()||!/[a-f0-9]{64}\.json$/.test(entry.name))continue;const record=await readRecord(join(home,'routes',entry.name));if(record?.schemaVersion!==1||typeof record.routeId!=='string'||!record.routeId||record.ownership!=='gozar-owned'||typeof record.owner!=='string'||!record.owner||!Number.isSafeInteger(record.generation)||record.generation<1||entry.name!==hash(record.routeId)+'.json')throw gozarError('provider_unavailable','The durable route record is unreadable');if(owner!==undefined&&record.owner!==owner)continue;const handle={kind:'durable',id:record.routeId,generation:record.generation};const previous=routes.get(routeKey(handle));put({...projectDurable(record,{handle,properties:unknownProperties()}),operationId:record.operationId??previous?.operationId??null});}
  for(const entry of await names(home)){if(!entry.isDirectory()||!/^port-[0-9]+$/.test(entry.name))continue;const bootstrap=await optionalRead(join(home,entry.name,'bootstrap.json'));if(!bootstrap||(owner!==undefined&&bootstrap.owner!==owner))continue;const journal=await optionalRead(join(home,entry.name,'session.json'));if(!journal?.snapshot)continue;const handle={kind:'session',id:`${entry.name}:${journal.snapshot.sessionId}`,generation:1};put({...projectSession(journal.embeddingView??{snapshot:journal.snapshot},{handle,properties:unknownProperties()}),operationId:bootstrap.operationId??routes.get(routeKey(handle))?.operationId??null});}
  for(const entry of await names(join(home,'services'))){if(!entry.isFile()||!/[a-f0-9]{64}\.json$/.test(entry.name))continue;const record=await readRecord(join(home,'services',entry.name));if(record.ownership!=='external-owned'||typeof record.origin!=='string')throw gozarError('provider_unavailable','The owner-route recovery record is unreadable');if(owner!==undefined&&record.embedding?.request.owner!==owner)continue;put(projectExternal(record,{handle:{kind:'external',id:record.origin,generation:0}}));}
  // A disk snapshot is recovery evidence. Only routeStatus can obtain a fresh subject-bound proof.
