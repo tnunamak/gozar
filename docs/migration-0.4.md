@@ -104,3 +104,30 @@ detection and creates no route. Both remove a private home under ~/.tmp.
 Use the explicit @tnunamak/gozar/testing effects factory for real-adapter fixtures:
 no ambient flag or real-provider fallback. See [embedding API](embedding-contract.md)
 and [effect contracts](testing-effects.md).
+
+
+## 0.3.4 upgrade checklist and release coupling
+
+1. Upgrade the CLI/library/core/contracts and host bindings together to 0.4.0;
+   do not mix installed components across releases. Keep a private recoverable
+   copy of the old state and record existing route handles before cutover.
+2. Stop/reconcile owned old routes before replacing controllers. Preserve
+   owner-managed resources and unconfirmed cleanup; do not infer absence from
+   process exit or a missing local map.
+3. Keep old approvals/proofs as history only. Recatalog with the exact owner,
+   target, usage and current configuration; show the full typed consent snapshot
+   and obtain new setup/route approvals. Never upgrade an old tuple silently.
+4. Import ownerless legacy references only through the documented default-backend
+   path above. Named ownership requires explicit migration; custom backends do
+   not import those credentials.
+5. Persist intent and operationId before allocation, then retain every returned
+   or error handle. Recover with listRoutes and current routeStatus; do not
+   generate a fresh operation ID merely to retry an ambiguous create.
+6. Verify the installed host against current public types before exposing real
+   traffic. See the public-consumer sample in [embedding guide](embedding-contract.md).
+
+The historical 0.1.x notes describe the legacy session interface and unpublished
+durable experiments at that time. They are not a statement that only 0.1.x is
+currently available, nor proof of 0.4 live maturity. Offline fixtures do not
+validate real accounts, provider limits, network reach or remote cleanup.
+Route close retains credentials and does not remove provider-owned DNS/domains.

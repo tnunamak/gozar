@@ -48,14 +48,14 @@ belong in bootstrap, environment variables, arguments, events or errors.
 
 Legacy direct setup calls retain their file-backed path. Migrate embedded callers
 to a configured factory and explicit provider/configuration revision requests.
-The decisive release check is the installed DataConnect integration using public
-APIs. Helper tests alone do not establish that integration.
+The decisive release check is an installed host integration using public APIs.
+Helper tests alone do not establish that integration.
 
 ## Focused verification
 
 The broker test spawns a real Node child and gives it only the resolver descriptor
 and trusted host identity. It checks a digest of the returned canary, backend lock,
-wrong boot, and shutdown. The installed controller and DataConnect acceptance
+wrong boot, and shutdown. The installed controller and host acceptance
 remain separate checks owned by the integration lane.
 
 A bounded TLA+ draft model checks shared-secret preservation and retaining the
@@ -117,3 +117,153 @@ rewrites the state file. Every setup result also includes `configuration` for
 the actual applied or draft scope; its revision and scope ID agree with the
 result's `configurationRevision` and `scopeId`. Use its offered actions for the
 next step, or call the draft reader after restart. Do not reconstruct digests.
+
+
+## Public-consumer recovery boundary
+
+Save the following block as `host-route-example.mjs` beside an installed,
+release-matched `@tnunamak/gozar@0.4.0`. Import its functions from your host;
+importing this module does not start a route. This is a library plus CLI, not
+a hosted control plane. The host supplies its own input requirements UI,
+durable journal and explicit selection/confirmation callbacks.
+
+`journal.saveIntent` must atomically and durably commit before resolving.
+Allocate `operationId` once when the user's intent is created, persist it with
+that intent, and reuse it after ambiguous results. Do not mint another ID merely
+because an await failed. Journal query/handle state privately, never approvals,
+candidate bearer values, backend bytes or raw provider errors.
+
+<!-- public-consumer -->
+```js
+import { createGozar } from '@tnunamak/gozar';
+
+// Supply implementations conforming to the release's public host types.
+// Keep this configured factory alive while its controllers use the backend.
+export const createHost = options => createGozar(options);
+
+export async function openApproved({
+  api, query, operationId, choose, confirm, journal,
+}) {
+  if (!query.owner || !operationId) throw new Error('owner and operationId required');
+  if (!['attached', 'session', 'durable'].includes(query.usage.kind))
+    throw new Error('unsupported usage');
+  const catalog = await api.catalogRoutes(query);
+  const candidate = await choose(catalog.candidates);
+  if (!catalog.candidates.includes(candidate) || !candidate.eligible
+      || candidate.setup.state !== 'ready' || !candidate.candidateToken)
+    throw new Error('select an eligible ready candidate');
+  if (candidate.consentFactsDigest !== candidate.consent.consentFactsDigest)
+    throw new Error('inconsistent consent snapshot');
+  // Present the COMPLETE snapshot: scope, all facts (including unknown),
+  // typed disclosures, terms/privacy links and all affectsConsent rows.
+  // confirm must return true only after the user approves this exact card.
+  if (await confirm(structuredClone(candidate.consent)) !== true) return null;
+  await journal.saveIntent({
+    operationId, query: structuredClone(query), providerId: candidate.providerId,
+  });
+  const request = { ...query, operationId, approval: {
+    kind: 'route', consentFactsDigest: candidate.consentFactsDigest,
+    candidateToken: candidate.candidateToken,
+    disclosureRevision: candidate.disclosure.revision,
+  } };
+  try {
+    const route = query.usage.kind === 'durable'
+      ? await api.ensureRoute(request)
+      : await api.expose({ ...request, wait: 'verified' });
+    await journal.saveHandle(route);
+    return route; // Advertise only its published value, never origin.
+  } catch (error) {
+    if (error.route?.handle) await journal.saveHandle(error.route);
+    throw error; // Host renders normalized code/nextAction, not raw diagnostics.
+  }
+}
+
+export const recover = ({ api, home, owner }) => api.listRoutes({ home, owner });
+
+export async function closeRetained({ api, journal, home, handle }) {
+  const route = await api.closeRoute({ home, handle, mode: 'remove' });
+  await journal.saveHandle(route);
+  return route; // unconfirmed means retain the handle and retry close, not create.
+}
+```
+
+Recovery is not recreation. `listRoutes({home,owner})` returns historical retained
+snapshots, including uncertain allocations; it neither renews proof nor makes a
+cached URL publishable. Use `routeStatus({home,handle})` for current proof.
+Unreadable state must remain an error, not an empty list. Preserve handles from
+both successful results and `error.route`, including stopped/error outcomes.
+A replay of a stopped operation remains terminal; changing intent under the
+same operation ID is `operation_conflict`. A genuinely new user intent needs
+new review and a new durable intent record. Keep cleanup debt visible until
+confirmed absence; a Stop acknowledgement is not absence.
+
+### Setup, reload and visible consent
+
+Use one explicit owner consistently for inventory/catalog, intake, setup,
+draft creation/read/commit and route operations. Select providers by returned
+IDs, not provider-specific branches. Read `configuration.inputRequirements`;
+use each requirement's `actionId` to locate its current offered action. Render
+the full setup consent snapshot and typed action disclosure, including effects,
+installation artifact identity and links. Do not reconstruct or shorten its
+digest. Route consent does not authorize setup, and setup consent does not
+authorize route publication.
+
+For a plain-value action, `runSetupAction` receives `home`, the same `owner`,
+returned `providerId`, `expectedConfigurationRevision`, optional `draftId`,
+the offered `actionId`, `value`, and approval
+`{kind:'setup',consentFactsDigest,digest,disclosureRevision}` copied from that
+exact action. Secret input uses the host's typed intake API and only its returned
+opaque handle, not a plain value. Follow pending/blocked results and recatalog;
+never assume a revision advanced. For each next action use the returned
+configuration, or reload it using `readConfigurationDraft` with the same owner.
+Never reuse an approval from before a revision/configuration change.
+
+Begin a draft at the applied revision; stage changes under its returned revision.
+After an application restart, read that same draft ID and use its fresh offered
+actions. Stop affected runtimes before commit. A failed setup/CAS preserves the
+old binding; a failed start after successful commit does not undo the commit.
+Retain unbound intake handles for explicit discard. Closing a route retains
+credentials; neither discard nor close revokes the provider's credential.
+Owner-managed DNS, domains, tunnels and other provider-owned resources remain
+the owner's responsibility unless an offered action explicitly says otherwise.
+
+### Host backend and supervisor boundary
+
+Supply `secretBackend`, `hostCapabilities` and `identity` to `createHost`
+using the matching release's exported host types. Backend callbacks stay in the
+trusted host; there is no file-store fallback for custom backends. Locked backend
+presence is unknown, not absent. Keep the resolver available for every detached
+controller; resolver loss withdraws availability.
+
+On the first supervisor boot, establish the stable host instance and a fresh
+controller boot before bootstrap. On every replacement, call the trusted broker's
+`registerController({identity})` before starting it. An explicit replacement
+identity must use the same instance and a fresh boot; invalidate old descriptors
+and tokens first. Use the returned incarnation in proof subjects. A long-lived
+factory is not evidence of a fresh controller boot. Never reuse a prior boot,
+credential bytes or proof snapshot to make recovery look successful.
+
+The broker constructor and complete backend/identity interfaces are not declared
+inline in the route contract excerpt. This guide intentionally does not invent
+their signatures; use the installed public embedding types. The executable
+sample above exercises route consent/journaling/recovery, not supervisor or
+credential-backend integration.
+
+### Release and validation limits
+
+Keep CLI, library, WASM/core, runtime contracts and host bindings from the same
+0.4.0 release. A 0.3.4 host must follow the migration guide rather than copying
+old approval tuples. 0.1.x descriptions explain historical behavior; they are
+not a current support or publication inventory. The 0.4 boundary is broader,
+but does not imply every provider/account/OS combination has live validation.
+
+Optional SDKs are installed by the owner when the chosen candidate's current
+prerequisite/remedy requests it. Detection does not install them or prove account
+permission. Never auto-run arbitrary remedy instructions. The shipped execution
+release is HTTP(S)-only: visible raw TCP/TLS profiles remain detect-only, not an
+alternative execution path. Expiry belongs to session lifetime/proof state;
+there is no expiring usage kind.
+
+Offline example tests check public package import and injected host sequencing
+with negative controls. They are not live provider, installed-host, supervisor,
+account, remote-absence or end-to-end publication evidence.

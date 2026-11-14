@@ -423,7 +423,8 @@ export function stop(options?: LegacyExposeOptions): Promise<LegacySessionReply>
 
 // --- Kept service and hand-back exports (also at @tnunamak/gozar/service) ------------------------
 // The pre-0.2 durable signatures (ensureRoute/adoptRoute with adapterId and approvals tuples, and
-// statusRoutes) are not kept: durable routes were never published, only 0.1.0 is on npm. The root
+// statusRoutes) are not kept: those durable signatures were unpublished at the
+// historical 0.1.0 migration boundary. The current root ensureRoute/adoptRoute replace them.
 // ensureRoute/adoptRoute above replace them.
 
 export type ServiceRoute = Record<string, unknown>;

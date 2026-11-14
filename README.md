@@ -2,6 +2,13 @@
 
 SPDX-License-Identifier: Apache-2.0
 
+## Upgrading an embedded host to 0.4.0
+
+For 0.3.4 callers, use the [migration checklist](docs/migration-0.4.md) and
+[public-consumer embedding sample](docs/embedding-contract.md#public-consumer-recovery-boundary).
+Upgrade CLI/library/core/contracts together. Fresh typed consent replaces old
+approval tuples; offline examples are not evidence of live provider validation.
+
 Give a local service an HTTPS address a remote client can reach, or a private route inside your Tailscale network. Gozar can use Tailscale Funnel, Tailscale Serve, localhost.run, your own HTTPS proxy, or a selected LAN interface.
 
 **Will it fit your app?** You need Linux or macOS with Node.js 22.13 or newer, a local service on a port you choose, and a client that reaches it over the internet, your tailnet or your LAN. Windows is not supported: every route answers `unsupported`. Gozar adds no authentication to your app.
