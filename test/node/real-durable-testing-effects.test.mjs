@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import {readFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {join} from 'node:path';
 import {createServiceVerifier} from '@tnunamak/gozar';
 import {createTestingGozar} from '@tnunamak/gozar/testing';
 import {scratch,query} from './route-schema-check.mjs';
-async function exercise(t,{partialWrite=false,adoptExisting=false}={}){
+export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJournal=false}={}){
  let harness,app;t.after(async()=>{try{await harness?.close();}finally{if(app)await new Promise(resolve=>app.close(resolve));}});
  const home=await scratch(t),owner='durable-effects';
  const verifier=createServiceVerifier();app=http.createServer((req,res)=>{if(!verifier(req,res))res.end('app');});await new Promise(resolve=>app.listen(0,'127.0.0.1',resolve));
@@ -42,11 +45,31 @@ async function exercise(t,{partialWrite=false,adoptExisting=false}={}){
   const restored=await api.approveRouteConsent({home,handle:route.handle,approvalToken:review.approvalToken,consentFactsDigest:review.consentFactsDigest});assert.equal(restored.verification.status,'verified');assert.deepEqual(restored.handle,route.handle);assert.equal(writes,written);
   assert.deepEqual((await api.ensureRoute(request)).handle,route.handle);assert.equal(writes,written);
   await api.suspendRoute({home,handle:route.handle});
+  const beforeResume=writes;
   const resumed=await api.ensureRoute({...q,operationId:undefined});assert.equal(resumed.handle.generation,route.handle.generation+1);
+  assert.equal(writes,beforeResume+1,'resume restores the pinned rule exactly once');
+  if(resumeJournal){
+   // The committed engine record plus stale operation journal is the crash
+   // boundary before operation-result persistence. Replay must not allocate.
+   const name=createHash('sha256').update(JSON.stringify([owner,q.operationId])).digest('hex')+'.json';
+   const journal=JSON.parse(await readFile(join(home,'operations',name),'utf8'));
+   assert.deepEqual(journal.view.handle,route.handle,'journal retains the pre-resume generation');
+   assert.equal(resumed.operationId,q.operationId);
+   const committed=(await api.listRoutes({home,owner})).routes.filter(row=>row.handle.kind==='durable'&&row.handle.id===resumed.handle.id);
+   assert.equal(committed.length,1);assert.deepEqual(committed[0].handle,resumed.handle);
+   await assert.rejects(api.closeRoute({home,handle:route.handle,mode:'remove'}),{code:'route_conflict'});
+   assert.equal(writes,beforeResume+1,'stale Stop must not remove the replacement');
+   await assert.rejects(api.ensureRoute({...request,target:'127.0.0.1:1'}),{code:'operation_conflict'});
+   assert.equal(writes,beforeResume+1,'conflicting old-operation intent must not write');
+  }
   const afterResume=writes;assert.deepEqual((await api.ensureRoute(request)).handle,resumed.handle);assert.equal(writes,afterResume,'replay reconciles the existing generation without another allocation');
   const recovery=(await api.listRoutes({home,owner})).routes.filter(row=>row.handle.kind==='durable'&&row.handle.id===resumed.handle.id);assert.equal(recovery.length,1);assert.deepEqual(recovery[0].handle,resumed.handle);assert.equal(recovery[0].published,null);
   assert.equal((await api.closeRoute({home,handle:resumed.handle,mode:'remove'})).cleanup.state,'confirmed');
-  assert.deepEqual(config,foreign);assert.equal((await api.ensureRoute(request)).state,'released');
+  assert.deepEqual(config,foreign);assert.equal(writes,afterResume+1,'Stop removes exactly the resumed rule');
+  const terminalWrites=writes,terminal=await api.ensureRoute(request);
+  assert.equal(terminal.state,'released');assert.deepEqual(terminal.handle,resumed.handle);
+  assert.equal(terminal.cleanup.state,'confirmed');
+  assert.equal(writes,terminalWrites,'stopped replay must remain terminal without a write');
  }
  assert.ok(harness.events.some(e=>e.kind==='local-api'&&e.operation==='request'));
 }

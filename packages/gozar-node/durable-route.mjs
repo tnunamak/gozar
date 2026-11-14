@@ -674,9 +674,11 @@ export async function ensureRoute(request, deps) {
       const table = await reservationTable(await canonicalHome(home), dir);
       if (heldBy(table, { routeId, listener: record.target, resource: capability.providerResource, port: record.intent.port })) throw reservedError();
       // Persist this association with the empty-slot intent before provider writes.
-      // A restored generation belongs to this operation, not its predecessor.
+      // An explicit operation takes ownership of this restoration. An omitted
+      // operation ID resumes the retained operation; keep its association so a
+      // stale operation journal can discover the committed generation.
       record = { ...record, state: 'creating', receipt: null, cleanupDebt: null,
-        generation: record.generation + 1, operationId: request.operationId ?? null };
+        generation: record.generation + 1, operationId: request.operationId ?? record.operationId ?? null };
       const created = await createListener(dir, record, entry, { table, firstAllocation: false, ctx });
       return finish(created.record, created.verification);
     }
