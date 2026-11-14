@@ -29,3 +29,8 @@ test('safe errors only disclose allow-listed codes and local syntax never claims
  }
  const e=safeListenerError(new Error('secret-canary ERR_NGROK_9999'));assert.doesNotMatch(e.message,/secret-canary|9999/);assert.match(e.message,/account|connection/i);
 });
+test('an explicit authentication refusal retains a bound negative allocation receipt without an owned listener',async()=>{
+ const lifecycle=createListenerLifecycle({adapterId:'fixture'});let failure;
+ try{await lifecycle.open(context,plan,{sdk:{forward:async()=>{throw Object.assign(new Error('secret-canary'),{code:'ERR_NGROK_105'});}},options:{}});}catch(error){failure=error;}
+ assert.ok(failure.cleanupReceipt);assert.equal((await lifecycle.remove(context,failure.cleanupReceipt)).removed,true);assert.doesNotMatch(JSON.stringify(failure),/secret-canary/);
+});

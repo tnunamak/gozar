@@ -108,7 +108,7 @@ test('closed shapes reject unknown properties', () => {
 test('every consumer shape has at least one valid fixture, and every valid fixture passes', () => {
   const covered = new Set(fixtures.valid.map(item => item.shape));
   for (const shape of [...consumerShapes, 'AdapterDefinition', 'ProviderEntry', 'AdapterPlan', 'AdapterEffectError']) assert.ok(covered.has(shape), `no valid fixture for ${shape}`);
-  for (const item of fixtures.valid) assert.deepEqual(check(item.schema, item.shape, item.value), [], `${item.shape}: ${item.name}`);
+  assert.deepEqual(fixtures.valid.flatMap(item=>check(item.schema,item.shape,item.value).map(error=>`${item.shape}: ${item.name}: ${error}`)),[]);
 });
 
 test('valid catalog fixtures cover eligible, ineligible, macOS-unsupported, setup-required and unknown-privacy candidates', () => {
@@ -135,7 +135,7 @@ test('the required invalid cases are present', () => {
 
 test('every errorNormalization target is in the frozen union, which equals the schema enum', () => {
   assert.deepEqual([...fixtures.frozenErrorCodes].sort(), [...catalogSchema.$defs.ErrorCode.enum].sort());
-  assert.equal(fixtures.frozenErrorCodes.length, 21);
+  assert.equal(fixtures.frozenErrorCodes.length, 31);
   for (const [code, entry] of Object.entries(fixtures.errorNormalization)) assert.ok(fixtures.frozenErrorCodes.includes(entry.target), `${code} -> ${entry.target}`);
 });
 

@@ -40,10 +40,10 @@ export class Journal {
   async intent(effect) {
     // No raw process/network output, environment or credentials enter the journal.
     this.value.intents[effect.id] = { sessionId: effect.sessionId, generation: effect.generation,
-      operation: effect.operation, ...(effect.recipeRef ? { record: effect.record } : {}), adapterId: effect.record?.adapterId ?? effect.adapterId, resourceId: effect.record?.resourceId ?? effect.resourceId, durable: true };
+      operation: effect.operation, operationId: this.value.operationId ?? null, ...(effect.recipeRef ? { record: effect.record } : {}), adapterId: effect.record?.adapterId ?? effect.adapterId, resourceId: effect.record?.resourceId ?? effect.resourceId, durable: true };
     await this.save();
   }
-  async own(resource) { this.value.owned[resource.id] = resource; await this.save(); }
+  async own(resource) { resource.operationId ??= this.value.operationId ?? null; this.value.owned[resource.id] = resource; await this.save(); }
   async removed(id) { delete this.value.owned[id]; await this.save(); }
 }
 

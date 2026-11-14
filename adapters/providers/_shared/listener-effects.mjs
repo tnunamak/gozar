@@ -9,7 +9,7 @@ export async function listenerSdk(ctx,loadSdk){
   if(typeof record?.handle!=='string'||!record.handle||typeof record?.url!=='string')throw effectError('provider_unavailable','The fixture listener effect returned an invalid resource');
   return {id:()=>record.handle,url:()=>record.url,close:()=>invoke('close',{handle:record.handle})};
  };
- return {forward:async options=>listener(await invoke('open',{options})),getListener:async handle=>{
+ return {forward:async options=>{const result=await invoke('open',{options});if(result?.error)throw Object.assign(new Error('The fixture SDK rejected listener creation'),{code:typeof result.error.code==='string'&&/^ERR_[A-Z0-9_]{1,64}$/.test(result.error.code)?result.error.code:'SDK_REFUSED'});return listener(result);},getListener:async handle=>{
   const result=await invoke('read',{handle});
   if(result?.present===false)return null;
   if(result?.present!==true)throw effectError('provider_unavailable','The fixture listener presence is unknown');

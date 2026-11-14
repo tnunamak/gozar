@@ -151,15 +151,21 @@ test('preference show and set round-trip, and a stale revision is a conflict', a
 
 test('setup refuses a world-readable secret file and never prints the secret', async t => {
   const w = await durableWorld(world, t);
-  const approval = await privateFile(await files(w, 'setup-approval.json'), { digest: 'sha256:none', disclosureRevision: 'disc-none' });
+  const approval = await privateFile(await files(w, 'setup-approval.json'), {kind:'setup',consentFactsDigest:'current-facts', digest: 'sha256:current', disclosureRevision: 'disc-current' });
+  const queryFile=await privateFile(await files(w,'setup-query.json'),w.query());
+  const action={id:'some-action',kind:'provide-secret',digest:'sha256:current',disclosure:{revision:'disc-current'},consent:{consentFactsDigest:'current-facts'}};
+  const api={catalogRoutes:async()=>({candidates:[{providerId:'opaque',configuration:{revision:'current-config',scopeId:'current-scope',actions:[action],inputRequirements:[{id:'input',actionId:action.id,secret:true}]}}]}),storeSecret:async()=>assert.fail('invalid input must not enter custody'),runSetupAction:async()=>assert.fail('invalid input must not execute')};
+  const run=async()=>{let stdout='',stderr='';const code=await routeMain(['setup','some-action','--approval-file',approval,'--secret-file',secret,'--query-file',queryFile,'--provider-id','opaque','--home',w.home,'--json'],{api,stdout:{write:chunk=>stdout+=chunk},stderr:{write:chunk=>stderr+=chunk}});return {code,stdout,stderr};};
   const secret = await files(w, 'secret.txt');
   await writeFile(secret, 'synthetic-secret-value\n', { mode: 0o644 }); await chmod(secret, 0o644);
-  const loose = await gozar(w.env, ['setup', 'some-action', '--approval-file', approval, '--secret-file', secret, '--home', w.home, '--json']);
+  const loose = await run();
   assert.equal(loose.code, 1);
+  assert.match(loose.stdout,/0600/);
   assert.doesNotMatch(loose.stdout + loose.stderr, /synthetic-secret-value/);
-  // An action the catalog does not list is stale, with a private secret too: still no echo.
+  // A stale action approval with a private secret still cannot enter custody or echo it.
   await chmod(secret, 0o600);
-  const stale = await gozar(w.env, ['setup', 'some-action', '--approval-file', approval, '--secret-file', secret, '--home', w.home, '--json']);
+  await privateFile(approval,{kind:'setup',consentFactsDigest:'stale',digest:'old',disclosureRevision:'old'});
+  const stale = await run();
   assert.equal(stale.code, 3, stale.stdout + stale.stderr);
   assertShape('GozarError', envelope(stale));
   assert.doesNotMatch(stale.stdout + stale.stderr, /synthetic-secret-value/);
@@ -167,10 +173,12 @@ test('setup refuses a world-readable secret file and never prints the secret', a
 
 test('red: setup --value answers a provide-value action, and --value with --secret-file is refused', async t => {
   const w = await durableWorld(world, t);
-  const approval = await privateFile(await files(w, 'value-approval.json'), { digest: 'sha256:none', disclosureRevision: 'disc-none' });
+  const approval = await privateFile(await files(w, 'value-approval.json'), {kind:'setup',consentFactsDigest:'facts', digest: 'sha256:current', disclosureRevision: 'disc-current' });
+  const queryFile=await privateFile(await files(w,'value-query.json'),w.query());
   const seen = [];
-  const api = { runSetupAction: async request => { seen.push(request); return { schemaVersion: 1, state: 'complete' }; } };
-  const run = args => routeMain(['setup', 'origin', '--approval-file', approval, '--home', w.home, ...args, '--json'], { api, stdout: { write() {} }, stderr: { write() {} } });
+  const action={id:'origin',kind:'provide-value',digest:'sha256:current',disclosure:{revision:'disc-current'},consent:{consentFactsDigest:'facts'}};
+  const api = {catalogRoutes:async()=>({candidates:[{providerId:'opaque',configuration:{revision:'config',scopeId:'scope',actions:[action],inputRequirements:[{id:'address',actionId:action.id,secret:false}]}}]}),runSetupAction: async request => { seen.push(request); return { schemaVersion: 1, state: 'complete' }; } };
+  const run = args => routeMain(['setup', 'origin', '--approval-file', approval, '--home', w.home,'--query-file',queryFile,'--provider-id','opaque', ...args, '--json'], { api, stdout: { write() {} }, stderr: { write() {} } });
   assert.equal(await run(['--value', 'https://app.example.test']), 0);
   assert.equal(seen[0].value, 'https://app.example.test');
   assert.equal(seen[0].secretHandle, undefined);
@@ -245,5 +253,5 @@ test('--provider-id sets query.providerId for catalog, and a query file value is
   await run(['--provider-id', 'example-provider']);
   await run([]);
   assert.deepEqual(seen, ['example-provider', 'from-file']);
-  assert.equal(await routeMain(['setup', 'x', '--provider-id', 'a', '--json'], { api, stdout: { write() {} }, stderr: { write() {} } }), 1, 'a command that takes no provider id refuses the flag');
+  assert.equal(await routeMain(['setup', 'x', '--provider-id', 'a', '--json'], { api, stdout: { write() {} }, stderr: { write() {} } }), 3, 'a provider selection still needs an explicit current setup approval');
 });

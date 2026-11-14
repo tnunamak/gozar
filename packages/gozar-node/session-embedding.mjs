@@ -7,7 +7,7 @@ import {currentRouteReview} from './route-consent.mjs';
 import {consentReview,consentSnapshot} from './consent-facts.mjs';
 import {fixtureSpawn} from './fixture-spawn.mjs';
 import {testingFetch} from './testing-network.mjs';
-import {gozarError} from './error-normalizer.mjs';
+import {gozarError,instructionAction} from './error-normalizer.mjs';
 
 export async function connectSessionEmbedding(config,{onLoss}){
  const saved=config.embedding;if(!saved)return null;
@@ -41,7 +41,7 @@ export async function connectSessionEmbedding(config,{onLoss}){
    try{await refresh();}catch{blocked=true;}
    const receipt=output.validation?.probeReceipt;
    if(receipt&&output.snapshot.phase==='published-ready')subject={origin:receipt.origin,target:saved.request.target,instanceId:saved.identity.instanceId,bootId:saved.identity.bootId,handleGeneration:1};
-   const consentChange=blocked?{reason:lost?'host-resolver-unavailable':'consent-facts-changed',nextAction:lost?null:'review-route-consent'}:null;
+   const consentChange=blocked?{reason:lost?'host-resolver-unavailable':'consent-facts-changed',nextAction:lost?null:instructionAction('review-route-consent','Review changed route consent','Call reviewRouteConsent for this handle and show its current snapshot before approval.')}:null;
    return {...output,target:saved.request.target,owner:saved.request.owner,operationId:config.operationId??null,proofSubject:subject,fixtureEffects:saved.fixtureEffects===true,
     consentFactsDigest:current?.review.consentFactsDigest??approved.consentFactsDigest,...(consentChange?{consentChange}:{}),
     ...(blocked?{snapshot:{...output.snapshot,phase:output.snapshot.phase==='stopped'?'stopped':'degraded',published:null},validation:null}:{})};

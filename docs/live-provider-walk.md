@@ -12,7 +12,7 @@ npm install @tnunamak/gozar@0.4.0 @ngrok/ngrok@1.7.0
 ```
 
 For a named connector, install the official `cloudflared` executable instead.
-For the TLS stream proof, OpenSSL must be on PATH. Gozar reports missing local
+Raw TCP/TLS profiles are detect-only in 0.4 by Lead decision, so the HTTP(S) embedding contract ships together; the operator may revisit that scope. Gozar reports missing local
 prerequisites as data and never runs an installer.
 
 ## Prepare a query
@@ -36,10 +36,6 @@ in the commands below; `gozar catalog --query-file query.json --json` lists ids.
 }
 ```
 
-For passthrough use transport `tcp` or `tls` and an application that speaks that
-protocol. Stream proof establishes initial transport to Gozar's forwarding
-boundary; it does not establish application identity or login. The TLS proof
-certificate is synthetic and does not certify your application's certificate.
 
 ## Collect the input requirements
 
@@ -53,10 +49,9 @@ them, then returns setup state. It creates no route. A missing SDK or executable
 can leave setup pending after inputs have been saved. Repeating configure edits
 or rotates saved inputs; it does not reconfigure an existing live route.
 
-For the HTTPS edge and passthrough adapters, obtain the **agent authtoken**, not
+For the HTTPS edge adapter, obtain the **agent authtoken**, not
 an API key, from [Your Authtoken](https://dashboard.ngrok.com/get-started/your-authtoken).
-Use [Domains](https://dashboard.ngrok.com/domains) for the reserved domain when
-the descriptor requests one. Supply the narrowest agent credential permitted by
+Use the assigned free development domain from [Domains](https://dashboard.ngrok.com/domains), or an address your plan permits. A paid custom reserved domain is not required for free HTTPS. Supply the narrowest agent credential permitted by
 your account's endpoint policy. Gozar does not inspect its effective grants or
 entitlement; those remain unknown until the provider accepts the request.
 
@@ -75,8 +70,7 @@ See [tunnel-token handling](https://developers.cloudflare.com/tunnel/reference/t
 
 Ask the catalog again after setup. Review the selected choice's full disclosure
 and every affectsConsent fact, the exact local target and allocated origin.
-Save only its candidateToken and disclosure.revision as a private approval file
-with shape `{ "candidateToken": "...", "disclosureRevision": "..." }` and mode
+Save its current route approval as a private file with shape `{ "kind": "route", "candidateToken": "...", "disclosureRevision": "...", "consentFactsDigest": "consent-v1:..." }` and mode
 0600. This file contains consent bearer data, never a provider credential.
 
 ```sh
@@ -86,8 +80,7 @@ gozar expose --query-file query.json --provider-id ID --approval-file approval.j
 
 The attached CLI stays open while stdin holds its lease. Success returns a route
 with routeState verified, a non-null published endpoint, actual proof time,
-vantage and check results. Keep expiry and proof scope visible. For streams,
-ordinary status does not repeat disruptive initial proof or stamp it fresh.
+vantage, bound subject and check results. Keep expiry and proof scope visible.
 Open the returned endpoint from the intended client and check your app's own
 authorization and successful request independently.
 

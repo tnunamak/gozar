@@ -64,9 +64,9 @@ const verificationOf = (state, checkedAtMs, checks = []) => proven(state === 'us
 const challengeChecks = origin => (typeof origin === 'string' && origin.startsWith('https://') ? ['nonce', 'tls'] : ['nonce']);
 const debtMessage = debt => typeof debt === 'string' ? debt : debt?.message ?? debt?.reason ?? 'Cleanup is incomplete';
 
-function view({ handle, origin, published, state, ownership, properties, ingress = null, verification, limits, cleanup = { state: 'none' }, target, bindTarget, expiresAt, validUntil, now, facts,consentChange,consentFactsDigest,operationId }) {
+function view({ handle, origin, published, state, ownership, properties, ingress = null, verification, limits, cleanup = { state: 'none' }, target, bindTarget, expiresAt, validUntil, now, facts,consentChange,consentFactsDigest,operationId,binding }) {
   return enrichRoute({ schemaVersion: 2, handle: { kind: handle.kind, id: handle.id, generation: handle.generation }, origin, published, state, ownership,
-    properties, ingress, verification, limits, cleanup,...(consentChange?{consentChange}:{}),...(consentFactsDigest?{consentFactsDigest}:{}),operationId:operationId??null }, { target, bindTarget, expiresAt, validUntil, now, facts });
+    properties, ingress, verification, limits, cleanup,...(binding?{binding}:{}),...(consentChange?{consentChange}:{}),...(consentFactsDigest?{consentFactsDigest}:{}),operationId:operationId??null }, { target, bindTarget, expiresAt, validUntil, now, facts });
 }
 const limitsOf = (limits, fallbackPollMs, idleTimeoutMs = null) => ({
   recommendedPollIntervalMs: limits?.recommendedPollIntervalMs ?? fallbackPollMs, idleTimeoutMs: limits?.idleTimeoutMs ?? idleTimeoutMs });
@@ -79,7 +79,7 @@ export function projectDurable(reply, { handle, properties, ingress = null, limi
   const proof=proven(reply.verification?.status==='verified'&&state==='usable'?'verified':'unverified',Number.isFinite(checkedAt)?iso(checkedAt):null,challengeChecks(reply.origin??reply.allocatedOrigin));
   Object.assign(proof,{observedAt:reply.verification?.observedAt??proof.checkedAt,subject:reply.verification?.subject??null});
   // RouteView.origin is the route's address, also before verification; `published` is what the app may advertise.
-  return view({operationId:reply.operationId,consentChange:reply.consentChange,consentFactsDigest:reply.consentFactsDigest, target: reply.target, expiresAt: reply.expiresAt, validUntil: reply.verification?.validUntil, facts, now, handle, origin: reply.allocatedOrigin ?? reply.origin ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
+  return view({binding:reply.binding,operationId:reply.operationId,consentChange:reply.consentChange,consentFactsDigest:reply.consentFactsDigest, target: reply.target, expiresAt: reply.expiresAt, validUntil: reply.verification?.validUntil, facts, now, handle, origin: reply.allocatedOrigin ?? reply.origin ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
     verification: proof,
     limits: limitsOf(limits, 60_000, reply.idleTimeoutMs), cleanup: reply.cleanupDebt ? { state: 'unconfirmed', message: debtMessage(reply.cleanupDebt) } : { state: 'none' } });
 }
@@ -107,10 +107,11 @@ export function projectSession(reply, { handle, properties, ingress = null, limi
 
 /** From an external service record (owner-managed ingress). Privacy and stability stay unknown. */
 export function projectExternal(record, { handle, now = Date.now() }) {
-  const verified = record.verification?.status === 'verified';
-  const checkedAt = typeof record.verification?.checkedAt === 'string' ? Date.parse(record.verification.checkedAt) : now;
-  return view({ target: record.target, validUntil: record.verification?.validUntil, now, handle, origin: record.origin, published: verified ? record.origin : null, state: verified ? 'usable' : 'unverified',
-    ownership: 'external-owned', properties: unknownProperties(), verification: proven(verified ? 'verified' : 'unverified', iso(Number.isFinite(checkedAt) ? checkedAt : now), challengeChecks(record.origin)),
+  const verified = record.verification?.status === 'verified'&&record.verification.method!=='host-command'&&!!record.verification.subject;
+  const checkedAt = typeof record.verification?.checkedAt === 'string' ? Date.parse(record.verification.checkedAt) : null;
+  const proof={...proven(verified?'verified':'unverified',Number.isFinite(checkedAt)?iso(checkedAt):null,challengeChecks(record.origin)),subject:record.verification?.subject??null,observedAt:record.verification?.observedAt??null};
+  return view({operationId:record.embedding?.operationId,consentChange:record.consentChange,consentFactsDigest:record.embedding?.consentReview.consentFactsDigest, target: record.target, validUntil: record.verification?.validUntil, now, handle, origin: record.origin, published: verified ? record.origin : null, state: verified ? 'usable' : 'unverified',
+    ownership: 'external-owned', properties: unknownProperties(), verification:proof,
     limits: limitsOf(null, 60_000) });
 }
 
@@ -122,7 +123,7 @@ export function projectAttached(lease, { handle, now = Date.now() }) {
     : verificationOf(state, lease.checkedAtMs ?? null, checksFor(lease.properties?.proof?.checks, { sse: lease.sseChecked === true, origin: lease.origin ?? null }));
   verification.observedAt=verification.checkedAt??null;
   verification.subject=lease.proofSubject??null;
-  return view({ target: lease.target, bindTarget: lease.bindTarget, expiresAt: lease.expiresAt ?? (Number.isFinite(lease.expiresAtMs) ? iso(lease.expiresAtMs) : undefined), validUntil: lease.proof?.validUntil ?? lease.ingress?.validUntil, facts: lease.facts, now, handle, origin: lease.origin ?? null, published: state === 'usable' ? lease.origin ?? null : null, state, ownership: 'gozar-owned',
+  return view({binding:lease.binding, target: lease.target, bindTarget: lease.bindTarget, expiresAt: lease.expiresAt ?? (Number.isFinite(lease.expiresAtMs) ? iso(lease.expiresAtMs) : undefined), validUntil: lease.proof?.validUntil ?? lease.ingress?.validUntil, facts: lease.facts, now, handle, origin: lease.origin ?? null, published: state === 'usable' ? lease.origin ?? null : null, state, ownership: 'gozar-owned',
     properties: lease.properties ? completeProperties(lease.properties) : lease.properties, ingress: lease.ingress ?? null, verification,
     limits: limitsOf(lease.limits, 5_000), cleanup: lease.cleanup?.state === 'debt' ? { ...lease.cleanup, state: 'unconfirmed' } : lease.cleanup ?? { state: 'none' } });
 }
@@ -158,7 +159,7 @@ const defaults = {
   session: {
     async status({ home, handle }) {
       const { control } = await import('./daemon.mjs');
-      const [directory, sessionId] = splitSession(handle.id);
+      const [directory, sessionId] = checkedSession(handle.id);
       let reply;
       try { reply = await control(join(home, directory), { type: 'status' }, 30_000); }
       catch (cause) { if(cause.code&&cause.code!=='ENOENT'&&cause.code!=='ECONNREFUSED')throw cause;throw gozarError('route_not_found', `No running session ${handle.id}`, null, cause); }
@@ -167,7 +168,7 @@ const defaults = {
     },
     async close({ home, handle }) {
       const { stopSession } = await import('./daemon.mjs');
-      const [name,sessionId]=splitSession(handle.id),directory=join(home,name);
+      const [name,sessionId]=checkedSession(handle.id),directory=join(home,name);
       if(sessionId){const bootstrap=await readRecord(join(directory,'bootstrap.json'));const recorded=bootstrap.sessionId??(await readRecord(join(directory,'session.json'))).snapshot?.sessionId;if(recorded!==sessionId)throw gozarError('route_conflict','The session was replaced; this handle is stale');}
       return stopSession(directory);
     },
@@ -187,6 +188,7 @@ const defaults = {
   },
 };
 export const splitSession = id => { const at = id.indexOf(':'); return at < 0 ? [id, null] : [id.slice(0, at), id.slice(at + 1)]; };
+function checkedSession(id){const parts=splitSession(id);if(!/^port-[0-9]+$/.test(parts[0])||!parts[1]||!/^[A-Za-z0-9_-]+$/.test(parts[1]))throw gozarError('invalid_input','Invalid session handle');return parts;}
 
 /** Fresh proof for one handle. An external service is read with handle {kind:'external', id:<origin>}. */
 export async function routeStatus(request, deps = {}) {
@@ -233,7 +235,7 @@ export async function closeRoute(request, deps = {}) {
       }
       case 'attached': return await (deps.attached ?? await defaults.attached()).closeAttachedRoute(request, deps.attachedDeps);
       case 'external': {
-        const before = await routeStatus({ home: request.home, handle }, deps);
+        let before;try{before=await routeStatus({home:request.home,handle},deps);}catch(error){if(error.code==='route_conflict')throw error;}
         await (deps.external ?? defaults.external).close(request);
         return releasedView(before, handle);
       }

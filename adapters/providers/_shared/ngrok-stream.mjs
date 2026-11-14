@@ -78,7 +78,7 @@ export function createNgrokStreamAdapter(definitionUrl, { loadSdk = () => import
         if(!configured(config)||originFor(config,entry.request)!==effect.origin)throw effectError('setup_required','Complete ngrok setup first');
         const {attempt,session}=entry;
         const sdk=await listenerSdk(ctx,loadSdk);
-        try{const receipt=await lifecycle.open({...ctx,signal:attempt.signal,deadlineMs:attempt.deadlineMs},plan,{sdk,
+        try{const receipt=await lifecycle.open({...ctx,signal:attempt.signal,deadlineMs:attempt.deadlineMs},plan,{sdk,credentialAction:authAction,
           options:{addr:effect.target,authtoken:config.auth,proto:transport,...(transport==='tls'?{domain:config.domain}:effect.origin?{remote_addr:streamAddress(effect.origin,'tcp').origin.slice(6)}:{})},
           normalizeOrigin:value=>{
             const parsed=new URL(value);

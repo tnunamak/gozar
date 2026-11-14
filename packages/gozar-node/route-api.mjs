@@ -19,7 +19,9 @@ import { createEmbeddingServices } from './embedding-services.mjs';
 import { listProviders as inventory } from './embedding-inventory.mjs';
 import { setupConsentReview,consentSnapshot } from './consent-facts.mjs';
 import {offeredConfiguration,readConfigurationDraft,clearConfigurationInput} from './embedding-setup.mjs';
-import {withRouteOperation,listRecordedRoutes,recordOperationView} from './route-operations.mjs';
+import {withRouteOperation,listRecordedRoutes,recordOperationView,operationReferenceForRoute} from './route-operations.mjs';
+import {withServiceContext,reviewExternalConsent,approveExternalConsent} from './service.mjs';
+import {catalogFactsFor} from './catalog-facts.mjs';
 
 const lazy = loader => { let loaded; return () => (loaded ??= loader()); };
 const engine = lazy(() => import('./durable-route.mjs'));
@@ -39,20 +41,26 @@ export function createRouteApi(deps = {}) {
     ...(deps.manifest ? { registry: { manifest: deps.manifest, root: deps.root } } : {}),
     hostCapabilities:deps.hostCapabilities??{}, ...(deps.dispatchEffect?{dispatchEffect:deps.dispatchEffect}:{}),
     ...(deps.readContext ? { readContext: deps.readContext } : {}),
-    decorateSetupAction:({action,adapter,configuration,draftId=null})=>{
-      const review=setupConsentReview({registryId:resolved.registryId,providerId:adapter.id,configuration,draftId,action,facts:adapter.definition.facts??[]});
+    decorateSetupAction:({action,adapter,configuration,draftId=null,inspection})=>{
+      const review=setupConsentReview({registryId:resolved.registryId,providerId:adapter.id,configuration,draftId,action,facts:catalogFactsFor(inspection??{adapter})});
       return {...action,consent:consentSnapshot(review),review:{canonicalInput:review.canonicalInput}};
     } }); };
-  const guard = async action => { try { return structuredClone(await action()); } catch (error) { throw normalizeError(error); } };
+  const publicError=cause=>{const normalized=normalizeError(cause),error=gozarError(normalized.code,normalized.message,normalized.nextAction?structuredClone(normalized.nextAction):null);if(normalized.route)error.route=structuredClone(normalized.route);return error;};
+  const guard = async action => { try { return structuredClone(await action()); } catch (error) { throw publicError(error); } };
   const setupDeps=async request=>{
     const context=await shared(request);
-    return {...deps.setup,...context,validateSetupApproval:({action,adapter,configuration})=>{
-      const review=setupConsentReview({registryId:context.registryId,providerId:adapter.id,configuration,draftId:request.draftId??null,action,facts:adapter.definition.facts??[]});
+    const invoke=async(operation,input)=>{const adapter=context.adapters.find(a=>a.id===request.providerId);if(!adapter?.definition.effectOperations?.some(row=>row.kind==='artifact'&&row.operation===operation))throw gozarError('unsupported','The adapter has not declared this artifact effect');return context.dispatchEffect({kind:'artifact',operation,input});};
+    const artifactExecutor=context.dispatchEffect?{
+      async fetchArtifact(artifact){const result=await invoke('fetch',{artifact});if(typeof result?.bytes!=='string'||Buffer.byteLength(result.bytes,'base64')>32*1024*1024)throw gozarError('artifact_integrity_failed','The artifact observation is invalid');return new Uint8Array(Buffer.from(result.bytes,'base64'));},
+      async executeArtifact({artifact,effects,bytes}){const result=await invoke('execute',{artifact,effects,bytes:Buffer.from(bytes).toString('base64')});if(result?.executed!==true||result.exitCode!==0)throw gozarError('provider_unavailable','The approved artifact did not execute successfully');return result;},
+    }:deps.setup?.artifactExecutor;
+    return {...deps.setup,...context,...(artifactExecutor?{artifactExecutor}:{}),validateSetupApproval:({action,adapter,configuration,inspection})=>{
+      const review=setupConsentReview({registryId:context.registryId,providerId:adapter.id,configuration,draftId:request.draftId??null,action,facts:catalogFactsFor(inspection??{adapter})});
       if(request.approval?.kind!=='setup'||request.approval.consentFactsDigest!==review.consentFactsDigest)throw gozarError('consent_mismatch','Setup consent changed; review the current action again');
     }};
   };
   // A `verify` option ({ origin, target }) replaces the challenge verifier for the durable calls below. It is for tests.
-  const verified=async(action,request={})=>{const module=await engine();return module.withRuntimeContext(await shared(request),()=>deps.verify?module.withVerifier(deps.verify,action):action());};
+  const verified=async(action,request={})=>{const module=await engine(),context={...await shared(request),...(deps.verify?{verify:deps.verify}:{})};return withServiceContext(context,()=>module.withRuntimeContext(context,()=>deps.verify?module.withVerifier(deps.verify,action):action()));};
 
   /** A durable engine reply is a record view; its RouteView needs the adapter's declared properties. */
   async function durableView(reply) {
@@ -74,7 +82,10 @@ export function createRouteApi(deps = {}) {
     if (request.usage?.kind !== 'durable' || (request.intent !== undefined && request.intent !== 'create')) throw gozarError('invalid_input', 'An owner-run route is created with usage durable and intent create');
     const redeemed = await redeemApproval(request, await shared(request));
     const service = deps.service?.addService ?? (await import('./service.mjs')).addService;
-    const { route } = await service({ origin: redeemed.plan.origin, target: request.target, home: redeemed.home });
+    const context=await shared(request),handle={kind:'external',id:redeemed.plan.origin,generation:0};
+    await context.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:adapter.id,revision:redeemed.grant.configurationRevision,handle});
+    const {approval,wait,...query}=request;
+    const { route } = await service({ origin: redeemed.plan.origin, target: request.target, home: redeemed.home,embedding:{request:query,consentReview:redeemed.consentReview,operationId:request.operationId??null} });
     return projectExternal(route, { handle: { kind: 'external', id: route.origin, generation: 0 } });
   }
 
@@ -97,9 +108,9 @@ export function createRouteApi(deps = {}) {
     }),
 
     routeStatus: request => guard(() => verified(async () => viewStatus(request, { adapters: await adapters(), ...deps.view }),request)),
-    closeRoute: request => guard(() => verified(async () => {const view=await viewClose(request, { adapters: await adapters(), ...deps.view });if(view.cleanup.state==='confirmed'){if(request.handle.kind==='attached')await releaseAttachedConfiguration(request,await services());if(request.handle.kind==='session')await releaseSessionConfiguration(request,await services());}return recordOperationView({home:request.home,view});},request)),
+    closeRoute: request => guard(() => verified(async () => {const reference=await operationReferenceForRoute(request);const view=await viewClose(request, { adapters: await adapters(), ...deps.view });if(view.cleanup.state==='confirmed'){if(request.handle.kind==='attached')await releaseAttachedConfiguration(request,await services());if(request.handle.kind==='session')await releaseSessionConfiguration(request,await services());}return recordOperationView({home:request.home,view,reference});},request)),
     suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }),request)),
-    watchRoutes: request => pollRoutes(request, { routeStatus: r => verified(async () => viewStatus(r, { adapters: await adapters(), ...deps.view }),r), ...deps.watch }),
+    watchRoutes:async function*(request){try{for await(const event of pollRoutes(request,{routeStatus:r=>verified(async()=>viewStatus(r,{adapters:await adapters(),...deps.view}),r),...deps.watch}))yield structuredClone(event);}catch(error){throw publicError(error);}},
     getRoutePreferences, setRoutePreferences,
     runSetupAction: request => guard(async () => runSetup(request,await setupDeps(request))),
     listProviders: request => guard(async()=>inventory(request,await shared(request))),
@@ -109,8 +120,8 @@ export function createRouteApi(deps = {}) {
     readConfigurationDraft:request=>guard(async()=>readConfigurationDraft(request,await shared(request))),
     commitConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const snapshot=await context.embeddingServices.commitConfigurationDraft(request);return offeredConfiguration({...request,draftId:undefined},snapshot,context);}),
     clearConfigurationInput:request=>guard(async()=>clearConfigurationInput(request,await setupDeps(request))),
-    reviewRouteConsent:request=>guard(async()=>request.handle?.kind==='session'?sessionConsent(request,{adapters:await adapters()}):request.handle?.kind==='durable'?verified(async()=>(await engine()).reviewDurableConsent(request),request):reviewAttachedConsent(request)),
-    approveRouteConsent:request=>guard(async()=>request.handle?.kind==='session'?sessionConsent(request,{approve:true,adapters:await adapters()}):request.handle?.kind==='durable'?verified(async()=>durableView(await (await engine()).approveDurableConsent(request)),request):approveAttachedConsent(request)),
+    reviewRouteConsent:request=>guard(async()=>request.handle?.kind==='external'?verified(()=>reviewExternalConsent(request),request):request.handle?.kind==='session'?sessionConsent(request,{adapters:await adapters()}):request.handle?.kind==='durable'?verified(async()=>(await engine()).reviewDurableConsent(request),request):reviewAttachedConsent(request)),
+    approveRouteConsent:request=>guard(async()=>request.handle?.kind==='external'?verified(async()=>projectExternal(await approveExternalConsent(request),{handle:request.handle}),request):request.handle?.kind==='session'?sessionConsent(request,{approve:true,adapters:await adapters()}):request.handle?.kind==='durable'?verified(async()=>durableView(await (await engine()).approveDurableConsent(request)),request):approveAttachedConsent(request)),
     resolveClientAddress,
   };
   return api;

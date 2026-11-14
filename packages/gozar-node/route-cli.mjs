@@ -11,7 +11,7 @@ import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { defaultHome } from './default-home.mjs';
 import { promptInputRequirement } from './input-requirements.mjs';
 
-export const ROUTE_COMMANDS = ['catalog', 'ensure', 'adopt', 'setup', 'configure', 'preference', 'watch', 'suspend'];
+export const ROUTE_COMMANDS = ['catalog', 'ensure', 'adopt', 'setup', 'configure', 'preference', 'watch', 'suspend','routes','route-status','close','review-consent','approve-consent'];
 const MAX_FILE_BYTES = 1 << 20;
 const REQUIREMENT_CODES = new Set(['requirements_unsatisfied', 'setup_required', 'unsupported']);
 const APPROVAL_CODES = new Set(['consent_required', 'consent_unknown', 'consent_expired', 'consent_mismatch', 'candidate_stale', 'route_not_found']);
@@ -29,6 +29,11 @@ const specs = {
   preference: { values: ['profile-home', 'expected-revision', 'on-unavailable'], multi: ['prefer'], flags: ['json'], positional: 'show or set' },
   suspend: { values: ['handle-file', 'route', 'home'], flags: ['json'] },
   watch: { values: ['handle-file', 'home', 'interval-ms'], flags: ['json'] },
+  routes:{values:['home','owner'],flags:['json']},
+  'route-status':{values:['home','handle-file'],flags:['json']},
+  close:{values:['home','handle-file'],flags:['json']},
+  'review-consent':{values:['home','handle-file'],flags:['json']},
+  'approve-consent':{values:['home','handle-file','approval-file'],flags:['json']},
 };
 
 function parse(command, argv) {
@@ -81,6 +86,7 @@ async function readApproval(options, { needed }) {
   }
   return readJson(options['approval-file'], 'The approval file', { privateFile: true });
 }
+async function readRef(options){const file=await readJson(required(options,'handle-file'),'The handle file');return {home:file.home??options.home??defaultHome(),handle:file.handle??file};}
 
 /** Resolves when the lease holder (stdin) ends or the process is asked to stop. */
 function untilReleased(stdin) {
@@ -98,6 +104,11 @@ function untilReleased(stdin) {
 }
 
 const commandsRun = {
+  async routes({options,api,out}){out(await api.listRoutes({home:options.home??defaultHome(),...(options.owner?{owner:options.owner}:{})}));return 0;},
+  async 'route-status'({options,api,out}){out(await api.routeStatus(await readRef(options)));return 0;},
+  async close({options,api,out}){const result=await api.closeRoute({...await readRef(options),mode:'remove'});out(result);return result.cleanup.state==='confirmed'?0:1;},
+  async 'review-consent'({options,api,out}){out(await api.reviewRouteConsent(await readRef(options)));return 0;},
+  async 'approve-consent'({options,api,out}){const approval=await readApproval(options,{needed:true});out(await api.approveRouteConsent({...await readRef(options),approvalToken:approval.approvalToken,consentFactsDigest:approval.consentFactsDigest}));return 0;},
   async configure({ options, api, out, err, prompt, storeSecret }) {
     const query = await readQuery(options), home = options.home ?? query.home ?? defaultHome();
     const catalog = await api.catalogRoutes({ ...query, home });
@@ -167,13 +178,13 @@ const commandsRun = {
   },
 
   async setup({ options, positional, api, out, err, storeSecret, prompt }) {
-    if (options['provider-id'] !== undefined && !options.prompt) throw gozarError('invalid_input', '--provider-id on setup requires --prompt and --query-file');
     if (options.value !== undefined && options['secret-file'] !== undefined) throw gozarError('invalid_input', '--value and --secret-file cannot be used together');
     const home = options.home ?? defaultHome();
     const approval = await readApproval(options, { needed: true });
     const query=await readQuery({...options,home});
     const catalog=await api.catalogRoutes(query);
-    const candidate=catalog.candidates.find(c=>c.providerId===options['provider-id']&&c.configuration.actions.some(a=>a.id===positional));
+    const matches=catalog.candidates.filter(c=>(options['provider-id']??query.providerId)===c.providerId&&c.configuration.actions.some(a=>a.id===positional));
+    const candidate=matches.length===1?matches[0]:null;
     if(!candidate)throw gozarError('candidate_stale','Select exactly one provider and current offered action');
     const configuration=candidate.configuration,action=configuration.actions.find(a=>a.id===positional);
     const descriptor=configuration.inputRequirements.find(i=>i.actionId===positional);
@@ -256,7 +267,8 @@ export async function routeMain(argv, deps = {}) {
     if (!Object.hasOwn(commandsRun, command)) throw gozarError('invalid_input', `Unknown command ${command}`);
     const { options, positional } = parse(command, rest);
     const rootApi = deps.api ?? await import('./api.mjs');
-    const api = options['registry-file'] ? rootApi.createGozar({ manifest: options['registry-file'], root: options['registry-root'] }) : rootApi;
+    const api = deps.api&&!options['registry-file']?rootApi:rootApi.createGozar({...(options['registry-file']?{manifest:options['registry-file'],root:options['registry-root']}:{}),
+      hostCapabilities:{'runtime.attached':{known:true,value:true},'runtime.durable':{known:true,value:true},'secrets.backend':{known:true,value:true},'installer.execute':{known:true,value:false}}});
     const storeSecret = deps.storeSecret ?? api.storeSecret;
     const stdin = deps.stdin ?? process.stdin;
     const prompt = deps.prompt ?? (descriptor => promptInputRequirement(descriptor, { stdin, stderr }));

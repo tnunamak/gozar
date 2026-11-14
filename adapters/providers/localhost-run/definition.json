@@ -336,7 +336,7 @@
       {
         "id": "storage-policy",
         "label": "Credential storage",
-        "value": "Private local files; read-back reports presence and non-secret values only.",
+        "value": "The configured host credential backend owns custody; the default uses private local files. Read-back returns presence and non-secret values only.",
         "known": true,
         "group": "setup",
         "affectsConsent": false,

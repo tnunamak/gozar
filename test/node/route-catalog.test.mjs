@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { adoptDisclosureRevision, buildCatalog, catalogRoutes, preferenceRefFor } from '../../packages/gozar-node/route-catalog.mjs';
 import { normalizeError } from '../../packages/gozar-node/error-normalizer.mjs';
+import {createEmbeddingServices} from '../../packages/gozar-node/embedding-services.mjs';
 import { action, assertShape, codeOf, fixtures, properties, query, scratch, stubAdapter, tokenStubs } from './route-schema-check.mjs';
 
 const durableFacts = async ({ adapterId }) => ({ planDigest: `durable-${adapterId}`, observedResource: `durable-res-${adapterId}` });
 function deps(adapters, over = {}) {
   const tokens = tokenStubs();
-  return { adapters, platform: 'linux', preferenceRecord: { schemaVersion: 1, revision: 0, adapterPreference: [], onUnavailable: 'ask' }, issue: tokens.issue,
+  return { adapters, registryId:'synthetic-registry',embeddingServices:createEmbeddingServices({registryId:'synthetic-registry'}),platform: 'linux', preferenceRecord: { schemaVersion: 1, revision: 0, adapterPreference: [], onUnavailable: 'ask' }, issue: tokens.issue,
     consentBinding: tokens.consentBinding, durablePlanFacts: durableFacts, readContext: { now: () => 0, configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified' }) },
     now: () => Date.parse('2026-11-12T12:00:00Z'), tokens, ...over };
 }
@@ -103,7 +104,7 @@ test('red: a needs-setup candidate gets no token, and a ready one is bound to pl
   assert.equal(needs.expiresAt, null);
   assert.equal(needs.setup.actions[0].id, 'login');
   assert.match(ready.candidateToken, /^tok_/);
-  assert.deepEqual(d.tokens.live.get(ready.candidateToken).grant, { adapterId: 'ready-one', planDigest: 'plan-ready-one-127.0.0.1:8799', observedResource: 'res-ready-one' });
+  assert.deepEqual(d.tokens.live.get(ready.candidateToken).grant, { adapterId: 'ready-one', planDigest: 'plan-ready-one-127.0.0.1:8799', observedResource: 'res-ready-one',configurationRevision:ready.configuration.revision,scopeId:ready.configuration.scopeId,consentFactsDigest:ready.consent.consentFactsDigest });
   assert.equal(d.tokens.live.size, 1);
 });
 
@@ -129,7 +130,7 @@ test('a durable usage takes plan facts from the durable engine, and a durable pi
   const catalog = await catalogRoutes(q, d);
   assertShape('Catalog', catalog);
   assert.equal(catalog.candidates[0].display.label, 'Route bravo');
-  assert.deepEqual(d.tokens.live.get(catalog.candidates[0].candidateToken).grant, { adapterId: 'bravo', planDigest: 'durable-bravo', observedResource: 'durable-res-bravo' });
+  const candidate=catalog.candidates[0];assert.deepEqual(d.tokens.live.get(candidate.candidateToken).grant, { adapterId: 'bravo', planDigest: 'durable-bravo', observedResource: 'durable-res-bravo',configurationRevision:candidate.configuration.revision,scopeId:candidate.configuration.scopeId,consentFactsDigest:candidate.consent.consentFactsDigest });
   assert.ok(d.adapters.every(a => a.calls.plan === 0));
 });
 

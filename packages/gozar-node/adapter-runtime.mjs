@@ -376,9 +376,11 @@ async function runDetectRecipe(recipe,dispatchEffect) {
     }else completion=await driver.execute(effect);
     output = coreStep({ state: output.state, command: { sessionId: 'probe', ...completion }, adapters, requirements, host: { ...driver.host, nowMs: driver.nowMs() } });
   }
-  return output.snapshot.observations?.probe === 'present';
+  const observation=output.snapshot.observations?.probe;
+  if(observation===undefined||observation==='unknown')throw effectError('provider_unavailable','The read-only probe did not establish its prerequisite');
+  return observation === 'present';
 }
-export async function probeWithEffects(recipe,dispatchEffect){try{return {ok:await runDetectRecipe(recipe,dispatchEffect)};}catch{return {ok:false};}}
+export async function probeWithEffects(recipe,dispatchEffect){return {ok:await runDetectRecipe(recipe,dispatchEffect)};}
 
 /**
  * The read-only ReadContext an engine hands to adapters. `probe` runs a read-only detect recipe through the same
@@ -398,7 +400,7 @@ export function createReadContext({ home, platform = process.platform, now = Dat
       throw Object.assign(new Error('Unknown route name'), { code: 'route_not_found' });
     }),
     probe: probe ?? (async recipe => {
-      try { return { ok: await runDetectRecipe(recipe) }; } catch { return { ok: false }; }
+      return { ok: await runDetectRecipe(recipe) };
     }),
     verifyChallenge: verifyChallenge ?? (async (origin, target) => {
       const { verification } = await import('./service-state.mjs');

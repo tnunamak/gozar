@@ -24,8 +24,8 @@ export function prerequisitesFor(inspection, observedAt) {
   });
 }
 
-export function configurationFor(actions, saved) {
-  const inputRequirements = actions.filter(action => ['provide-secret', 'provide-value'].includes(action.kind)).map(action => ({
+export function configurationFor(actions, saved, declared) {
+  const inputRequirements = declared?structuredClone(declared):actions.filter(action => ['provide-secret', 'provide-value'].includes(action.kind)).map(action => ({
     id: action.id, actionId: action.id, label: action.secretLabel ?? action.valueLabel ?? action.label,
     kind: action.valueFormat ?? 'text', secret: action.kind === 'provide-secret', help: action.help ?? action.label,
     required: action.required !== false, obtainUrl: action.obtainUrl ?? null, validation: 'syntax-only',
@@ -50,16 +50,16 @@ export function enrichRoute(route, { target, bindTarget, expiresAt, validUntil, 
   const expiry = typeof expiresAt === 'string' ? known(expiresAt) : unknown();
   const proofExpiry = typeof validUntil === 'string' ? known(validUntil) : unknown();
   const expired = [expiry, proofExpiry].some(item => item.known && Date.parse(item.value) <= now);
-  const verified = route.verification.status === 'verified' && !expired;
+  const verified = route.verification.status === 'verified' && !expired && route.verification.subject!=null;
   const verification = { ...route.verification, observedAt:route.verification.observedAt??route.verification.checkedAt??null,subject:route.verification.subject??null, status: verified ? 'verified' : 'unverified', validUntil: proofExpiry,
     results: route.verification.checks.map(check => ({ check, status: verified ? 'passed' : 'unknown' })) };
   let localPort = unknown();
   try { const url = new URL(target.includes('://') ? target : `http://${target}`); localPort = known(Number(url.port || (url.protocol === 'https:' ? 443 : 80))); } catch { /* no recorded target */ }
-  return { ...route, schemaVersion: 2,operationId:route.operationId??null,published: expired ? null : route.published, verification, expiresAt: expiry,
+  return { ...route,state:route.state==='usable'&&!verified?'unverified':route.state, schemaVersion: 2,operationId:route.operationId??null,published: verified ? route.published : null, verification, expiresAt: expiry,
     binding:route.binding??bindingFor({observedTarget:undefined,authority:route.ownership==='external-owned'?'owner':'unknown',remedy:null}),
     cleanup:cleanupRecovery(route.cleanup,route.handle),
     routeState: route.cleanup.state === 'unconfirmed' ? 'cleanup-unconfirmed' : expired ? 'expired' : verified ? 'verified'
       : route.state === 'released' ? 'inactive' : route.origin ? 'detected' : 'unknown',
     hostConfiguration: { target: target ? known(target) : unknown(), localPort, bindTarget: bindTarget ? known(bindTarget) : unknown(), origin: route.origin ? known(route.origin) : unknown() },
-    facts, actions: route.state === 'released' ? [] : ['stop', 'edit', 'rotate'] };
+    facts, actions: route.state === 'released' ? [] : route.consentChange?.reason==='proof-refresh-unsupported'?['stop']:['stop', 'edit', 'rotate'] };
 }

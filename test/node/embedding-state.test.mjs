@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createRouteApi, fakeRegistry, fakeReadContext, fakeRouteScenarios } from '@tnunamak/gozar/testing';
-import { storeSecret } from '@tnunamak/gozar';
 import { renderScreen } from '../../examples/remote-access-screen.mjs';
 import { loadAdapters } from '../../packages/gozar-node/adapter-runtime.mjs';
 import { projectSession } from '../../packages/gozar-node/route-view.mjs';
@@ -50,12 +49,16 @@ test('fake states cover every admitted kind with expiry, checks and cleanup as d
 test('session proof uses the recorded time, vantage and check results rather than the read clock', () => {
   const fixture = fakeRouteScenarios()[1];
   const receipt = { observedAtMs: 1000, expiresAtMs: 3000, vantage: 'public', tls: true, instanceMatched: true, sse: false };
-  const route = projectSession({ snapshot: {phase:'published-ready',published:fixture.origin}, validation:{probeReceipt:receipt} },
+  const route = projectSession({proofSubject:fixture.verification.subject,snapshot: {phase:'published-ready',published:fixture.origin}, validation:{probeReceipt:receipt} },
     {handle:fixture.handle,properties:fixture.properties,now:2000});
   assert.equal(route.verification.checkedAt, new Date(1000).toISOString());
   assert.equal(route.verification.vantage,'public');
   assert.equal(route.verification.validUntil.value,new Date(3000).toISOString());
   assert.deepEqual(route.verification.checks,['tls','nonce']);
+});
+test('a successful historical receipt with an unknown subject cannot publish',()=>{
+ const fixture=fakeRouteScenarios()[1];const route=projectSession({snapshot:{phase:'published-ready',published:fixture.origin,checkedAtMs:1000}}, {handle:fixture.handle,properties:fixture.properties,now:2000});
+ assert.equal(route.verification.status,'unverified');assert.equal(route.published,null);assert.equal(route.verification.subject,null);
 });
 
 test('secret intake, read-back, edit and rotation never return a secret', async t => {
@@ -66,14 +69,16 @@ test('secret intake, read-back, edit and rotation never return a secret', async 
   const q=query({home,usage:{kind:'session',lifetimeMs:60000}});
   const read=async()=> (await api.catalogRoutes(q)).candidates[0];
   assert.equal((await read()).configuration.credentials.auth.value,false);
-  await api.runSetupAction({home,actionId:'domain',value:'example.invalid',approval:{digest:'domain',disclosureRevision:'test'}});
+  const setup=async(actionId,input)=>{const candidate=await read(),action=candidate.configuration.actions.find(a=>a.id===actionId);return api.runSetupAction({home,owner:q.owner,providerId:candidate.providerId,expectedConfigurationRevision:candidate.configuration.revision,actionId,...input,approval:{kind:'setup',digest:action.digest,disclosureRevision:action.disclosure.revision,consentFactsDigest:action.consent.consentFactsDigest}});};
+  await setup('domain',{value:'example.invalid'});
   for(const secret of ['first-private-test-value','replacement-private-test-value']) {
-    const stored=await storeSecret({home,value:secret});assert.deepEqual(Object.keys(stored),['handle']);
-    await api.runSetupAction({home,actionId:'auth',secretHandle:stored.handle,approval:{digest:'auth',disclosureRevision:'test'}});
+    const before=await read(),configuration=before.configuration;
+    const stored=await api.storeSecret({home,owner:q.owner,providerId:before.providerId,inputId:'auth',scopeId:configuration.scopeId,expectedConfigurationRevision:configuration.revision,bytes:new TextEncoder().encode(secret)});assert.deepEqual(Object.keys(stored).sort(),['configurationRevision','handle','scopeId']);
+    await setup('auth',{secretHandle:stored.handle});
     const candidate=await read();assert.equal(candidate.configuration.credentials.auth.value,true);assert.equal(candidate.setup.state,'ready');
     assert.ok(candidate.configuration.actions.some(a=>a.id==='auth')); assert.ok(!JSON.stringify(candidate).includes(secret)); assert.ok(!JSON.stringify(candidate).includes(stored.handle));
   }
-  await api.runSetupAction({home,actionId:'domain',value:'example.invalid',approval:{digest:'domain',disclosureRevision:'test'}});
+  await setup('domain',{value:'example.invalid'});
   assert.equal((await read()).configuration.values.domain,'example.invalid');
 });
 

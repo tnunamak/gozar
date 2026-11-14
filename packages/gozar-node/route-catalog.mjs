@@ -12,6 +12,8 @@ import { loopbackTarget } from './durable-route.mjs';
 import { checksFor, completeProperties, needsFor } from './route-view.mjs';
 import { adoptDisclosureRevision, consentDisclosureRevision } from './adopt-disclosure.mjs';
 import { routeConsentReview, setupConsentReview,consentSnapshot } from './consent-facts.mjs';
+import {catalogFactsFor} from './catalog-facts.mjs';
+import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
 
 export { adoptDisclosureRevision } from './adopt-disclosure.mjs';
 export { consentDisclosureRevision } from './adopt-disclosure.mjs';
@@ -110,7 +112,7 @@ export async function inspectAdapter(adapter, context, platform) {
 /** One revision for the provider-side state: it changes when a setup state, an action or a property changes. */
 export function catalogRevisionOf(inspections, platform) {
   const view = inspections.map(item => ({ id: item.adapter.id, state: item.state, properties: item.properties,
-    facts: item.adapter.definition.facts ?? [], availability: availabilityFor(item.adapter.definition),
+    facts: catalogFactsFor(item), availability: availabilityFor(item.adapter.definition),
     actions: item.actions.map(action => [action.id, action.digest, action.disclosure.revision]), disclosure: item.adapter.definition.disclosure.revision }));
   return `catrev_${sha(JSON.stringify([platform, view])).slice(0, 32)}`;
 }
@@ -164,7 +166,9 @@ async function collect(query, deps) {
     // so the stream check appears only when the request needs SSE.
     const declared = completeProperties(inspection.properties, definition, query.usage.kind);
     const properties = { ...declared, proof: { ...declared.proof, checks: checksFor(declared.proof.checks, { sse: query.requirements.protocols.includes('sse') }) } };
-    let setupState = state, grant = null;
+    const hostPrerequisites=capabilityPrerequisites(definition,query.hostCapabilities??deps.hostCapabilities??{});
+    const unavailableHost=hostPrerequisites.find(item=>item.state!=='present');
+    let setupState = unavailableHost?'unsupported':state, grant = null;
     const unmet = [];
     if (supportedPlatform(platform)) {
       unmet.push(...unmetRequirements({ requirements: query.requirements, usage: query.usage, definition, properties, setupState }));
@@ -186,7 +190,7 @@ async function collect(query, deps) {
             const own = bindConfiguration(context, adapter.id);
             const plan = await adapter.plan(own, request);
             const observed = await adapter.observe(own, request);
-            grant = { adapterId: adapter.id, planDigest: plan.digest, observedResource: observed.resourceKey };
+            grant = { adapterId: adapter.id, planDigest: plan.digest, observedResource: observed.resourceKey,...(plan.origin?{origin:plan.origin}:{}) };
           }
         } catch (error) {
           // No durable recipe or no plan: not usable for this usage. A failing provider read leaves the state unknown.
@@ -197,6 +201,7 @@ async function collect(query, deps) {
     } else unmet.push({ requirement: 'platform', actual: platform, reasonCode: 'unsupported_platform' });
 
     const availability = availabilityFor(definition);
+    if(unavailableHost)for(const kind of Object.keys(availability))if(availability[kind].state==='available')availability[kind]={state:'unsupported',reason:`host-capability-${unavailableHost.state}`};
     if (supportedPlatform(platform) && availability[query.usage.kind].state === 'detect-only') setupState = 'detect-only';
     const eligible = unmet.length === 0 && availability[query.usage.kind].state === 'available';
     const observedAt = new Date(context.now()).toISOString();
@@ -204,14 +209,14 @@ async function collect(query, deps) {
     const offered = [...new Map([...actions, ...(inspection.missingActions ?? [])].map(action => [action.id, action])).values()];
     const decorate = action => {
       if (!deps.registryId || !saved.revision) return action;
-      const review = setupConsentReview({registryId:deps.registryId,providerId:adapter.id,configuration:saved,draftId:query.draftId??null,action,facts:definition.facts??[]});
+      const review = setupConsentReview({registryId:deps.registryId,providerId:adapter.id,configuration:saved,draftId:query.draftId??null,action,facts:catalogFactsFor(inspection)});
       return {...action,consent:consentSnapshot(review),review:{canonicalInput:review.canonicalInput}};
     };
     const decorated = offered.map(decorate);
-    const configuration = configurationFor(decorated, saved);
+    const configuration = configurationFor(decorated, saved,definition.inputRequirements);
     const candidate = { providerId: adapter.id, name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
       display: { label: definition.label, description: describe(definition, properties), needs: needsFor(definition, query.usage.kind) }, properties,
-      availability, prerequisites: prerequisitesFor(inspection, observedAt), configuration, facts: structuredClone(definition.facts ?? []),
+      availability, prerequisites: [...prerequisitesFor(inspection, observedAt),...hostPrerequisites], configuration, facts: catalogFactsFor(inspection),
       setup: { state: setupState, actions: setupState === 'action-required' ? (inspection.missingActions ?? actions).map(decorate) : [] }, disclosure: { ...definition.disclosure, revision: consentDisclosureRevision(definition) },
       candidateToken: null, expiresAt: null };
     if (query.usage.kind === 'durable' && query.intent === 'adopt') {

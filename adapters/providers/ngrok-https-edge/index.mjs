@@ -31,18 +31,18 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
     definition: new URL('./definition.json', import.meta.url),
     extend: ({ base, definition, platformOf, unsupported }) => {
       const action = (id, label, secretLabel) => {
-        const body = { id, kind: 'provide-secret', label, secretLabel, obtainUrl: 'https://dashboard.ngrok.com/get-started/your-authtoken', disclosure: definition.disclosure };
+        const body = { id, kind: 'provide-secret', label, secretLabel,help:'Use an agent authtoken, not an API key. Saving it checks local syntax only; presence does not establish provider acceptance.', obtainUrl: 'https://dashboard.ngrok.com/get-started/your-authtoken', disclosure: definition.disclosure };
         return { ...body, digest: sha(body) };
       };
-      const authAction = action('auth', 'Provide your ngrok auth token', 'ngrok auth token');
+      const authAction = action('auth', 'Provide your ngrok agent authtoken', 'ngrok agent authtoken');
       const domainAction = (() => {
         const body = { id: 'reserved-domain', kind: 'provide-value', label: 'Provide your assigned development or reserved domain', valueLabel: 'Assigned development or reserved domain',
-          obtainUrl: 'https://dashboard.ngrok.com/domains', valuePlaceholder: 'example.ngrok.app', valueFormat: 'domain', required: true, disclosure: definition.disclosure };
+          help:'Copy the assigned development domain from your account. It is valid on the free plan; use a reserved/custom domain only if your account already permits it.',obtainUrl: 'https://dashboard.ngrok.com/domains', valuePlaceholder: 'example.ngrok.app', valueFormat: 'domain', required: true, disclosure: definition.disclosure };
         return { ...body, digest: sha(body) };
       })();
       const installAction = (() => {
         const body = { id: 'install-sdk', kind: 'instructions', label: 'Install the ngrok SDK', disclosure: definition.disclosure,
-          instructions: 'Reinstall Gozar with optional dependencies enabled so the ngrok SDK is present.' };
+          instructions: 'Install the optional peer runtime in your app: npm install @ngrok/ngrok@1.7.0, then ask the catalog again.' };
         return { ...body, digest: sha(body) };
       })();
 
@@ -76,9 +76,9 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
           if (!supportedPlatform(platformOf(ctx))) throw unsupported('this platform');
           if (request?.usage?.kind !== 'attached') throw unsupported(`the ${request?.usage?.kind} kind`);
           const config = settings(await ctx.configuration(request.configurationRef ?? null).catch(() => null));
-          if (!config) throw effectError('setup_required', 'Set up the ngrok auth token and reserved domain first');
+          if (!config) throw effectError('setup_required', 'Set up the ngrok agent authtoken and assigned development or reserved domain first');
           const origin = `https://${config.reservedDomain}`;
-          if (request.origin && request.origin !== origin) throw effectError('setup_required', 'The requested origin is not your reserved ngrok domain');
+          if (request.origin && request.origin !== origin) throw effectError('setup_required', 'The requested origin differs from the configured account domain');
           const resourceKey = keyFor(config.reservedDomain);
           const effects = [{ adapterId: definition.id, operation: 'create', kind: 'sdk-listener', target: request.target, origin, configurationRef: request.configurationRef ?? null }];
           return { digest: sha({ resourceKey, effects }), origin, resourceKey, effects,
@@ -91,9 +91,9 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
           await ctx.assertGeneration();
           if (!Number.isSafeInteger(ctx.generation)) throw effectError('provider_unavailable', 'The context carries no generation');
           const config = settings(await ctx.configuration(effect.configurationRef).catch(() => null));
-          if (!config || `https://${config.reservedDomain}` !== effect.origin) throw effectError('setup_required', 'Set up the ngrok auth token and reserved domain first');
+          if (!config || `https://${config.reservedDomain}` !== effect.origin) throw effectError('setup_required', 'Set up the ngrok agent authtoken and assigned development or reserved domain first');
           const sdk=await listenerSdk(ctx,loadSdk);
-          return lifecycle.open(ctx,plan,{sdk,options:{addr:effect.target,authtoken:config.authToken,domain:config.reservedDomain}});
+          return lifecycle.open(ctx,plan,{sdk,credentialAction:authAction,options:{addr:effect.target,authtoken:config.authToken,domain:config.reservedDomain}});
         },
 
         async observe(ctx, request) {

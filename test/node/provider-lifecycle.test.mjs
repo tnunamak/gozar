@@ -18,13 +18,13 @@ test('a new fixture provider loads through the public factory and crosses setup,
   const q=query({home,usage:{kind:'attached'},requirements:{reach:'this-device',transport:'any',payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}});
   const [choice]=(await api.catalogRoutes(q)).candidates;
   assert.equal(choice.configuration.inputRequirements[0].secret,true);
-  const {handle}=await gozar.storeSecret({home,value:'private-fixture-input'});
+  const {handle}=await api.storeSecret({home,owner:q.owner,providerId:choice.providerId,inputId:'credential',scopeId:choice.configuration.scopeId,expectedConfigurationRevision:choice.configuration.revision,bytes:new TextEncoder().encode('private-fixture-input')});
   const action=choice.configuration.actions[0];
-  await api.runSetupAction({home,actionId:action.id,secretHandle:handle,approval:{digest:action.digest,disclosureRevision:action.disclosure.revision}});
+  await api.runSetupAction({home,owner:q.owner,providerId:choice.providerId,expectedConfigurationRevision:choice.configuration.revision,actionId:action.id,secretHandle:handle,approval:{kind:'setup',digest:action.digest,disclosureRevision:action.disclosure.revision,consentFactsDigest:action.consent.consentFactsDigest}});
   const catalog=await api.catalogRoutes(q), selected=catalog.candidates[0];
   assert.match(renderScreen(catalog),/Fixture fact: "rendered from data"/);
   assert.match(renderScreen(catalog),/Input requirement: Fixture credential/);
-  const route=await api.expose({...q,wait:'verified',approval:{candidateToken:selected.candidateToken,disclosureRevision:selected.disclosure.revision}});
+  const route=await api.expose({...q,wait:'verified',approval:{kind:'route',candidateToken:selected.candidateToken,disclosureRevision:selected.disclosure.revision,consentFactsDigest:selected.consentFactsDigest}});
   t.after(async()=>{await api.closeRoute({home,handle:route.handle,mode:'remove'}).catch(()=>{});});
   assertShape('RouteView',route); assert.equal(route.routeState,'verified');
   const stopped=await api.closeRoute({home,handle:route.handle,mode:'remove'});
@@ -34,15 +34,16 @@ test('a new fixture provider loads through the public factory and crosses setup,
   assert.ok(events.indexOf('start')<events.indexOf('proof')); assert.ok(events.indexOf('stop')<events.indexOf('cleanup'));
 });
 
-test('core rejects an adapter-tagged proof for another attempt and cleans up the owned fixture', async t => {
-  const home=await scratch(t),root=join(home,'registry'),id='mismatched-proof';
+for(const mismatch of ['attempt','endpoint','allocation'])test(`core rejects another ${mismatch} and cleans up the owned fixture`, async t => {
+  const home=await scratch(t),root=join(home,'registry'),id=`mismatched-${mismatch}`;
   const registry=await fakeRegistry({id,kinds:['attached'],reach:'this-device',transport:'tcp',proofProtocol:'echo',dir:root});t.after(registry.cleanup);
   const module=join(root,'providers',id,'index.mjs');
-  await writeFile(module,(await readFile(module,'utf8')).replace('attemptId:current.id','attemptId:"another-attempt"'));
+  const replacements={attempt:['attemptId:current.id','attemptId:"another-attempt"'],endpoint:['endpoint:origin','endpoint:"tcp://127.0.0.1:1"'],allocation:['generation: ctx.generation ?? 1','generation: 9']};
+  const source=await readFile(module,'utf8'),[before,after]=replacements[mismatch];assert.ok(source.includes(before));await writeFile(module,source.replace(before,after));
   const api=gozar.createGozar({manifest:registry.manifest,root});
   const q=query({home,usage:{kind:'attached'},requirements:{reach:'this-device',transport:'tcp',payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}});
   const choice=(await api.catalogRoutes(q)).candidates[0];
-  await assert.rejects(api.expose({...q,wait:'verified',approval:{candidateToken:choice.candidateToken,disclosureRevision:choice.disclosure.revision}}),error=>error.code==='verification_failed');
+  await assert.rejects(api.expose({...q,wait:'verified',approval:{kind:'route',candidateToken:choice.candidateToken,disclosureRevision:choice.disclosure.revision,consentFactsDigest:choice.consentFactsDigest}}),error=>error.code===(mismatch==='allocation'?'provider_unavailable':'verification_failed'));
   const events=(await readFile(join(root,'providers',id,'events.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line).event);
   assert.ok(events.includes('start'));assert.ok(events.includes('stop'));assert.ok(events.includes('cleanup'));
 });

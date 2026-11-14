@@ -3,11 +3,18 @@ import { join, dirname } from 'node:path';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import { readFileSync } from 'node:fs';
+import {AsyncLocalStorage} from 'node:async_hooks';
 import { atomicWrite } from './journal.mjs';
 import { statusRoutes, durableRouteAt } from './durable-route.mjs';
-import { gozarError, normalizeError } from './error-normalizer.mjs';
+import { gozarError, normalizeError,instructionAction } from './error-normalizer.mjs';
 import { noncePattern, trustedDirectory, canonicalHome, privateDirectory, readRecord, withExclusiveLock,
   canonicalAuthority, transcript, verification } from './service-state.mjs';
+import {currentRouteReview} from './route-consent.mjs';
+import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
+import {consentReview,consentSnapshot} from './consent-facts.mjs';
+import {issueConsentToken,redeemConsentToken,consentBinding,canonicalDigest} from './consent-token.mjs';
+const serviceContext=new AsyncLocalStorage();
+export const withServiceContext=(context,action)=>serviceContext.run(context,action);
 
 const refuse = (code, message) => Object.assign(new Error(message), { code });
 function originValue(value) {
@@ -43,11 +50,11 @@ function externalOwnerId() {
   }
   throw refuse('internal_error', 'The registry has no adapter for an owner-kept route');
 }
-function config({ origin, target, verifyCmd = null }) {
+function config({ origin, target, verifyCmd = null,embedding }) {
   if (verifyCmd !== null && (typeof verifyCmd !== 'string' || !verifyCmd.trim() || verifyCmd.includes('\0')))
     throw refuse('invalid_input', 'Invalid verification command');
   const route = { schemaVersion: 1, origin: originValue(origin), target: targetValue(target),
-    adapterId: externalOwnerId(), ownership: 'external-owned', verifyCmd };
+    adapterId: externalOwnerId(), ownership: 'external-owned', verifyCmd,...(embedding?{embedding}: {}) };
   if (Buffer.byteLength(JSON.stringify(route)) > 65536) throw refuse('invalid_input', 'Service record exceeds size limit');
   return route;
 }
@@ -73,9 +80,25 @@ async function mutate(home, origin, action) {
   await privateDirectory(locks);
   return withExclusiveLock(join(locks, hash(origin)), () => action(dir));
 }
-async function present(route) { return { ...route, verification: await verification(route) }; }
-async function addServiceUnguarded({ origin, target, verifyCmd = null, home = defaultHome() }) {
-  const route = config({ origin, target, verifyCmd });
+async function currentExternal(route){
+ const runtime=serviceContext.getStore();if(!runtime?.embeddingServices||!route.embedding)return null;
+ const adapter=runtime.adapters.find(item=>item.id===route.adapterId);if(!adapter)throw refuse('provider_unavailable','The recorded owner-route adapter is unavailable');
+ return currentRouteReview(route.embedding.request,adapter,runtime);
+}
+async function present(route) {
+ const runtime=serviceContext.getStore(),current=await currentExternal(route);
+ let checked;
+ if(current&&current.review.consentFactsDigest!==route.embedding.consentReview.consentFactsDigest){
+  route.embedding.reviewRequired=true;
+  await mutate(route.embedding.request.home,route.origin,async dir=>{const fresh=await stored(join(dir,filename(route.origin)),filename(route.origin));if(fresh.embedding?.consentReview.consentFactsDigest===route.embedding.consentReview.consentFactsDigest)await atomicWrite(join(dir,filename(route.origin)),{...fresh,embedding:{...fresh.embedding,reviewRequired:true}});});
+ }
+ if(current&&route.embedding.reviewRequired)checked={status:'unverified',checkedAt:null,observedAt:null,subject:null};
+ else checked=await (runtime?.verify??verification)(route);
+ if(current){const identity=await runtime.embeddingServices.resolveIdentity({home:route.embedding.request.home});checked={...checked,observedAt:checked.checkedAt??null,subject:{origin:route.origin,target:route.target,...identity,handleGeneration:0},validUntil:checked.checkedAt?new Date(Date.parse(checked.checkedAt)+15000).toISOString():null};}
+ return {...route,verification:checked,...(current&&checked.status!=='verified'?{consentChange:{oldDigest:route.embedding.consentReview.consentFactsDigest,newDigest:current.review.consentFactsDigest,reason:'consent-or-proof-changed',nextAction:instructionAction('review-route-consent','Review changed route consent','Call reviewRouteConsent for this handle and show its current snapshot before approval.')}}:{})};
+}
+async function addServiceUnguarded({ origin, target, verifyCmd = null, home = defaultHome(),embedding }) {
+  const route = config({ origin, target, verifyCmd,embedding });
   await mutate(home, route.origin, async dir => {
     const name = filename(route.origin), path = join(dir, name);
     try {
@@ -122,14 +145,47 @@ async function removeServiceUnguarded({ origin, home = defaultHome() }) {
     const owned = await durableRouteAt(dirname(dir), origin);
     if (owned) throw Object.assign(new Error(`Route ${owned} is gozar-owned; remove it with releaseRoute({ routeId: '${owned}' }) or \`gozar stop --route ${owned}\``), { code: 'gozar_owned' });
     const name = filename(origin), path = join(dir, name);
-    try { await stored(path, name); }
+    let record;try { record=await stored(path, name); }
     catch (error) { if (error.code === 'ENOENT') return false; throw error; }
     await unlink(path);
+    const runtime=serviceContext.getStore();if(record.embedding&&runtime?.embeddingServices)await releaseRecordedConfigurationUse({registryId:record.embedding.consentReview?.canonicalInput.scope.registryId,home,owner:record.embedding.request.owner,providerId:record.adapterId,handle:{kind:'external',id:origin,generation:0}},runtime);
     const fd = await open(dir, 'r');
     try { await fd.sync(); } finally { await fd.close(); }
     return true;
   });
   return { schemaVersion: 1, origin, removed };
+}
+async function externalReview(route,handle){
+ const current=await currentExternal(route);if(!current)throw refuse('unsupported','This owner route has no current consent authority');
+ const runtime=serviceContext.getStore(),identity=await runtime.embeddingServices.resolveIdentity({home:route.embedding.request.home});
+ const subject={origin:route.origin,target:route.target,...identity,handleGeneration:handle.generation};
+ const review=consentReview({scope:{...current.review.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation},typedDisclosures:current.review.canonicalInput.typedDisclosures,facts:current.facts});
+ const binding={...consentBinding(route.embedding.request,route.embedding.request.home,`runtime-review:${review.consentFactsDigest}`,review.consentFactsDigest),handle,subject};
+ return {current,review,subject,binding};
+}
+export async function reviewExternalConsent({home,handle}){
+ return mutate(home,handle.id,async dir=>{
+  const path=join(dir,filename(handle.id)),route=await stored(path,filename(handle.id));
+  const {review,subject,binding}=await externalReview(route,handle);
+  route.embedding.reviewRequired=true;await atomicWrite(path,route);
+  const issued=await issueConsentToken({home,binding,grant:{adapterId:route.adapterId,planDigest:canonicalDigest(binding),observedResource:route.origin}});
+  return {...consentSnapshot(review),subject,approvalToken:issued.token,expiresAt:issued.expiresAt};
+ });
+}
+export async function approveExternalConsent({home,handle,approvalToken,consentFactsDigest}){
+ return mutate(home,handle.id,async dir=>{
+  const path=join(dir,filename(handle.id)),route=await stored(path,filename(handle.id));
+  const {current,review,subject,binding}=await externalReview(route,handle);
+  if(review.consentFactsDigest!==consentFactsDigest)throw refuse('consent_mismatch','The owner-route review changed');
+  await redeemConsentToken({home,token:approvalToken,binding,providerId:route.adapterId});
+  const runtime=serviceContext.getStore(),checked=await (runtime.verify??verification)(route);
+  if(checked.status!=='verified'){route.embedding.reviewRequired=true;await atomicWrite(path,route);throw refuse('verification_failed','The owner route did not pass fresh proof');}
+  const previousRegistry=route.embedding.consentReview.canonicalInput.scope.registryId,use={home,owner:route.embedding.request.owner,providerId:route.adapterId,handle};
+  await runtime.embeddingServices.registerConfigurationUse({...use,revision:current.configuration.revision});
+  route.embedding={...route.embedding,consentReview:current.review,reviewRequired:false};await atomicWrite(path,route);
+  if(previousRegistry!==runtime.registryId)await releaseRecordedConfigurationUse({...use,registryId:previousRegistry},runtime);
+  return {...route,verification:{...checked,subject,observedAt:checked.checkedAt,validUntil:new Date(Date.parse(checked.checkedAt)+15000).toISOString()}};
+ });
 }
 export function createServiceVerifier() {
   const instanceId = randomUUID();

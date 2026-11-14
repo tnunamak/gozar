@@ -4,7 +4,7 @@
     "schemaVersion": 1,
     "id": "cloudflare-named",
     "label": "Cloudflare named tunnel",
-    "needs": "Needs a Cloudflare account and an existing named tunnel. This route is not available in this release.",
+    "needs": "Needs a saved run token for an existing remotely managed named tunnel, its published HTTPS origin, the dashboard service mapping to the configured local gate port, and the connector executable with Bash.",
     "capabilities": {
       "reach": "internet",
       "transport": "https",
@@ -23,7 +23,7 @@
         "stability": "stable",
         "scope": "hostname route in the owner\u2019s Cloudflare account",
         "conditions": [
-          "no admitted create recipe",
+          "the existing tunnel service mapping must point to the configured local gate port",
           "DNS and the tunnel are owner-managed prerequisites"
         ],
         "ports": null
@@ -58,8 +58,8 @@
       "attached"
     ],
     "disclosure": {
-      "revision": "disc-dcd687fdcadb",
-      "text": "Cloudflare named tunnel is detected only. Gozar cannot create a route with it yet. The Cloudflare edge terminates TLS and can read payloads.",
+      "revision": "disc-named-040-owned-connector",
+      "text": "The Cloudflare edge terminates TLS and can read payloads. Gozar starts and stops its connector and local gate. The owner keeps the tunnel registration, DNS route, Access policy and token revocation.",
       "links": [
         {
           "rel": "terms",
@@ -124,11 +124,11 @@
       {
         "id": "cost-detail",
         "label": "Cost details",
-        "value": "Cloudflare lists a $0 Free Zero Trust plan with connector software included, but no page names Cloudflare Tunnel.",
+        "value": "Cloudflare documents no bandwidth charge for Tunnel; optional products and account-specific services can have separate charges.",
         "known": true,
         "group": "cost",
         "affectsConsent": false,
-        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "source": "https://developers.cloudflare.com/billing/understand/how-charges-accrue/",
         "asOf": "2026-11-12"
       },
       {
@@ -187,7 +187,7 @@
       {
         "id": "address-condition-0",
         "label": "Address condition",
-        "value": "no admitted create recipe",
+        "value": "the existing tunnel service mapping must point to the configured local gate port",
         "known": true,
         "group": "address",
         "affectsConsent": false,
@@ -391,7 +391,7 @@
       {
         "id": "storage-policy",
         "label": "Credential storage",
-        "value": "The configured private credential backend supplies bytes only to trusted adapter operations; public read-back returns presence and non-secret values.",
+        "value": "The configured host credential backend owns custody; the default uses private local files. Read-back returns presence and non-secret values only.",
         "known": true,
         "group": "setup",
         "affectsConsent": false,
@@ -624,6 +624,46 @@
         "affectsConsent": true,
         "source": "adapter-definition",
         "asOf": "2026-11-13"
+      },
+      {
+        "id": "connector-redundancy",
+        "label": "Documented connector redundancy",
+        "value": "One connector normally maintains four persistent edge links across two data centers; this is not a visitor capacity guarantee.",
+        "known": true,
+        "group": "constraints",
+        "affectsConsent": false,
+        "source": "https://developers.cloudflare.com/tunnel/",
+        "asOf": "2026-11-13T00:00:00.000Z"
+      },
+      {
+        "id": "connector-pq-policy",
+        "label": "Connector cryptographic policy",
+        "value": "QUIC supports requiring post-quantum encryption; HTTP2 does not. Gozar does not assert the deployed transport or downgrade policy.",
+        "known": true,
+        "group": "constraints",
+        "affectsConsent": false,
+        "source": "https://developers.cloudflare.com/tunnel/reference/run-parameters/",
+        "asOf": "2026-11-13T00:00:00.000Z"
+      },
+      {
+        "id": "access-policy-boundary",
+        "label": "Application access policy",
+        "value": "Tunnel transport proof does not establish a deployed Access policy or application authorization.",
+        "known": true,
+        "group": "constraints",
+        "affectsConsent": false,
+        "source": "https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/",
+        "asOf": "2026-11-13T00:00:00.000Z"
+      },
+      {
+        "id": "quick-tunnel-limits",
+        "label": "Product boundary",
+        "value": "Quick Tunnel limits are not named-tunnel limits.",
+        "known": true,
+        "group": "constraints",
+        "affectsConsent": false,
+        "source": "https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/",
+        "asOf": "2026-11-13T00:00:00.000Z"
       }
     ],
     "effectOperations": [

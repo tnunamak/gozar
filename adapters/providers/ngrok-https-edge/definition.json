@@ -4,7 +4,7 @@
     "schemaVersion": 1,
     "id": "ngrok-https-edge",
     "label": "ngrok HTTPS edge",
-    "needs": "Needs an ngrok account, its auth token and a reserved domain.",
+    "needs": "Needs an ngrok agent authtoken and the assigned development or an already permitted reserved domain.",
     "capabilities": {
       "reach": "internet",
       "transport": "https",
@@ -21,9 +21,9 @@
       },
       "address": {
         "stability": "stable",
-        "scope": "reserved domain of your ngrok account",
+        "scope": "assigned development or reserved domain of your ngrok account",
         "conditions": [
-          "a reserved domain is a per-user setup value",
+          "the assigned development domain is valid on Free; custom/reserved domains depend on account entitlement",
           "the listener lives only while the host process runs"
         ],
         "ports": null
@@ -58,8 +58,8 @@
       "attached"
     ],
     "disclosure": {
-      "revision": "disc-43d91fe6da83",
-      "text": "Serve this app through an ngrok listener on your reserved ngrok domain while the app runs. The ngrok edge terminates TLS and can read payloads. The auth token stays in Gozar\u2019s private store.",
+      "revision": "disc-ngrok-https-040",
+      "text": "Serve this app through an ngrok HTTPS listener on your assigned development or permitted reserved domain while the app runs. The ngrok edge terminates TLS and can read payloads. Credential custody stays with the configured host backend.",
       "links": [
         {
           "rel": "terms",
@@ -175,7 +175,7 @@
       {
         "id": "address-condition-0",
         "label": "Address condition",
-        "value": "a reserved domain is a per-user setup value",
+        "value": "the assigned development domain is valid on Free; custom/reserved domains depend on account entitlement",
         "known": true,
         "group": "address",
         "affectsConsent": false,
@@ -217,13 +217,12 @@
       {
         "id": "browser-warning",
         "label": "Browser warning",
-        "value": null,
-        "known": false,
-        "reason": "not-observed",
+        "value": "Free HTML browser traffic can receive an interstitial even after programmatic nonce proof succeeds. API traffic and account-specific applicability are separate.",
+        "known": true,
         "group": "access",
         "affectsConsent": false,
-        "source": "https://ngrok.com/pricing, https://ngrok.com/tos, https://ngrok.com/privacy",
-        "asOf": "2026-11-12"
+        "source": "https://ngrok.com/docs/pricing-limits/free-plan-limits",
+        "asOf": "2026-11-13"
       },
       {
         "id": "payload-readers",
@@ -236,8 +235,8 @@
         "asOf": "2026-11-12"
       },
       {
-        "id": "reserved-domain",
-        "label": "Reserved domain required",
+        "id": "domain-required",
+        "label": "Assigned development or reserved domain required",
         "value": true,
         "known": true,
         "group": "setup",
@@ -379,7 +378,7 @@
       {
         "id": "storage-policy",
         "label": "Credential storage",
-        "value": "Private local files; read-back reports presence and non-secret values only.",
+        "value": "The configured host credential backend owns custody; the default uses private local files. Read-back returns presence and non-secret values only.",
         "known": true,
         "group": "setup",
         "affectsConsent": false,

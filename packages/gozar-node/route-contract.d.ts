@@ -32,6 +32,7 @@ export type Requirements = {
 
 export type Query = {
   operationId?:string;
+  hostCapabilities?:import('./embedding-contract.js').HostCapabilities;
   schemaVersion: 1;
   owner: string;
   target: string;
@@ -63,7 +64,7 @@ export type Action = {
   id: string;
   kind: 'open-url' | 'instructions' | 'provide-secret' | 'provide-value' | 'gozar-runs'|'clear-input'|'install-artifact';
   inputId?:string;
-  consent?:ConsentSnapshot;
+  consent?:SetupConsentSnapshot;
   review?:{canonicalInput:unknown};
   label: string;
   digest: string;
@@ -78,6 +79,8 @@ export type Action = {
   valuePlaceholder?: string;
   valueFormat?: 'https-origin' | 'domain' | 'text';
   required?: boolean;
+  artifact?:{url:string;sha256:string;platform:string;architecture:string};
+  effects?:{writes:string[];networkOrigins:string[];requiresPrivilege:boolean;restartRequired:boolean};
 };
 
 export type Properties = {
@@ -123,18 +126,22 @@ export type Fact = { id: string; label: string; value: string | number | boolean
 export type SetupConsentScope={kind:'setup';registryId:string;scopeId:string;providerId:string;configurationRevision:string;draftId:string|null;actionId:string;disclosureRevision:string;actionDigest:string};
 export type RouteConsentScope={kind:'route';registryId:string;scopeId:string;providerId:string;configurationRevision:string;query:{usage:Usage;reach:Reach;transport:Properties['transport'];target:string;expectedOrigin:string|null};reviewHandle?:string;handleGeneration?:number};
 /** The actual typed canonical input. Setup includes the full trusted action, including artifact/effect disclosures. */
-export type ConsentDisclosures={action:Omit<Action,'consent'|'review'>}|{reach:Reach;transport:Properties['transport'];traffic:Properties['traffic'];address:Properties['address'];cost:{kind:Properties['cost']['kind']};lifetimes:Properties['lifetimes'];supervision:Properties['supervision'];protocols:Properties['protocols'];disclosure:Disclosure};
-export type ConsentSnapshot={scope:SetupConsentScope|RouteConsentScope;consentFactsDigest:string;facts:Fact[];disclosures:ConsentDisclosures};
+export type SetupConsentDisclosures={action:Omit<Action,'consent'|'review'>};
+export type RouteConsentDisclosures={reach:Reach;transport:Properties['transport'];traffic:Properties['traffic'];address:Properties['address'];cost:{kind:Properties['cost']['kind']};lifetimes:Properties['lifetimes'];supervision:Properties['supervision'];protocols:Properties['protocols'];disclosure:Disclosure};
+export type ConsentDisclosures=SetupConsentDisclosures|RouteConsentDisclosures;
+export type SetupConsentSnapshot={scope:SetupConsentScope;consentFactsDigest:string;facts:Fact[];disclosures:SetupConsentDisclosures};
+export type RouteConsentSnapshot={scope:RouteConsentScope;consentFactsDigest:string;facts:Fact[];disclosures:RouteConsentDisclosures};
+export type ConsentSnapshot=SetupConsentSnapshot|RouteConsentSnapshot;
 export type Availability = Record<Usage['kind'], { state: 'available' | 'detect-only' | 'unsupported'; reason: string }>;
-export type Prerequisite = { id: string; label: string; state: 'present' | 'missing' | 'unknown' | 'denied';
-  observedAt: string; version: Observation<string>; remedy: Action | null };
+export type Prerequisite = { id: string; label: string; state: 'present' | 'missing' | 'unknown' | 'denied'|'unsupported';
+  observation?:Observation<boolean|string>;observedAt: string|null; version: Observation<string>; remedy: Action | null };
 export type InputRequirement = { id: string; actionId:string; label: string; kind: 'text' | 'domain' | 'https-origin'; secret: boolean; help: string;
   required: boolean; obtainUrl: string | null; validation: 'syntax-only' };
 export type Configuration = { revision:string;scopeId:string;inputRequirements: InputRequirement[]; values: Record<string,string>;
   credentials: Record<string,Observation<boolean>>; actions: Action[] };
 
 export type Candidate = {
-  consent:ConsentSnapshot;
+  consent:RouteConsentSnapshot;
   consentFactsDigest:string;
   review:{canonicalInput:unknown};
   availability: Availability;
@@ -213,7 +220,7 @@ export type Ingress = {
 
 export type RouteView = {
   operationId:string|null;
-  binding:import('./embedding-contract').RouteBinding;
+  binding:import('./embedding-contract.js').RouteBinding;
   schemaVersion: 2;
   routeState: 'detected' | 'verified' | 'expired' | 'cleanup-unconfirmed' | 'inactive' | 'unknown';
   expiresAt: Observation<string>;
@@ -435,22 +442,23 @@ export function confirmHandBack(request: { routeId: string; transfer: string; ho
 export function cancelHandBack(request: { routeId: string; transfer: string; home?: string }): Promise<{ schemaVersion: 1; route: ServiceRoute }>;
 
 /** Stores secret bytes privately; returns an opaque handle only. */
-export const storeSecret:import('./embedding-contract').HostEmbeddingMethods['storeSecret'];
-export const discardSecret:import('./embedding-contract').HostEmbeddingMethods['discardSecret'];
-export const beginConfigurationDraft:import('./embedding-contract').HostEmbeddingMethods['beginConfigurationDraft'];
-export const commitConfigurationDraft:import('./embedding-contract').HostEmbeddingMethods['commitConfigurationDraft'];
-export const discardConfigurationDraft:import('./embedding-contract').HostEmbeddingMethods['discardConfigurationDraft'];
-export const listProviders:import('./embedding-contract').HostEmbeddingMethods['listProviders'];
-export const readConfigurationDraft:import('./embedding-contract').HostEmbeddingMethods['readConfigurationDraft'];
-export const clearConfigurationInput:import('./embedding-contract').HostEmbeddingMethods['clearConfigurationInput'];
-export function reviewRouteConsent(request:RouteRef):Promise<ConsentSnapshot&{subject:ProofSubject|null;approvalToken:string;expiresAt:string}>;
+export const storeSecret:import('./embedding-contract.js').HostEmbeddingMethods['storeSecret'];
+export const discardSecret:import('./embedding-contract.js').HostEmbeddingMethods['discardSecret'];
+export const beginConfigurationDraft:import('./embedding-contract.js').HostEmbeddingMethods['beginConfigurationDraft'];
+export const commitConfigurationDraft:import('./embedding-contract.js').HostEmbeddingMethods['commitConfigurationDraft'];
+export const discardConfigurationDraft:import('./embedding-contract.js').HostEmbeddingMethods['discardConfigurationDraft'];
+export const listProviders:import('./embedding-contract.js').HostEmbeddingMethods['listProviders'];
+export const readConfigurationDraft:import('./embedding-contract.js').HostEmbeddingMethods['readConfigurationDraft'];
+export const clearConfigurationInput:import('./embedding-contract.js').HostEmbeddingMethods['clearConfigurationInput'];
+export function reviewRouteConsent(request:RouteRef):Promise<RouteConsentSnapshot&{subject:ProofSubject|null;approvalToken:string;expiresAt:string}>;
 export function approveRouteConsent(request:RouteRef&{approvalToken:string;consentFactsDigest:string}):Promise<RouteView>;
 export function listRoutes(request:{home:string;owner?:string}):Promise<{routes:RouteView[]}>;
-export type {SecretBackend,HostCapabilities,HostCapabilityId,HostIdentity,ConfigurationDraft,ProviderInventory} from './embedding-contract';
+export type {SecretBackend,HostCapabilities,HostCapabilityId,HostIdentity,ConfigurationDraft,ProviderInventory} from './embedding-contract.js';
+export type {Adapter,AdapterDefinition,AdapterRequest,AdapterPlan,AdapterProofSession,ProofAttempt,ReadContext,SetupContext,AdmittedEffectContext,Receipt,Removal,Verification,Observation as AdapterObservation} from './adapter-contract.js';
 
 /** Trusted executable extension registry. Relative provider paths resolve under root/providers. */
-export type GozarOptions={manifest?: string | {providers: {id:string; module:string; definition:string}[]}; root?: string;secretBackend?:import('./embedding-contract').SecretBackend;hostCapabilities?:import('./embedding-contract').HostCapabilities;identity?:import('./embedding-contract').HostIdentity};
-export function createGozar(options?: GozarOptions): import('./embedding-contract').HostEmbeddingMethods & {
+export type GozarOptions={manifest?: string | {providers: {id:string; module:string; definition:string}[]}; root?: string;secretBackend?:import('./embedding-contract.js').SecretBackend;hostCapabilities?:import('./embedding-contract.js').HostCapabilities;identity?:import('./embedding-contract.js').HostIdentity};
+export function createGozar(options?: GozarOptions): import('./embedding-contract.js').HostEmbeddingMethods & {
  catalogRoutes: typeof catalogRoutes; expose: (request:ExposeRequest)=>Promise<RouteView>;
  ensureRoute: typeof ensureRoute; adoptRoute: typeof adoptRoute; routeStatus: typeof routeStatus;
  closeRoute: typeof closeRoute; suspendRoute: typeof suspendRoute; watchRoutes: typeof watchRoutes;

@@ -1,4 +1,4 @@
-import type {GozarOptions,createGozar} from './route-contract';
+import type {GozarOptions,createGozar} from './route-contract.js';
 export type JsonValue=null|boolean|number|string|JsonValue[]|{[key:string]:JsonValue};
 export interface TestingEffectContext {signal:AbortSignal;fixture:true}
 export interface TestingEffect {kind:string;operation:string;handle(input:JsonValue,context:TestingEffectContext):Promise<JsonValue>}
@@ -7,7 +7,7 @@ export type ListenerEffectRequest =
  | {kind:'sdk-listener';operation:'detect';input:Record<string,never>}
  | {kind:'sdk-listener';operation:'open';input:{options:{addr:string;authtoken:string;domain?:string;proto?:'tcp'|'tls';remote_addr?:string}}}
  | {kind:'sdk-listener';operation:'read'|'close';input:{handle:string}};
-export type ListenerEffectResult = {available:boolean}|{handle:string;url:string}|{present:false}|{present:true;url:string}|{closed:boolean};
+export type ListenerEffectResult = {available:boolean}|{handle:string;url:string}|{present:false}|{present:true;url:string}|{closed:boolean}|{error:{code:string}};
 export type NetworkEffectRequest =
  | {kind:'network';operation:'fetch';input:{url:string;method:string;headers:Record<string,string>}}
  | {kind:'network';operation:'exchange';input:{endpoint:string;transport:'tcp'|'tls';bytes:string;pinnedCertificate:string|null;deadlineMs:number}};
@@ -29,5 +29,15 @@ export type SpawnEffectRequest=
  |{kind:'spawn';operation:'read';input:{handle:string}}
  |{kind:'spawn';operation:'close';input:{handle:string;signal:string}};
 export type SpawnEffectResult={stdout:string;stderr:string;exitCode:number}|{stdout:string;stderr:string;exitCode:null;handle:string;pid:number}|{present:boolean;exitCode?:number}|{closed:boolean};
+export type ArtifactEffectRequest=
+ |{kind:'artifact';operation:'fetch';input:{artifact:NonNullable<import('./route-contract.js').Action['artifact']>}}
+ |{kind:'artifact';operation:'execute';input:{artifact:NonNullable<import('./route-contract.js').Action['artifact']>;effects:NonNullable<import('./route-contract.js').Action['effects']>;bytes:string}};
+export type ArtifactEffectResult={bytes:string}|{executed:boolean;exitCode:number};
 export interface TestingHarness {gozar:ReturnType<typeof createGozar>;events:{sequence:number;kind:string;operation:string;state:'requested'|'completed'|'failed';fixture:true}[];close():Promise<void>}
 export function createTestingGozar(options:GozarOptions&{effects:TestingEffect[]}):Promise<TestingHarness>;
+export function fakeRegistry(options:{id:string;label?:string;kinds:import('./route-contract.js').Usage['kind'][];reach:Exclude<import('./route-contract.js').Reach,'unknown'>;transport?:import('./route-contract.js').Properties['transport'];protocols?:import('./route-contract.js').Requirements['protocols'];dir?:string;facts?:import('./route-contract.js').Fact[];setupActions?:import('./route-contract.js').Action[];proofProtocol?:'http'|'echo'}):Promise<{manifest:NonNullable<GozarOptions['manifest']>;root:string;cleanup():Promise<void>}>;
+export function fakeRouteScenarios(options?:{target?:string;now?:number}):import('./route-contract.js').RouteView[];
+export function fakeReadContext(options?:{home?:string;probeOk?:boolean;verified?:boolean;now?:()=>number}):import('./adapter-contract.js').ReadContext;
+export function createReadContext(options?:Record<string,unknown>):import('./adapter-contract.js').ReadContext;
+/** Lower-level fixture factory retained for tests that inject individual local boundaries. */
+export function createRouteApi(options?:GozarOptions&Record<string,unknown>):ReturnType<typeof createGozar>;

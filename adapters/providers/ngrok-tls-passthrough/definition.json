@@ -363,7 +363,7 @@
       {
         "id": "storage-policy",
         "label": "Credential storage",
-        "value": "Private local files; read-back reports presence and non-secret values only.",
+        "value": "The configured host credential backend owns custody; the default uses private local files. Read-back returns presence and non-secret values only.",
         "known": true,
         "group": "setup",
         "affectsConsent": false,
@@ -586,6 +586,26 @@
         "affectsConsent": false,
         "source": "adapter-configuration",
         "asOf": "2026-11-13"
+      },
+      {
+        "id": "public-plan-requirement",
+        "label": "Public plan requirement",
+        "value": "Raw TLS requires paid entitlement; selected account eligibility remains unknown.",
+        "known": true,
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/docs/pricing-limits/free-plan-limits",
+        "asOf": "2026-11-13T00:00:00.000Z"
+      },
+      {
+        "id": "execution-scope",
+        "label": "Execution scope",
+        "value": "Detect-only in 0.4: raw passthrough is deferred so the HTTP(S) embedding contract ships together.",
+        "known": true,
+        "group": "constraints",
+        "affectsConsent": false,
+        "source": "gozar:release-0.4-scope",
+        "asOf": "2026-11-13T00:00:00.000Z"
       }
     ],
     "originSchemes": [

@@ -24,10 +24,13 @@ import {connectSessionEmbedding} from './session-embedding.mjs';
 export const failureRecord = error => ({ message: error.message, ...(typeof error.code === 'string' ? { code: error.code, nextAction: error.nextAction ?? null } : {}) });
 export const socketPath = directory => join(directory, 'control.sock');
 export async function control(directory, command, timeoutMs = 15_000) {
+  let operational=false;
   if(!['stop','reconcile'].includes(command?.type)){
-    const bootstrap=JSON.parse(await readFile(join(directory,'bootstrap.json'),'utf8'));
-    const adapter=bootstrap.adapters?.find(item=>item.id===bootstrap.adapterId);
+    let bootstrap;try{bootstrap=JSON.parse(await readFile(join(directory,'bootstrap.json'),'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
+    const adapter=bootstrap?.adapters?.find(item=>item.id===bootstrap.adapterId);
     if(adapter&&adapter.planVersion!==1)throw gozarError('unsupported','Legacy recipe publication is not supported in 0.4. Stop this session and expose it again with an admitted operational plan.');
+    operational=adapter?.planVersion===1;
+    if(!operational){if(command.type==='health')command={...command,type:'status'};if(!['status','process-output'].includes(command.type))throw gozarError('unsupported','This controller has no admitted operational bootstrap; only inspection and cleanup are available');}
   }
   const identity = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8'));
   if (!identity.startIdentity || await processIdentity(identity.pid) !== identity.startIdentity) throw new Error('Controller is not running; readiness withdrawn');
@@ -41,7 +44,7 @@ export async function control(directory, command, timeoutMs = 15_000) {
       output += chunk;
       if (output.length > 1_048_576) return finish(new Error('Controller response exceeds limit'));
       if (output.includes('\n')) {
-        try { const reply = JSON.parse(output.split('\n')[0]); reply.error ? finish(Object.assign(new Error(reply.error), reply.code ? { code: reply.code, nextAction: reply.nextAction ?? null } : {})) : finish(null, reply); }
+        try { const reply = JSON.parse(output.split('\n')[0]);if(!operational&&!['stop','reconcile'].includes(command.type)&&(reply.snapshot?.published||reply.snapshot?.phase==='published-ready'))throw gozarError('unsupported','Legacy or unidentified controller publication is not supported in 0.4'); reply.error ? finish(Object.assign(new Error(reply.error), reply.code ? { code: reply.code, nextAction: reply.nextAction ?? null } : {})) : finish(null, reply); }
         catch (error) { finish(error); }
       }
     });
@@ -160,6 +163,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
     await journal.load();
   }
   if (Object.keys(journal.value.owned).length) throw gozarError('cleanup_debt', 'Cleanup remains pending; stop the recorded session before restarting', stopNext());
+  await journal.save({operationId:config.operationId??null,owner:config.owner??null});
   let controller;
   const embedding=await connectSessionEmbedding(config,{onLoss:()=>{controller?.driver.cancelProbes();}});
   let initializedDone = false;

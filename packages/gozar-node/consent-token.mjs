@@ -57,7 +57,7 @@ function checkGrant(grant) {
   if (!plain(grant) || !['adapterId', 'planDigest', 'observedResource'].every(key => text(grant[key])))
     throw refuse('invalid_input', 'Consent grant needs adapterId, planDigest and observedResource');
   return { adapterId: grant.adapterId, planDigest: grant.planDigest, observedResource: grant.observedResource,
-    ...Object.fromEntries(['consentFactsDigest','configurationRevision','scopeId'].filter(key=>grant[key]!==undefined).map(key=>[key,grant[key]])) };
+    ...Object.fromEntries(['consentFactsDigest','configurationRevision','scopeId','origin'].filter(key=>grant[key]!==undefined).map(key=>[key,grant[key]])) };
 }
 
 async function consentDirectory(home, create) {

@@ -74,8 +74,9 @@ Status tells you what is currently published. Health rechecks it. Stop attempts 
 | tunnl.gg stable | Public internet | Explicit opt-in (`--adapter tunnl-gg`) and OpenSSH; Gozar creates its installation key on first approved use. The relay can read traffic, may show a browser warning, and can close quiet streams after about two minutes. |
 | LAN | Selected local network | Explicit non-loopback interface and firewall approval. **HTTP only**; not a public HTTPS route. |
 | Your HTTPS proxy | Clients that reach your configured proxy | You own DNS, TLS, reverse proxy, service uptime and cleanup. Gozar verifies the route, but does not deploy your proxy. |
-| ngrok HTTPS edge | Public internet | **Attached routes only** (the route lives while your app runs). Needs the optional `@ngrok/ngrok` package, a reserved ngrok domain and an auth token. The ngrok edge terminates TLS and can read traffic. `gozar setup` stores the token and domain for the adapter, and the route is ready once every setup step is complete. |
-| ngrok TLS and TCP passthrough; Cloudflare named Tunnel | Not creatable by Gozar 0.3.4 | Detection only; a detected CLI is not evidence of account permission or a usable route. |
+| ngrok HTTPS edge | Public internet | **Attached routes only** (the route lives while your app runs). Needs the optional `@ngrok/ngrok` package, an agent authtoken and the assigned development domain or another domain your plan permits. The edge can read traffic. Saved inputs establish presence, not account validity or verified routing. |
+| Cloudflare named tunnel | Public internet | Attached owned connector for an existing owner-managed tunnel and DNS route. Configure its run token, published HTTPS origin and local gate port through input requirements. The edge can read traffic; stopping Gozar keeps the remote tunnel/DNS/token. |
+| ngrok TLS and TCP passthrough | Detect-only in 0.4 | Raw execution is deferred so the HTTP(S) embedding contract ships together. Local detection does not establish account permission. |
 
 `docs/providers.md` lists every provider the registry ships, with its reach, address stability and cost. Use `npx --package=@tnunamak/gozar@0.4.0 gozar detect --port 3000 --alternatives` to inspect candidates before making changes. A visible candidate does not prove login, permission, correct routing, client reachability or address stability. For a long-running origin that Gozar must not manage, use [service routes](docs/service-routes.md). For a Tailscale origin that Gozar creates and keeps fixed across restarts, use [durable routes](docs/service-routes.md#durable-routes-gozar-owned).
 
@@ -169,12 +170,17 @@ The same requests run from the command line. Each command reads its request from
 | `gozar ensure --query-file FILE [--approval-file FILE] [--reconsent] --json` | Creates or confirms a durable route. |
 | `gozar adopt --query-file FILE --approval-file FILE --handover-file FILE --json` | Takes over an existing rule and removes it when the route is released or stopped. |
 | `gozar expose --query-file FILE --approval-file FILE [--wait verified] --json` | Opens a session or attached route. `--wait verified`, the default, returns once the route is verified; `--wait allocated` returns as soon as the provider has allocated the address. For an attached route this process holds it; close stdin to end it. |
-| `gozar setup ACTION_ID --approval-file FILE [--secret-file FILE] [--value VALUE] --json` | Runs one approved setup action. A `provide-value` action takes `--value`; a secret takes `--secret-file`. |
+| `gozar setup ACTION_ID --query-file FILE --provider-id ID --approval-file FILE [--secret-file FILE \| --value VALUE \| --prompt] --json` | Runs one current scoped setup action. Secret files stay private; prompts follow input descriptors. |
 | `gozar preference show [--profile-home DIR] --json` | Reads the user's provider order and its revision. |
 | `gozar preference set --expected-revision N [--prefer REF ...] [--profile-home DIR] --json` | Replaces the provider order. N is the revision `show` returned. |
 | `gozar suspend --route ID --json` | Suspends a durable route; `ensure` resumes it without new approval. |
 | `gozar suspend --handle-file FILE --json` | Suspends the durable handle saved in FILE, with generation checking. |
 | `gozar watch --handle-file FILE --json` | Streams route changes until the route is gone. |
+| `gozar routes --home DIR [--owner OWNER] --json` | Lists retained route/recovery handles without refreshing proof. |
+| `gozar route-status --handle-file FILE --json` | Reads current proof for an exact handle. |
+| `gozar close --handle-file FILE --json` | Withdraws and retries cleanup for that handle. |
+| `gozar review-consent --handle-file FILE --json` | Returns the current runtime consent snapshot. |
+| `gozar approve-consent --handle-file FILE --approval-file FILE --json` | Redeems that review and safely reproves the same generation. |
 
 Exit codes: `0` success; `2` requirements, setup or `unsupported`; `3` missing, stale or unknown approval, or no such route; `1` any other failure. There is no `--yes` for these commands: the approval is the private file that holds the token the catalog issued. The session commands in [Share a local service](#share-a-local-service) and [Embed Gozar in your app](#embed-gozar-in-your-app) are a different form of `gozar expose`: they take `--port` and `--client-reach`, use `--yes` for approval, and do not take the files above.
 
@@ -204,6 +210,40 @@ Install into your Node.js 22.13+ project:
 ```sh
 npm install @tnunamak/gozar@0.4.0
 ```
+
+For a new embedding, use `createGozar({secretBackend?,hostCapabilities?,identity?})`.
+Use that same factory for configuration and runtime. `listProviders({home,owner})`
+discovers every registered audience without issuing execution tokens. Render
+input requirements through their `actionId`; read saved values and credential
+presence from `configuration`. Scoped `storeSecret` accepts bytes and returns a
+handle only to the trusted host. Setup requires the provider, current revision
+and the offered action's setup approval. Use persisted configuration drafts for
+editing or rotation while an older runtime is retained.
+
+Recatalog the exact query before starting. Show the selected candidate's complete
+`consent` snapshot: `{scope,consentFactsDigest,facts,disclosures}`. Show every
+consent fact and typed disclosure; a display-only fact does not grant authority.
+Return `approval:{kind:'route',candidateToken,disclosureRevision,consentFactsDigest}`.
+Setup uses `kind:'setup'` with the offered action's digest, disclosure revision
+and consent digest. Never reconstruct a draft scope or digest in the app.
+
+Journal an `operationId` before `expose` or `ensureRoute`. It reserves a stable
+handle before allocation; replay never starts a second runtime. `listRoutes`
+recovers partial and uncertain allocations after a host crash. Its snapshots are
+historical; use `routeStatus` for current subject-bound proof. Advertise only
+`published`. Runtime consent drift withdraws publication; review and approve the
+new snapshot for safe proof on the same generation, or stop when refresh is
+unsupported. `closeRoute` retains uncertainty until exact owned cleanup succeeds.
+
+Shipped execution in 0.4 is HTTP(S) only. Raw TCP/TLS profiles remain detect-only
+so the full embedding contract can ship together. Trusted extensions can declare
+their own protocol proof through `prepareProof`; the installed lifecycle fixture
+uses non-HTTP proof without core changes. New display properties are open facts,
+not additional typed fields. See [the embedding contract](docs/embedding-contract.md),
+[migration changes](docs/migration-0.4.md), [testing effects](docs/testing-effects.md)
+and the runnable [screen example](examples/remote-access-screen.mjs).
+
+The session wrapper below remains available for existing integrations.
 
 Start a service on port 18765. This example chooses localhost.run, which requires OpenSSH, forwards traffic through a relay that can read it, and may change its URL. **Obtain the user's approval of this provider and `http://127.0.0.1:18765` first.** This example polls six times and attempts cleanup; production integrations must monitor the entire session.
 
@@ -241,7 +281,18 @@ Each call runs the packaged CLI. The optional `home` sets `GOZAR_HOME`; use the 
 
 Accepted camelCase options include `probeDirectory`, `probeWaitMs`, `streamableHttp` and `oauthDcr`. Invalid/unknown options throw (sometimes before a promise is returned), so keep the invocation inside `try`. JSON CLI failures surface as `error.reply` plus `error.code`; other failures may contain only a message.
 
-The root package exports the route functions `catalogRoutes` (also `detect`), `inspectLegacyRoute`, `ensureRoute`, `adoptRoute`, `expose`, `routeStatus`, `closeRoute`, `watchRoutes`, `getRoutePreferences`, `setRoutePreferences`, `runSetupAction` and `resolveClientAddress`, plus `status`, `stop`, `addService`, `statusServices`, `removeService`, `createServiceVerifier`, `releaseRoute`, `confirmHandBack` and `cancelHandBack`. `@tnunamak/gozar/service` exports the service and hand-back functions and `createServiceVerifier`. `expose` takes the route request shown in [Route by requirement](#route-by-requirement) when `schemaVersion` is 1, and the session options above otherwise. The 0.2.0 durable signatures `statusRoutes` and `durableConsentText` and the earlier `ensureRoute` and `adoptRoute` inputs are gone from the package root. For the legacy session commands `health`, use the CLI, with `@tnunamak/gozar/bin/gozar.mjs` if you need a resolved executable inside a package.
+The root exports `createGozar` and the same default factory methods: catalog/detect,
+provider inventory, setup/secret intake, configuration drafts, route start/adopt,
+status/list/watch, consent review/redeem, suspend/close, preferences and client
+address resolution. See the [public types](packages/gozar-node/route-contract.d.ts)
+for their exact names and requests. Factory methods share the configured registry,
+credential backend and host capabilities.
+
+The compatibility `status`, `stop`, service and hand-back helpers remain available;
+`@tnunamak/gozar/service` exports the service helpers and `createServiceVerifier`.
+`expose` takes the route request when schemaVersion is 1, and the session options
+above otherwise. See [proof and cleanup boundaries](docs/proof-and-cleanup-0.4.md)
+before treating older helper evidence as structured route verification.
 
 ## Try the echo server
 
@@ -377,9 +428,10 @@ Catalog and route responses use schemaVersion 2; requests still use 1. Read
 observed states and fixes independently of setup and route proof.
 
 Render `candidate.configuration.inputRequirements` generically. Its `values` are non-secret
-read-back; `credentials` reports presence only. Import `storeSecret` from
-`@tnunamak/gozar`, pass `{home,value}`, and send the returned handle to the approved
-`runSetupAction`. Configuration actions support edits and rotation while ready.
+read-back; `credentials` reports presence only. Use the same factory's
+`storeSecret({home,owner,providerId,inputId,scopeId,expectedConfigurationRevision,bytes})`
+and send its returned handle to the approved, revision-bound `runSetupAction`.
+Use draftId for staged edits while a runtime retains applied configuration.
 
 Render `facts` by group and show every `affectsConsent` row before approval. New
 facts require no app changes. Unknown rows include a reason; `needs-provider-call`
@@ -403,7 +455,7 @@ gozar configure --query-file query.json --provider-id ID --json
 Secret terminal input is hidden and stored by Gozar. No token belongs in argv,
 an environment variable, an approval file or a support transcript. `configure`
 collects inputs and does not open a route. The explicit-action alternative is
-`gozar setup ACTION_ID --prompt --query-file query.json --approval-file approval.json`.
+`gozar setup ACTION_ID --prompt --query-file query.json --provider-id ID --approval-file approval.json`.
 See [the opt-in operator walk](docs/live-provider-walk.md) for the stored-credential
 HTTPS flow and cleanup responsibilities.
 

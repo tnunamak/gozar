@@ -1,8 +1,8 @@
-import type {Configuration} from './route-contract';
+import type {Configuration,Reach,Properties,Prerequisite,Fact,Action,Usage} from './route-contract.js';
 /** Additive host embedding contract for Gozar 0.4.0. Trusted host APIs only. */
 export type Observation<T> = {known:true;value:T}|{known:false;reason:string};
 export type HostCapabilityId = 'installer.execute'|'privilege.elevate'|'secrets.backend'|'runtime.attached'|'runtime.durable'|(string & {});
-export type HostCapabilities = Record<HostCapabilityId,Observation<boolean|string>>;
+export type HostCapabilities = Partial<Record<HostCapabilityId,Observation<boolean|string>>>;
 export interface HostIdentity {instanceId:string;bootId:string}
 export interface SecretBackend {
  put(request:{scopeId:string;inputId:string;revision:string;bytes:Uint8Array}):Promise<{handle:string}>;
@@ -24,8 +24,8 @@ export interface HostEmbeddingMethods {
  listProviders(request:{home:string;owner?:string;hostCapabilities?:HostCapabilities}):Promise<{schemaVersion:number;catalogRevision:string;observedAt:string;providers:ProviderInventory[]}>;
 }
 export interface ProviderInventory {
- providerId:string;label:string;reach:string;transport:string;
- availability:Record<'session'|'attached'|'durable',{state:string;reason:string}>;
- prerequisites:unknown[];configuration:ConfigurationSnapshot&{inputRequirements:unknown[];actions:unknown[]};facts:unknown[];
+ providerId:string;label:string;reach:Reach;transport:Properties['transport'];
+ availability:Record<Usage['kind'],{state:'available'|'detect-only'|'unsupported'|'ready'|'action-required'|'unknown';reason:string}>;
+ prerequisites:Prerequisite[];configuration:Configuration;facts:Fact[];
 }
-export interface RouteBinding {authority:'adapter'|'owner'|'unknown';target:Observation<string>;remedy:unknown|null}
+export interface RouteBinding {authority:'adapter'|'owner'|'unknown';target:Observation<string>;remedy:Action|null}

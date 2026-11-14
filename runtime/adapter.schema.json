@@ -234,6 +234,66 @@
             },
             "additionalProperties": false
           }
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inputRequirements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "text",
+                  "domain",
+                  "https-origin"
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "obtainUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "validation": {
+                "const": "syntax-only"
+              },
+              "secret": {
+                "type": "boolean"
+              },
+              "help": {
+                "type": "string"
+              },
+              "actionId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "kind",
+              "required",
+              "obtainUrl",
+              "validation",
+              "secret",
+              "help",
+              "actionId"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false
@@ -627,6 +687,7 @@
         "origin"
       ],
       "properties": {
+        "operationId": { "type": ["string", "null"] },
         "schemaVersion": {
           "const": 1
         },

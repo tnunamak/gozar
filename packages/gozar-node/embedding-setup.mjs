@@ -69,8 +69,7 @@ export async function offeredConfiguration(request,snapshot,deps){
  const inspection=await inspectAdapter(adapter,{...read,providerConfiguration:providerId=>deps.embeddingServices.resolveConfiguration({...request,providerId})},platform);
  const raw=[...new Map([...inspection.actions,...(inspection.missingActions??[]),...clearInputActions(snapshot)].map(a=>[a.id,a])).values()];
  const actions=await Promise.all(raw.map(action=>deps.decorateSetupAction?deps.decorateSetupAction({action,adapter,configuration:snapshot,draftId:request.draftId??null,inspection}):action));
- const configuration={...configurationFor(actions,snapshot),...snapshot,actions};
- if(adapter.definition.inputRequirements)configuration.inputRequirements=structuredClone(adapter.definition.inputRequirements);
+ const configuration={...snapshot,...configurationFor(actions,snapshot,adapter.definition.inputRequirements),actions};
  return configuration;
 }
 export async function readConfigurationDraft(request,deps){

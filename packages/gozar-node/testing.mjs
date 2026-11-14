@@ -41,9 +41,16 @@ export async function createTestingGozar({effects,...options}={}){
   const api=createCoreRouteApi({manifest,root,secretBackend,hostCapabilities,identity,dispatchEffect,
     verify:request=>verification(request,{fetch:testingFetch(dispatchEffect)})});
   const gozar={...api};
-  for(const method of ['expose','ensureRoute','adoptRoute'])gozar[method]=async request=>{try{const route=await api[method](request);if(route.cleanup.state!=='confirmed')active.set(JSON.stringify(route.handle),{home:request.home,handle:route.handle,mode:'remove'});return route;}catch(error){if(error.route&&error.route.cleanup.state!=='confirmed')active.set(JSON.stringify(error.route.handle),{home:request.home,handle:error.route.handle,mode:'remove'});throw error;}};
-  gozar.closeRoute=async request=>{const route=await api.closeRoute(request);if(route.cleanup.state==='confirmed')active.delete(JSON.stringify(route.handle));return route;};
-  return {gozar,events,close:()=>closing??=(async()=>{for(const request of active.values())await gozar.closeRoute(request);abort.abort();})()};
+  const mark=value=>{const copy=structuredClone(value);copy.facts??=[];copy.facts.push({id:'gozar-testing-effects',label:'Fixture evidence',value:'Synthetic provider effects and isolated local transport; real provider acceptance is unverified.',known:true,group:'proof',affectsConsent:false,source:'@tnunamak/gozar/testing',asOf:null});return copy;};
+  gozar.catalogRoutes=async request=>{const result=await api.catalogRoutes(request);return {...result,candidates:result.candidates.map(mark)};};
+  gozar.listProviders=async request=>{const result=await api.listProviders(request);return {...result,providers:result.providers.map(mark)};};
+  const track=(home,route)=>{for(const[key,prior]of active)if(prior.home===home&&prior.handle.kind===route.handle.kind&&prior.handle.id===route.handle.id&&prior.handle.generation<=route.handle.generation)active.delete(key);if(route.cleanup.state!=='confirmed')active.set(JSON.stringify(route.handle),{home,handle:route.handle,mode:'remove'});};
+  for(const method of ['expose','ensureRoute','adoptRoute'])gozar[method]=async request=>{try{const route=mark(await api[method](request));track(request.home,route);return route;}catch(error){if(error.route){error.route=mark(error.route);track(request.home,error.route);}throw error;}};
+  for(const method of ['routeStatus','suspendRoute','approveRouteConsent'])gozar[method]=async request=>mark(await api[method](request));
+  gozar.listRoutes=async request=>{const result=await api.listRoutes(request);return {routes:result.routes.map(mark)};};
+  gozar.watchRoutes=async function*(request){for await(const event of api.watchRoutes(request))yield event.route?{...event,route:mark(event.route)}:event;};
+  gozar.closeRoute=async request=>{const route=mark(await api.closeRoute(request));if(route.cleanup.state==='confirmed')active.delete(JSON.stringify(route.handle));return route;};
+  return {gozar,events,close:()=>closing??=(async()=>{const errors=[];for(const request of [...active.values()])try{const route=await gozar.closeRoute(request);if(route.cleanup.state!=='confirmed'){const error=gozarError('cleanup_debt','Fixture cleanup is unconfirmed; retain the route handle and retry');error.route=route;errors.push(error);}}catch(error){errors.push(error);}if(errors.length)throw errors[0];abort.abort();})().catch(error=>{closing=null;throw error;})};
 }
 
 /** Deterministic lifecycle projections for every admitted usage kind; no provider or process is started. */
@@ -54,11 +61,12 @@ export function fakeRouteScenarios({ target = '127.0.0.1:18765', now = Date.pars
   const origin = 'https://screen.example.invalid', checkedAt = new Date(now).toISOString(), future = new Date(now + 60_000).toISOString();
   return ['session', 'attached', 'durable'].flatMap(kind => ['detected', 'verified', 'expired', 'cleanup-unconfirmed'].map(state => {
     const handle = { kind, id: `fixture-${kind}`, generation: 1 }, verified = state !== 'detected';
+    const subject={origin,target,instanceId:'fixture-instance',bootId:'fixture-boot',handleGeneration:handle.generation};
     const expiry = state === 'expired' ? new Date(now - 1).toISOString() : future;
     const options = { handle, properties, now };
-    const route = kind === 'durable' ? projectDurable({ state: verified ? 'usable' : 'unverified', origin, target, verification: { status: verified ? 'verified' : 'unverified', checkedAt, validUntil: expiry }, expiresAt: expiry }, options)
-      : kind === 'attached' ? projectAttached({ state: verified ? 'usable' : 'unverified', origin, target, properties, checkedAtMs: now, expiresAt: expiry }, options)
-      : projectSession({ snapshot: { phase: verified ? 'published-ready' : 'candidate-ready', candidate: origin, published: verified ? origin : null, target, expiresAt: expiry, checkedAtMs: now } }, options);
+    const route = kind === 'durable' ? projectDurable({ state: verified ? 'usable' : 'unverified', origin, target, verification: { status: verified ? 'verified' : 'unverified', checkedAt, validUntil: expiry,subject }, expiresAt: expiry }, options)
+      : kind === 'attached' ? projectAttached({ state: verified ? 'usable' : 'unverified', origin, target, properties, checkedAtMs: now,proofSubject:subject, expiresAt: expiry }, options)
+      : projectSession({proofSubject:subject,snapshot: { phase: verified ? 'published-ready' : 'candidate-ready', candidate: origin, published: verified ? origin : null, target, expiresAt: expiry, checkedAtMs: now } }, options);
     return enrichRoute({ ...route, cleanup: { state: state === 'cleanup-unconfirmed' ? 'unconfirmed' : 'none' } }, { target, expiresAt: expiry, validUntil: expiry, now });
   }));
 }
@@ -152,7 +160,7 @@ export default {
       await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
       servers.set(plan.resourceKey,server); plan={...plan,origin:'http://127.0.0.1:'+server.address().port};mark('start');
     }
-    return { schemaVersion: 1, adapterId: definition.id, resourceKey: plan.resourceKey, generation: ctx.generation ?? 1, identity: null, readback: plan.readback, origin: plan.origin ?? 'https://' + definition.id + '.example.invalid' };
+    return { schemaVersion: 1, adapterId: definition.id, resourceKey: plan.resourceKey, generation: ctx.generation ?? 1,operationId:ctx.operationId??null, identity: null, readback: plan.readback, origin: plan.origin ?? 'https://' + definition.id + '.example.invalid' };
   },
   async observe(ctx, request) { return { present: false, resourceKey: definition.id + ':' + sha({ target: request.target }).slice(0, 16), identity: null, revision: null }; },
   async verify(ctx, receipt) { mark('proof'); return ctx.verifyChallenge(receipt?.readback?.origin ?? receipt?.origin ?? '', receipt?.readback?.target ?? ''); },

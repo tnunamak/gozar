@@ -8,7 +8,10 @@
 - Add route proof/expiry state, recorded host configuration and cleanup confirmation.
 - Return schemaVersion 2 for Catalog and RouteView; setup adds detect-only and
   cleanup replaces debt with unconfirmed/confirmed. See docs/migration-0.4.md.
-- Execute named HTTPS connectors and raw TCP/TLS SDK listeners through the generic attached lifecycle and adapter-declared proof. Stream proof is initial transport evidence; synthetic TLS proof certificates do not certify app identity.
+- Execute named HTTPS connectors and SDK HTTPS listeners through the generic attached lifecycle. Shipped raw TCP/TLS choices remain detect-only so the full HTTP(S) embedding contract can ship together; trusted non-HTTP extensions retain adapter-declared proof.
+- Bind setup and route approval to visible canonical consent snapshots and scoped configuration revisions. Add persisted drafts, host secret backends, input clearing and safe same-generation runtime consent review.
+- Bind proof to the current host/controller subject. Retain uncertain cleanup receipts and reserve operation IDs before allocation so a host can recover routes after a crash without starting another one.
+- Add complete provider inventory, host capability prerequisites, read-only route recovery listing and CLI recovery commands. Add an explicit testing effects factory for real adapters across the detached controller boundary.
 - Add trusted extension loading, descriptor CLI prompts and an installed non-HTTP fixture lifecycle command.
 - Ship a provider-neutral remote access screen example with --fakes and --detect.
 - `@ngrok/ngrok` is now an optional peer dependency. Apps that use the ngrok HTTPS edge must install it; other apps avoid downloading its native binaries (about 10 MB on Linux and 29 MB on macOS).

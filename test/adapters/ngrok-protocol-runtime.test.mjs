@@ -105,7 +105,7 @@ test('controller publishes only after proof; repeated fresh status retains proof
   const read = { ...ctx, home }, ask = { ...request, target: `127.0.0.1:${app.address().port}`, requirements: { transport: 'tcp', protocols: [] } };
   const plan = await adapter.plan(read, ask), directory = join(home, 'att_0123456789abcdef');
   await mkdir(directory, { mode: 0o700 });
-  await writeFile(join(directory, 'bootstrap.json'), JSON.stringify({ id: 'att_0123456789abcdef', home, platform: 'linux', adapterId: adapter.id, request: ask, plan, leaseExpiryMs: 60000 }));
+  await writeFile(join(directory, 'bootstrap.json'), JSON.stringify({ id: 'att_0123456789abcdef', home, platform: 'linux', adapterId: adapter.id, identity:{instanceId:'fixture-controller',bootId:'fixture-boot'}, request: ask, plan, leaseExpiryMs: 60000 }));
   const done = runAttachedController(directory, { adapters: [adapter], readContext: read, effectContext: createAttachedEffectContext });
   t.after(async () => { await controlAttached(directory, { type: 'close' }).catch(() => {}); await done; });
   let saved;

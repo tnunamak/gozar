@@ -38,7 +38,9 @@
     "docs/ngrok-stream-protocols.md",
     "docs/design/0.4.0-state-contract.md",
     "docs/testing-effects.md",
-    "docs/embedding-contract.md"
+    "docs/embedding-contract.md",
+    "docs/proof-and-cleanup-0.4.md",
+    "docs/release-0.4-interface-coverage.md"
   ],
   "repository": {
     "type": "git",

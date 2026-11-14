@@ -2,7 +2,7 @@
 import {randomUUID} from 'node:crypto';
 import {effectError} from '../../../packages/gozar-node/adapter-runtime.mjs';
 const debt=()=>({removed:false,debt:{code:'close_failed',reason:'listener-absence-unconfirmed',message:'The owned listener has not confirmed absence; retry cleanup.'}});
-export function safeListenerError(error){
+export function safeListenerError(error,credentialAction){
  if(error?.code==='unsupported')return effectError('unsupported','The declared listener effect has no testing handler');
  const code=[error?.code,error?.error_code,error?.message].filter(v=>typeof v==='string').join(' ').match(/\bERR_NGROK_(8013|105|108)\b/)?.[1];
  const detail={
@@ -12,6 +12,8 @@ export function safeListenerError(error){
  }[code];
  const result=effectError(detail?'setup_required':'provider_unavailable',detail?.[0]??'The listener could not start. Check the connection, saved credential and account settings, then review setup and retry.');
  if(detail)result.nextAction={id:'check-listener-account',kind:'open-url',label:'Check account setup',href:detail[1],digest:`listener-account-${code}`,disclosure:{revision:'listener-account-1',text:'Open the provider dashboard; Gozar changes no account settings.',links:[]}};
+ if(code==='105'&&credentialAction)result.nextAction=structuredClone(credentialAction);
+ if(!detail)result.nextAction={id:'review-listener-setup',kind:'instructions',label:'Review connection and setup',instructions:'Check the network connection, then review the saved credential and account settings before retrying.',digest:'listener-setup-review-1',disclosure:{revision:'listener-setup-review-1',text:'Gozar changes no provider settings.',links:[]}};
  return result;
 }
 
@@ -33,10 +35,10 @@ export function createListenerLifecycle({adapterId,timeoutMs=5000,startupTimeout
   }catch{return debt();}
  }
  return {
-  async open(ctx,plan,{sdk,options,normalizeOrigin=value=>new URL(value).origin}={}){
+  async open(ctx,plan,{sdk,options,credentialAction,normalizeOrigin=value=>new URL(value).origin}={}){
    await ctx.assertGeneration();
    if(records.has(plan.resourceKey)||ctx.signal?.aborted)throw safeListenerError();
-   const receipt={schemaVersion:1,adapterId,resourceKey:plan.resourceKey,generation:ctx.generation,
+   const receipt={schemaVersion:1,adapterId,resourceKey:plan.resourceKey,generation:ctx.generation,operationId:ctx.operationId??null,
     identity:{runtimeId:randomUUID(),origin:plan.origin??null,...(ctx.attemptId?{attemptId:ctx.attemptId}:{})},origin:plan.origin??null,readback:{...plan.readback}};
    const record={receipt,sdk,opening:true,listener:null,abandoned:false};records.set(plan.resourceKey,record);
    let abort;
@@ -50,9 +52,13 @@ export function createListenerLifecycle({adapterId,timeoutMs=5000,startupTimeout
     receipt.origin=actual;receipt.identity.origin=actual;receipt.readback.origin=actual;
     return structuredClone(receipt);
    }catch(cause){
-    record.abandoned=true;const outcome=await clean(record);
-    const error=safeListenerError(cause);
-    if(!outcome.removed)error.cleanupReceipt=structuredClone(receipt);
+    record.abandoned=true;
+    // An authenticated SDK response rejecting the agent credential cannot allocate this listener.
+    // Message text can select safe copy, but never supplies this negative ownership evidence.
+    if(cause?.code==='ERR_NGROK_105'&&!record.opening&&!record.listener){records.delete(plan.resourceKey);removed.add(key(receipt));}
+    else await clean(record);
+    const error=safeListenerError(cause,credentialAction);
+    error.cleanupReceipt=structuredClone(receipt);
     throw error;
    }finally{ctx.signal?.removeEventListener('abort',abort);}
   },

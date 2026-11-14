@@ -19,7 +19,7 @@ The versioned request/result unions ship in `testing-contract.d.ts`:
 | kind / operation | input | result |
 | --- | --- | --- |
 | sdk-listener / detect | `{}` | `{available:boolean}` |
-| sdk-listener / open | `{options:{addr,authtoken,domain?,proto?,remote_addr?}}` | `{handle,url}` |
+| sdk-listener / open | `{options:{addr,authtoken,domain?,proto?,remote_addr?}}` | `{handle,url}` or `{error:{code}}`; allow-listed safe diagnostics only |
 | sdk-listener / read | `{handle}` | `{present:false}` or `{present:true,url}` |
 | sdk-listener / close | `{handle}` | `{closed:boolean}`; read must separately confirm absence |
 | network / fetch | `{url,method,headers}` | `{status,headers,chunks:[{data,delayMs}]}` |
@@ -30,6 +30,8 @@ The versioned request/result unions ship in `testing-contract.d.ts`:
 | process-runtime / close | `{handle}` | `{closed:boolean}`; read separately confirms absence |
 | local-api / request | `{path,method,headers,body}` | `{status,headers,body:string}`; conditional writes retain real ETag checks |
 | recipe / probe | `{recipe}` | `{stdout,stderr,exitCode}`; Gozar runs the declared parser, never a supplied success flag |
+| artifact / fetch | `{artifact}` | `{bytes}` as base64; core checks the trusted SHA-256 |
+| artifact / execute | `{artifact,effects,bytes}` | `{executed,exitCode}`; only matching approved bytes reach it |
 
 `data` and `bytes` encode bytes as base64. Fetch chunks preserve timing so nonce
 and streaming checks still execute. Exchange returns bytes from the actual owned
@@ -37,6 +39,9 @@ local proof listener through the fixture's mapping; echoing input alone fails
 the independent local witness. A TLS certificate is PEM and must match the
 ephemeral proof certificate. Fixture evidence establishes only isolated fixture
 transport, never real account entitlement or public-provider acceptance.
+The factory marks public fixture facts as synthetic evidence. Its `close()`
+tries every retained current handle, rejects on cleanup debt, and permits retry;
+returning from the test harness is not independent evidence of remote absence.
 
 Operational sessions declare `spawn/run`, `spawn/read`, `spawn/close` and
 `network/fetch`. `run` receives `{program,args,longRunning}` and returns bounded
