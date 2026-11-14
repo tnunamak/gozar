@@ -1,6 +1,6 @@
 // Host-owned authenticated, boot-bound resolver. Descriptor contains authority, never credentials.
 import net from 'node:net';
-import {randomBytes,timingSafeEqual,randomUUID} from 'node:crypto';
+import {randomBytes,timingSafeEqual} from 'node:crypto';
 import {chmod,unlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {canonicalHome} from './service-state.mjs';
@@ -10,7 +10,8 @@ const same=(a,b)=>{if(typeof a!=='string'||typeof b!=='string')return false;cons
 export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{},dispatchEffect}){
  home=await canonicalHome(home,true);identity??=await services.resolveIdentity({home});
  const descriptor={socketPath:join(home,`resolver-${randomBytes(6).toString('hex')}.sock`),token:randomBytes(32).toString('hex'),...identity};
- const sockets=new Set();let closed=false;
+ const sockets=new Set();let closed=false,registered=false;
+ const admittedBoots=new Set();
  const server=net.createServer(socket=>{
   sockets.add(socket);socket.setEncoding('utf8');let buffer='';let queue=Promise.resolve();
   socket.on('error',()=>{});socket.on('close',()=>{sockets.delete(socket);if(!closed)onLoss(embeddingError('secret_backend_unavailable'));});
@@ -28,8 +29,17 @@ export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{}
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(descriptor.socketPath,resolve);});await chmod(descriptor.socketPath,0o600);
  return {descriptor,async registerController({identity:nextIdentity}={}){
    if(closed)throw embeddingError('secret_backend_unavailable');
-   nextIdentity??={instanceId:identity.instanceId,bootId:randomUUID()};
-   if(nextIdentity.instanceId!==identity.instanceId||typeof nextIdentity.bootId!=='string'||!nextIdentity.bootId||nextIdentity.bootId===identity.bootId)throw embeddingError('secret_backend_unavailable');
+   if(!registered){
+    nextIdentity??=identity;
+    if(nextIdentity.instanceId!==identity.instanceId||nextIdentity.bootId!==identity.bootId||
+       typeof identity.bootId!=='string'||!identity.bootId)throw embeddingError('secret_backend_unavailable');
+    registered=true;admittedBoots.add(identity.bootId);
+    return {...descriptor};
+   }
+   if(!nextIdentity||nextIdentity.instanceId!==identity.instanceId||
+      typeof nextIdentity.bootId!=='string'||!nextIdentity.bootId||
+      admittedBoots.has(nextIdentity.bootId))throw embeddingError('secret_backend_unavailable');
+   admittedBoots.add(nextIdentity.bootId);
    for(const socket of sockets)socket.destroy();
    identity={...nextIdentity};Object.assign(descriptor,identity,{token:randomBytes(32).toString('hex')});
    onLoss(embeddingError('secret_backend_unavailable'));return {...descriptor};

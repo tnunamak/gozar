@@ -175,7 +175,7 @@ export async function openAttachedRoute(request, deps = {}) {
         const hostIdentity=await deps.embeddingServices.resolveIdentity({home:redeemed.home});
         broker=await startEmbeddingBroker({services:deps.embeddingServices,home:redeemed.home,identity:hostIdentity,
           dispatchEffect:deps.dispatchEffect,onLoss:()=>{if(brokers.has(id))void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
-        const descriptor=await broker.registerController();
+        const descriptor=await broker.registerController({identity:hostIdentity});
         identity={instanceId:descriptor.instanceId,bootId:descriptor.bootId};
         brokers.set(id,broker);
         try{await deps.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle:{kind:'attached',id,generation:1}});}

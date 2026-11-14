@@ -18,7 +18,7 @@ test('configured host keychain crosses the actual detached controller without a 
  const ready=(await api.catalogRoutes(q)).candidates[0];
  const route=await api.expose({...q,wait:'verified',approval:{kind:'route',candidateToken:ready.candidateToken,disclosureRevision:ready.disclosure.revision,consentFactsDigest:ready.consentFactsDigest}});
  t.after(()=>api.closeRoute({home,handle:route.handle,mode:'remove'}).catch(()=>{}));
- assert.equal(route.verification.status,'verified');assert.equal(route.verification.subject.instanceId,'host-instance');assert.notEqual(route.verification.subject.bootId,'host-supervisor-boot');
+ assert.equal(route.verification.status,'verified');assert.equal(route.verification.subject.instanceId,'host-instance');assert.equal(route.verification.subject.bootId,'host-supervisor-boot');
  assert.equal(route.verification.subject.handleGeneration,route.handle.generation);assert.equal(route.verification.subject.target,q.target);assert.ok(reads>=3);
  assert.equal((await api.closeRoute({home,handle:route.handle,mode:'remove'})).cleanup.state,'confirmed');
  async function scan(dir){for(const entry of await readdir(dir,{withFileTypes:true})){const path=join(dir,entry.name);if(entry.isDirectory())await scan(path);else if(entry.isFile())assert.equal((await readFile(path)).includes(Buffer.from(canary)),false,path);}}
