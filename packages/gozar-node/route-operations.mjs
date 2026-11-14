@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {canonicalHome,trustedDirectory,privateDirectory,readRecord,withExclusiveLock} from './service-state.mjs';
 import {atomicWrite,processIdentity} from './journal.mjs';
 import {canonicalDigest,peekConsentGrant} from './consent-token.mjs';
-import {unknownProperties,projectSession,projectDurable,projectExternal} from './route-view.mjs';
+import {unknownProperties,projectSession,projectDurable,projectExternal,recoveryHistory} from './route-view.mjs';
 import {enrichRoute} from './embedding-state.mjs';
 import {gozarError} from './error-normalizer.mjs';
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -99,6 +99,29 @@ export async function recordOperationView({home,view,reference}){
   if(record.view.handle.kind!==view.handle.kind||record.view.handle.id!==view.handle.id)return view;
   record.view={...view,operationId:record.operationId};record.phase=view.cleanup.state==='confirmed'?'terminal':'recovery';await atomicWrite(path,record);return record.view;
  },{waitSeconds:30});
+}
+
+/** Missing route files are not absence evidence; only exact terminal journals are. */
+export async function retainedOperationView({home,handle,owner}={}){
+ if(handle?.kind!=='durable')return null;
+ let dir;
+ try{dir=await directory(home,false);}catch(error){if(error.code==='ENOENT')return null;throw error;}
+ const matches=[];
+ for(const entry of await readdir(dir,{withFileTypes:true})){
+  if(!entry.isFile()||!/^[a-f0-9]{64}\.json$/.test(entry.name))continue;
+  const record=checkRecord(await readRecord(join(dir,entry.name)));
+  if(entry.name!==hash(JSON.stringify([record.owner,record.operationId]))+'.json')
+   throw gozarError('provider_unavailable','The operation recovery filename does not match its identity');
+  const ref=record.view.handle;
+  if(ref.kind!==handle.kind||ref.id!==handle.id||ref.generation!==handle.generation||
+    (owner!==undefined&&record.owner!==owner))continue;
+  matches.push(record);
+ }
+ if(!matches.length)return null;
+ // A nonterminal sibling is not erased by a terminal snapshot of another operation.
+ const debt=matches.find(record=>record.phase!=='terminal'||record.view.state!=='released'||record.view.cleanup?.state!=='confirmed');
+ if(debt)return recoveryHistory(structuredClone(debt.view),'Retained operation has no confirmed provider absence; retry cleanup with the original provider available.');
+ return structuredClone(matches[0].view);
 }
 
 /** Read persisted snapshots only. Listing never mints consent or refreshes a provider proof. */

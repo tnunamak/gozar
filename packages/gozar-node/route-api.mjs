@@ -19,7 +19,7 @@ import { createEmbeddingServices } from './embedding-services.mjs';
 import { listProviders as inventory } from './embedding-inventory.mjs';
 import { setupConsentReview,consentSnapshot } from './consent-facts.mjs';
 import {offeredConfiguration,readConfigurationDraft,clearConfigurationInput} from './embedding-setup.mjs';
-import {withRouteOperation,listRecordedRoutes,recordOperationView,operationReferenceForRoute} from './route-operations.mjs';
+import {withRouteOperation,listRecordedRoutes,recordOperationView,operationReferenceForRoute,retainedOperationView} from './route-operations.mjs';
 import {withServiceContext,reviewExternalConsent,approveExternalConsent} from './service.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
 
@@ -108,7 +108,7 @@ export function createRouteApi(deps = {}) {
     }),
 
     routeStatus: request => guard(() => verified(async () => viewStatus(request, { adapters: await adapters(), ...deps.view }),request)),
-    closeRoute: request => guard(() => verified(async () => {const reference=await operationReferenceForRoute(request);const view=await viewClose(request, { adapters: await adapters(), ...deps.view });if(view.cleanup.state==='confirmed'){if(request.handle.kind==='attached')await releaseAttachedConfiguration(request,await services());if(request.handle.kind==='session')await releaseSessionConfiguration(request,await services());}return recordOperationView({home:request.home,view,reference});},request)),
+    closeRoute: request => guard(() => verified(async () => {const reference=await operationReferenceForRoute(request);let view;try{view=await viewClose(request, { adapters: await adapters(), ...deps.view });}catch(error){if(error.code!=='route_not_found')throw error;const retained=await retainedOperationView(request);if(!retained)throw error;return retained;}if(view.cleanup.state==='confirmed'){if(request.handle.kind==='attached')await releaseAttachedConfiguration(request,await services());if(request.handle.kind==='session')await releaseSessionConfiguration(request,await services());}return recordOperationView({home:request.home,view,reference});},request)),
     suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }),request)),
     watchRoutes:async function*(request){try{for await(const event of pollRoutes(request,{routeStatus:r=>verified(async()=>viewStatus(r,{adapters:await adapters(),...deps.view}),r),...deps.watch}))yield structuredClone(event);}catch(error){throw publicError(error);}},
     getRoutePreferences, setRoutePreferences,
