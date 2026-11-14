@@ -605,6 +605,11 @@ function requestFields(request) {
 // The app passes a Query, never an adapter. First creation needs `approval`: a single-use token
 // Gozar's catalog issued. Its grant names the adapter; the facts it was issued on are recomputed
 // here under the reservation lock. An existing record is the pin and needs no token.
+// Validate before an operation reservation is written by the public API.
+export function validateEnsureRequest(request) {
+  if (request?.intent !== undefined && request.intent !== 'create') throw refuse('invalid_input', 'ensureRoute creates; use adoptRoute for adoption');
+  return requestFields(request);
+}
 export async function ensureRoute(request, deps) {
   if (request?.intent !== undefined && request.intent !== 'create') throw refuse('invalid_input', 'ensureRoute creates; use adoptRoute for an existing route');
   const { routeId, target, home, owner, origin, approval, reconsent } = requestFields(request);
@@ -696,6 +701,16 @@ export async function ensureRoute(request, deps) {
 // Remove by exact compare-and-set from the receipt or empty-slot intent. A rule Gozar cannot attribute stays in place,
 // and the record stays as visible cleanup debt until the rule is gone or the user dismisses it.
 async function removeListener(dir, record, adapters, ctx, { suspend = false } = {}) {
+  // A new registry is not authority to destroy a previous registry's listener.
+  const runtime = scopedRuntime.getStore();
+  if (runtime?.embeddingServices && record.consentReview?.canonicalInput?.scope?.registryId !== runtime.registryId) {
+    if (suspend) throw refuse('consent_mismatch', 'Restore the original registry before suspending this route');
+    const cleanupDebt = { reason: 'registry-changed', port: (record.receipt ?? record.intent)?.port ?? null,
+      nextAction: instructionAction('restore-route-registry', 'Restore the original route registry',
+        'Restore the registry that owns this retained handle, then retry closeRoute remove. Nothing was removed.') };
+    await save(dir, { ...record, state: 'releasing', cleanupDebt });
+    return { removed: false, providerRemoved: false, cleanupDebt };
+  }
   if (!suspend && record.state === 'suspended') {
     await drop(dir, record.routeId);
     return { removed: true, providerRemoved: false, cleanupDebt: null };
@@ -712,11 +727,13 @@ async function removeListener(dir, record, adapters, ctx, { suspend = false } = 
   };
   const keep = async (reason, providerRemoved = false) => {
     if (suspend) throw refuse(reason === 'address_changed' ? reason : 'uncertain', `Cannot suspend: ${reason}; the rule was left in place`);
-    const cleanupDebt = { reason, port: pin.port };
+    const cleanupDebt = { reason, port: pin?.port ?? null,
+      nextAction: instructionAction('recover-route-receipt', 'Recover the original route receipt',
+        'Retain this handle and restore its exact ownership receipt and original registry before retrying removal. Cleanup is unconfirmed.') };
     await save(dir, { ...record, cleanupDebt });
     return { removed: false, providerRemoved, cleanupDebt };
   };
-  if (!pin) { await drop(dir, record.routeId); return { removed: true, providerRemoved: false, cleanupDebt: null }; }
+  if (!pin) return keep('missing-ownership-receipt');
   // The adapter that wrote the rule may be gone (removed from the registry in a later version). Without its
   // facet nothing can be read or removed, so the record stays as cleanup debt instead of failing the release.
   const entry = adapters.find(item => item.id === record.adapterId && item.durable);
