@@ -18,11 +18,17 @@ import { loadCatalog } from './catalog.mjs';
 import { createGate, validateLifetimeMs } from './gate.mjs';
 import { loadCore } from './core.mjs';
 import { gozarError, instructionAction } from './error-normalizer.mjs';
+import {connectSessionEmbedding} from './session-embedding.mjs';
 
 /** What a failed controller leaves for its starter: the message, and the contract code and next action when it has them. */
 export const failureRecord = error => ({ message: error.message, ...(typeof error.code === 'string' ? { code: error.code, nextAction: error.nextAction ?? null } : {}) });
 export const socketPath = directory => join(directory, 'control.sock');
 export async function control(directory, command, timeoutMs = 15_000) {
+  if(!['stop','reconcile'].includes(command?.type)){
+    const bootstrap=JSON.parse(await readFile(join(directory,'bootstrap.json'),'utf8'));
+    const adapter=bootstrap.adapters?.find(item=>item.id===bootstrap.adapterId);
+    if(adapter&&adapter.planVersion!==1)throw gozarError('unsupported','Legacy recipe publication is not supported in 0.4. Stop this session and expose it again with an admitted operational plan.');
+  }
   const identity = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8'));
   if (!identity.startIdentity || await processIdentity(identity.pid) !== identity.startIdentity) throw new Error('Controller is not running; readiness withdrawn');
   return new Promise((resolve, reject) => {
@@ -155,6 +161,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   }
   if (Object.keys(journal.value.owned).length) throw gozarError('cleanup_debt', 'Cleanup remains pending; stop the recorded session before restarting', stopNext());
   let controller;
+  const embedding=await connectSessionEmbedding(config,{onLoss:()=>{controller?.driver.cancelProbes();}});
   let initializedDone = false;
   let initializationError;
   let initializedResolve;
@@ -166,12 +173,16 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   const queuedRouteOrigins = new Set();
   const operational = config.operational === true || selectedAdapter?.planVersion === 1;
   const gate = operational ? await createGate(config.targetPort, { lifetimeMs: config.lifetimeMs, onExpire: () => { setImmediate(() => initialized.then(() => finalize()).catch(() => {})); } }) : null;
+  if(embedding?.fixtureVerifier)probeExecutor=embedding.fixtureVerifier(gate);
   // Until the control socket is published, a failed start must close the gate: its port listener keeps the process alive.
   const abandon = async error => { await gate?.close().catch(() => {}); throw error; };
   try {
     controller = new Controller({ ...config, targetPort: gate?.port ?? config.targetPort, servicePort: config.targetPort, step, journal, onAutomaticStop: () => initialized.then(() => finalize()) });
   } catch (error) { await abandon(error); }
   controller.driver.lifetimeMs = config.lifetimeMs;
+  if(embedding?.spawnProcess)controller.driver.spawnProcess=embedding.spawnProcess;
+  if(embedding)controller.beforeEffect=embedding.beforeEffect;
+  if(embedding)controller.beforePublication=embedding.check;
   controller.driver.probeWaitMs = config.probeWaitMs;
   controller.driver.observeProcessOutput = config.observeProcessOutput === true;
   controller.driver.onProcessOutput = event => {
@@ -215,8 +226,12 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   };
   if (operational) await prepareHost(controller.driver, selectedAdapter, { origin: config.origin, gate, probeExecutor, authorities: hostAuthorities }).catch(abandon);
   let setupPending = Boolean(gate && selectedAdapter?.setup?.requiresProxyTarget);
-  const present = output => ({ ...output, ...(gate ? { lifetimeMs: gate.lifetimeMs, expiresAtMs: gate.expiresAtMs } : {}), ...(selectedAdapter?.clientProfile ? { connectionProfile: selectedAdapter.clientProfile } : {}),
+  const present = async output => {const result=({ ...output, ...(gate ? { lifetimeMs: gate.lifetimeMs, expiresAtMs: gate.expiresAtMs } : {}), ...(selectedAdapter?.clientProfile ? { connectionProfile: selectedAdapter.clientProfile } : {}),
     ...(setupPending && !controller.state?.stopRequested ? { action: { kind: 'external', instruction: `Point the existing origin ${config.origin} at ${gate.target}, then run ${cliCommand('health', config.targetPort, dirname(directory))}.`, target: gate.target, recheckCommand: 'health' } } : {}) });
+    const projected=embedding?await embedding.project(result):result;
+    if(embedding)await journal.save({embeddingView:publicReply(projected,directory)});
+    return projected;
+  };
   const nonce = randomUUID();
   const identity = { pid: process.pid, startIdentity: await processIdentity(process.pid).catch(abandon), nonce };
   // Only remove a stale socket after proving the prior daemon identity is gone.
@@ -240,6 +255,9 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
         const message = JSON.parse(input.split('\n')[0]);
         if (message.nonce !== nonce) throw new Error('Controller identity mismatch');
         const command = message.command;
+        if(command?.type==='resolver-lost'){controller.driver.cancelProbes();socket.end(`${JSON.stringify(publicReply(await present(controller.present()),directory))}\n`);return;}
+        if(command?.type==='review-consent'&&embedding){socket.end(`${JSON.stringify({review:await embedding.review()})}\n`);return;}
+        if(command?.type==='approve-consent'&&embedding){const output=await embedding.approve(command,async()=>{let result=await controller.command({type:'health'});if(result.snapshot.phase==='candidate-ready')result=await controller.approve();return result;});socket.end(`${JSON.stringify(publicReply(await present(output),directory))}\n`);return;}
         if (command?.type === 'process-output') {
           if (!Number.isSafeInteger(command.after ?? 0) || (command.after ?? 0) < 0) throw new Error('Invalid output cursor');
           socket.end(`${JSON.stringify({ events:controller.driver.readProcessOutput(command.after ?? 0) })}\n`); return;
@@ -258,7 +276,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
             output = await controller.command({ type: 'start', adapterId: config.adapterId, consent: config.consent === true });
             if (config.approveOrigin && output.snapshot.phase === 'candidate-ready') output = await controller.approve();
             armMonitor();
-            socket.end(`${JSON.stringify(publicReply(present(output), directory))}\n`); return;
+            socket.end(`${JSON.stringify(publicReply(await present(output), directory))}\n`); return;
           }
           if (command.type === 'update-origin') {
             if (selectedAdapter?.ownership !== 'external-owned') throw new Error('Origin updates require an external-owned route');
@@ -268,14 +286,14 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
             controller.driver.host.bindings.externalOrigin = { type: 'credential-free-https-origin', value: origin, authorityRef: randomUUID(),
               sessionId: controller.sessionId, observedAtMs: nowMs, expiresAtMs: nowMs + 900000 };
             config.origin = origin;
-            if (setupPending) { socket.end(`${JSON.stringify(publicReply(present(controller.present()), directory))}\n`); return; }
+            if (setupPending) { socket.end(`${JSON.stringify(publicReply(await present(controller.present()), directory))}\n`); return; }
           }
           const fresh = controller.driver.acceptedProbeReceipt?.expiresAtMs > controller.driver.nowMs() && controller.driver.proofGeneration === controller.state?.generation;
           const health = initializedDone && operational && ['status', 'health'].includes(command.type) && !command.initial && (command.type === 'health' || !fresh) && controller.state?.selected && !controller.state?.stopRequested;
           output = await controller.command(health ? { type: 'health' } : command);
           if (config.approveOrigin && output.snapshot.phase === 'candidate-ready') output = await controller.approve();
         }
-        socket.end(`${JSON.stringify(publicReply(present(output), directory))}\n`);
+        socket.end(`${JSON.stringify(publicReply(await present(output), directory))}\n`);
         if (closing) server.close();
       } catch (error) { socket.end(`${JSON.stringify({ error: error.message, ...(typeof error.code === 'string' ? { code: error.code, nextAction: error.nextAction ?? null } : {}) })}\n`); }
     });
@@ -297,6 +315,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   server.on('close', async () => {
     clearInterval(monitor);
     await gate?.close();
+    embedding?.close();
     controller.driver.outputEvents = []; controller.driver.outputBytes = 0;
     // Keep the last controller identity for crash/status auditing. The socket closes here;
     // every status call still proves the process birth identity and authenticates its live socket.
@@ -304,10 +323,11 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   let finalizing;
   const finalize = () => {
     if (finalizing) return finalizing;
-    finalizing = controller.shutdown().then(output => {
+    finalizing = controller.shutdown().then(async output => {
       if (output.snapshot.phase === 'stopped' && !output.localCleanupFailures.length &&
           Object.keys(controller.journal.value.owned).length === 0) {
         closing = true;
+        await embedding?.release();
         server.close();
       }
       return output;
@@ -325,6 +345,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
     const planned = await controller.command({ type: 'recommend' });
     const selected = config.adapterId ?? planned.snapshot.recommendations[0];
     if (selected && config.consent && !setupPending) {
+      await embedding?.check();
       await controller.command({ type: 'start', adapterId: selected, consent: true });
       // CLI approval is explicit and exact; never turn an unvalidated candidate into a published URL.
       if (config.approveOrigin === true) await controller.approve();
@@ -358,7 +379,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
 }
 
 export function publicReply(output, directory) {
-  return { ...(output.lifetimeMs !== undefined ? { lifetimeMs: output.lifetimeMs, expiresAtMs: output.expiresAtMs } : {}), snapshot: { ...output.snapshot, adapterId: output.state?.selected ?? output.snapshot?.adapterId }, ...(output.action ? { action: output.action } : {}), ...(output.gateTarget ? { gateTarget: output.gateTarget } : {}), ...(output.validation ? { validation: output.validation } : {}), journalPath: join(directory, 'session.json'),
+  return { ...Object.fromEntries(['target','owner','operationId','proofSubject','fixtureEffects','consentChange','consentFactsDigest'].filter(key=>output[key]!==undefined).map(key=>[key,output[key]])),...(output.lifetimeMs !== undefined ? { lifetimeMs: output.lifetimeMs, expiresAtMs: output.expiresAtMs } : {}), snapshot: { ...output.snapshot, adapterId: output.state?.selected ?? output.snapshot?.adapterId }, ...(output.action ? { action: output.action } : {}), ...(output.gateTarget ? { gateTarget: output.gateTarget } : {}), ...(output.validation ? { validation: output.validation } : {}), journalPath: join(directory, 'session.json'),
     sseChecked: output.state?.requirements?.sse === true,
     ...(output.connectionProfile ? { connectionProfile: output.connectionProfile } : {}),
     ...(output.localCleanupFailures ? { localCleanupFailures: output.localCleanupFailures } : {}) };

@@ -25,7 +25,7 @@ test('named connector refuses incomplete inputs before starting and reports unce
   await assert.rejects(adapter.plan({...base,configuration:async()=>({token:'present'})},{usage:{kind:'attached'},target:'127.0.0.1:3000'}),e=>e.code==='setup_required');assert.equal(starts,0);
   const ctx={...base,configuration:async()=>({token:'present',origin:'https://named.example.invalid','gate-port':'18479'})};
   const request={usage:{kind:'attached'},target:'127.0.0.1:3000'}, plan=await adapter.plan(ctx,request), receipt=await adapter.create(ctx,plan);
-  const removal=await adapter.remove(ctx,receipt,{});assert.equal(removal.removed,false);assert.equal(removal.debt.reason,'connector-stop-unconfirmed');assert.ok(!JSON.stringify(removal).includes('private-runtime-diagnostic'));
+  const removal=await adapter.remove(ctx,receipt,{});assert.equal(removal.removed,false);assert.equal(removal.debt.reason,'listener-absence-unconfirmed');assert.ok(!JSON.stringify(removal).includes('private-runtime-diagnostic'));
 });
 
 test('a resolving close is not absence when the owned connector remains alive', async () => {

@@ -112,6 +112,12 @@
         "label": "Local connector port",
         "observation": "portSet",
         "actionId": "gate-port"
+      },
+      {
+        "id": "process-supervisor",
+        "label": "Process supervisor",
+        "observation": "supervisor",
+        "actionId": "install-supervisor"
       }
     ],
     "facts": [
@@ -385,7 +391,7 @@
       {
         "id": "storage-policy",
         "label": "Credential storage",
-        "value": "Private local files; read-back reports presence and non-secret values only.",
+        "value": "The configured private credential backend supplies bytes only to trusted adapter operations; public read-back returns presence and non-secret values.",
         "known": true,
         "group": "setup",
         "affectsConsent": false,
@@ -612,12 +618,34 @@
       {
         "id": "credential-process-boundary",
         "label": "Credential process boundary",
-        "value": "The saved connector token is passed to the owned child process through its private environment, never command arguments or public return data.",
+        "value": "The owned connector receives the token through anonymous pipes. Gozar does not place token bytes in process arguments, environment variables or a credential mirror.",
         "known": true,
         "group": "setup",
         "affectsConsent": true,
         "source": "adapter-definition",
         "asOf": "2026-11-13"
+      }
+    ],
+    "effectOperations": [
+      {
+        "kind": "process-runtime",
+        "operation": "detect"
+      },
+      {
+        "kind": "process-runtime",
+        "operation": "open"
+      },
+      {
+        "kind": "process-runtime",
+        "operation": "read"
+      },
+      {
+        "kind": "process-runtime",
+        "operation": "close"
+      },
+      {
+        "kind": "network",
+        "operation": "fetch"
       }
     ]
   },

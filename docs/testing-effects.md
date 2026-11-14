@@ -24,6 +24,12 @@ The versioned request/result unions ship in `testing-contract.d.ts`:
 | sdk-listener / close | `{handle}` | `{closed:boolean}`; read must separately confirm absence |
 | network / fetch | `{url,method,headers}` | `{status,headers,chunks:[{data,delayMs}]}` |
 | network / exchange | `{endpoint,transport,bytes,pinnedCertificate,deadlineMs}` | `{bytes,certificate?}` |
+| process-runtime / detect | `{program}` | `{available:boolean}` |
+| process-runtime / open | `{program,args,credential,origin,target,deadlineMs}` | `{handle}` |
+| process-runtime / read | `{handle}` | `{present:boolean}` |
+| process-runtime / close | `{handle}` | `{closed:boolean}`; read separately confirms absence |
+| local-api / request | `{path,method,headers,body}` | `{status,headers,body:string}`; conditional writes retain real ETag checks |
+| recipe / probe | `{recipe}` | `{stdout,stderr,exitCode}`; Gozar runs the declared parser, never a supplied success flag |
 
 `data` and `bytes` encode bytes as base64. Fetch chunks preserve timing so nonce
 and streaming checks still execute. Exchange returns bytes from the actual owned
@@ -31,3 +37,14 @@ local proof listener through the fixture's mapping; echoing input alone fails
 the independent local witness. A TLS certificate is PEM and must match the
 ephemeral proof certificate. Fixture evidence establishes only isolated fixture
 transport, never real account entitlement or public-provider acceptance.
+
+Operational sessions declare `spawn/run`, `spawn/read`, `spawn/close` and
+`network/fetch`. `run` receives `{program,args,longRunning}` and returns bounded
+`{stdout,stderr,exitCode}`. A long-running result has `exitCode:null` plus an opaque
+`handle` and the PID of a harmless fixture child the backend actually started.
+The normal session ledger checks that PID's birth identity and stops only that
+process. `read({handle})` returns `{present,exitCode?}`; `close({handle,signal})`
+requests cancellation. Source output still passes through the shipped parser.
+No fixture executable replaces a vendor program on PATH. The fixture proof reads
+the current owned gate challenge through `network/fetch`; fixture observations do
+not establish reachability through a real provider.

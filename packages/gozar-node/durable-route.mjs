@@ -18,9 +18,11 @@ import { trustedDirectory, canonicalHome, privateDirectory, readRecord, withExcl
   challengePath, canonicalAuthority } from './service-state.mjs';
 import { durableCapability, admitRouteEffect, routeAuthority } from './plan.mjs';
 import { loadAdapters } from './adapter-runtime.mjs';
-import { redeemConsentToken, consentBinding, canonicalDigest } from './consent-token.mjs';
+import { issueConsentToken,redeemConsentToken, consentBinding, canonicalDigest } from './consent-token.mjs';
 import { defaultHome } from './default-home.mjs';
 import { adoptDisclosureRevision, consentDisclosureRevision } from './adopt-disclosure.mjs';
+import {currentRouteReview} from './route-consent.mjs';
+import {consentReview,consentSnapshot} from './consent-facts.mjs';
 
 const refuse = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
 const hash = routeId => createHash('sha256').update(routeId).digest('hex');
@@ -43,9 +45,75 @@ export function setVerifierForTest(replacement) {
 // A verifier that holds for one call and the work it starts, so concurrent callers do not share it (used by a route API
 // built with a `verify` option). Without one, the replaceable global above answers.
 const scopedVerifier = new AsyncLocalStorage();
+const scopedRuntime = new AsyncLocalStorage();
+const heldReservation=new AsyncLocalStorage();
+export const withRuntimeContext=(runtime,action)=>scopedRuntime.run(runtime,action);
 const runVerifier = check => (scopedVerifier.getStore() ?? verifier.run)(check);
 /** Runs `action` with `verify({ origin, target })` as the challenge verifier. */
 export const withVerifier = (verify, action) => scopedVerifier.run(verify, action);
+
+async function boundProof(record,checked){
+  const runtime=scopedRuntime.getStore();
+  if(!runtime?.embeddingServices)return checked;
+  const identity=await runtime.embeddingServices.resolveIdentity({home:runtime.home});
+  return {...checked,observedAt:checked.checkedAt??null,subject:{origin:record.origin??record.intent.origin,target:record.target,...identity,handleGeneration:record.generation}};
+}
+const verifyRecord=async record=>boundProof(record,await runVerifier({origin:record.origin??record.intent.origin,target:record.target,verifyCmd:null}));
+async function currentConsent(record){
+  const runtime=scopedRuntime.getStore();if(!runtime?.embeddingServices||!record.reviewQuery)return null;
+  const adapter=runtime.adapters.find(item=>item.id===record.adapterId);if(!adapter)throw refuse('provider_unavailable','The recorded adapter is unavailable');
+  const facts=await adapter.runtimeFacts(durableContext(runtime.home,record.owner),{schemaVersion:1,adapterId:adapter.id,resourceKey:record.providerResource,generation:record.generation,identity:null,origin:record.origin??record.intent?.origin,readback:{kind:'durable',target:record.target}});
+  return currentRouteReview(record.reviewQuery,adapter,runtime,{runtimeFacts:facts});
+}
+async function consentCurrent(record){
+  const current=await currentConsent(record);if(!current)return true;
+  if(current.review.consentFactsDigest!==record.consentReview?.consentFactsDigest){
+    const change={oldDigest:record.consentReview?.consentFactsDigest??'',newDigest:current.review.consentFactsDigest,nextAction:'review-route-consent',reason:'consent-changed'};
+    const runtime=scopedRuntime.getStore();
+    const withdraw=async dir=>{const fresh=await load(dir,record.routeId);if(!fresh||fresh.generation!==record.generation||['releasing','handing-back','suspending','suspended'].includes(fresh.state))return;Object.assign(record,{state:'unverified',consentChange:change,pendingFacts:current.facts});await save(dir,record);};
+    if(heldReservation.getStore())await withdraw(heldReservation.getStore());else await reserved(runtime.home,withdraw);
+    return false;
+  }
+  return !record.consentChange;
+}
+async function authorizeRecord(record,request,adapter,grant){
+  const runtime=scopedRuntime.getStore();if(!runtime?.embeddingServices)return record;
+  const current=await currentRouteReview(request,adapter,runtime);
+  if(request.approval?.kind!=='route'||request.approval.consentFactsDigest!==current.review.consentFactsDigest||grant.consentFactsDigest!==current.review.consentFactsDigest)throw refuse('consent_mismatch','Route consent changed before provider effects');
+  await runtime.embeddingServices.registerConfigurationUse({home:request.home,owner:request.owner,providerId:adapter.id,revision:current.configuration.revision,handle:{kind:'durable',id:record.routeId,generation:record.generation}});
+  const {approval,...query}=request;
+  return {...record,operationId:request.operationId??null,reviewQuery:query,consentReview:current.review,configurationRevision:current.configuration.revision};
+}
+
+function reviewBinding(record,current,handle){
+ const review=consentReview({scope:{...current.review.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation},typedDisclosures:current.review.canonicalInput.typedDisclosures,facts:current.facts});
+ return {review,binding:{...consentBinding(record.reviewQuery,record.reviewQuery.home,`runtime-review:${review.consentFactsDigest}`,review.consentFactsDigest),handle,subject:record.verification?.subject??null}};
+}
+export async function reviewDurableConsent({home,handle}){
+ return reserved(home,async dir=>{
+  const record=await load(dir,handle.id);if(!record||record.generation!==handle.generation)throw refuse('route_conflict','This route handle is stale');
+  const current=await currentConsent(record);if(!current||!record.receipt)throw refuse('unsupported','This route has no current consent authority');
+  record.state='unverified';record.consentChange??={reason:'review-requested',nextAction:'review-route-consent',oldDigest:record.consentReview.consentFactsDigest,newDigest:current.review.consentFactsDigest};await save(dir,record);
+  const {review,binding}=reviewBinding(record,current,handle);
+  const issued=await issueConsentToken({home,binding,grant:{adapterId:record.adapterId,planDigest:canonicalDigest(binding),observedResource:record.providerResource}});
+  return {...consentSnapshot(review),subject:record.verification?.subject??null,approvalToken:issued.token,expiresAt:issued.expiresAt};
+ });
+}
+export async function approveDurableConsent({home,handle,approvalToken,consentFactsDigest}){
+ return reserved(home,async dir=>{
+  let record=await load(dir,handle.id);if(!record||record.generation!==handle.generation)throw refuse('route_conflict','This route handle is stale');
+  const current=await currentConsent(record);if(!current||!record.receipt)throw refuse('unsupported','This route has no current consent authority');
+  const {review,binding}=reviewBinding(record,current,handle);
+  if(consentFactsDigest!==review.consentFactsDigest)throw refuse('consent_mismatch','Runtime consent changed; request a new review');
+  await redeemConsentToken({home,token:approvalToken,binding,providerId:record.adapterId});
+  const runtime=scopedRuntime.getStore(),entry=durableEntry(await durableAdapters({adapters:runtime.adapters}),record.adapterId);
+  record={...record,consentReview:current.review,state:'unverified'};delete record.consentChange;await save(dir,record);
+  const observed=await entry.facet.observe(durableContext(home,record.owner));
+  const checked=await reconcile(record,entry.facet,observed);
+  if(checked.state!=='usable'){record.state='unverified';record.consentChange={reason:'fresh-proof-failed',nextAction:'review-route-consent'};await save(dir,record);throw refuse('verification_failed','The existing route did not pass fresh proof');}
+  const published=await publish(dir,record,checked.verification);return view(published.record,{verification:published.verification});
+ });
+}
 
 function routeIdValue(value) {
   if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(value)) throw refuse('invalid_input', 'Route ID must be 1..63 lowercase letters, digits or hyphens');
@@ -78,7 +146,12 @@ function durableEntry(adapters, adapterId, asFacts = false) {
   if (!capability) throw refuse('adapter_not_durable', 'Selected adapter cannot keep a stable origin');
   return { adapterId, adapter, facet: adapter.durable, capability };
 }
-const durableContext = home => ({ home, platform: process.platform, now: () => Date.now() });
+const durableContext = (home,owner) => {
+  const runtime=scopedRuntime.getStore();
+  return {home,owner:owner??runtime?.owner,platform:runtime?.platform??process.platform,now:()=>Date.now(),...(runtime?.readContext??{}),
+    ...(runtime?.dispatchEffect?{dispatchEffect:runtime.dispatchEffect}:{}),
+    ...(runtime?.embeddingServices?{providerConfiguration:providerId=>runtime.embeddingServices.resolveConfiguration({home,owner:owner??runtime.owner,providerId})}:{})};
+};
 const providerConflict = facet => Object.assign(new Error('Another program keeps changing the provider config: retry later'),
   { code: 'provider_conflict', provider: facet.family ?? null, nextAction: 'retry later' });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -228,7 +301,7 @@ async function reserved(home, action) {
   const locks = join(dir, '.locks');
   await trustedDirectory(locks, true);
   await privateDirectory(locks);
-  return withExclusiveLock(join(locks, 'reservation'), () => action(dir), { waitSeconds: reservationWaitSeconds })
+  return withExclusiveLock(join(locks, 'reservation'), () => heldReservation.run(dir,()=>action(dir)), { waitSeconds: reservationWaitSeconds })
     .catch(error => { throw error.code === 'busy' ? refuse('busy', 'Another Gozar route operation held the reservation lock for 30 s; retry') : error; });
 }
 
@@ -334,7 +407,8 @@ async function reconcile(record, facet, observed, { verify = true } = {}) {
   if (current === null) return { state: 'lost' };
   if (!isDeepStrictEqual(current, record.receipt.rule)) return { state: 'uncertain', cleanupDebt: { reason: 'rule-changed', port: pin.port } };
   if (!verify || record.state === 'suspending') return { state: record.state };
-  const checked = await runVerifier({ origin: record.origin ?? record.intent.origin, target: record.target, verifyCmd: null });
+  if(!await consentCurrent(record))return {state:'unverified',consentChange:record.consentChange};
+  const checked = await verifyRecord(record);
   return { state: checked.status === 'verified' ? 'usable' : 'unverified', verification: checked };
 }
 
@@ -361,7 +435,8 @@ function view(record, current = {}, extra = {}) {
     allocatedOrigin: record.origin ?? record.receipt?.origin ?? record.intent?.origin ?? null, target: record.target,
     adapterId: record.adapterId, ownership: record.ownership, provenance: record.provenance ?? 'created', lifetime: record.lifetime,
     exposure: 'owner-run', forwards: state === 'suspended' ? 'suspended; no provider forwarding rule' : `forwards to ${record.target} whether or not ${record.owner} is running`,
-    idleTimeoutMs: record.idleTimeoutMs ?? null, state, verification: current.verification ?? null,
+    idleTimeoutMs: record.idleTimeoutMs ?? null, state, verification: current.verification ?? record.verification ?? null,operationId:record.operationId??null,
+    ...(record.consentChange?{consentChange:record.consentChange}:{}),consentFactsDigest:record.consentReview?.consentFactsDigest??null,
     cleanupDebt: current.cleanupDebt ?? record.cleanupDebt ?? null, ...extra };
   if (record.state === 'handing-back') reply.handBack = { transfer: record.handBack.transfer, claim: record.handBack.claim };
   return reply;
@@ -404,6 +479,7 @@ async function createListener(dir, record, entry, { table, firstAllocation, expe
     // Nothing was written: a conflict or a rejected write proves the earlier attempt did not apply.
     if (saved && firstAllocation) await drop(dir, record.routeId);
     else if (saved) await save(dir, { ...record, state: 'lost' });
+    const runtime=scopedRuntime.getStore();if(firstAllocation&&runtime?.embeddingServices&&record.configurationRevision)await runtime.embeddingServices.releaseConfigurationUse({home:ctx.home,owner:record.owner,providerId:record.adapterId,handle:{kind:'durable',id:record.routeId,generation:record.generation}});
   };
   const { written, decision } = await compareAndSet(facet, ctx, async observed => {
     let slot;
@@ -429,7 +505,8 @@ async function createListener(dir, record, entry, { table, firstAllocation, expe
     if (!isDeepStrictEqual(saved, record)) { await save(dir, record); saved = record; }
     return { write: { op: 'put', slot: admitted.slot, rule: admitted.listener } };
   }).catch(async error => {
-    if (['provider_conflict', 'provider_failed'].includes(error.code)) await settle();
+    if(error.code==='provider_conflict')await settle();
+    else if(error.code==='provider_failed'&&saved)await save(dir,{...record,state:'uncertain',cleanupDebt:{reason:'write-outcome-unconfirmed',port:record.intent.port}});
     throw error;
   });
   if (!written) {
@@ -467,13 +544,14 @@ async function createListener(dir, record, entry, { table, firstAllocation, expe
 
 // Verify the pinned origin and durably publish it only after verification succeeds.
 async function publish(dir, record, checked) {
-  checked ??= await runVerifier({ origin: record.origin ?? record.intent.origin, target: record.target, verifyCmd: null });
+  if(!await consentCurrent(record)){await save(dir,{...record,state:'unverified'});return {record,verification:{status:'unverified',checkedAt:record.verification?.checkedAt??null,observedAt:record.verification?.observedAt??null,subject:record.verification?.subject??null}};}
+  checked ??= await verifyRecord(record);
   // Fence: a concurrent release or hand-back that moved the generation wins.
   const fresh = await load(dir, record.routeId);
   if (!fresh || fresh.generation !== record.generation || ['releasing', 'handing-back', 'suspending', 'suspended'].includes(fresh.state))
     throw refuse('route_releasing', 'The route was released during this call; it was not published');
-  const state = checked.status === 'verified' ? 'usable' : 'unverified';
-  record = { ...record, state, origin: state === 'usable' ? record.origin ?? record.intent.origin : record.origin ?? null };
+  const state = checked.status === 'verified'&&await consentCurrent(record) ? 'usable' : 'unverified';
+  record = { ...record, state,verification:checked,origin: state === 'usable' ? record.origin ?? record.intent.origin : record.origin ?? null };
   await save(dir, record);
   return { record, verification: checked };
 }
@@ -491,7 +569,7 @@ function approvalOf(approval) {
 async function redeem(home, request, intent, approval) {
   const canonical = await canonicalHome(home, true);
   return redeemConsentToken({ home: canonical, token: approval.candidateToken, providerId: request.providerId,
-    binding: consentBinding({ ...request, intent }, canonical, approval.disclosureRevision) });
+    binding: consentBinding({ ...request, intent }, canonical, approval.disclosureRevision,approval.consentFactsDigest) });
 }
 const stale = () => refuse('claim_mismatch', 'The provider changed since the user approved this route; nothing was changed. Ask the user again.');
 function requestFields(request) {
@@ -512,7 +590,7 @@ function requestFields(request) {
 export async function ensureRoute(request, deps) {
   if (request?.intent !== undefined && request.intent !== 'create') throw refuse('invalid_input', 'ensureRoute creates; use adoptRoute for an existing route');
   const { routeId, target, home, owner, origin, approval, reconsent } = requestFields(request);
-  const adapters = await adaptersOf(deps), ctx = durableContext(home);
+  const adapters = await adaptersOf(deps), ctx = durableContext(home,owner);
   return reserved(home, async dir => {
     // A user stop is a consent revocation until the user approves again.
     const tombstone = await stopped(dir, routeId);
@@ -586,10 +664,11 @@ export async function ensureRoute(request, deps) {
     const table = await reservationTable(await canonicalHome(home), dir);
     const facts = planFactsFromObservation(await facet.observe(ctx), { adapterId: grant.adapterId, facet, capability, target, origin, table, routeId });
     if (facts.planDigest !== grant.planDigest || facts.observedResource !== grant.observedResource) throw stale();
-    const fresh = { schemaVersion: 1, routeId, owner, adapterId: grant.adapterId, target, origin: null, createdAt: new Date().toISOString(),
+    let fresh = { schemaVersion: 1, routeId, owner, adapterId: grant.adapterId, target, origin: null, createdAt: new Date().toISOString(),
       ownership: 'gozar-owned', provenance: 'created', lifetime: capability.lifetime, idleTimeoutMs: capability.idleTimeoutMs,
       providerResource: capability.providerResource, consent: { adapterId: grant.adapterId, target, origin, durable: true },
       generation: 1, state: 'creating', intent: null, receipt: null, cleanupDebt: null };
+    fresh=await authorizeRecord(fresh,request,entry.adapter,grant);
     const created = await createListener(dir, fresh, entry, { table, firstAllocation: true, expectedOrigin: facts.origin, ctx });
     return finish(created.record, created.verification);
   });
@@ -607,6 +686,7 @@ async function removeListener(dir, record, adapters, ctx, { suspend = false } = 
   await save(dir, record);
   const pin = record.receipt ?? record.intent;
   const complete = async providerRemoved => {
+    const runtime=scopedRuntime.getStore();if(runtime?.embeddingServices&&record.configurationRevision)await runtime.embeddingServices.releaseConfigurationUse({home:ctx.home,owner:record.owner,providerId:record.adapterId,handle:{kind:'durable',id:record.routeId,generation:record.generation}});
     if (suspend) await save(dir, { ...record, state: 'suspended', receipt: null, cleanupDebt: null });
     else await drop(dir, record.routeId);
     return { removed: true, providerRemoved, cleanupDebt: null };
@@ -685,7 +765,7 @@ export async function releaseRoute({ routeId, mode = 'remove', home = defaultHom
       await drop(dir, routeId);
       return { schemaVersion: 1, routeId, removed: true, providerRemoved: false, cleanupDebt: record.cleanupDebt };
     }
-    return { schemaVersion: 1, routeId, ...await removeListener(dir, record, await adaptersOf(deps), durableContext(home)) };
+    return { schemaVersion: 1, routeId, ...await removeListener(dir, record, await adaptersOf(deps), durableContext(home,record.owner)) };
   });
 }
 
@@ -697,7 +777,7 @@ export async function stopRoute({ routeId, home = defaultHome() }, deps) {
     await atomicWrite(tombstonePath(dir, routeId), { schemaVersion: 1, routeId, stoppedAt: new Date().toISOString() });
     const record = await load(dir, routeId);
     if (!record) return { schemaVersion: 1, routeId, removed: false, providerRemoved: false, cleanupDebt: null, stopped: true };
-    return { schemaVersion: 1, routeId, ...await removeListener(dir, record, await adaptersOf(deps), durableContext(home)), stopped: true };
+    return { schemaVersion: 1, routeId, ...await removeListener(dir, record, await adaptersOf(deps), durableContext(home,record.owner)), stopped: true };
   });
 }
 
@@ -782,7 +862,7 @@ export async function adoptRoute(request, deps) {
   const { handover, migrationRef } = request;
   if (origin === null) throw refuse('invalid_input', 'Adoption requires the origin to adopt');
   if (migrationRef !== undefined && typeof migrationRef !== 'string') throw refuse('invalid_input', 'migrationRef must be a string');
-  const adapters = await durableAdapters(deps), ctx = durableContext(home);
+  const adapters = await durableAdapters(deps), ctx = durableContext(home,owner);
   return reserved(home, async dir => {
     const tombstone = await stopped(dir, routeId);
     if (tombstone && !reconsent) throw refuse('stopped_by_user', 'The user stopped this route; it cannot be adopted until the user approves again (reconsent: true with a fresh approval) or runs `gozar allow --route ' + routeId + '`');
@@ -852,9 +932,9 @@ export async function statusRoutes({ routeId, home = defaultHome(), canonical = 
   const adapters = await adaptersOf(deps), ctx = durableContext(home);
   // One observation per provider store for this call; a failure is reported per route, not thrown.
   const observations = new Map();
-  const observeFor = entry => {
-    const key = entry.capability.providerResource;
-    if (!observations.has(key)) observations.set(key, entry.facet.observe(ctx).then(observed => ({ observed }), cause => ({ error: { code: cause.code ?? null, message: cause.message } })));
+  const observeFor = (entry,record) => {
+    const key = JSON.stringify([entry.capability.providerResource,record.owner]);
+    if (!observations.has(key)) observations.set(key, entry.facet.observe(durableContext(home,record.owner)).then(observed => ({ observed }), cause => ({ error: { code: cause.code ?? null, message: cause.message } })));
     return observations.get(key);
   };
   const routes = [];
@@ -866,9 +946,14 @@ export async function statusRoutes({ routeId, home = defaultHome(), canonical = 
       nextAction: `gozar stop --route ${record.routeId}` });
     let entry = null;
     try { entry = durableEntry(adapters, record.adapterId); } catch (cause) { routes.push({ ...view(record, { state: 'unknown' }, extra), error: { code: cause.code ?? null, message: cause.message } }); continue; }
-    const { observed, error } = await observeFor(entry);
+    const { observed, error } = await observeFor(entry,record);
     if (!observed) { routes.push({ ...view(record, { state: 'unknown' }, extra), error }); continue; }
     const current = await reconcile(record, entry.facet, observed);
+    const fresh=await load(dir,record.routeId);
+    if(!fresh||fresh.generation!==record.generation||['releasing','handing-back','suspending','suspended'].includes(fresh.state)){
+      current.state=fresh?.state??'unknown';if(current.verification)current.verification={...current.verification,status:'unverified'};
+      routes.push(view(record,current,extra));continue;
+    }
     if (current.state === 'usable' && record.origin === null) {
       // First successful verification after a crash or a failed check: publish it durably.
       const published = await reserved(home, async locked => {
@@ -879,7 +964,7 @@ export async function statusRoutes({ routeId, home = defaultHome(), canonical = 
       if (published) record = published;
       else current.state = 'unverified';
     }
-    if (['usable', 'unverified'].includes(current.state)) await renewIfDue(record, entry.facet, observed, ctx, current);
+    if (['usable', 'unverified'].includes(current.state)) await renewIfDue(record, entry.facet, observed, durableContext(home,record.owner), current);
     routes.push(view(record, current, extra));
   }
   return { schemaVersion: 1, routes, stoppedRoutes };

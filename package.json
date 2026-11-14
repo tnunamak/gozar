@@ -37,7 +37,8 @@
     "docs/live-provider-walk.md",
     "docs/ngrok-stream-protocols.md",
     "docs/design/0.4.0-state-contract.md",
-    "docs/testing-effects.md"
+    "docs/testing-effects.md",
+    "docs/embedding-contract.md"
   ],
   "repository": {
     "type": "git",

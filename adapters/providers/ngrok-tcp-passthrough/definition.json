@@ -77,8 +77,8 @@
         "reason": "usage-not-supported"
       },
       "attached": {
-        "state": "available",
-        "reason": "admitted"
+        "state": "detect-only",
+        "reason": "http-https-only-in-0.4; raw passthrough deferred by Lead"
       },
       "durable": {
         "state": "unsupported",

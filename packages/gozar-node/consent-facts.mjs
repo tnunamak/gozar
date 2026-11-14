@@ -36,7 +36,7 @@ export function consentFactRows(facts) {
     seen.add(fact.id);
     if (!(fact.value === null || ['string', 'boolean', 'number'].includes(typeof fact.value)) ||
         (!fact.known && (typeof fact.reason !== 'string' || !fact.reason)) ||
-        (fact.reason !== undefined && typeof fact.reason !== 'string')) return invalid();
+        (fact.reason !== undefined && fact.reason !== null && typeof fact.reason !== 'string')) return invalid();
     if (fact.affectsConsent) rows.push({ id: fact.id, label: fact.label, value: fact.known ? fact.value : null,
       known: fact.known, reason: fact.reason ?? null, group: fact.group, affectsConsent: true, source: fact.source });
   }

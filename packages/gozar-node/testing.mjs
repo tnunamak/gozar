@@ -17,6 +17,8 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { gozarError } from './error-normalizer.mjs';
 import { projectSession, projectDurable, projectAttached } from './route-view.mjs';
 import { enrichRoute } from './embedding-state.mjs';
+import {testingFetch} from './testing-network.mjs';
+import {verification} from './service-state.mjs';
 
 export { createReadContext };
 
@@ -35,7 +37,9 @@ export async function createTestingGozar({effects,...options}={}){
     try{const result=await handler(structuredClone(request.input),{signal:abort.signal,fixture:true});event.state='completed';return structuredClone(result);}
     catch{event.state='failed';throw gozarError('provider_unavailable','The testing effect failed');}
   };
-  const api=createCoreRouteApi({...options,dispatchEffect});
+  const {manifest,root,secretBackend,hostCapabilities,identity}=options;
+  const api=createCoreRouteApi({manifest,root,secretBackend,hostCapabilities,identity,dispatchEffect,
+    verify:request=>verification(request,{fetch:testingFetch(dispatchEffect)})});
   const gozar={...api};
   for(const method of ['expose','ensureRoute','adoptRoute'])gozar[method]=async request=>{try{const route=await api[method](request);if(route.cleanup.state!=='confirmed')active.set(JSON.stringify(route.handle),{home:request.home,handle:route.handle,mode:'remove'});return route;}catch(error){if(error.route&&error.route.cleanup.state!=='confirmed')active.set(JSON.stringify(error.route.handle),{home:request.home,handle:error.route.handle,mode:'remove'});throw error;}};
   gozar.closeRoute=async request=>{const route=await api.closeRoute(request);if(route.cleanup.state==='confirmed')active.delete(JSON.stringify(route.handle));return route;};

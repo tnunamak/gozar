@@ -74,7 +74,7 @@ export async function defaultReadContext() {
 export async function readContextFor(deps, home, platform, owner = deps.owner) {
   return { ...(deps.readContext ?? await defaultReadContext()), home, platform,
     ...(deps.embeddingServices ? {providerConfiguration: providerId => deps.embeddingServices.resolveConfiguration({home,owner,providerId})} : {}),
-    ...(deps.dispatchEffect ? {dispatchEffect: deps.dispatchEffect,probe:recipe=>deps.dispatchEffect({kind:'recipe',operation:'probe',input:{recipe}})} : {}) };
+    ...(deps.dispatchEffect ? {dispatchEffect: deps.dispatchEffect,probe:async recipe=>(await loadRuntime()).probeWithEffects(recipe,deps.dispatchEffect)} : {}) };
 }
 
 /** `providerId` picks exactly one adapter by the id its definition declares; an unknown id lists every id on offer, in registry order. */
@@ -103,6 +103,7 @@ export async function inspectAdapter(adapter, context, platform) {
   if (state !== 'unsupported') { try { actions = adapter.configurationActions ? adapter.configurationActions() : adapter.setupActions({ ...detected.facts, setupNeeded: true }); } catch { /* no usable actions */ } }
   let missingActions = [];
   try { missingActions = adapter.setupActions(detected.facts); } catch {}
+  actions=[...new Map([...actions,...missingActions].map(action=>[action.id,action])).values()];
   return { ...base, state, facts: detected.facts, properties, actions, missingActions, probed: true };
 }
 

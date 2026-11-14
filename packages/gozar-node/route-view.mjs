@@ -2,6 +2,7 @@
 // and routeStatus / closeRoute, which dispatch on handle.kind. Apps never learn which provider
 // answered; provider diagnostics stay on error.cause.
 import { join } from 'node:path';
+import {readRecord} from './service-state.mjs';
 import { enrichRoute, cleanupForSession } from './embedding-state.mjs';
 
 import { gozarError, normalizeError } from './error-normalizer.mjs';
@@ -63,9 +64,9 @@ const verificationOf = (state, checkedAtMs, checks = []) => proven(state === 'us
 const challengeChecks = origin => (typeof origin === 'string' && origin.startsWith('https://') ? ['nonce', 'tls'] : ['nonce']);
 const debtMessage = debt => typeof debt === 'string' ? debt : debt?.message ?? debt?.reason ?? 'Cleanup is incomplete';
 
-function view({ handle, origin, published, state, ownership, properties, ingress = null, verification, limits, cleanup = { state: 'none' }, target, bindTarget, expiresAt, validUntil, now, facts }) {
+function view({ handle, origin, published, state, ownership, properties, ingress = null, verification, limits, cleanup = { state: 'none' }, target, bindTarget, expiresAt, validUntil, now, facts,consentChange,consentFactsDigest,operationId }) {
   return enrichRoute({ schemaVersion: 2, handle: { kind: handle.kind, id: handle.id, generation: handle.generation }, origin, published, state, ownership,
-    properties, ingress, verification, limits, cleanup }, { target, bindTarget, expiresAt, validUntil, now, facts });
+    properties, ingress, verification, limits, cleanup,...(consentChange?{consentChange}:{}),...(consentFactsDigest?{consentFactsDigest}:{}),operationId:operationId??null }, { target, bindTarget, expiresAt, validUntil, now, facts });
 }
 const limitsOf = (limits, fallbackPollMs, idleTimeoutMs = null) => ({
   recommendedPollIntervalMs: limits?.recommendedPollIntervalMs ?? fallbackPollMs, idleTimeoutMs: limits?.idleTimeoutMs ?? idleTimeoutMs });
@@ -75,9 +76,11 @@ export function projectDurable(reply, { handle, properties, ingress = null, limi
   const state = STATES.has(reply.state) ? reply.state : 'unknown';
   const published = state === 'usable' && typeof reply.origin === 'string' ? reply.origin : null;
   const checkedAt = typeof reply.verification?.checkedAt === 'string' ? Date.parse(reply.verification.checkedAt) : null;
+  const proof=proven(reply.verification?.status==='verified'&&state==='usable'?'verified':'unverified',Number.isFinite(checkedAt)?iso(checkedAt):null,challengeChecks(reply.origin??reply.allocatedOrigin));
+  Object.assign(proof,{observedAt:reply.verification?.observedAt??proof.checkedAt,subject:reply.verification?.subject??null});
   // RouteView.origin is the route's address, also before verification; `published` is what the app may advertise.
-  return view({ target: reply.target, expiresAt: reply.expiresAt, validUntil: reply.verification?.validUntil, facts, now, handle, origin: reply.allocatedOrigin ?? reply.origin ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
-    verification: proven(reply.verification?.status === 'verified' && state === 'usable' ? 'verified' : 'unverified', Number.isFinite(checkedAt) ? iso(checkedAt) : null, challengeChecks(reply.origin ?? reply.allocatedOrigin)),
+  return view({operationId:reply.operationId,consentChange:reply.consentChange,consentFactsDigest:reply.consentFactsDigest, target: reply.target, expiresAt: reply.expiresAt, validUntil: reply.verification?.validUntil, facts, now, handle, origin: reply.allocatedOrigin ?? reply.origin ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
+    verification: proof,
     limits: limitsOf(limits, 60_000, reply.idleTimeoutMs), cleanup: reply.cleanupDebt ? { state: 'unconfirmed', message: debtMessage(reply.cleanupDebt) } : { state: 'none' } });
 }
 
@@ -95,7 +98,9 @@ export function projectSession(reply, { handle, properties, ingress = null, limi
     receipt ? ['tls', 'nonce', 'sse'].filter(check => ({ tls: receipt.tls, nonce: receipt.instanceMatched, sse: receipt.sse })[check] === true)
       : checksFor(properties?.proof?.checks, { sse: reply.sseChecked === true, origin: published }));
   if (receipt && ['public', 'tailnet', 'lan', 'this-device'].includes(receipt.vantage)) verification.vantage = receipt.vantage;
-  return view({ target: reply.target ?? snapshot.target, expiresAt: snapshot.expiresAt ?? (Number.isFinite(snapshot.expiresAtMs) ? iso(snapshot.expiresAtMs) : undefined), validUntil: Number.isFinite(reply.validation?.probeReceipt?.expiresAtMs) ? iso(reply.validation.probeReceipt.expiresAtMs) : undefined, facts, now, handle, origin: snapshot.published ?? snapshot.candidate ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
+  verification.subject=reply.proofSubject??null;verification.observedAt=verification.checkedAt;
+  if(reply.fixtureEffects&&verification.checkedAt)verification.vantage='this-device';
+  return view({operationId:reply.operationId,consentChange:reply.consentChange,consentFactsDigest:reply.consentFactsDigest, target: reply.target ?? snapshot.target, expiresAt: snapshot.expiresAt ?? (Number.isFinite(reply.expiresAtMs??snapshot.expiresAtMs) ? iso(reply.expiresAtMs??snapshot.expiresAtMs) : undefined), validUntil: Number.isFinite(reply.validation?.probeReceipt?.expiresAtMs) ? iso(reply.validation.probeReceipt.expiresAtMs) : undefined, facts, now, handle, origin: snapshot.published ?? snapshot.candidate ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
     verification, limits: limitsOf(limits, 5_000),
     cleanup: cleanupForSession(reply) });
 }
@@ -156,13 +161,15 @@ const defaults = {
       const [directory, sessionId] = splitSession(handle.id);
       let reply;
       try { reply = await control(join(home, directory), { type: 'status' }, 30_000); }
-      catch (cause) { throw gozarError('route_not_found', `No running session ${handle.id}`, null, cause); }
+      catch (cause) { if(cause.code&&cause.code!=='ENOENT'&&cause.code!=='ECONNREFUSED')throw cause;throw gozarError('route_not_found', `No running session ${handle.id}`, null, cause); }
       if (sessionId && reply.snapshot?.sessionId !== sessionId) throw gozarError('route_conflict', 'The session was replaced; this handle is stale');
       return reply;
     },
     async close({ home, handle }) {
       const { stopSession } = await import('./daemon.mjs');
-      return stopSession(join(home, splitSession(handle.id)[0]));
+      const [name,sessionId]=splitSession(handle.id),directory=join(home,name);
+      if(sessionId){const bootstrap=await readRecord(join(directory,'bootstrap.json'));const recorded=bootstrap.sessionId??(await readRecord(join(directory,'session.json'))).snapshot?.sessionId;if(recorded!==sessionId)throw gozarError('route_conflict','The session was replaced; this handle is stale');}
+      return stopSession(directory);
     },
   },
   async attached() { return import('./attached-route.mjs'); },
@@ -212,18 +219,16 @@ export async function closeRoute(request, deps = {}) {
       case 'durable': {
         let before;
         try { before = await routeStatus({ home: request.home, handle }, deps); }
-        catch (error) {
-          const { isUserStopped } = await import('./durable-route.mjs');
-          if (error.code !== 'route_not_found' || !await isUserStopped({ home: request.home, routeId: handle.id })) throw error;
-        }
+        catch { /* Exact retained ownership is checked again by release; fresh proof is not cleanup authority. */ }
         const reply = await (deps.durable ?? defaults.durable).close(request, { adapters: deps.adapters });
         const debt = reply?.cleanupDebt ?? null;
         return { ...releasedView(before, handle), state: debt ? 'uncertain' : 'released', cleanup: debt ? { state: 'unconfirmed', message: debtMessage(debt) } : { state: 'confirmed' }, routeState: debt ? 'cleanup-unconfirmed' : 'inactive' };
       }
       case 'session': {
-        const before = await routeStatus({ home: request.home, handle }, deps);
+        let before;try{before=await routeStatus({home:request.home,handle},deps);}catch{}
         const reply = await (deps.session ?? defaults.session).close(request);
-        const stopped = projectSession(reply, { handle, now, properties: before.properties });
+        if(reply.snapshot?.sessionId&&splitSession(handle.id)[1]&&reply.snapshot.sessionId!==splitSession(handle.id)[1])throw gozarError('route_conflict','The session was replaced; this handle is stale');
+        const stopped = projectSession(reply, { handle, now, properties: before?.properties??(await propertiesFor(reply.snapshot?.adapterId,deps,'session')).properties });
         return stopped.state === 'released' ? { ...releasedView(before, handle), cleanup: stopped.cleanup } : { ...stopped, ingress: null };
       }
       case 'attached': return await (deps.attached ?? await defaults.attached()).closeAttachedRoute(request, deps.attachedDeps);

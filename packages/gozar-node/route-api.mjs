@@ -9,7 +9,7 @@ import { routeStatus as viewStatus, closeRoute as viewClose, suspendRoute as vie
 import { watchRoutes as pollRoutes } from './route-watch.mjs';
 import { getRoutePreferences, setRoutePreferences } from './route-preferences.mjs';
 import { runSetupAction as runSetup } from './route-setup.mjs';
-import { openAttachedRoute, openSessionRoute, redeemApproval,reviewAttachedConsent,approveAttachedConsent,releaseAttachedConfiguration } from './attached-route.mjs';
+import { openAttachedRoute, openSessionRoute, redeemApproval,reviewAttachedConsent,approveAttachedConsent,releaseAttachedConfiguration,releaseSessionConfiguration,sessionConsent } from './attached-route.mjs';
 import { peekConsentGrant } from './consent-token.mjs';
 import { projectExternal } from './route-view.mjs';
 import { resolveClientAddress } from './ingress.mjs';
@@ -35,7 +35,7 @@ export function createRouteApi(deps = {}) {
     const registryId = await registryIdentity({...deps,adapters:deps.adapters});
     return {registryId,embeddingServices:deps.embeddingServices??createEmbeddingServices({registryId,secretBackend:deps.secretBackend,hostCapabilities:deps.hostCapabilities,identity:deps.identity})};
   })();
-  const shared = async (request={}) => { const resolved=await services(); return ({ adapters: await adapters(), platform: platform(), ...resolved, owner:request.owner,
+  const shared = async (request={}) => { const resolved=await services(); return ({ adapters: await adapters(), platform: platform(), ...resolved, owner:request.owner,home:request.home,
     ...(deps.manifest ? { registry: { manifest: deps.manifest, root: deps.root } } : {}),
     hostCapabilities:deps.hostCapabilities??{}, ...(deps.dispatchEffect?{dispatchEffect:deps.dispatchEffect}:{}),
     ...(deps.readContext ? { readContext: deps.readContext } : {}),
@@ -52,7 +52,7 @@ export function createRouteApi(deps = {}) {
     }};
   };
   // A `verify` option ({ origin, target }) replaces the challenge verifier for the durable calls below. It is for tests.
-  const verified = async action => deps.verify ? (await engine()).withVerifier(deps.verify, action) : action();
+  const verified=async(action,request={})=>{const module=await engine();return module.withRuntimeContext(await shared(request),()=>deps.verify?module.withVerifier(deps.verify,action):action());};
 
   /** A durable engine reply is a record view; its RouteView needs the adapter's declared properties. */
   async function durableView(reply) {
@@ -72,21 +72,21 @@ export function createRouteApi(deps = {}) {
     const adapter = grant && (await adapters()).find(item => item.id === grant.adapterId);
     if (adapter?.definition.ownership !== 'external-owned') return undefined;
     if (request.usage?.kind !== 'durable' || (request.intent !== undefined && request.intent !== 'create')) throw gozarError('invalid_input', 'An owner-run route is created with usage durable and intent create');
-    const redeemed = await redeemApproval(request, await shared());
+    const redeemed = await redeemApproval(request, await shared(request));
     const service = deps.service?.addService ?? (await import('./service.mjs')).addService;
     const { route } = await service({ origin: redeemed.plan.origin, target: request.target, home: redeemed.home });
     return projectExternal(route, { handle: { kind: 'external', id: route.origin, generation: 0 } });
   }
 
   const api = {
-    catalogRoutes: query => guard(async () => buildCatalog(query, { ...await shared(query), profileHome: deps.profileHome,
-      pinnedAdapterId: async q => q.usage.kind === 'durable' ? (await engine()).durablePin({ home: q.home, routeId: q.usage.routeId }) : null })),
+    catalogRoutes: query => guard(()=>verified(async () => buildCatalog(query, { ...await shared(query), profileHome: deps.profileHome,
+      pinnedAdapterId: async q => q.usage.kind === 'durable' ? (await engine()).durablePin({ home: q.home, routeId: q.usage.routeId }) : null }),query)),
 
     inspectLegacyRoute: request => guard(async () => (await legacy()).inspectLegacyRoute(request)),
 
     // The loaded adapters go to every durable engine call as an optional second argument; an engine that does not use it ignores it.
-    ensureRoute: request => guard(async()=>withRouteOperation(request,{...await shared(request),status:api.routeStatus,run:()=>verified(async () => (await ownerKept(request)) ?? durableView((await (await engine()).ensureRoute(request, { adapters: await adapters() })).route))})),
-    adoptRoute: request => guard(() => verified(async () => durableView((await (await engine()).adoptRoute(request, { adapters: await adapters() })).route))),
+    ensureRoute: request => guard(async()=>withRouteOperation(request,{...await shared(request),status:api.routeStatus,run:()=>verified(async () => (await ownerKept(request)) ?? durableView((await (await engine()).ensureRoute(request, { adapters: await adapters() })).route),request)})),
+    adoptRoute: request => guard(() => verified(async () => durableView((await (await engine()).adoptRoute(request, { adapters: await adapters() })).route),request)),
 
     /** A request with schemaVersion 1 is the route API; anything else is the legacy session call (handled by the caller). */
     expose: request => guard(async () => {
@@ -96,10 +96,10 @@ export function createRouteApi(deps = {}) {
       throw gozarError('invalid_input', "expose needs usage 'session' or 'attached'");
     }),
 
-    routeStatus: request => guard(() => verified(async () => viewStatus(request, { adapters: await adapters(), ...deps.view }))),
-    closeRoute: request => guard(() => verified(async () => {const view=await viewClose(request, { adapters: await adapters(), ...deps.view });if(request.handle.kind==='attached'&&view.cleanup.state==='confirmed')await releaseAttachedConfiguration(request,await services());return recordOperationView({home:request.home,view});})),
-    suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }))),
-    watchRoutes: request => pollRoutes(request, { routeStatus: r => verified(async () => viewStatus(r, { adapters: await adapters(), ...deps.view })), ...deps.watch }),
+    routeStatus: request => guard(() => verified(async () => viewStatus(request, { adapters: await adapters(), ...deps.view }),request)),
+    closeRoute: request => guard(() => verified(async () => {const view=await viewClose(request, { adapters: await adapters(), ...deps.view });if(view.cleanup.state==='confirmed'){if(request.handle.kind==='attached')await releaseAttachedConfiguration(request,await services());if(request.handle.kind==='session')await releaseSessionConfiguration(request,await services());}return recordOperationView({home:request.home,view});},request)),
+    suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }),request)),
+    watchRoutes: request => pollRoutes(request, { routeStatus: r => verified(async () => viewStatus(r, { adapters: await adapters(), ...deps.view }),r), ...deps.watch }),
     getRoutePreferences, setRoutePreferences,
     runSetupAction: request => guard(async () => runSetup(request,await setupDeps(request))),
     listProviders: request => guard(async()=>inventory(request,await shared(request))),
@@ -109,8 +109,8 @@ export function createRouteApi(deps = {}) {
     readConfigurationDraft:request=>guard(async()=>readConfigurationDraft(request,await shared(request))),
     commitConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const snapshot=await context.embeddingServices.commitConfigurationDraft(request);return offeredConfiguration({...request,draftId:undefined},snapshot,context);}),
     clearConfigurationInput:request=>guard(async()=>clearConfigurationInput(request,await setupDeps(request))),
-    reviewRouteConsent:request=>guard(()=>reviewAttachedConsent(request)),
-    approveRouteConsent:request=>guard(()=>approveAttachedConsent(request)),
+    reviewRouteConsent:request=>guard(async()=>request.handle?.kind==='session'?sessionConsent(request,{adapters:await adapters()}):request.handle?.kind==='durable'?verified(async()=>(await engine()).reviewDurableConsent(request),request):reviewAttachedConsent(request)),
+    approveRouteConsent:request=>guard(async()=>request.handle?.kind==='session'?sessionConsent(request,{approve:true,adapters:await adapters()}):request.handle?.kind==='durable'?verified(async()=>durableView(await (await engine()).approveDurableConsent(request)),request):approveAttachedConsent(request)),
     resolveClientAddress,
   };
   return api;

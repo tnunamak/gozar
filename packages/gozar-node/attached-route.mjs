@@ -65,6 +65,7 @@ export async function redeemApproval(request, deps) {
   if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available; ask the catalog again');
   if (approval.disclosureRevision !== consentDisclosureRevision(adapter.definition, query.intent)) throw gozarError('candidate_stale', 'Consent-relevant facts changed after approval; ask the catalog again');
   if (!adapter.definition.supportedKinds.includes(request.usage.kind)) throw gozarError('unsupported', 'This route does not support that usage');
+  if(adapter.definition.availability?.[request.usage.kind]?.state==='detect-only'||adapter.definition.availability?.[request.usage.kind]?.state==='unsupported')throw gozarError('unsupported','This usage is not admitted for execution in this release');
   const context = bindConfiguration(await readContextFor(deps, home, deps.platform ?? process.platform,query.owner), adapter.id);
   let consentReview;
   if(deps.embeddingServices){
@@ -267,6 +268,22 @@ export async function releaseAttachedConfiguration(request,{embeddingServices,re
   if(bootstrap?.registryId!==registryId)throw gozarError('route_conflict','The recovery handle belongs to a different registry');
   await embeddingServices.releaseConfigurationUse({home:request.home,owner:bootstrap.owner,providerId:bootstrap.adapterId,handle:{...handle,generation:1}});
 }
+export async function releaseSessionConfiguration(request,{embeddingServices}){
+  const handle=checkRef(request),directory=join(request.home,handle.id.split(':')[0]);
+  const bootstrap=await readJson(join(directory,'bootstrap.json'));
+  if(bootstrap?.embedding?.handle.id!==handle.id)return;
+  await embeddingServices.releaseConfigurationUse({home:request.home,owner:bootstrap.owner,providerId:bootstrap.adapterId,handle});
+  await dropBroker(handle.id);
+}
+export async function sessionConsent(request,{approve=false,adapters}={}){
+ const handle=checkRef(request);if(handle.kind!=='session')throw gozarError('unsupported','This handle is not a session');
+ const directory=join(request.home,handle.id.split(':')[0]),bootstrap=await readJson(join(directory,'bootstrap.json'));
+ if(bootstrap?.embedding?.handle.id!==handle.id)throw gozarError('route_conflict','This session handle is stale or has no current consent authority');
+ const {control}=await import('./daemon.mjs');
+ const result=await control(directory,{type:approve?'approve-consent':'review-consent',approvalToken:request.approvalToken,consentFactsDigest:request.consentFactsDigest},60000);
+ if(!approve)return result.review;
+ const adapter=adapters.find(a=>a.id===bootstrap.adapterId);return projectSession(result,{handle,properties:adapter.definition.capabilities,facts:adapter.definition.facts});
+}
 
 // --- The controller -----------------------------------------------------------------------------
 
@@ -288,8 +305,8 @@ const GATE_LIFETIME_MS = 2_147_483_647;
 export async function runAttachedController(directory, runtime = {}) {
   const bootstrap = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
   if(bootstrap.registryId&&await registryIdentity(bootstrap.registry)!==bootstrap.registryId)throw gozarError('artifact_integrity_failed','The controller registry content changed');
-  let resolverLost=false;
-  const resolver=bootstrap.resolver?await connectEmbeddingBroker({descriptor:bootstrap.resolver,identity:bootstrap.identity,onLoss:()=>{resolverLost=true;}}):null;
+  let resolverLost=false,onResolverLoss=()=>{};
+  const resolver=bootstrap.resolver?await connectEmbeddingBroker({descriptor:bootstrap.resolver,identity:bootstrap.identity,onLoss:()=>{resolverLost=true;onResolverLoss();}}):null;
   if(resolver)runtime={...runtime,embeddingServices:resolver,owner:bootstrap.owner,...(bootstrap.fixtureEffects?{dispatchEffect:resolver.dispatchEffect.bind(resolver)}:{})};
   if(bootstrap.fixtureEffects)runtime.fetch=testingFetch(runtime.dispatchEffect);
   const adapters = runtime.adapters ?? await (await loadRuntime())?.loadAdapters?.(bootstrap.registry);
@@ -325,6 +342,7 @@ export async function runAttachedController(directory, runtime = {}) {
   const gated = runtime.validation !== 'none';
   const proofAbort = new AbortController();
   const attempt = { id: bootstrap.id, nonce: randomBytes(32).toString('hex'), deadlineMs: now() + 120_000, signal: proofAbort.signal };
+  onResolverLoss=()=>{if(lease.cleanup.state!=='confirmed'){lease.state='unverified';proofAbort.abort();void save().catch(()=>{});}};
   Object.assign(context,{signal:attempt.signal,deadlineMs:attempt.deadlineMs,attemptId:attempt.id});
   lease.approvedReview=bootstrap.consentReview??null;
   const reviewTokens=new Map();
@@ -387,7 +405,8 @@ export async function runAttachedController(directory, runtime = {}) {
     } catch { if (!releasing) { lease.state = 'unverified'; await save(); } }
   }
   async function removeRoute() {
-    const observed = await adapter.observe(read, bootstrap.request);
+    let observed;
+    try{observed=await adapter.observe(read,bootstrap.request);}catch{observed={known:false,reason:'provider-observation-unavailable'};}
     return adapter.remove(context, receipt, observed);
   }
   const debtOf = removal => ({ state: 'unconfirmed', message: removal.debt?.message ?? 'The route could not be removed' });
@@ -527,7 +546,7 @@ export async function runAttachedController(directory, runtime = {}) {
 
 // --- Session usage ------------------------------------------------------------------------------
 
-async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs, origin, requirements,owner,operationId,sessionId }) {
+async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs, origin, requirements,owner,operationId,sessionId,embedding }) {
   const root = fileURLToPath(new URL('../../', import.meta.url));
   const { loadCatalog, loadDefinition } = await import('./catalog.mjs');
   const { launch } = await import('./daemon.mjs');
@@ -536,7 +555,7 @@ async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs
   return launch(directory, { adapters: [...catalog.filter(item => item.id !== definition.id), definition],
     requirements: { clientReach: requirements.reach, httpsRequired: requirements.transport === 'https', sse: requirements.protocols.includes('sse'),
       streamableHttp: requirements.protocols.includes('streamable-http'), oauthDcr: requirements.protocols.includes('oauth-dcr') },
-    targetPort: port, adapterId, lifetimeMs,owner,operationId:operationId??null,...(sessionId?{sessionId}:{}),origin: origin ?? undefined, operational: definition.planVersion === 1, consent: true, approveOrigin: true },
+    targetPort: port, adapterId, lifetimeMs,owner,operationId:operationId??null,...(sessionId?{sessionId}:{}),...(embedding?{embedding}:{}),origin: origin ?? undefined, operational: definition.planVersion === 1, consent: true, approveOrigin: true },
   join(root, 'bin', 'gozar.mjs'));
 }
 
@@ -554,8 +573,18 @@ export async function openSessionRoute(request, deps = {}) {
     if (!Number.isInteger(port) || port < 1 || port > 65_535) throw gozarError('invalid_input', 'target must end in :PORT');
     const redeemed = await withExclusiveLock(join(await attachedRoot(home), '.open.lock'), () => redeemApproval(request, { ...deps, adapters }), { waitSeconds: 30 });
     const directory = join(home, `port-${port}`);
+    const stableHandle=deps.reservedHandle??{kind:'session',id:`port-${port}:${randomUUID()}`,generation:1};
+    let embedding;
+    if(deps.embeddingServices){
+      const broker=await startEmbeddingBroker({services:deps.embeddingServices,home,identity:await deps.embeddingServices.resolveIdentity({home}),dispatchEffect:deps.dispatchEffect,
+        onLoss:()=>{void import('./daemon.mjs').then(module=>module.control(directory,{type:'resolver-lost'})).catch(()=>{});}});
+      const descriptor=await broker.registerController();brokers.set(stableHandle.id,broker);
+      try{await deps.embeddingServices.registerConfigurationUse({home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle:stableHandle});}
+      catch(error){await dropBroker(stableHandle.id);throw error;}
+      embedding={resolver:descriptor,identity:{instanceId:descriptor.instanceId,bootId:descriptor.bootId},...(deps.registry?{registry:deps.registry}:{}),registryId:deps.registryId,request:{...redeemed.request,home,owner:request.owner,...(request.intent?{intent:request.intent}:{})},consentReview:redeemed.consentReview,handle:stableHandle,fixtureEffects:!!deps.dispatchEffect};
+    }
     let reply = await (deps.startSession ?? legacyStartSession)({ home, directory, adapterId: redeemed.adapter.id, port, lifetimeMs: request.usage.lifetimeMs,
-      owner:request.owner,operationId:request.operationId,sessionId:deps.reservedHandle?.id.split(':').slice(1).join(':'),
+      owner:request.owner,operationId:request.operationId,sessionId:stableHandle.id.split(':').slice(1).join(':'),embedding,
       origin: request.origin ?? redeemed.plan.origin ?? null, requirements: request.requirements, wait: request.wait });
     const sessionId = reply.snapshot?.sessionId;
     const handle = { kind: 'session', id: sessionId ? `port-${port}:${sessionId}` : `port-${port}`, generation: 1 };

@@ -21,8 +21,10 @@ export class Controller {
       } } });
   }
   async advance(command) {
-    this.last = this.step({ ...(this.state ? { state: this.state } : {}), command: { sessionId: this.sessionId, ...command },
+    const next = this.step({ ...(this.state ? { state: this.state } : {}), command: { sessionId: this.sessionId, ...command },
       adapters: this.adapters, requirements: this.requirements, host: { ...this.driver.host, nowMs: this.driver.nowMs?.() ?? 0 } });
+    if(next.snapshot.phase==='published-ready'&&command.type!=='status')await this.beforePublication?.();
+    this.last=next;
     this.state = this.last.state;
     for (const generation of this.driver.proofExpiries?.keys() ?? []) {
       if (generation !== this.state.generation) this.driver.proofExpiries.delete(generation);
@@ -44,6 +46,7 @@ export class Controller {
       limitations: [...this.hostLimitations, ...(this.last.snapshot.limitations ?? [])] } };
   }
   async dispatch(effect) {
+    await this.beforeEffect?.(effect);
     if (effect.kind === 'http-probe' && effect.operation === 'probe') {
       const candidate = this.last.snapshot.candidate;
       if (candidate) this.driver.origin = safeOrigin(candidate);

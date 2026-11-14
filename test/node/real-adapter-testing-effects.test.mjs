@@ -6,10 +6,14 @@ import {X509Certificate} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {createTestingGozar} from '@tnunamak/gozar/testing';
 import {scratch,query} from './route-schema-check.mjs';
-async function exercise(t,transport,{buffered=false}={}){
+async function exercise(t,transport,{buffered=false,processRuntime=false}={}){
  let harness;t.after(()=>harness?.close());
  const home=await scratch(t),owner='fixture-owner',ledger=new Map();let serial=0;
  const effects=[
+  {kind:'process-runtime',operation:'detect',handle:async()=>({available:true})},
+  {kind:'process-runtime',operation:'open',handle:async input=>{const handle=`process-${++serial}`;ledger.set(handle,{url:input.origin,target:input.target});return {handle};}},
+  {kind:'process-runtime',operation:'read',handle:async({handle})=>({present:ledger.has(handle)})},
+  {kind:'process-runtime',operation:'close',handle:async({handle})=>{ledger.delete(handle);return {closed:true};}},
   {kind:'recipe',operation:'probe',handle:async()=>({ok:false})},
   {kind:'sdk-listener',operation:'detect',handle:async()=>({available:true})},
   {kind:'sdk-listener',operation:'open',handle:async({options})=>{const handle=`owned-${++serial}`,url=options.proto==='tls'?`tls://${options.domain}:443`:options.proto==='tcp'?'tcp://isolated.invalid:12345':`https://${options.domain}`;ledger.set(handle,{url,target:options.addr});return {handle,url};}},
@@ -31,10 +35,10 @@ async function exercise(t,transport,{buffered=false}={}){
   }},
  ];
  harness=await createTestingGozar({effects});const api=harness.gozar;
- const inventory=await api.listProviders({home,owner});const provider=inventory.providers.find(p=>p.transport===transport&&p.availability.attached.state!=='unsupported');assert.ok(provider);
+ const inventory=await api.listProviders({home,owner});const provider=inventory.providers.find(p=>p.transport===transport&&p.availability.attached.state!=='unsupported'&&p.configuration.inputRequirements.some(i=>i.kind==='https-origin')===processRuntime);assert.ok(provider);
  let config=provider.configuration;
  for(const requirement of config.inputRequirements){const action=config.actions.find(a=>a.id===requirement.actionId);let input;
-  if(requirement.secret){const {handle}=await api.storeSecret({home,owner,providerId:provider.providerId,inputId:requirement.id,scopeId:config.scopeId,expectedConfigurationRevision:config.revision,bytes:new TextEncoder().encode('synthetic-canary')});input={secretHandle:handle};}else input={value:'fixture.example.invalid'};
+  if(requirement.secret){const {handle}=await api.storeSecret({home,owner,providerId:provider.providerId,inputId:requirement.id,scopeId:config.scopeId,expectedConfigurationRevision:config.revision,bytes:new TextEncoder().encode('synthetic-canary')});input={secretHandle:handle};}else if(requirement.kind==='text'){const socket=net.createServer();await new Promise(resolve=>socket.listen(0,'127.0.0.1',resolve));const port=socket.address().port;await new Promise(resolve=>socket.close(resolve));input={value:String(port)};}else input={value:requirement.kind==='https-origin'?'https://fixture.example.invalid':'fixture.example.invalid'};
   config=(await api.runSetupAction({home,owner,providerId:provider.providerId,expectedConfigurationRevision:config.revision,actionId:action.id,...input,approval:{kind:'setup',digest:action.digest,disclosureRevision:action.disclosure.revision,consentFactsDigest:action.consent.consentFactsDigest}})).configuration;
  }
  const q=query({home,owner,operationId:'journaled-before-call',providerId:provider.providerId,usage:{kind:'attached'},target:'127.0.0.1:1',requirements:{reach:provider.reach,transport,payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}});
@@ -57,5 +61,7 @@ async function exercise(t,transport,{buffered=false}={}){
  assert.doesNotMatch(JSON.stringify(harness.events),/synthetic-canary/);
  assert.ok(harness.events.some(e=>e.kind==='network'&&e.operation===(transport==='https'?'fetch':'exchange')));
 }
-for(const transport of ['https','tcp','tls'])test(`public testing harness runs shipped ${transport} adapter through controller and witnessed proof`,t=>exercise(t,transport));
+for(const transport of ['https'])test(`public testing harness runs shipped ${transport} adapter through controller and witnessed proof`,t=>exercise(t,transport));
 test('public initial streaming proof cannot be bypassed by fresh status while frames are buffered',t=>exercise(t,'https',{buffered:true}));
+test('public testing harness runs shipped process adapter through the same generic lifecycle',t=>exercise(t,'https',{processRuntime:true}));
+test('shipped non-HTTP choices are detect-only and mint no executable token',async t=>{const home=await scratch(t);const harness=await createTestingGozar({effects:[]});t.after(harness.close);for(const transport of ['tcp','tls']){const catalog=await harness.gozar.catalogRoutes(query({home,usage:{kind:'attached'},requirements:{reach:'internet',transport,payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}}));for(const c of catalog.candidates.filter(c=>c.properties.transport===transport)){assert.equal(c.availability.attached.state,'detect-only');assert.equal(c.candidateToken,null);}}});

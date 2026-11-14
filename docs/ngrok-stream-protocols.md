@@ -1,8 +1,10 @@
 # ngrok raw stream adapters
 
-`ngrok-tcp-passthrough` and `ngrok-tls-passthrough` support attached routes. They use the optional `@ngrok/ngrok` SDK and Gozar-stored credentials. Use Gozar CLI setup to provide the token; TLS also requires a reserved domain. Account entitlement, billing and quota remain unknown until the provider accepts the request. No live account check was used to develop these adapters.
+Lead decision, 2026-11-13: 0.4 admits HTTP(S) execution only so the complete embedding contract can ship together; these raw kinds are detect-only and deferred beyond 0.4. Tim may reverse this decision during the owner walk.
 
-Request `transport: 'tcp'` or `transport: 'tls'` through the ordinary route API. Origins have explicit ports: `tcp://host:port` or `tls://host:443`. These are raw stream addresses, not HTTP URLs. The adapters do not claim SSE, Streamable HTTP or OAuth discovery support. TCP payload confidentiality stays unknown; plaintext TCP can be visible to the relay.
+`ngrok-tcp-passthrough` and `ngrok-tls-passthrough` retain experimental adapter/proof modules and offline tests. They use the optional `@ngrok/ngrok` SDK and stored credentials. The public 0.4 catalog mints no executable token for them. Account entitlement, billing and quota remain unknown; no live account check was used to develop these modules.
+
+Queries may inspect `transport: 'tcp'` or `transport: 'tls'`; detect-only availability blocks execution. Experimental origins have explicit ports: `tcp://host:port` or `tls://host:443`. The modules do not claim SSE, Streamable HTTP or OAuth discovery support. TCP payload confidentiality stays unknown.
 
 ## Initial transport proof
 

@@ -111,8 +111,9 @@ function checkStatus(reply) {
 const isMap = value => value === undefined || (value !== null && typeof value === 'object' && !Array.isArray(value));
 
 // GET serve-config: the whole config and its ETag. An empty config is JSON null.
-export async function getServeConfig() {
-  const reply = await request('/localapi/v0/serve-config');
+const requestFor=(ctx,path,options={})=>ctx?.dispatchEffect?ctx.dispatchEffect({kind:'local-api',operation:'request',input:{path,method:options.method??'GET',headers:options.headers??{},body:options.body??null}}):request(path,options);
+export async function getServeConfig(ctx) {
+  const reply = await requestFor(ctx,'/localapi/v0/serve-config');
   checkStatus(reply);
   if (reply.status !== 200) throw unavailable();
   const etag = reply.headers.etag;
@@ -126,9 +127,9 @@ export async function getServeConfig() {
 
 // POST serve-config with If-Match. Returns false on 412 (another program changed the
 // config after our read); the caller must re-read and re-decide, never repeat the write.
-export async function setServeConfig(config, etag) {
+export async function setServeConfig(config, etag,ctx) {
   if (typeof etag !== 'string' || !etag) throw typed('invalid_input', 'Serve config write requires the ETag of a read', 'read the serve config first');
-  const reply = await request('/localapi/v0/serve-config', { method: 'POST', headers: { 'If-Match': etag }, body: config });
+  const reply = await requestFor(ctx,'/localapi/v0/serve-config', { method: 'POST', headers: { 'If-Match': etag }, body: config });
   checkStatus(reply);
   if (reply.status === 412) return false;
   if (reply.status !== 200) throw typed('provider_failed', 'Tailscale rejected the serve config change; nothing else was changed', 'retry; check the tailscaled logs if it persists');
@@ -137,8 +138,8 @@ export async function setServeConfig(config, etag) {
 
 // Node DNS name and funnel-ports capability. Read only; callers never print them.
 const funnelPortsKey = /^https:\/\/tailscale\.com\/cap\/funnel-ports\?ports=([0-9,]+)$/;
-export async function getNode() {
-  const reply = await request('/localapi/v0/status?peers=false');
+export async function getNode(ctx) {
+  const reply = await requestFor(ctx,'/localapi/v0/status?peers=false');
   checkStatus(reply);
   if (reply.status !== 200) throw unavailable();
   let status;

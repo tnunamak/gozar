@@ -360,8 +360,8 @@ export class EffectDriver {
       await this.journal.save();
     }
     const processDetails = longRunning ? this.ledgerDetails(effect) : undefined;
-    const child = spawn(this.resolveProgram(effect.program, process.env), args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'],
-      env: { PATH: process.env.PATH, LANG: 'C.UTF-8' }, detached: false });
+    const child = (this.spawnProcess??spawn)(this.spawnProcess?effect.program:this.resolveProgram(effect.program, process.env), args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { PATH: process.env.PATH, LANG: 'C.UTF-8' }, detached: false,...(this.spawnProcess?{fixtureEffect:{longRunning}}:{}) });
     let resource;
     if (longRunning) {
       try { await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); }

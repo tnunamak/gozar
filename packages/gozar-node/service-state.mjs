@@ -133,7 +133,16 @@ export function canonicalAuthority(value) {
 export const transcript = (nonce, instanceId, authority, localPort) =>
   JSON.stringify(['gozar-service-proof', 2, nonce, instanceId, authority, localPort]);
 
-export function readChallenge(url, host, targetPort, nonce, signal) {
+export function readChallenge(url, host, targetPort, nonce, signal,fetchImpl) {
+  const parse=raw=>{
+    const body=JSON.parse(raw);
+    if(body.schemaVersion!==2||body.nonce!==nonce||!uuid.test(body.instanceId)||!noncePattern.test(body.proof)||body.authority!==host||canonicalAuthority(body.authority)!==body.authority||body.localPort!==targetPort)throw new Error('Verification failed');
+    return `${body.instanceId}:${body.proof}`;
+  };
+  if(fetchImpl)return (async()=>{
+    const reply=await fetchImpl(url,{headers:{Host:host,Accept:'application/json'},signal});if(reply.status!==200)throw new Error('Verification failed');
+    let length=0;const chunks=[];for await(const chunk of reply.body){length+=chunk.length;if(length>4096)throw new Error('Verification failed');chunks.push(chunk);}return parse(Buffer.concat(chunks).toString('utf8'));
+  })();
   return new Promise((resolve, reject) => {
     const req = (url.protocol === 'https:' ? https : http).get(url,
       { headers: { Host: host, Accept: 'application/json' }, signal }, res => {
@@ -147,11 +156,7 @@ export function readChallenge(url, host, targetPort, nonce, signal) {
         res.on('error', reject);
         res.on('end', () => {
           try {
-            const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            if (body.schemaVersion !== 2 || body.nonce !== nonce || !uuid.test(body.instanceId) || !noncePattern.test(body.proof) ||
-                body.authority !== host || canonicalAuthority(body.authority) !== body.authority || body.localPort !== targetPort)
-              throw new Error('Verification failed');
-            resolve(`${body.instanceId}:${body.proof}`);
+            resolve(parse(Buffer.concat(chunks).toString('utf8')));
           } catch { reject(new Error('Verification failed')); }
         });
       });
@@ -186,7 +191,7 @@ export function commandCheck(route, nonce, signal) {
     if (signal.aborted) abort();
   });
 }
-export async function verification(route) {
+export async function verification(route,{fetch:fetchImpl}={}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   const method = route.verifyCmd === null ? 'challenge' : 'host-command';
@@ -197,9 +202,9 @@ export async function verification(route) {
     const targetPort = Number(route.target.slice(route.target.lastIndexOf(':') + 1));
     const work = route.verifyCmd !== null ? commandCheck(route, nonce, controller.signal) : Promise.all([
       readChallenge(new URL('http://' + route.target + challengePath + '?nonce=' + nonce),
-        authority, targetPort, nonce, controller.signal),
+        authority, targetPort, nonce, controller.signal,fetchImpl),
       readChallenge(new URL(route.origin + challengePath + '?nonce=' + nonce),
-        authority, targetPort, nonce, controller.signal)
+        authority, targetPort, nonce, controller.signal,fetchImpl)
     ]).then(([local, publicId]) => { if (local !== publicId) throw new Error('Verification failed'); });
     await Promise.race([work, new Promise((_, reject) =>
       controller.signal.addEventListener('abort', () => reject(new Error('Verification timed out')), { once: true }))]);

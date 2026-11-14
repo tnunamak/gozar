@@ -604,6 +604,32 @@
         "source": "adapter-configuration",
         "asOf": "2026-11-13"
       }
+    ],
+    "effectOperations": [
+      {
+        "kind": "recipe",
+        "operation": "probe"
+      },
+      {
+        "kind": "local-api",
+        "operation": "request"
+      },
+      {
+        "kind": "network",
+        "operation": "fetch"
+      },
+      {
+        "kind": "spawn",
+        "operation": "run"
+      },
+      {
+        "kind": "spawn",
+        "operation": "read"
+      },
+      {
+        "kind": "spawn",
+        "operation": "close"
+      }
     ]
   },
   "evidence": {

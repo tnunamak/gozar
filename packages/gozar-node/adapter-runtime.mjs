@@ -113,6 +113,21 @@ function durableFacetErrors(facet) {
 
 const methods = ['detect', 'properties', 'setupActions', 'setup', 'plan', 'create', 'observe', 'verify', 'remove', 'runtimeFacts'];
 
+function declaredContext(context,definition){
+  if(!context?.dispatchEffect)return context;
+  const dispatch=async request=>{
+    if(!(definition.effectOperations??[]).some(item=>item.kind===request?.kind&&item.operation===request?.operation))throw effectError('unsupported','The adapter has not declared this fixture effect operation');
+    return context.dispatchEffect(request);
+  };
+  return {...context,dispatchEffect:dispatch,probe:recipe=>probeWithEffects(recipe,dispatch)};
+}
+function scopedAdapter(adapter){
+  const wrapped={...adapter};
+  for(const name of ['detect','setup','plan','create','observe','verify','remove','runtimeFacts','prepareProof'])if(typeof adapter[name]==='function')wrapped[name]=(...args)=>adapter[name](bindConfiguration(declaredContext(args[0],adapter.definition),adapter.id),...args.slice(1));
+  if(adapter.durable){wrapped.durable={...adapter.durable};for(const name of ['observe','put','delete'])wrapped.durable[name]=(...args)=>adapter.durable[name](bindConfiguration(declaredContext(args[0],adapter.definition),adapter.id),...args.slice(1));}
+  return wrapped;
+}
+
 async function inside(root, path, label, id) {
   const providers = await realpath(resolve(root, 'providers')).catch(() => { throw loadError(id, 'providers directory is missing'); });
   const target = resolve(root, path);
@@ -157,7 +172,7 @@ export async function loadAdapters({ manifest, root } = {}) {
     const facetErrors = durableFacetErrors(adapter.durable);
     if (facetErrors.length) throw loadError(id, `invalid durable facet: ${facetErrors.join('; ')}`);
     if (adapter.id !== id || file.adapter.id !== id || !isDeepStrictEqual(adapter.definition, file.adapter)) throw loadError(id, 'registry entry, module and definition disagree');
-    adapters.push(adapter);
+    adapters.push(scopedAdapter(adapter));
   }
   return adapters;
 }
@@ -240,8 +255,8 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
   const unsupported = what => effectError('unsupported', `${definition.id} does not support ${what}`);
 
   // Read-only state of the durable listener for a request: the facet reads, this shapes the adapter's observe result.
-  async function listener(request) {
-    try { return await adapter.durable.inspect(request, { transport: durableState.serve ? await durableState.serve() : undefined }); }
+  async function listener(request,context) {
+    try { return await adapter.durable.inspect(request, { transport: durableState.serve ? await durableState.serve() : undefined,context }); }
     catch (error) { throw mapProviderError(error); }
   }
 
@@ -285,7 +300,7 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
         const engine = await durableState.load();
         if (typeof engine.durablePlanFacts !== 'function') throw unsupported('the durable engine');
         let facts, seen;
-        try { facts = await engine.durablePlanFacts({ home: ctx.home, adapterId: definition.id, target: request.target, origin: request.origin, adapters: [adapter] }); seen = await listener(request); }
+        try { facts = await engine.durablePlanFacts({ home: ctx.home, adapterId: definition.id, target: request.target, origin: request.origin, adapters: [adapter] }); seen = await listener(request,ctx); }
         catch (error) { throw mapProviderError(error); }
         return { digest: facts.planDigest, origin: facts.origin ?? request.origin, resourceKey: facts.observedResource, effects: [],
           readback: { kind: 'durable', origin: facts.origin ?? request.origin, target: request.target }, cleanup: { kind: 'durable' }, precondition: { revision: seen.revision } };
@@ -309,7 +324,7 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
     },
 
     async observe(ctx, request) {
-      if (request?.usage?.kind === 'durable' && durableRecipe && adapter.durable) return listener(request);
+      if (request?.usage?.kind === 'durable' && durableRecipe && adapter.durable) return listener(request,ctx);
       const resourceKey = `${definition.id}:${sha({ target: request.target, origin: request.origin }).slice(0, 16)}`;
       return { present: false, resourceKey, identity: null, revision: null };
     },
@@ -341,7 +356,7 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
 
 // The core WASM module and its effect driver load on first use: detecting nothing never pays for them.
 let coreStep = null;
-async function runDetectRecipe(recipe) {
+async function runDetectRecipe(recipe,dispatchEffect) {
   const [{ loadCore }, { EffectDriver }] = await Promise.all([import('./core.mjs'), import('./driver.mjs')]);
   coreStep ??= await loadCore();
   const adapters = [{ id: 'probe', audience: 'local', ownership: 'external-owned', recipes: { detect: recipe } }];
@@ -352,11 +367,18 @@ async function runDetectRecipe(recipe) {
   // Read-only detection yields one spawn effect per round; a bounded loop keeps a misbehaving recipe finite.
   for (let round = 0; round < 8 && output.effects.length; round += 1) {
     const [effect] = output.effects;
-    const completion = await driver.execute(effect);
+    let completion;
+    if(dispatchEffect){
+      if(effect.operation!=='detect'||effect.kind!=='spawn')throw effectError('unsupported','Fixture detection accepts only declared read-only process observations');
+      const result=await dispatchEffect({kind:'recipe',operation:'probe',input:{recipe}});
+      if(typeof result?.stdout!=='string'||typeof result?.stderr!=='string'||!Number.isInteger(result?.exitCode)||Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr)>Math.min(recipe.maxOutputBytes??65536,65536))throw effectError('provider_unavailable','The fixture probe returned an invalid bounded observation');
+      completion={type:'effect-result',effectId:effect.id,sessionId:effect.sessionId,generation:effect.generation,ok:true,result};
+    }else completion=await driver.execute(effect);
     output = coreStep({ state: output.state, command: { sessionId: 'probe', ...completion }, adapters, requirements, host: { ...driver.host, nowMs: driver.nowMs() } });
   }
   return output.snapshot.observations?.probe === 'present';
 }
+export async function probeWithEffects(recipe,dispatchEffect){try{return {ok:await runDetectRecipe(recipe,dispatchEffect)};}catch{return {ok:false};}}
 
 /**
  * The read-only ReadContext an engine hands to adapters. `probe` runs a read-only detect recipe through the same
