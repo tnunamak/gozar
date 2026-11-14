@@ -34,6 +34,12 @@ import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
 import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
 
 export const HEARTBEAT_MS = 5_000;
+// Shared by initial verification and custom proof refresh; a previous or future
+// observation cannot establish readiness for the current verification attempt.
+export function proofObservedDuring(checked, started, ended) {
+  const observed = Date.parse(checked?.checkedAt);
+  return Number.isFinite(observed) && observed >= started && observed <= ended;
+}
 export const LEASE_EXPIRY_MS = 20_000;
 const idPattern = /^att_[0-9a-f]{16}$/;
 const here = fileURLToPath(import.meta.url);
@@ -453,7 +459,7 @@ export async function runAttachedController(directory, runtime = {}) {
       lease.facts = [...new Map([...(adapter.definition.facts ?? []), ...(lease.runtimeFacts ?? []), ...(checked.facts ?? [])].map(fact => [fact.id, fact])).values()];
     }
     const observed=Date.parse(checked.checkedAt);
-    if(resolverLost||activeAttempt!==attempt||attempt.signal.aborted||releasing||now()>=attempt.deadlineMs||!Number.isFinite(observed)||observed<started||observed>now())return {...checked,status:'unverified'};
+    if(resolverLost||activeAttempt!==attempt||attempt.signal.aborted||releasing||now()>=attempt.deadlineMs||!proofObservedDuring(checked,started,now()))return {...checked,status:'unverified'};
     if(!proofSession)lease.proof={...checked,vantage:'this-device',checks:checked.status==='verified'?[...(endpoint.startsWith('https:')?['tls']:[]),'nonce',...(sse?['sse']:[])]:[],validUntil:new Date(observed+15000).toISOString()};
     lease.proofSubject=bootstrap.identity?{origin:endpoint,target:bootstrap.request.target,...bootstrap.identity,handleGeneration:handle.generation}:null;
     return checked;
@@ -471,11 +477,18 @@ export async function runAttachedController(directory, runtime = {}) {
     try {
       attempt={id:randomUUID(),nonce:randomBytes(32).toString('hex'),deadlineMs:session?Math.min(bootstrap.expiresAtMs,now()+120000):now()+120000,signal:proofAbort.signal};
       if(!proofSession)gate?.rotate();
+      const started = now();
       const verification = proofSession
         ? await proofSession.refresh({ origin: lease.origin, receipt, attempt })
         : await checkProof(false);
       if (proofSession) {
         if (verification.attemptId !== attempt.id || verification.endpoint !== lease.origin || attempt.signal.aborted || now() >= attempt.deadlineMs || releasing) return;
+        if (!proofObservedDuring(verification, started, now())) {
+          // Retain the original evidence, but withdraw readiness on invalid time.
+          lease.state = 'unverified';
+          await save();
+          return;
+        }
         lease.proof = verification;
         lease.facts = [...(adapter.definition.facts ?? []), ...(verification.facts ?? [])];
       }
