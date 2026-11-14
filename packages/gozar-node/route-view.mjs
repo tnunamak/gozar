@@ -211,6 +211,8 @@ export async function routeStatus(request, deps = {}) {
         return projectDurable(reply, { handle, now, ...await propertiesFor(reply.adapterId, deps, 'durable') });
       }
       case 'session': {
+        const generic=await defaults.attached();
+        if(await generic.genericSessionRecord(request))return await generic.attachedStatus(request,deps.attachedDeps);
         const reply = await (deps.session ?? defaults.session).status(request);
         return projectSession(reply, { handle, now, ...await propertiesFor(reply.snapshot?.adapterId, deps, 'session') });
       }
@@ -236,6 +238,8 @@ export async function closeRoute(request, deps = {}) {
         return { ...releasedView(before, handle), state: debt ? 'uncertain' : 'released', cleanup: cleanupRecovery(debt ? { state: 'unconfirmed', message: debtMessage(debt) } : { state: 'confirmed' },handle), routeState: debt ? 'cleanup-unconfirmed' : 'inactive' };
       }
       case 'session': {
+        const generic=await defaults.attached();
+        if(await generic.genericSessionRecord(request))return await generic.closeAttachedRoute(request,deps.attachedDeps);
         let before;try{before=await routeStatus({home:request.home,handle},deps);}catch{}
         const reply = await (deps.session ?? defaults.session).close(request);
         if(reply.snapshot?.sessionId&&splitSession(handle.id)[1]&&reply.snapshot.sessionId!==splitSession(handle.id)[1])throw gozarError('route_conflict','The session was replaced; this handle is stale');

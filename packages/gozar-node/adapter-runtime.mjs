@@ -263,6 +263,8 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
   const adapter = {
     id: definition.id,
     definition,
+    // Explicit recipe provenance survives scopedAdapter wrapping; unknown modules use the generic controller.
+    sessionExecution: wrapped?.recipes?.create ? 'recipe' : 'generic',
 
     async detect(ctx) {
       const os = platformOf(ctx);
