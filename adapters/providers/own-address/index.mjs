@@ -86,11 +86,12 @@ export default recipeAdapter({
       },
 
       async plan(ctx, request) {
-        if (request?.usage?.kind !== 'durable') return base.plan(ctx, request);
         platformOf(ctx);
-        const origin = request.origin == null ? await given(ctx) : parseOrigin(request.origin);
-        if (request.origin != null && !origin) throw effectError('invalid_input', 'The requested origin is invalid');
+        const origin = request?.origin == null ? await given(ctx) : parseOrigin(request.origin);
+        if (request?.origin != null && !origin) throw effectError('invalid_input', 'The requested origin is invalid');
         if (!origin) throw effectError('setup_required', 'Provide the HTTPS address you run first');
+        // Detect and plan consume the same scoped mapping, including session plans.
+        if (request?.usage?.kind !== 'durable') return base.plan(ctx, { ...request, origin });
         const resourceKey = `${definition.id}:${sha({ target: request.target, origin }).slice(0, 16)}`;
         return { digest: sha({ adapterId: definition.id, kind: 'durable', target: request.target, origin, resourceKey }), origin, resourceKey, effects: [],
           readback: { kind: 'durable', origin, target: request.target }, cleanup: { kind: 'external-owned' }, precondition: null };
