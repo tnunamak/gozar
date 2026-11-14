@@ -3,7 +3,7 @@
 // Inspection is read-only: it calls detect, properties, setupActions, plan and observe, nothing else.
 import { createHash } from 'node:crypto';
 import { canonicalHome } from './service-state.mjs';
-import { gozarError, normalizeError } from './error-normalizer.mjs';
+import { gozarError, normalizeError, instructionAction } from './error-normalizer.mjs';
 import { supportedPlatform } from './platform.mjs';
 import { availabilityFor, prerequisitesFor, configurationFor, features } from './embedding-state.mjs';
 import { readConfiguration } from './adapter-configuration.mjs';
@@ -87,6 +87,28 @@ export function selectAdapters(adapters, providerId) {
   return chosen;
 }
 
+
+// Closed diagnostic vocabulary: never echo provider messages, raw codes or actions.
+function catalogFailure(error, phase = 'detect') {
+  const rows = {
+    secret_backend_locked: ['secret_backend_locked', 'unknown', 'Unlock the configured secret backend'],
+    secret_backend_unavailable: ['secret_backend_unavailable', 'unknown', 'Restore the configured secret backend'],
+    ENOENT: ['software_missing', 'missing', 'Install the software declared by this adapter'],
+    host_policy_denied: ['host_policy_denied', 'denied', 'Review the host policy for this adapter'],
+    provider_unavailable: ['provider_unavailable', 'unknown', 'Retry the read-only provider observation'],
+    setup_required: ['setup_required', 'missing', 'Complete the declared provider setup'],
+    unsupported: [phase === 'plan' ? 'usage_unsupported' : 'read_operation_unsupported', 'unsupported',
+      phase === 'plan' ? 'Choose a supported usage' : 'Supply the declared read-only operation capability']
+  };
+  const [reason, state, label] = Object.hasOwn(rows, error?.code) ? rows[error.code]
+    : ['observation_unavailable', 'unknown', 'Retry the read-only provider observation'];
+  return {reason, state, observation: {known: false, reason},
+    remedy: instructionAction('catalog-' + reason, label, label + '. Gozar changes nothing.')};
+}
+const failureFacts = failure => failure ? [{id: 'catalog-observation', label: 'Route availability observation',
+  known: false, reason: failure.reason, value: null, group: 'availability', affectsConsent: true,
+  source: 'catalog', asOf: null}] : [];
+
 // --- One adapter, observed ----------------------------------------------------------------------
 
 /**
@@ -96,23 +118,31 @@ export function selectAdapters(adapters, providerId) {
 export async function inspectAdapter(adapter, context, platform) {
   const base = { adapter, properties: adapter.definition.capabilities, actions: [] };
   if (!supportedPlatform(platform)) return { ...base, state: 'unsupported', facts: null, probed: false };
-  let detected;
-  try { detected = await adapter.detect(bindConfiguration(context, adapter.id)); }
-  catch { return { ...base, state: 'unknown', facts: null, probed: true }; }
-  const state = ['ready', 'action-required', 'unsupported', 'unknown'].includes(detected?.state) ? detected.state : 'unknown';
+  let detected, failure = null;
+  const observedContext = {...context};
+  for (const name of ['probe', 'dispatchEffect']) if (typeof context[name] === 'function') {
+    observedContext[name] = async (...args) => {
+      try { return await context[name](...args); }
+      catch (error) { failure ??= catalogFailure(error); throw error; }
+    };
+  }
+  try { detected = await adapter.detect(bindConfiguration(observedContext, adapter.id)); }
+  catch (error) { return { ...base, state: 'unknown', facts: null, probed: true, failure: failure ?? catalogFailure(error) }; }
+  const state = failure ? 'unknown' : ['ready', 'action-required', 'unsupported', 'unknown'].includes(detected?.state) ? detected.state : 'unknown';
+  if (state === 'unknown') failure ??= catalogFailure(null);
   let properties = base.properties, actions = [];
   try { properties = adapter.properties(detected.facts); } catch { /* keep the declared capabilities */ }
   if (state !== 'unsupported') { try { actions = adapter.configurationActions ? adapter.configurationActions() : adapter.setupActions({ ...detected.facts, setupNeeded: true }); } catch { /* no usable actions */ } }
   let missingActions = [];
   try { missingActions = adapter.setupActions(detected.facts); } catch {}
   actions=[...new Map([...actions,...missingActions].map(action=>[action.id,action])).values()];
-  return { ...base, state, facts: detected.facts, properties, actions, missingActions, probed: true };
+  return { ...base, state, facts: detected.facts, properties, actions, missingActions, probed: true, failure };
 }
 
 /** One revision for the provider-side state: it changes when a setup state, an action or a property changes. */
 export function catalogRevisionOf(inspections, platform) {
   const view = inspections.map(item => ({ id: item.adapter.id, state: item.state, properties: item.properties,
-    facts: catalogFactsFor(item), availability: availabilityFor(item.adapter.definition),
+    facts: [...catalogFactsFor(item), ...failureFacts(item.failure)], availability: availabilityFor(item.adapter.definition),
     actions: item.actions.map(action => [action.id, action.digest, action.disclosure.revision]), disclosure: item.adapter.definition.disclosure.revision }));
   return `catrev_${sha(JSON.stringify([platform, view])).slice(0, 32)}`;
 }
@@ -169,6 +199,7 @@ async function collect(query, deps) {
     const hostPrerequisites=capabilityPrerequisites(definition,query.hostCapabilities??deps.hostCapabilities??{});
     const unavailableHost=hostPrerequisites.find(item=>item.state!=='present');
     let setupState = unavailableHost?'unsupported':state, grant = null;
+    let failure = inspection.failure;
     const unmet = [];
     if (supportedPlatform(platform)) {
       unmet.push(...unmetRequirements({ requirements: query.requirements, usage: query.usage, definition, properties, setupState }));
@@ -196,10 +227,16 @@ async function collect(query, deps) {
           // No durable recipe or no plan: not usable for this usage. A failing provider read leaves the state unknown.
           if (normalizeError(error).code === 'unsupported') unmet.push({ requirement: 'usage', actual: query.usage.kind, reasonCode: 'not_met' });
           else { setupState = 'unknown'; unmet.push({ requirement: 'setup', actual: 'unknown', reasonCode: 'unknown' }); }
+          failure = catalogFailure(error, 'plan');
         }
       }
     } else unmet.push({ requirement: 'platform', actual: platform, reasonCode: 'unsupported_platform' });
 
+    if (failure) {
+      const setup = unmet.find(item => item.requirement === 'setup');
+      if (setup) setup.actual = {known: false, reason: failure.reason};
+      inspection.failure = failure;
+    }
     const availability = availabilityFor(definition);
     if(unavailableHost)for(const kind of Object.keys(availability))if(availability[kind].state==='available')availability[kind]={state:'unsupported',reason:`host-capability-${unavailableHost.state}`};
     if (supportedPlatform(platform) && availability[query.usage.kind].state === 'detect-only') setupState = 'detect-only';
@@ -216,7 +253,10 @@ async function collect(query, deps) {
     const configuration = configurationFor(decorated, saved,definition.inputRequirements);
     const candidate = { providerId: adapter.id, name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
       display: { label: definition.label, description: describe(definition, properties), needs: needsFor(definition, query.usage.kind) }, properties,
-      availability, prerequisites: [...prerequisitesFor(inspection, observedAt),...hostPrerequisites], configuration, facts: catalogFactsFor(inspection),
+      availability, prerequisites: [...prerequisitesFor(inspection, observedAt),...hostPrerequisites,
+        ...(failure ? [{id: 'catalog-observation', label: 'Route availability observation', state: failure.state,
+          observation: failure.observation, observedAt, version: {known: false, reason: 'not_observed'}, remedy: failure.remedy}] : [])],
+      configuration, facts: [...catalogFactsFor(inspection), ...failureFacts(failure)],
       setup: { state: setupState, actions: setupState === 'action-required' ? (inspection.missingActions ?? actions).map(decorate) : [] }, disclosure: { ...definition.disclosure, revision: consentDisclosureRevision(definition) },
       candidateToken: null, expiresAt: null };
     if (query.usage.kind === 'durable' && query.intent === 'adopt') {
