@@ -20,7 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
-import { selectedInterfaceAddress } from './interfaces.mjs';
+import { isIP } from 'node:net';
 
 const packageRoot = fileURLToPath(new URL('../../', import.meta.url));
 const defaultAdaptersRoot = resolve(packageRoot, 'adapters');
@@ -379,13 +379,14 @@ async function runDetectRecipe(recipe,dispatchEffect) {
         if(typeof result?.stdout!=='string'||typeof result?.stderr!=='string'||!Number.isInteger(result?.exitCode)||Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr)>limit)throw effectError('provider_unavailable','The fixture probe returned an invalid bounded observation');
       } else {
         // The same document shape as EffectDriver.interfaces; Rust owns the recipe predicate.
-        // Reuse the existing address classifier, never interpret inventory as reachability proof.
+        // Raw inventory validity is not selected binding eligibility: ordinary unzoned
+        // link-local and other unselected addresses must reach the shared core predicate.
         const plain=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&Object.getPrototypeOf(value)===Object.prototype;
         if(!plain(result)||Object.keys(result).some(key=>key!=='interfaces')||!plain(result.interfaces)||
           Buffer.byteLength(JSON.stringify(result))>limit||
           Object.values(result.interfaces).some(rows=>!Array.isArray(rows)||rows.some(row=>!plain(row)||
             typeof row.address!=='string'||typeof row.internal!=='boolean'||
-            (!row.internal&&!selectedInterfaceAddress(row.address)))))
+            isIP(row.address)===0)))
           throw effectError('provider_unavailable','The fixture probe returned an invalid bounded interface observation');
       }
       completion={type:'effect-result',effectId:effect.id,sessionId:effect.sessionId,generation:effect.generation,ok:true,result};
