@@ -142,15 +142,45 @@ test('buffered initial SSE and unconfirmed removal retain original failure on st
  assert(first.error);assert.equal(first.error.code,'verification_failed');
  assert.equal(f.ledger.size,1,'declined cleanup must retain owned allocation');
  const calls=f.fetches.length;
+ let retained;
  for(let i=0;i<3;i++){
-  const view=await f.status();unpublished(view);assert.equal(view.cleanup.state,'unconfirmed');
+  retained=await f.status();unpublished(retained);assert.equal(retained.cleanup.state,'unconfirmed');
  }
+ assert(first.error.route,'initial failure retains the owned route');
+ assert.deepEqual(retained.handle,first.error.route.handle);
+ assert.equal(retained.operationId,f.request.operationId);
+ assert.equal(retained.operationId,first.error.route.operationId);
+ // Snapshot the latest failed view, not the earlier allocation/proof attempt.
+ const failedEvidence=structuredClone(retained.verification);
+ const failedHandle=structuredClone(retained.handle);
  assert.equal(f.fetches.length,calls,'settled failure did not start nonce-only refresh');
+ assert.equal(f.allocated,1,'initial failure has exactly one allocation');
  const replay=await f.api.expose(f.request).then(route=>({route}),error=>({error}));
- assert(replay.error);assert.equal(replay.error.code,first.error.code);
+ let replayView;
+ if(replay.error){
+  assert.equal(replay.error.code,'verification_failed');
+  assert.equal(replay.error.code,first.error.code);
+  assert(replay.error.route,'rejected replay retains its failed route');
+  replayView=replay.error.route;
+ }else{
+  assert(replay.route,'successful recovery read returns the retained view');
+  replayView=replay.route;
+ }
+ unpublished(replayView);
+ assert.equal(replayView.cleanup.state,'unconfirmed','refused provider removal remains cleanup debt');
+ assert.deepEqual(replayView.handle,failedHandle,'replay preserves handle and generation');
+ assert.equal(replayView.operationId,retained.operationId,'replay preserves operation identity');
+ assert.deepEqual(replayView.verification,failedEvidence,'recovery does not restamp failed proof evidence');
+ assert.equal(f.fetches.length,calls,'replay starts no extra nonce or SSE proof');
  assert.equal(f.allocated,1,'replay must not allocate again');
- f.allowRemoval();assert.equal((await f.close()).cleanup.state,'confirmed');
+ assert.equal(f.ledger.size,1,'failed replay does not lose the refused owned allocation');
+ f.allowRemoval();
+ const closed=await f.close();assert.equal(closed.cleanup.state,'confirmed');
+ assert.deepEqual(closed.handle,failedHandle,'cleanup applies to the exact owned generation');
  assert.equal(f.ledger.size,0);assert.deepEqual(f.removed,['owned-1']);
+ const appResponse=await fetch('http://'+f.request.target,{signal:AbortSignal.timeout(6000)});
+ assert.equal(appResponse.status,200);
+ assert.equal(await appResponse.text(),'owned application','foreign application survives owned cleanup');
 });
 test('close requested during initial proof cannot publish late completion', {timeout:30000}, async t=>{
  const f=await fixture(t,{holdStream:true});
