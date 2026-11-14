@@ -129,7 +129,16 @@ export async function listRecordedRoutes({home,owner}={},deps={}){
  if(owner!==undefined&&(typeof owner!=='string'||!owner))throw gozarError('invalid_input','owner must be a non-empty string');
  home=await canonicalHome(home,false);const routes=new Map();
  const routeKey=handle=>JSON.stringify([handle.kind,handle.id]);
- const put=view=>routes.set(routeKey(view.handle),{...view,operationId:view.operationId??null});
+ const put=view=>{
+  const key=routeKey(view.handle),previous=routes.get(key);
+  // Enumeration order is not lifecycle order. A stale active snapshot cannot
+  // undo exact terminal evidence, and an older generation cannot hide a newer one.
+  if(previous){
+   if(previous.handle.generation>view.handle.generation)return;
+   if(previous.handle.generation===view.handle.generation&&previous.state==='released'&&previous.cleanup?.state==='confirmed')return;
+  }
+  routes.set(key,{...view,operationId:view.operationId??null});
+ };
  const names=async dir=>{try{await trustedDirectory(dir,false);return await readdir(dir,{withFileTypes:true});}catch(error){if(error.code==='ENOENT')return [];throw error;}};
  for(const entry of await names(join(home,'operations'))){if(!entry.isFile()||!/[a-f0-9]{64}\.json$/.test(entry.name))continue;const record=checkRecord(await readRecord(join(home,'operations',entry.name)));if(owner===undefined||record.owner===owner)put(record.view);}
  for(const entry of await names(join(home,'attached'))){if(!entry.isDirectory()||!/^att_[a-f0-9]{16}$/.test(entry.name))continue;const root=join(home,'attached',entry.name),bootstrap=await readRecord(join(root,'bootstrap.json'));if(owner!==undefined&&bootstrap.owner!==owner)continue;const record=await optionalRead(join(root,'state.json'));if(!record)continue;if(!record.lastView?.handle)throw gozarError('provider_unavailable','The attached recovery snapshot is unreadable');let view=record.lastView;
