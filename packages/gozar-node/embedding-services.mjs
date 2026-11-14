@@ -26,7 +26,8 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   return withExclusiveLock(join(home,'.embedding-lock'),async()=>{
    let state;try{const file=await checkedFile(join(home,'embedding-state.json'),constants.O_RDONLY,'embedding state');try{state=JSON.parse(await file.readFile('utf8'));}finally{await file.close();}}catch(e){if(e.code!=='ENOENT')throw e;state={schemaVersion:1,configs:{},secrets:{},instanceId:fresh()};}
    if(state?.schemaVersion!==1||!state.configs||!state.secrets||typeof state.instanceId!=='string')fail('internal_error');
-   const result=await run(state,home);if(!readOnly)await atomicWrite(join(home,'embedding-state.json'),state);return result;
+   const checkpoint=async()=>{if(readOnly)fail('internal_error');await atomicWrite(join(home,'embedding-state.json'),state);};
+   const result=await run(state,home,checkpoint);if(!readOnly)await checkpoint();return result;
   },{waitSeconds:30});
  }
  const scope=(home,providerId,owner)=>{if(owner!==undefined&&(typeof owner!=='string'||!owner))fail('invalid_input');if(typeof providerId!=='string'||!providerId)fail('invalid_input');return hash(JSON.stringify([registryId,home,owner??null,providerId]));};
@@ -81,7 +82,29 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   }),
   beginConfigurationDraft:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner);compare(c,r.expectedConfigurationRevision);const draftId=fresh();const d={scopeId:c.scopeId,revision:fresh(),baseRevision:c.revision,bindings:clone(c.bindings),values:clone(c.values)};c.drafts[draftId]=d;return {draftId,scopeId:c.scopeId,baseRevision:c.revision,configuration:await redacted(h,d)};}),
   commitConfigurationDraft:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner),d=select(c,r.draftId);if(!r.draftId)fail('invalid_input');compare(d,r.expectedConfigurationRevision);compare(c,d.baseRevision);if(c.uses.length)fail('configuration_in_use');c.bindings=d.bindings;c.values=d.values;c.revision=fresh();delete c.drafts[r.draftId];return redacted(h,c);}),
-  discardConfigurationDraft:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner),d=c.drafts[r.draftId];if(!d)return {discarded:false};const owned=Object.entries(s.secrets).filter(([,v])=>v.scopeId===c.scopeId&&v.draftId===r.draftId).map(([k])=>k);delete c.drafts[r.draftId];for(const handle of owned)if(!referenced(s,handle))await remove(s,h,handle);return {discarded:true};}),
+  discardConfigurationDraft:r=>transaction(r.home,async(s,h,checkpoint)=>{
+   if(typeof r.draftId!=='string'||!r.draftId)fail('invalid_input');
+   const c=await config(s,h,r.providerId,r.owner),d=c.drafts[r.draftId];
+   const owned=Object.entries(s.secrets).filter(([,v])=>v.registryId===registryId&&v.scopeId===c.scopeId&&v.draftId===r.draftId).map(([handle])=>handle);
+   // Detach first. Secret metadata retains the authority to retry orphan cleanup.
+   if(d){delete c.drafts[r.draftId];await checkpoint();}
+   const presence=async handle=>{
+    const result=await call(h,'presence',{scopeId:c.scopeId,handle});
+    if(result?.known!==true||typeof result.value!=='boolean')fail(result?.reason==='secret_backend_locked'?'secret_backend_locked':'secret_backend_unavailable');
+    return result.value;
+   };
+   for(const handle of owned){
+    if(referenced(s,handle))continue;
+    if(await presence(handle)){
+     await call(h,'delete',{scopeId:c.scopeId,handle});
+     if(await presence(handle))fail('secret_backend_unavailable');
+    }
+    delete s.secrets[handle];
+    // Keep each confirmed removal durable before starting the next backend call.
+    await checkpoint();
+   }
+   return {discarded:!!d};
+  }),
   discardSecret:r=>transaction(r.home,(s,h)=>remove(s,h,r.handle)),
   registerConfigurationUse:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner);compare(c,r.revision);const key=JSON.stringify(r.handle);if(!c.uses.includes(key))c.uses.push(key);}),
   releaseConfigurationUse:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner);c.uses=c.uses.filter(x=>x!==JSON.stringify(r.handle));}),
