@@ -148,11 +148,12 @@ function processEffects() {
 
 async function configure(api, q, candidate) {
   const providerId = candidate.providerId;
-  let draft = await api.beginConfigurationDraft({ home: q.home, providerId,
+  // Draft CAS and every later read/mutation use the catalog's explicit owner.
+  let draft = await api.beginConfigurationDraft({ home: q.home, owner: q.owner, providerId,
     expectedConfigurationRevision: candidate.configuration.revision });
   const done = new Set();
   for (let count = 0; count < 32; count++) {
-    draft = await api.readConfigurationDraft({ home: q.home, providerId, draftId: draft.draftId });
+    draft = await api.readConfigurationDraft({ home: q.home, owner: q.owner, providerId, draftId: draft.draftId });
     const input = draft.configuration.inputRequirements.find(row => !done.has(row.id));
     if (!input) break;
     let action = draft.configuration.actions.find(row => row.id === input.actionId);
@@ -163,7 +164,7 @@ async function configure(api, q, candidate) {
         scopeId: draft.scopeId, expectedConfigurationRevision: draft.configuration.revision,
         draftId: draft.draftId, bytes: new TextEncoder().encode('synthetic-account-' + randomUUID()) });
       answer = { secretHandle: stored.handle };
-      draft = await api.readConfigurationDraft({ home: q.home, providerId, draftId: draft.draftId });
+      draft = await api.readConfigurationDraft({ home: q.home, owner: q.owner, providerId, draftId: draft.draftId });
       action = draft.configuration.actions.find(row => row.id === input.actionId);
       assert.ok(action?.consent);
     } else {
@@ -176,10 +177,10 @@ async function configure(api, q, candidate) {
       approval: { kind: 'setup', digest: action.digest, disclosureRevision: action.disclosure.revision,
         consentFactsDigest: action.consent.consentFactsDigest } });
     done.add(input.id);
-    draft = await api.readConfigurationDraft({ home: q.home, providerId, draftId: draft.draftId });
+    draft = await api.readConfigurationDraft({ home: q.home, owner: q.owner, providerId, draftId: draft.draftId });
   }
   assert.ok(draft.configuration.inputRequirements.every(row => done.has(row.id)), 'bounded configuration completed');
-  await api.commitConfigurationDraft({ home: q.home, providerId, draftId: draft.draftId,
+  await api.commitConfigurationDraft({ home: q.home, owner: q.owner, providerId, draftId: draft.draftId,
     expectedConfigurationRevision: draft.configuration.revision });
 }
 
