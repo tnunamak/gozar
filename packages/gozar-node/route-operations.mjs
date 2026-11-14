@@ -67,7 +67,16 @@ export async function withRouteOperation(request,{registryId,embeddingServices,a
  try{const view={...await run(record.view.handle),operationId:request.operationId};record.view=view;record.phase='allocated';return await persist(record);}
  catch(error){
   record.phase='recovery';let recovered=error.route;
-  if(!recovered)try{recovered=await status({home,handle:record.view.handle});}catch{}
+  if(!recovered)try{recovered=await status({home,handle:record.view.handle});}catch(statusError){
+   if(statusError.code==='route_conflict'){
+    // Follow a committed restoration only for the exact operation and owner.
+    try{
+     const reference=await operationReferenceForRoute({home,handle:record.view.handle});
+     if(reference?.owner===record.owner&&reference.operationId===record.operationId)
+      recovered=await status({home,handle:reference.handle});
+    }catch{}
+   }
+  }
   record.view=recovered?{...recovered,operationId:request.operationId}:{...record.view,state:'uncertain',routeState:'cleanup-unconfirmed',cleanup:{state:'unconfirmed',nextAction:null},published:null};
   error.route=await persist(record);throw error;
  }

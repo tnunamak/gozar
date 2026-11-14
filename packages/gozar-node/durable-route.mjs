@@ -673,7 +673,10 @@ export async function ensureRoute(request, deps) {
         throw refuse('address_changed', 'The adopted rule is gone and Gozar does not create rules on this adopt-only port; release the route and create a new one with new approval');
       const table = await reservationTable(await canonicalHome(home), dir);
       if (heldBy(table, { routeId, listener: record.target, resource: capability.providerResource, port: record.intent.port })) throw reservedError();
-      record = { ...record, state: 'creating', receipt: null, cleanupDebt: null, generation: record.generation + 1 };
+      // Persist this association with the empty-slot intent before provider writes.
+      // A restored generation belongs to this operation, not its predecessor.
+      record = { ...record, state: 'creating', receipt: null, cleanupDebt: null,
+        generation: record.generation + 1, operationId: request.operationId ?? null };
       const created = await createListener(dir, record, entry, { table, firstAllocation: false, ctx });
       return finish(created.record, created.verification);
     }
