@@ -24,7 +24,7 @@ export function prerequisitesFor(inspection, observedAt) {
   });
 }
 
-export function configurationFor(actions, saved, declared) {
+function projectOfferedConfiguration(actions, saved, declared) {
   const inputRequirements = declared?structuredClone(declared):actions.filter(action => ['provide-secret', 'provide-value'].includes(action.kind)).map(action => ({
     id: action.id, actionId: action.id, label: action.secretLabel ?? action.valueLabel ?? action.label,
     kind: action.valueFormat ?? 'text', secret: action.kind === 'provide-secret', help: action.help ?? action.label,
@@ -33,6 +33,15 @@ export function configurationFor(actions, saved, declared) {
   return { inputRequirements, ...(saved.revision ? {revision:saved.revision,scopeId:saved.scopeId} : {}), values: saved.values, credentials: Object.fromEntries(inputRequirements.filter(field => field.secret)
     .map(field => [field.id, saved.credentials[field.id] ?? known(false)])),
     actions: actions.filter(action => ['provide-secret', 'provide-value'].includes(action.kind)) };
+}
+
+// Preserve already-redacted persisted observations even after their action disappears.
+export function configurationFor(actions, saved, declared) {
+  const projected = projectOfferedConfiguration(actions, saved, declared);
+  return {
+    ...projected,
+    credentials: Object.assign({}, projected.credentials, structuredClone(saved.credentials)),
+  };
 }
 
 export function cleanupForSession(reply) {
