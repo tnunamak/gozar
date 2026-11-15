@@ -305,6 +305,7 @@ export async function closeAttachedRoute(request, deps = {}) {
     if (!error.gone) throw error;
     const state = await viewFromRecord(directory, handle);
     if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') return releasedView(state.lastView, handle);
+    if (state.resourceRemoval) return recoveryHistory(state.lastView, 'Resource removed; exact configuration reference release remains unconfirmed');
     // Without an owned receipt or recovery effects, retain debt without loading transient runtime.
     if (!state.receipt || !deps.effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
     // The controller died with the route up: remove it from the saved receipt, in this process.
@@ -325,6 +326,7 @@ export async function releaseAttachedConfiguration(request,{embeddingServices,re
   const handle=checkRef(request),directory=await routeDirectory(request.home,handle);
   const bootstrap=await readJson(join(directory,'bootstrap.json'));
   await releaseRecordedConfigurationUse({registryId:bootstrap?.registryId,home:request.home,owner:bootstrap.owner,providerId:bootstrap.adapterId,handle:{...handle,generation:1}},{embeddingServices,registryId});
+  await dropBroker(handle.id);
 }
 export async function releaseSessionConfiguration(request,runtime){
   const generic=await genericSessionRecord(request);
@@ -359,6 +361,49 @@ export async function genericSessionRecord(request) {
   return {directory,bootstrap};
 }
 
+
+/** Dispose controller ownership after exact recorded reference release. */
+export async function finishCleanupController(request){
+  const handle=checkRef(request);dropLease(handle.id);await dropBroker(handle.id);
+}
+
+/** Capture cleanup authority before close can retire the bootstrap. Not allocation identity. */
+export async function attachedCleanupReference(request,runtime) {
+  const handle=checkRef(request);
+  if(!['attached','session'].includes(handle.kind))return null;
+  const home=await canonicalHome(request.home,false);
+  const directory=handle.kind==='attached'?await routeDirectory(home,handle):join(home,handle.id.split(':')[0]);
+  const bootstrap=await readJson(join(directory,'bootstrap.json'));
+  if(!bootstrap)throw gozarError('cleanup_debt','Cleanup authority is unavailable');
+  if(typeof bootstrap.operationId==='string')return null;
+  const bound=handle.kind==='attached'?{kind:'attached',id:bootstrap.id,generation:1}:bootstrap.handle??bootstrap.embedding?.handle;
+  if(bound?.kind!==handle.kind||bound.id!==handle.id||bound.generation!==handle.generation)
+    throw gozarError('route_conflict','Cleanup handle does not match its bootstrap');
+  const registryId=bootstrap.registryId??bootstrap.embedding?.registryId;
+  const owner=bootstrap.owner,providerId=bootstrap.adapterId;
+  if(typeof owner!=='string'||!owner||typeof providerId!=='string'||!providerId||registryId!==runtime.registryId||
+      (bootstrap.home??bootstrap.embedding?.request?.home)!==home)
+    throw gozarError('cleanup_debt','Cleanup scope cannot be verified');
+  if(request.owner!==undefined&&request.owner!==owner)throw gozarError('route_conflict','Cleanup owner does not match');
+  return {home,owner,providerId,registryId,handle:structuredClone(handle)};
+}
+
+/** Only the controller's persisted post-removal receipt can advance metadata-only recovery. */
+export async function attachedRemovalEvidence(request,scope) {
+  const handle=checkRef(request);
+  const directory=handle.kind==='attached'?await routeDirectory(scope.home,handle):join(scope.home,handle.id.split(':')[0]);
+  const state=await readJson(join(directory,'state.json'));
+  if(!state?.resourceRemoval)return null;
+  const evidence=state.resourceRemoval;
+  if(evidence.schemaVersion!==1||evidence.registryId!==scope.registryId||evidence.owner!==scope.owner||
+      evidence.providerId!==scope.providerId||evidence.handle?.kind!==handle.kind||evidence.handle.id!==handle.id||
+      evidence.handle.generation!==handle.generation||state.handle?.kind!==handle.kind||state.handle.id!==handle.id||state.handle.generation!==handle.generation||
+      state.adapterId!==scope.providerId||state.lastView?.handle?.kind!==handle.kind||
+      state.lastView.handle.id!==handle.id||state.lastView.handle.generation!==handle.generation)
+    throw gozarError('cleanup_debt','Resource-removal evidence does not match cleanup scope');
+  return {...state.lastView,handle:structuredClone(handle),state:'released',routeState:'released',
+    published:null,ingress:null,verification:{...state.lastView.verification,status:'unverified'},cleanup:{state:'confirmed'}};
+}
 // --- The controller -----------------------------------------------------------------------------
 
 const credentialFreeOrigin = (value, properties, schemes) => {
@@ -399,8 +444,14 @@ export async function runAttachedController(directory, runtime = {}) {
   let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null, proofSession = null,initialSettled=false;
   const nonce = randomBytes(32).toString('hex');
   const lastView = () => ({...projectAttached(expired()&&lease.state==='usable'?{...lease,state:'unverified'}:lease, { handle, now: now() }),operationId:bootstrap.operationId??null,...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
+  let resourceRemoval=null;
   const save = () => atomicWrite(join(directory, 'state.json'), { schemaVersion: 1, adapterId: adapter.id, request: bootstrap.request, plan: bootstrap.plan,
-    receipt, handle, phase: lease.state, lastView: lastView() });
+    receipt, handle, phase: lease.state, lastView: lastView(), resourceRemoval });
+  async function recordRemoval(){
+    resourceRemoval={schemaVersion:1,registryId:bootstrap.registryId,owner:bootstrap.owner,providerId:adapter.id,handle:structuredClone(handle)};
+    lease.state='uncertain';lease.cleanup={state:'unconfirmed',message:'Resource removed; configuration reference release remains unconfirmed'};
+    await save();
+  }
 
   const admitted = (runtime.effectContext ?? (await loadRuntime())?.createAttachedEffectContext)?.({ adapter, readContext: read, request: bootstrap.request, plan: bootstrap.plan, generation: 1 });
   // The effect is admitted for generation 1: a new route. Receipts carry the generation create returns.
@@ -469,7 +520,7 @@ export async function runAttachedController(directory, runtime = {}) {
   function verify(){if(verification)return verification;verification=refreshProof().finally(()=>{verification=null;});return verification;}
   async function refreshProof() {
     if (expired()) { await release(); return; }
-    if (!receipt || releasing || !initialSettled || failure || lease.cleanup.state==='confirmed') return;
+    if (!receipt || resourceRemoval || releasing || !initialSettled || failure || lease.cleanup.state==='confirmed') return;
     const facts=await adapter.runtimeFacts(read,receipt);
     Object.assign(lease,{properties:facts.properties,binding:facts.binding,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
     if(!await enforceConsent())return;
@@ -540,7 +591,7 @@ export async function runAttachedController(directory, runtime = {}) {
       failure = { code: error.code, message: error.message,nextAction:error.nextAction??null };
       lease.state = 'lost';
       if (receipt) {
-        try { const removal = await removeRoute(); if (!removal.removed || removal.debt) Object.assign(lease, { state: 'uncertain', cleanup: debtOf(removal) }); else {lease.cleanup = {state:'confirmed'};await releaseUse();} }
+        try { const removal = await removeRoute(); if (!removal.removed || removal.debt) Object.assign(lease, { state: 'uncertain', cleanup: debtOf(removal) }); else {lease.cleanup = {state:'confirmed'};await recordRemoval();await releaseUse();lease.cleanup={state:'confirmed'};} }
         catch { Object.assign(lease, { state: 'uncertain', cleanup: { state: 'unconfirmed', message: 'The route could not be withdrawn; close it again' } }); }
       } else { lease.state = 'uncertain'; lease.cleanup = {state:'unconfirmed',message:'Startup failed before an owned runtime receipt was returned'}; }
       await atomicWrite(join(directory, 'failure.json'), failure);
@@ -554,12 +605,13 @@ export async function runAttachedController(directory, runtime = {}) {
     proofAbort.abort();
     releasing ??= (async () => {
       await creation;
+      if (resourceRemoval) {await releaseUse();lease.state='released';lease.cleanup={state:'confirmed'};await save();return;}
       if (lease.cleanup.state === 'confirmed') {lease.state='released';await save();return;}
       lease.state = 'releasing'; await save().catch(() => {});
       try {
         if(!receipt)throw gozarError('cleanup_debt','Startup outcome remains unknown; retain this recovery handle');
         const removal = await removeRoute();
-        if (removal.removed && !removal.debt) { lease.state = 'released'; lease.cleanup = { state: 'confirmed' };await releaseUse(); }
+        if (removal.removed && !removal.debt) { lease.state = 'released'; lease.cleanup = { state: 'confirmed' };await recordRemoval();await releaseUse();lease.state='released';lease.cleanup={state:'confirmed'}; }
         else { lease.state = 'uncertain'; lease.cleanup = debtOf(removal); }
       } catch (cause) { lease.state = 'uncertain'; lease.cleanup = { state: 'unconfirmed', message: `Removal failed (${normalizeError(cause).code})` }; }
       await save();

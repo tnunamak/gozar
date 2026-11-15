@@ -21,6 +21,8 @@ import { listProviders as inventory } from './embedding-inventory.mjs';
 import { setupConsentReview,consentSnapshot } from './consent-facts.mjs';
 import {offeredConfiguration,readConfigurationDraft,clearConfigurationInput} from './embedding-setup.mjs';
 import {withRouteOperation,listRecordedRoutes,recordOperationView,operationReferenceForRoute,retainedOperationView,recordPendingReferenceCleanup,retryRecordedReferenceCleanup,referenceCleanupDebt} from './route-operations.mjs';
+import {cleanupReferenceRecord,prepareCleanupReference,recordCleanupRemoval,retryCleanupReference,listCleanupReferences} from './route-operations.mjs';
+import {attachedCleanupReference,attachedRemovalEvidence,finishCleanupController} from './attached-route.mjs';
 import {withServiceContext,reviewExternalConsent,approveExternalConsent} from './service.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
 
@@ -109,9 +111,27 @@ export function createRouteApi(deps = {}) {
       throw gozarError('invalid_input', "expose needs usage 'session' or 'attached'");
     }),
 
-    routeStatus: request => guard(() => verified(async () => viewStatus(request, { adapters: await adapters(), ...deps.view }),request)),
+    routeStatus: request => guard(() => verified(async () => {
+      const retained=await cleanupReferenceRecord(request,await services());
+      if(retained)return retained.view;
+      return viewStatus(request,{adapters:await adapters(),...deps.view});
+    },request)),
     closeRoute: request => guard(() => verified(async () => {
       const context=await services();
+      const cleanupRuntime={...context,afterReferenceRelease:async()=>{
+        try{await viewClose(request,{adapters:await adapters(),...deps.view});}
+        catch(error){if(error.code!=='route_not_found')throw error;}
+        await finishCleanupController(request);
+      }};
+      const retainedCleanup=await cleanupReferenceRecord(request,context);
+      if(retainedCleanup&&request.mode!==undefined&&request.mode!=='remove')throw gozarError('invalid_input','Retained cleanup requires mode remove');
+      const privateRetry=await retryCleanupReference(request,cleanupRuntime);
+      if(privateRetry)return privateRetry;
+      let cleanupScope=retainedCleanup?.scope;
+      if(request.mode==='remove'&&['attached','session'].includes(request.handle?.kind)&&!cleanupScope){
+        cleanupScope=await attachedCleanupReference(request,context);
+        if(cleanupScope)await prepareCleanupReference(cleanupScope);
+      }
       // This path consumes only an exact private resource-removal milestone.
       const retried=await retryRecordedReferenceCleanup(request,{...context,
         ...(request.handle?.kind==='session'?{afterReferenceRelease:()=>releaseSessionConfiguration(request,context)}:{})});
@@ -122,9 +142,18 @@ export function createRouteApi(deps = {}) {
       try{view=await viewClose(request,{adapters:await adapters(),...deps.view});}
       catch(error){
         if(error.code!=='route_not_found')throw error;
+        if(retainedCleanup)return retainedCleanup.view;
         const retained=await retainedOperationView(request);
         if(!retained)throw error;
         return retained;
+      }
+      if(cleanupScope){
+        const evidence=view.cleanup.state==='confirmed'?view:await attachedRemovalEvidence(request,cleanupScope);
+        if(evidence){
+          await recordCleanupRemoval(cleanupScope,evidence);
+          return retryCleanupReference(request,cleanupRuntime);
+        }
+        return (await cleanupReferenceRecord(request,context)).view;
       }
       if(view.cleanup.state==='confirmed'&&['attached','session'].includes(request.handle.kind)){
         let debt=referenceCleanupDebt(view);
@@ -146,11 +175,17 @@ export function createRouteApi(deps = {}) {
       return recordOperationView({home:request.home,view,reference});
     },request)),
     suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }),request)),
-    watchRoutes:async function*(request){try{for await(const event of pollRoutes(request,{routeStatus:r=>verified(async()=>viewStatus(r,{adapters:await adapters(),...deps.view}),r),...deps.watch}))yield structuredClone(event);}catch(error){throw publicError(error);}},
+    watchRoutes:async function*(request){try{for await(const event of pollRoutes(request,{routeStatus:api.routeStatus,...deps.watch}))yield structuredClone(event);}catch(error){throw publicError(error);}},
     getRoutePreferences, setRoutePreferences,
     runSetupAction: request => guard(async () => runSetup(request,await setupDeps(request))),
     listProviders: request => guard(async()=>inventory(request,await shared(request))),
-    listRoutes:request=>guard(()=>listRecordedRoutes(request)),
+    listRoutes:request=>guard(async()=>{
+      const base=await listRecordedRoutes(request),retained=await listCleanupReferences(request);
+      const key=handle=>JSON.stringify([handle.kind,handle.id,handle.generation]);
+      const views=new Map(base.routes.map(view=>[key(view.handle),view]));
+      for(const view of retained)views.set(key(view.handle),view);
+      return {routes:[...views.values()]};
+    }),
     ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft'].map(method=>[method,request=>guard(async()=> (await services()).embeddingServices[method](request))])),
     beginConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const draft=await context.embeddingServices.beginConfigurationDraft(request);return {...draft,configuration:await offeredConfiguration({...request,draftId:draft.draftId},draft.configuration,context)};}),
     readConfigurationDraft:request=>guard(async()=>readConfigurationDraft(request,await shared(request))),

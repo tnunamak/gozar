@@ -260,3 +260,89 @@ export async function listRecordedRoutes({home,owner}={},deps={}){
  return {routes:[...routes.values()].map(view=>view.state==='released'?view:{...view,state:view.state==='usable'?'unverified':view.state,published:null,
   routeState:view.cleanup.state==='unconfirmed'?'cleanup-unconfirmed':view.origin?'detected':'unknown',verification:{...view.verification,status:'unverified',results:(view.verification.results??[]).map(result=>({...result,status:'unknown'}))}})};
 }
+
+
+// Cleanup-only authority is separate from optional allocation operation intents.
+async function cleanupDirectory(home,create=false){
+ const dir=join(await canonicalHome(home,create),'reference-cleanup');
+ await trustedDirectory(dir,create);await privateDirectory(dir);return dir;
+}
+const cleanupKey=handle=>hash(JSON.stringify([handle.kind,handle.id,handle.generation]));
+function checkCleanupRecord(record,home,name){
+ const scope=record?.scope,handle=scope?.handle;
+ if(record?.schemaVersion!==1||record.kind!=='configuration-reference-cleanup'||
+    !['prepared','resource-removed','terminal'].includes(record.phase)||
+    !['attached','session'].includes(handle?.kind)||typeof handle.id!=='string'||!handle.id||
+    !Number.isSafeInteger(handle.generation)||handle.generation<1||
+    typeof scope.owner!=='string'||!scope.owner||typeof scope.providerId!=='string'||!scope.providerId||
+    typeof scope.registryId!=='string'||!scope.registryId||scope.home!==home||
+    record.scopeDigest!==canonicalDigest(scope)||name!==cleanupKey(handle)+'.json'||
+    !sameHandle(record.view?.handle,handle))
+  throw gozarError('cleanup_debt','The private cleanup reference cannot be verified');
+ if(record.phase!=='prepared'&&(!sameHandle(record.resourceView?.handle,handle)||record.resourceView?.cleanup?.state!=='confirmed'))
+  throw gozarError('cleanup_debt','The resource-removal receipt cannot be verified');
+ if(record.phase==='terminal'&&(record.view.state!=='released'||record.view.cleanup?.state!=='confirmed'))
+  throw gozarError('cleanup_debt','Terminal cleanup evidence cannot be verified');
+ return record;
+}
+async function cleanupRecords(home){
+ let dir;try{dir=await cleanupDirectory(home);}catch(error){if(error.code==='ENOENT')return [];throw error;}
+ const rows=[];
+ for(const entry of await readdir(dir,{withFileTypes:true})){
+  if(entry.name==='.cleanup-lock')continue;
+  if(!entry.isFile()||!/^[a-f0-9]{64}\.json$/.test(entry.name))throw gozarError('cleanup_debt','Unexpected cleanup reference entry');
+  rows.push(checkCleanupRecord(await readRecord(join(dir,entry.name)),home,entry.name));
+ }
+ return rows;
+}
+export async function cleanupReferenceRecord({home,owner,handle}={},runtime={}){
+ if(!['attached','session'].includes(handle?.kind))return null;
+ try{home=await canonicalHome(home,false);}catch(error){if(error.code==='ENOENT')return null;throw error;}
+ const rows=(await cleanupRecords(home)).filter(row=>row.scope.handle.kind===handle.kind&&row.scope.handle.id===handle.id);
+ if(!rows.length)return null;
+ const row=rows.find(row=>sameHandle(row.scope.handle,handle));
+ if(!row||owner!==undefined&&row.scope.owner!==owner)throw gozarError('route_conflict','Cleanup reference belongs to another handle or owner');
+ if(runtime.registryId!==undefined&&runtime.registryId!==row.scope.registryId)throw gozarError('cleanup_debt','Cleanup registry no longer matches');
+ return row;
+}
+export async function prepareCleanupReference(scope){
+ const home=await canonicalHome(scope.home,false),dir=await cleanupDirectory(home,true),name=cleanupKey(scope.handle)+'.json';
+ return withExclusiveLock(join(dir,'.cleanup-lock'),async()=>{
+  const prior=await optionalRead(join(dir,name));
+  if(prior){checkCleanupRecord(prior,home,name);if(canonicalDigest(scope)!==prior.scopeDigest)throw gozarError('route_conflict','Cleanup scope changed');return prior;}
+  const record={schemaVersion:1,kind:'configuration-reference-cleanup',scope:structuredClone(scope),scopeDigest:canonicalDigest(scope),
+   phase:'prepared',view:recoveryHistory(startingRoute(scope.handle,null),'Resource removal is not confirmed; retry close with the exact retained handle.')};
+  checkCleanupRecord(record,home,name);await atomicWrite(join(dir,name),record);return record;
+ },{waitSeconds:30});
+}
+export async function recordCleanupRemoval(scope,view){
+ const home=await canonicalHome(scope.home,false),dir=await cleanupDirectory(home),name=cleanupKey(scope.handle)+'.json';
+ return withExclusiveLock(join(dir,'.cleanup-lock'),async()=>{
+  const record=checkCleanupRecord(await readRecord(join(dir,name)),home,name);
+  if(record.scopeDigest!==canonicalDigest(scope)||!sameHandle(view.handle,scope.handle)||view.cleanup?.state!=='confirmed')
+   throw gozarError('cleanup_debt','Cleanup removal receipt does not match');
+  if(record.phase==='terminal')return record;
+  record.resourceView={...view,published:null,ingress:null,verification:{...view.verification,status:'unverified'}};
+  record.view=referenceCleanupDebt(record.resourceView);record.phase='resource-removed';
+  await atomicWrite(join(dir,name),record);return record;
+ },{waitSeconds:30});
+}
+export async function retryCleanupReference(request,runtime){
+ const found=await cleanupReferenceRecord(request,runtime);
+ if(!found||found.phase==='prepared')return null;
+ const home=found.scope.home,dir=await cleanupDirectory(home),name=cleanupKey(found.scope.handle)+'.json';
+ return withExclusiveLock(join(dir,'.cleanup-lock'),async()=>{
+  const record=checkCleanupRecord(await readRecord(join(dir,name)),home,name);
+  if(record.scopeDigest!==found.scopeDigest)throw gozarError('cleanup_debt','Cleanup scope changed during retry');
+  if(record.phase==='terminal')return structuredClone(record.view);
+  if(record.phase!=='resource-removed')return null;
+  try{await releaseRecordedConfigurationUse(record.scope,runtime);await runtime.afterReferenceRelease?.();}
+  catch(cause){const error=gozarError('cleanup_debt','Resource removed but exact configuration reference remains',record.view.cleanup.nextAction,cause);error.route=structuredClone(record.view);throw error;}
+  record.view={...record.resourceView,state:'released',routeState:'released',cleanup:{state:'confirmed'}};
+  record.phase='terminal';await atomicWrite(join(dir,name),record);return structuredClone(record.view);
+ },{waitSeconds:30});
+}
+export async function listCleanupReferences({home,owner}={}){
+ home=await canonicalHome(home,false);
+ return (await cleanupRecords(home)).filter(row=>owner===undefined||row.scope.owner===owner).map(row=>structuredClone(row.view));
+}
