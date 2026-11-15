@@ -39,14 +39,14 @@ if (config.lease) {
 const nonce = 'fake-nonce';
 let calls = 0;
 const snapshot = () => { const phase = config.phases[Math.min(calls++, config.phases.length - 1)];
-  return { sessionId: 's1', adapterId: 'stub-b', phase, ...(config.candidate && ['candidate-ready', 'published-ready'].includes(phase) ? { candidate: config.candidate } : {}), ...(phase === 'published-ready' ? { published: config.candidate } : {}) }; };
+  return { sessionId: config.sessionId, adapterId: 'stub-b', phase, ...(config.candidate && ['candidate-ready', 'published-ready'].includes(phase) ? { candidate: config.candidate } : {}), ...(phase === 'published-ready' ? { published: config.candidate } : {}) }; };
 const server = net.createServer(socket => {
   let input = '';
   socket.on('error', () => {});
   socket.on('data', chunk => {
     input += chunk; if (!input.includes('\\n')) return;
     const { command } = JSON.parse(input.split('\\n')[0]);
-    if (command.type === 'stop') { socket.end(JSON.stringify({ snapshot: { sessionId: 's1', phase: 'stopped' } }) + '\\n', () => process.exit(0)); return; }
+    if (command.type === 'stop') { socket.end(JSON.stringify({ snapshot: { sessionId: config.sessionId, phase: 'stopped' } }) + '\\n', () => process.exit(0)); return; }
     socket.end(JSON.stringify({ snapshot: snapshot() }) + '\\n');
   });
 });
@@ -76,7 +76,7 @@ async function sessionWorld(t, { port = 8799 } = {}) {
       return { ...q, approval: { candidateToken: token, disclosureRevision: 'disc-stub-b' }, wait };
     };
     const run = async () => openSessionRoute(await approve(), { adapters: [stubAdapter('stub-b')], redeem: tokens.redeem, consentBinding: tokens.consentBinding, platform: 'linux', readContext,
-      startSession: options => launch(options.directory, { targetPort: options.port, ...daemon }, script), pollMs: 20, ...deps });
+      startSession: options => launch(options.directory, { targetPort: options.port, ...daemon, sessionId: options.sessionId }, script), pollMs: 20, ...deps });
     return { request: await approve(), run };
   };
   const daemonGone = async () => {

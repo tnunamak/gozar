@@ -835,7 +835,7 @@ async function sessionStartFailure(reply, { home, adapterId, deps }) {
  */
 async function failedSessionStart(directory, error, deps, scope) {
   let identity = null, stopped = null, cleanupFailure = null, outcome = {state:'unconfirmed'};
-  let bootstrap, stoppedView=null;
+  let bootstrap, stoppedView=null, foreignSession=false, brokerFailure=null;
   const fallback=startingRoute(scope.handle,scope.target,scope.operationId);
   const exactView=view=>view?.handle?.kind===scope.handle.kind && view.handle.id===scope.handle.id &&
     view.handle.generation===scope.handle.generation && view.hostConfiguration?.target?.known===true &&
@@ -843,9 +843,27 @@ async function failedSessionStart(directory, error, deps, scope) {
     (scope.operationId===undefined || view.operationId===scope.operationId);
   try {
     bootstrap=await readJson(join(directory,'bootstrap.json'));
-    // A failed launch can encounter another session. Never stop that controller.
-    if(deps.embeddingServices && (bootstrap?.embedding?.handle?.id!==scope.handle.id ||
-        bootstrap.embedding.handle.generation!==scope.handle.generation))
+    // A port directory and a live PID identify a process, not this allocation.
+    // Prove the reserved session incarnation before even reading its control PID.
+    const port=Number(scope.target.split(':').at(-1));
+    const recordedId=typeof bootstrap?.sessionId==='string'&&bootstrap.sessionId
+      ? `port-${port}:${bootstrap.sessionId}` : null;
+    if(recordedId && recordedId!==scope.handle.id){
+      foreignSession=true;throw error;
+    }
+    const embedded=bootstrap?.embedding;
+    if(recordedId!==scope.handle.id || scope.handle.kind!=='session' ||
+        (!embedded && scope.handle.generation!==1) ||
+        (bootstrap.targetPort!==undefined && bootstrap.targetPort!==port) ||
+        (bootstrap.owner!==undefined && bootstrap.owner!==scope.owner) ||
+        (bootstrap.adapterId!==undefined && bootstrap.adapterId!==scope.providerId) ||
+        (bootstrap.operationId!=null && bootstrap.operationId!==scope.operationId) ||
+        (bootstrap.recipeRegistryId!==undefined && bootstrap.recipeRegistryId!==deps.registryId) ||
+        ((deps.embeddingServices || embedded) && (!embedded ||
+          embedded.handle?.kind!==scope.handle.kind || embedded.handle.id!==scope.handle.id ||
+          embedded.handle.generation!==scope.handle.generation ||
+          embedded.registryId!==deps.registryId || bootstrap.owner!==scope.owner ||
+          bootstrap.adapterId!==scope.providerId)))
       throw gozarError('cleanup_debt','No matching recorded session proves ownership of startup cleanup');
     identity=await readJson(join(directory,'control.json'));
     try { stopped=await (deps.stopSession ?? (async()=> (await import('./daemon.mjs')).stopSession(directory)))(); }
@@ -872,8 +890,10 @@ async function failedSessionStart(directory, error, deps, scope) {
   } catch(cause){cleanupFailure=cause;}
   finally {
     // Revoke only this abandoned parent's broker, even if metadata must be retried.
-    try{await dropBroker(scope.handle.id);}catch(cause){cleanupFailure??=cause;}
+    try{await dropBroker(scope.handle.id);}catch(cause){brokerFailure=cause;cleanupFailure??=cause;}
   }
+  // A positively different incarnation was never ours to clean or offer to Stop.
+  if(foreignSession && !brokerFailure)return error;
   const stop=`Run: ${cliCommand('stop', Number(directory.slice(directory.lastIndexOf('-') + 1)), dirname(directory))}`;
   const nextAction=instructionAction('stop-session','Stop the failed session',stop);
   const result=cleanupFailure ? gozarError('cleanup_debt','The route failed to start and cleanup or reference release is unconfirmed; retry removal with the retained handle',nextAction,error) : error;
