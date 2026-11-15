@@ -158,3 +158,83 @@ test('unsupported identities fail symmetrically before metadata mutation',async 
  await services.releaseConfigurationUse({...scope,handle:identity});
  await commit();
 });
+
+// session-reference-debt-closure-20261114 remains the host/resource/reference
+// cleanup prerequisite. These owning-unit controls grant no route authority.
+async function reservationFixture(t){
+ const home=await scratch(t),records=new Map();let calls=0,deletes=0;
+ t.after(()=>{for(const bytes of records.values())bytes.fill(0);records.clear();});
+ const backend={
+  async put({bytes}){calls++;const handle='fixture-ref-'+records.size;records.set(handle,new Uint8Array(bytes));return {handle};},
+  async withSecret({handle},use){calls++;assert.ok(records.has(handle));const bytes=new Uint8Array(records.get(handle));try{return await use(bytes);}finally{bytes.fill(0);}},
+  async presence({handle}){calls++;return {known:true,value:records.has(handle)};},
+  async delete(){calls++;deletes++;throw new Error('saved reference must survive');}
+ };
+ const services=createEmbeddingServices({registryId:'reservation-controls',secretBackend:backend});
+ const groups=[];
+ for(const owner of ['owner','foreign-owner']){
+  const scope={home,owner,providerId:'provider'},c=await services.readConfiguration(scope);
+  const bytes=new TextEncoder().encode('synthetic-reservation-fixture');
+  let stored;try{stored=await services.storeSecret({...scope,scopeId:c.scopeId,inputId:'credential',expectedConfigurationRevision:c.revision,bytes});}
+  finally{bytes.fill(0);}
+  const changed=await services.mutateConfiguration({...scope,expectedConfigurationRevision:c.revision},tx=>tx.bindSecret('credential',stored.handle));
+  groups.push({scope,c:changed.configuration,stored});
+ }
+ const [own,foreign]=groups;
+ const read=async()=>JSON.parse(await readFile(join(home,'embedding-state.json'),'utf8'));
+ const before=await read();
+ const draft=await services.beginConfigurationDraft({...own.scope,expectedConfigurationRevision:own.c.revision});
+ const commit=()=>services.commitConfigurationDraft({...own.scope,draftId:draft.draftId,expectedConfigurationRevision:draft.configuration.revision});
+ const metadataOnly=async run=>{const count=calls;await run();assert.equal(calls,count,'register/release never calls credential backend');};
+ const preserved=async()=>{
+  const state=await read();
+  assert.deepEqual(state.secrets,before.secrets,'saved reference metadata survives');
+  assert.deepEqual(state.configs[own.c.scopeId].bindings,before.configs[own.c.scopeId].bindings);
+  assert.deepEqual(state.configs[foreign.c.scopeId],before.configs[foreign.c.scopeId],'foreign applied references unchanged');
+  assert.equal(deletes,0);
+  for(const g of groups)assert.equal(new TextDecoder().decode(records.get(g.stored.handle)),'synthetic-reservation-fixture');
+ };
+ return {home,services,own,read,commit,metadataOnly,preserved};
+}
+test('duplicate exact reservation and parsed copy occupy one stored identity',async t=>{
+ const f=await reservationFixture(t),{services,own}=f;
+ const identity={reservation:'duplicate',nested:{generation:1}},second={reservation:'independent'};
+ await f.metadataOnly(async()=>{
+  for(const value of [identity,identity,JSON.parse(JSON.stringify(identity))])
+   await services.registerConfigurationUse({...own.scope,revision:own.c.revision,handle:value});
+ });
+ let state=await f.read();
+ assert.deepEqual(state.configs[own.c.scopeId].uses,[JSON.stringify(identity)],'one stored identity, not merely release-all success');
+ assert.equal(state.configs[own.c.scopeId].revision,own.c.revision);
+ await assert.rejects(f.commit(),{code:'configuration_in_use'});
+ await f.metadataOnly(()=>services.registerConfigurationUse({...own.scope,revision:own.c.revision,handle:second}));
+ await f.metadataOnly(()=>services.releaseConfigurationUse({...own.scope,handle:JSON.parse(JSON.stringify(identity))}));
+ state=await f.read();
+ assert.deepEqual(state.configs[own.c.scopeId].uses,[JSON.stringify(second)],'one exact release removes duplicate identity only');
+ await assert.rejects(f.commit(),{code:'configuration_in_use'},'independent reservation survives');
+ await f.preserved();
+ await f.metadataOnly(()=>services.releaseConfigurationUse({...own.scope,handle:second}));
+ assert.deepEqual((await f.read()).configs[own.c.scopeId].uses,[]);
+ const applied=await f.commit();
+ assert.notEqual(applied.revision,own.c.revision,'positive current-draft commit after final exact release');
+ assert.deepEqual(applied.credentials.credential,{known:true,value:true});
+ await f.preserved();
+});
+test('nested property order mismatch is byte-preserving and does not release a hold',async t=>{
+ const f=await reservationFixture(t),{services,own}=f;
+ const identity={a:{b:2,c:3}},reordered={a:{c:3,b:2}};
+ await f.metadataOnly(()=>services.registerConfigurationUse({...own.scope,revision:own.c.revision,handle:identity}));
+ await assert.rejects(f.commit(),{code:'configuration_in_use'});
+ const path=join(f.home,'embedding-state.json'),before=await readFile(path);
+ await f.metadataOnly(()=>services.releaseConfigurationUse({...own.scope,handle:reordered}));
+ assert.deepEqual(await readFile(path),before,'nested order mismatch cannot rewrite metadata');
+ assert.deepEqual((await f.read()).configs[own.c.scopeId].uses,[JSON.stringify(identity)]);
+ await assert.rejects(f.commit(),{code:'configuration_in_use'});
+ await f.preserved();
+ await f.metadataOnly(()=>services.releaseConfigurationUse({...own.scope,handle:identity}));
+ assert.deepEqual((await f.read()).configs[own.c.scopeId].uses,[]);
+ const applied=await f.commit();
+ assert.notEqual(applied.revision,own.c.revision);
+ assert.deepEqual(applied.credentials.credential,{known:true,value:true});
+ await f.preserved();
+});
