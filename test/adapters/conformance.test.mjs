@@ -194,6 +194,50 @@ test('all ten registered adapters conform', async () => {
   }
 });
 
+test('own-address rejects undeclared usage before origin intake and preserves supported setup', async () => {
+  const adapter = (await loadAdapters({ manifest: tenManifest, root: adaptersRoot })).find(a => a.id === 'own-address');
+  assert.ok(adapter);
+  const undeclared = ['session', 'attached', 'durable'].filter(kind => !adapter.definition.supportedKinds.includes(kind));
+  assert.ok(undeclared.length, 'exercise an actually undeclared kind');
+  const calls = { configuration: 0, probe: 0, effect: 0, origin: 0 };
+  const noEffect = async () => { calls.effect++; throw new Error('unexpected provider effect'); };
+  const ctx = readContext({
+    configuration: async () => { calls.configuration++; return null; },
+    probe: async () => { calls.probe++; return { ok: true }; },
+    dispatchEffect: noEffect, executePlan: noEffect, compareAndRemove: noEffect,
+  });
+  for (const kind of undeclared) {
+    await rejects(adapter.plan(ctx, request(kind)), 'unsupported');
+    await rejects(adapter.plan({ ...ctx, origin: 'not-an-origin' }, request(kind)), 'unsupported');
+    await rejects(adapter.plan(ctx, request(kind, 'not-an-origin')), 'unsupported');
+    const untouched = request(kind);
+    Object.defineProperty(untouched, 'origin', { get() {
+      calls.origin++; throw new Error('undeclared usage read origin');
+    } });
+    await rejects(adapter.plan(ctx, untouched), 'unsupported');
+  }
+  assert.deepEqual(calls, { configuration: 0, probe: 0, effect: 0, origin: 0 });
+
+  const origin = 'https://owner.example.test';
+  for (const kind of adapter.definition.supportedKinds) {
+    const before = calls.configuration;
+    await rejects(adapter.plan(ctx, request(kind)), 'setup_required');
+    assert.equal(calls.configuration, before + 1, 'supported usage still asks for its configured origin');
+    const plan = await adapter.plan({ ...ctx, configuration: async () => {
+      calls.configuration++; return { origin };
+    } }, request(kind));
+    assert.equal(plan.origin, origin);
+    if (kind === 'durable') {
+      assert.deepEqual(plan.readback, { kind, origin, target: request(kind).target });
+      assert.deepEqual(plan.effects, [], 'owner-kept route has no provider mutation');
+      assert.deepEqual(plan.cleanup, { kind: 'external-owned' });
+    }
+    await rejects(adapter.plan({ ...ctx, platform: 'win32' }, request(kind, origin)), 'unsupported');
+  }
+  assert.equal(calls.probe, 0);
+  assert.equal(calls.effect, 0);
+});
+
 test('honest declarations: kinds match the working recipes, unsupported providers declare none', async () => {
   const kinds = Object.fromEntries((await loadAdapters({ manifest: tenManifest, root: adaptersRoot })).map(a => [a.id, a.definition.supportedKinds]));
   assert.deepEqual(kinds['tailscale-funnel'], ['session', 'durable']);
