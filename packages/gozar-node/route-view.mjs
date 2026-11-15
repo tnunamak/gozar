@@ -239,7 +239,7 @@ export async function closeRoute(request, deps = {}) {
         return { ...releasedView(before, handle), state: debt ? 'uncertain' : 'released', cleanup: cleanupRecovery(debt ? { state: 'unconfirmed', message: debtMessage(debt) } : { state: 'confirmed' },handle), routeState: debt ? 'cleanup-unconfirmed' : 'inactive' };
       }
       case 'session': {
-        const generic=await defaults.attached();
+        const generic={...await defaults.attached(),...deps.attached};
         if(await generic.genericSessionRecord(request))return await generic.closeAttachedRoute(request,deps.attachedDeps);
         let before;try{before=await routeStatus({home:request.home,handle},deps);}catch{}
         const reply = await (deps.session ?? defaults.session).close(request);
