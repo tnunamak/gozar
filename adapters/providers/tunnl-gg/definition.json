@@ -77,8 +77,8 @@
     "ownership": "gozar-owned",
     "availability": {
       "session": {
-        "state": "detect-only",
-        "reason": "execution-not-implemented"
+        "state": "available",
+        "reason": "admitted"
       },
       "attached": {
         "state": "unsupported",

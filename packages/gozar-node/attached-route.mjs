@@ -788,7 +788,7 @@ export async function openSessionRoute(request, deps = {}) {
         try { reply = await (deps.sessionStatus ?? (async () => (await import('./daemon.mjs')).control(directory, { type: 'status' }, 30_000)))(); }
         catch (cause) { throw gozarError('provider_unavailable', 'The session controller stopped before the route was ready', null, cause); }
       }
-    } catch (error) { throw await failedSessionStart(directory, error, deps, {home,handle:stableHandle,owner:request.owner,providerId:redeemed.adapter.id,properties:redeemed.adapter.definition.capabilities}); }
+    } catch (error) { throw await failedSessionStart(directory, error, deps, {home,handle:stableHandle,owner:request.owner,providerId:redeemed.adapter.id,target:request.target,operationId:request.operationId,properties:redeemed.adapter.definition.capabilities}); }
   } catch (error) { throw normalizeError(error); }
 }
 
@@ -835,7 +835,12 @@ async function sessionStartFailure(reply, { home, adapterId, deps }) {
  */
 async function failedSessionStart(directory, error, deps, scope) {
   let identity = null, stopped = null, cleanupFailure = null, outcome = {state:'unconfirmed'};
-  let bootstrap;
+  let bootstrap, stoppedView=null;
+  const fallback=startingRoute(scope.handle,scope.target,scope.operationId);
+  const exactView=view=>view?.handle?.kind===scope.handle.kind && view.handle.id===scope.handle.id &&
+    view.handle.generation===scope.handle.generation && view.hostConfiguration?.target?.known===true &&
+    view.hostConfiguration.target.value===scope.target &&
+    (scope.operationId===undefined || view.operationId===scope.operationId);
   try {
     bootstrap=await readJson(join(directory,'bootstrap.json'));
     // A failed launch can encounter another session. Never stop that controller.
@@ -848,8 +853,18 @@ async function failedSessionStart(directory, error, deps, scope) {
     outcome=identity?.startIdentity
       ? await stopController({pid:identity.pid,startIdentity:identity.startIdentity})
       : error.controllerCleanup ?? {state:'unconfirmed'};
+    // Bind the snapshot before projecting our reserved handle onto it. A reply
+    // from a different session is neither cleanup evidence nor recovery authority.
+    if(stopped?.snapshot?.sessionId && scope.handle.id===`port-${scope.target.split(':').at(-1)}:${stopped.snapshot.sessionId}`){
+      const view=projectSession(stopped,{handle:scope.handle,properties:scope.properties,now:(deps.now??Date.now)()});
+      const target=view.hostConfiguration?.target;
+      if((!target?.known || target.value===scope.target) &&
+          (view.operationId==null || view.operationId===scope.operationId))
+        stoppedView={...fallback,...view,hostConfiguration:{...view.hostConfiguration,target:fallback.hostConfiguration.target},
+          ...(scope.operationId===undefined?{}:{operationId:scope.operationId})};
+    }
     // Controller death alone is not proof of provider/resource removal.
-    if(cleanupFailure || stopped?.snapshot?.phase!=='stopped' ||
+    if(cleanupFailure || !stoppedView || stopped?.snapshot?.phase!=='stopped' ||
         stopped?.localCleanupFailures?.length || outcome.state==='unconfirmed')
       throw cleanupFailure ?? gozarError('cleanup_debt','Resource or controller cleanup remains unconfirmed');
     if(deps.embeddingServices)await releaseRecordedConfigurationUse({registryId:bootstrap.embedding.registryId,home:scope.home,
@@ -863,10 +878,11 @@ async function failedSessionStart(directory, error, deps, scope) {
   const nextAction=instructionAction('stop-session','Stop the failed session',stop);
   const result=cleanupFailure ? gozarError('cleanup_debt','The route failed to start and cleanup or reference release is unconfirmed; retry removal with the retained handle',nextAction,error) : error;
   const decorated=withCleanupOutcome(result,outcome);
-  if(stopped?.snapshot){
-    const view=projectSession(stopped,{handle:scope.handle,properties:scope.properties,now:(deps.now??Date.now)()});
-    decorated.route=cleanupFailure ? {...view,state:'uncertain',cleanup:{state:'unconfirmed',nextAction,message:result.message}} : view;
-  } else if(error.route) decorated.route={...error.route,handle:scope.handle,state:'uncertain',cleanup:{state:'unconfirmed',nextAction,message:result.message}};
+  const view=stoppedView ?? (exactView(error.route)?error.route:fallback);
+  decorated.route=cleanupFailure
+    ? {...view,published:null,verification:fallback.verification,state:'uncertain',
+      cleanup:{state:'unconfirmed',nextAction,message:result.message}}
+    : view;
   return decorated;
 }
 
