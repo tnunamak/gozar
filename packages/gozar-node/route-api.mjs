@@ -65,9 +65,11 @@ export function createRouteApi(deps = {}) {
   const verified=async(action,request={})=>{const module=await engine(),context={...await shared(request),...(deps.verify?{verify:deps.verify}:{})};return withServiceContext(context,()=>module.withRuntimeContext(context,()=>deps.verify?module.withVerifier(deps.verify,action):action()));};
 
   // Recovery gets explicit factory-owned dependencies; request fields cannot supply effects.
+  const factoryCloseOverride=request=>['attached','session'].includes(request.handle?.kind)&&
+    typeof deps.view?.attached?.closeAttachedRoute==='function';
   const recoveryViewDeps=async request=>{
     let context=await shared(request);const generation=request.handle?.generation;
-    if(request.owner===undefined){
+    if(request.owner===undefined&&!factoryCloseOverride(request)){
       const recorded=await recordedRecoveryScope(request,context.registryId);
       if(recorded)context={...context,...recorded};
     }
@@ -132,7 +134,7 @@ export function createRouteApi(deps = {}) {
     }),
 
     routeStatus: request => guard(() => verified(async () => viewStatus(request, { adapters: await adapters(), ...deps.view }),request)),
-    closeRoute: request => guard(async () => {const observation=await retainedCloseObservation(request);if(observation)return observation;return verified(async () => {const reference=await operationReferenceForRoute(request);let view;try{view=await viewClose(request, await recoveryViewDeps(request));}catch(error){if(error.code!=='route_not_found')throw error;const retained=await retainedOperationView(request);if(!retained)throw error;return retained;}if(view.cleanup.state==='confirmed'){if(request.handle.kind==='attached')await releaseAttachedConfiguration(request,await services());if(request.handle.kind==='session')await releaseSessionConfiguration(request,await services());}return recordOperationView({home:request.home,view,reference});},request);}),
+    closeRoute: request => guard(async () => {if(factoryCloseOverride(request))return viewClose(request,await recoveryViewDeps(request));const observation=await retainedCloseObservation(request);if(observation)return observation;return verified(async () => {const reference=await operationReferenceForRoute(request);let view;try{view=await viewClose(request, await recoveryViewDeps(request));}catch(error){if(error.code!=='route_not_found')throw error;const retained=await retainedOperationView(request);if(!retained)throw error;return retained;}if(view.cleanup.state==='confirmed'){if(request.handle.kind==='attached')await releaseAttachedConfiguration(request,await services());if(request.handle.kind==='session')await releaseSessionConfiguration(request,await services());}return recordOperationView({home:request.home,view,reference});},request);}),
     suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }),request)),
     watchRoutes:async function*(request){try{for await(const event of pollRoutes(request,{routeStatus:r=>verified(async()=>viewStatus(r,{adapters:await adapters(),...deps.view}),r),...deps.watch}))yield structuredClone(event);}catch(error){throw publicError(error);}},
     getRoutePreferences, setRoutePreferences,

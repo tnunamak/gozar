@@ -61,12 +61,14 @@ test('explicit factory overrides and explicit no-authority remain intact',async 
  }
 });
 
-test('missing owner does not acquire a default effect factory from request fields',async t=>{
+for(const kind of ['attached','session'])test(kind+' missing owner does not acquire a default effect factory from request fields',async t=>{
  const home=await homeFor(t);let captured;
  const api=createRouteApi({adapters:[],embeddingServices:{},view:{
-  attached:{closeAttachedRoute:async(request,deps)=>{captured=deps;return uncertain(request);}},
+  attached:{genericSessionRecord:async request=>request.handle.kind==='session',
+   closeAttachedRoute:async(request,deps)=>{captured=deps;return uncertain(request);}},
  }});
  const result=await api.closeRoute({home,mode:'remove',effectContext:()=>assert.fail('untrusted request factory'),
-  handle:{kind:'attached',id:'att_0123456789abcdef',generation:1}});
+  handle:{kind,id:kind==='attached'?'att_0123456789abcdef':'port-41237:context_fixture',generation:1}});
  assert.equal(captured.effectContext,undefined);assert.equal(result.cleanup.state,'unconfirmed');
+ assert.equal(captured.owner,undefined);
 });
