@@ -1,7 +1,7 @@
 import net from 'node:net';
 import { cliCommand } from './cli-command.mjs';
 import { chmod, readFile, unlink, open, mkdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { retireInstallKeyLease } from './key-route-lease.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -39,7 +39,7 @@ export async function control(directory, command, timeoutMs = 15_000) {
     const socket = net.createConnection(socketPath(directory));
     const finish = (error, result) => { if (settled) return; settled = true; clearTimeout(deadline); socket.destroy(); error ? reject(error) : resolve(result); };
     const deadline = setTimeout(() => finish(new Error('Controller timed out; readiness unknown')), timeoutMs);
-    socket.once('connect', () => socket.write(`${JSON.stringify({ nonce: identity.nonce, command })}\n`));
+    socket.once('connect', () => socket.write(`${JSON.stringify({ nonce: identity.nonce, command, ...(command.type==='observe'?{controllerIdentity:{pid:identity.pid,startIdentity:identity.startIdentity}}:{}) })}\n`));
     socket.on('data', chunk => {
       output += chunk;
       if (output.length > 1_048_576) return finish(new Error('Controller response exceeds limit'));
@@ -51,6 +51,15 @@ export async function control(directory, command, timeoutMs = 15_000) {
     socket.on('error', error => finish(error));
     socket.on('end', () => { if (!settled) finish(new Error('Controller closed without a result')); });
   });
+}
+
+/** Private module API, bound to the exact current public handle. */
+export async function observeSession(directory,{sessionId,handleGeneration}) {
+  if(typeof sessionId!=='string'||!sessionId||!Number.isSafeInteger(handleGeneration)||handleGeneration<1)
+    throw gozarError('route_conflict','Exact session incarnation and generation are required');
+  const reply=await control(directory,{type:'observe',sessionId,handleGeneration});
+  if(reply.snapshot?.sessionId!==sessionId)throw gozarError('route_conflict','Session incarnation changed');
+  return reply;
 }
 
 // A controller keeps the implementation it loaded at startup. Retire a stopped,
@@ -259,6 +268,23 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
         const message = JSON.parse(input.split('\n')[0]);
         if (message.nonce !== nonce) throw new Error('Controller identity mismatch');
         const command = message.command;
+        if(command?.type==='observe'){
+          const handle=config.embedding?.handle;
+          if(message.controllerIdentity?.pid!==identity.pid||!identity.startIdentity||
+              message.controllerIdentity?.startIdentity!==identity.startIdentity||
+              typeof command.sessionId!=='string'||command.sessionId!==controller.sessionId||
+              config.sessionId!==controller.sessionId||handle?.kind!=='session'||
+              handle.id!==basename(directory)+':'+controller.sessionId||
+              command.handleGeneration!==handle.generation||!Number.isSafeInteger(handle.generation)||handle.generation<1)
+            throw gozarError('route_conflict','Observation does not match current session authority');
+          if(!operational||!embedding||!initializedDone||initializationError)
+            throw gozarError('provider_unavailable','Current session observation unavailable');
+          const output=controller.observe({gateExpiresAtMs:gate?.expiresAtMs});
+          const result=embedding.observe({...output,
+            ...(gate?{lifetimeMs:gate.lifetimeMs,expiresAtMs:gate.expiresAtMs}:{}),
+            ...(selectedAdapter?.clientProfile?{connectionProfile:selectedAdapter.clientProfile}:{})});
+          socket.end(`${JSON.stringify({...publicReply(result,directory),observationEvidence:result.observationEvidence})}\n`);return;
+        }
         if(command?.type==='resolver-lost'){controller.driver.cancelProbes();socket.end(`${JSON.stringify(publicReply(await present(controller.present()),directory))}\n`);return;}
         if(command?.type==='review-consent'&&embedding){socket.end(`${JSON.stringify({review:await embedding.review()})}\n`);return;}
         if(command?.type==='approve-consent'&&embedding){const output=await embedding.approve(command,async()=>{let result=await controller.command({type:'health'});if(result.snapshot.phase==='candidate-ready')result=await controller.approve();return result;});socket.end(`${JSON.stringify(publicReply(await present(output),directory))}\n`);return;}

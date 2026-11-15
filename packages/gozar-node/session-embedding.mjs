@@ -47,6 +47,20 @@ export async function connectSessionEmbedding(config,{onLoss}){
     consentFactsDigest:current?.review.consentFactsDigest??approved.consentFactsDigest,...(consentChange?{consentChange}:{}),
     ...(blocked?{snapshot:{...output.snapshot,phase:output.snapshot.phase==='stopped'?'stopped':'degraded',published:null},validation:null}:{})};
   },
+  observe(output){
+   const receipt=output.validation?.probeReceipt;
+   const derived=receipt&&saved.identity&&saved.handle?{origin:receipt.origin,target:saved.request.target,
+    instanceId:saved.identity.instanceId,bootId:saved.identity.bootId,handleGeneration:saved.handle.generation}:null;
+   const bindingMatches=derived&&typeof derived.instanceId==='string'&&typeof derived.bootId==='string'&&
+    (!subject||JSON.stringify(subject)===JSON.stringify(derived));
+   const unavailable=lost||blocked||!current||current.review.consentFactsDigest!==approved.consentFactsDigest||!bindingMatches;
+   const consentChange=unavailable?{reason:lost?'host-resolver-unavailable':'cached-authority-unavailable',nextAction:null}:null;
+   return structuredClone({...output,target:saved.request.target,owner:saved.request.owner,
+    operationId:config.operationId??null,proofSubject:subject??derived,fixtureEffects:saved.fixtureEffects===true,
+    consentFactsDigest:current?.review.consentFactsDigest??approved.consentFactsDigest,
+    ...(consentChange?{consentChange}:{}),
+    ...(unavailable?{snapshot:{...output.snapshot,phase:output.snapshot.phase==='stopped'?'stopped':'degraded',published:null},validation:null}:{})});
+  },
   async review(){
    blocked=true;await refresh();
    const scope={...current.review.canonicalInput.scope,reviewHandle:saved.handle.id,handleGeneration:saved.handle.generation};
