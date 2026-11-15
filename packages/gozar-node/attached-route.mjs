@@ -69,6 +69,12 @@ export async function preflightExpose(request, deps = {}) {
       throw gozarError('unsupported', 'This usage is not admitted for execution in this release');
   }
   checkExpose(request, request.usage.kind);
+  // Reject a factory whose executable registry changed before the public API
+  // reserves an operation handle. The controller still rechecks at admission;
+  // a later race remains recovery debt, never inferred zero-allocation cleanup.
+  if (deps.registryId && deps.registry && await registryIdentity(deps.registry) !== deps.registryId) {
+    throw gozarError('artifact_integrity_failed', 'The route registry content changed');
+  }
 }
 
 async function adaptersOf(deps) {
