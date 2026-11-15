@@ -42,7 +42,11 @@ export class Controller {
   }
   present() {
     if (!this.last) return undefined;
-    return { ...this.last, ...(this.driver.proofGeneration === this.state.generation && this.driver.acceptedProbeReceipt?.expiresAtMs > this.driver.nowMs() ? { validation: { probeReceipt: this.driver.acceptedProbeReceipt, provenance: this.driver.proofProvenance } } : {}), ...(this.driver.gate ? { gateTarget: this.driver.gate.target } : {}), snapshot: { ...this.last.snapshot,
+    const selected = this.adapters.find(adapter => adapter.id === this.state.selected);
+    // Declared stream metadata is not a session deadline or fresh provider evidence.
+    const idleTimeoutMs = selected?.planVersion === 1 && selected.admission?.state === 'admitted' &&
+      Number.isSafeInteger(selected.idleTimeoutMs) && selected.idleTimeoutMs >= 0 ? selected.idleTimeoutMs : null;
+    return { ...this.last, limits: { idleTimeoutMs }, ...(this.driver.proofGeneration === this.state.generation && this.driver.acceptedProbeReceipt?.expiresAtMs > this.driver.nowMs() ? { validation: { probeReceipt: this.driver.acceptedProbeReceipt, provenance: this.driver.proofProvenance } } : {}), ...(this.driver.gate ? { gateTarget: this.driver.gate.target } : {}), snapshot: { ...this.last.snapshot,
       limitations: [...this.hostLimitations, ...(this.last.snapshot.limitations ?? [])] } };
   }
   async dispatch(effect) {

@@ -254,6 +254,7 @@ for(const mode of ['positive','invalid','late-failure'])test('actual daemon, gat
   if(mode==='positive') {
     const route=await bounded('verified expose',()=>start,OPERATION_MS);
     assert.equal(route.state,'usable');assert.equal(route.origin,effect.origin);
+    assert.equal(route.limits.idleTimeoutMs,121000);
     assert.equal(route.verification.status,'verified');assert.ok(route.verification.checks.includes('nonce'));
     assert.equal(route.verification.subject.origin,effect.origin);
     assert.equal(route.verification.subject.handleGeneration,route.handle.generation);
@@ -262,6 +263,16 @@ for(const mode of ['positive','invalid','late-failure'])test('actual daemon, gat
     assert.equal(effect.facts().creates,1);assert.ok(effect.facts().nonceResponses>0);
     const status=await bounded('public route status',()=>effect.gozar.routeStatus({home:f.home,handle:route.handle}));
     assert.equal(status.handle.id,route.handle.id);assert.equal(status.state,'usable');
+    assert.equal(status.limits.idleTimeoutMs,121000);
+    assert.deepEqual(status.handle,route.handle);
+    assert.deepEqual(status.expiresAt,route.expiresAt);
+    assert.deepEqual(status.verification,route.verification,'metadata does not restamp the observed proof');
+    const replay=await bounded('repeated public route status',()=>effect.gozar.routeStatus({home:f.home,handle:route.handle}));
+    assert.equal(replay.limits.idleTimeoutMs,121000);
+    assert.deepEqual(replay.handle,route.handle);
+    assert.deepEqual(replay.expiresAt,route.expiresAt);
+    assert.deepEqual(replay.verification,route.verification);
+    assert.equal(effect.facts().creates,1,'status must not allocate another owned child');
     const scope={home:f.home,owner:request.owner,providerId:f.id};
     const current=(await bounded('live configuration',()=>effect.gozar.catalogRoutes(request),OPERATION_MS)).candidates.find(c=>c.providerId===f.id).configuration;
     const liveDraft=await bounded('live draft',()=>effect.gozar.beginConfigurationDraft({...scope,expectedConfigurationRevision:current.revision}));

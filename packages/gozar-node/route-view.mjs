@@ -102,7 +102,7 @@ export function projectSession(reply, { handle, properties, ingress = null, limi
   verification.subject=reply.proofSubject??null;verification.observedAt=verification.checkedAt;
   if(reply.fixtureEffects&&verification.checkedAt)verification.vantage='this-device';
   return view({operationId:reply.operationId,consentChange:reply.consentChange,consentFactsDigest:reply.consentFactsDigest, target: reply.target ?? snapshot.target, expiresAt: snapshot.expiresAt ?? (Number.isFinite(reply.expiresAtMs??snapshot.expiresAtMs) ? iso(reply.expiresAtMs??snapshot.expiresAtMs) : undefined), validUntil: Number.isFinite(reply.validation?.probeReceipt?.expiresAtMs) ? iso(reply.validation.probeReceipt.expiresAtMs) : undefined, facts, now, handle, origin: snapshot.published ?? snapshot.candidate ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
-    verification, limits: limitsOf(limits, 5_000),
+    verification, limits: limitsOf(limits, 5_000, reply.limits?.idleTimeoutMs),
     cleanup: cleanupForSession(reply) });
 }
 

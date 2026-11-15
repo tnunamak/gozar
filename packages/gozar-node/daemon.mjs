@@ -394,7 +394,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
 }
 
 export function publicReply(output, directory) {
-  return { ...Object.fromEntries(['target','owner','operationId','proofSubject','fixtureEffects','consentChange','consentFactsDigest'].filter(key=>output[key]!==undefined).map(key=>[key,output[key]])),...(output.lifetimeMs !== undefined ? { lifetimeMs: output.lifetimeMs, expiresAtMs: output.expiresAtMs } : {}), snapshot: { ...output.snapshot, adapterId: output.state?.selected ?? output.snapshot?.adapterId }, ...(output.action ? { action: output.action } : {}), ...(output.gateTarget ? { gateTarget: output.gateTarget } : {}), ...(output.validation ? { validation: output.validation } : {}), journalPath: join(directory, 'session.json'),
+  return { ...Object.fromEntries(['limits','target','owner','operationId','proofSubject','fixtureEffects','consentChange','consentFactsDigest'].filter(key=>output[key]!==undefined).map(key=>[key,output[key]])),...(output.lifetimeMs !== undefined ? { lifetimeMs: output.lifetimeMs, expiresAtMs: output.expiresAtMs } : {}), snapshot: { ...output.snapshot, adapterId: output.state?.selected ?? output.snapshot?.adapterId }, ...(output.action ? { action: output.action } : {}), ...(output.gateTarget ? { gateTarget: output.gateTarget } : {}), ...(output.validation ? { validation: output.validation } : {}), journalPath: join(directory, 'session.json'),
     sseChecked: output.state?.requirements?.sse === true,
     ...(output.connectionProfile ? { connectionProfile: output.connectionProfile } : {}),
     ...(output.localCleanupFailures ? { localCleanupFailures: output.localCleanupFailures } : {}) };
