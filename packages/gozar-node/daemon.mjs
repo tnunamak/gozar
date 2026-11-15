@@ -179,9 +179,12 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   const gate = operational ? await createGate(config.targetPort, { lifetimeMs: config.lifetimeMs, onExpire: () => { setImmediate(() => initialized.then(() => finalize()).catch(() => {})); } }) : null;
   if(embedding?.fixtureVerifier)probeExecutor=embedding.fixtureVerifier(gate);
   // Until the control socket is published, a failed start must close the gate: its port listener keeps the process alive.
-  const abandon = async error => { await gate?.close().catch(() => {}); throw error; };
+  const abandon = async error => { try { await gate?.close(); } finally { embedding?.close(); } throw error; };
   try {
-    controller = new Controller({ ...config, targetPort: gate?.port ?? config.targetPort, servicePort: config.targetPort, step, journal, onAutomaticStop: () => initialized.then(() => finalize()) });
+    if(config.embedding?.fixtureEffects===true && selectedAdapter?.recipes?.create?.kind==='local-forwarder' && !embedding?.fixtureLocalTransport)
+      throw gozarError('unsupported','Fixture local-forwarder requires an authenticated transport declaration and mapping');
+    controller = new Controller({ ...config, fixtureLocalTransport: embedding?.fixtureLocalTransport ?? null,
+      targetPort: gate?.port ?? config.targetPort, servicePort: config.targetPort, step, journal, onAutomaticStop: () => initialized.then(() => finalize()) });
   } catch (error) { await abandon(error); }
   controller.driver.lifetimeMs = config.lifetimeMs;
   if(embedding?.spawnProcess)controller.driver.spawnProcess=embedding.spawnProcess;
