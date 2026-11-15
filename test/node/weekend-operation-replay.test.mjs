@@ -219,3 +219,42 @@ for(const lateFailure of [false,true])test('pending reference debt dominates ord
  assert.equal(f.ledger.size,0);assert.deepEqual(f.removals,[allocated.handle.id]);
  }finally{replayFinish.resolve();finish.resolve();await settled;if(replaySettled)await replaySettled;}
 });
+
+test('matching supplied reference records actual fixture removal and terminal replay',async t=>{
+ const f=await fixture(t),first=await f.invoke();
+ assert.equal(f.ledger.delete(first.handle.id),true);f.removals.push(first.handle.id);
+ const removed={...first,state:'released',routeState:'released',published:null,ingress:null,cleanup:{state:'confirmed'}};
+ const stopped=await recordOperationView({home:f.home,view:removed,
+  reference:{owner:f.request.owner,operationId:f.request.operationId,handle:first.handle}});
+ const entry=(await readdir(join(f.home,'operations'))).find(name=>name.endsWith('.json'));
+ const journal=JSON.parse(await readFile(join(f.home,'operations',entry),'utf8'));
+ assert.equal(journal.phase,'terminal');assert.deepEqual(journal.view,stopped);
+ assert.deepEqual(await f.invoke({}, {status:async()=>assert.fail('supplied-handle terminal must not probe')}),stopped);
+ assert.equal(f.ledger.size,0);assert.deepEqual(f.removals,[first.handle.id]);
+ assert.equal(f.allocations.length,1);assert.equal(f.publications.length,1);
+});
+
+test('committed durable generation dominates older awaited status', {timeout:10000},async t=>{
+ const f=await fixture(t);
+ const changes={usage:{kind:'durable',routeId:'durable-owned'}};
+ const first=await f.invoke(changes),entered=deferred(),finish=deferred();
+ const replay=f.invoke(changes,{status:async({handle})=>{
+  assert.deepEqual(handle,first.handle);entered.resolve();await finish.promise;return first;
+ }});
+ const settled=replay.then(view=>({view}),error=>({error}));
+ try{
+  await Promise.race([entered.promise,settled.then(()=>assert.fail('status barrier not reached'))]);
+  const restored={...first,handle:{...first.handle,generation:2},
+   origin:'https://restored.invalid',published:'https://restored.invalid',
+   verification:{...first.verification,checkedAt:'2026-11-15T00:00:00.000Z'}};
+  // Trusted library recorder models an already committed restoration. This is
+  // a journal boundary, not a real durable-provider qualification.
+  f.ledger.set(restored.handle.id,structuredClone(restored));
+  await recordOperationView({home:f.home,view:restored,
+   reference:{owner:f.request.owner,operationId:f.request.operationId,handle:restored.handle}});
+  finish.resolve();const result=await settled;assert.equal(result.error,undefined);
+  assert.deepEqual(result.view,restored);
+  assert.equal(f.allocations.length,1);assert.equal(f.publications.length,1);
+  assert.equal(f.removals.length,0);
+ }finally{finish.resolve();await settled;}
+});

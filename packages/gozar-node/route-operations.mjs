@@ -57,16 +57,22 @@ export async function withRouteOperation(request,{registryId,embeddingServices,a
   await atomicWrite(path,value);return structuredClone(value.view);
  },{waitSeconds:30});
  if(!winner){
-  // Status may have begun before Stop persisted debt; re-read after that await.
+  // All replay decisions linearize at a current locked read, including immediate replies.
   // This observer never writes the stale status over the operation journal.
   const observe=async view=>withExclusiveLock(join(dir,'.reservation-lock'),async()=>{
    const current=checkRecord(await readRecord(path));
+   if(current.owner!==record.owner||current.operationId!==record.operationId||current.intentDigest!==record.intentDigest||
+      canonicalDigest(current.intent)!==current.intentDigest||current.view.handle.kind!==record.view.handle.kind||current.view.handle.id!==record.view.handle.id)
+    throw gozarError('operation_conflict','The operation recovery identity changed');
    if(current.referenceCleanup)return pendingReferenceView(current,home);
    if(current.view.cleanup.state==='confirmed')return structuredClone(current.view);
+   if(view&&view.handle?.kind==='durable'&&current.view.handle.kind==='durable'&&view.handle.id===current.view.handle.id&&
+      Number.isSafeInteger(view.handle.generation)&&Number.isSafeInteger(current.view.handle.generation)&&
+      current.view.handle.generation>view.handle.generation)return structuredClone(current.view);
    return view;
   },{waitSeconds:30});
-  if(record.referenceCleanup)return pendingReferenceView(record,home);
-  if(record.view.cleanup.state==='confirmed')return structuredClone(record.view);
+  const immediate=await observe(null);
+  if(immediate)return immediate;
   try{return await observe({...await status({home,handle:record.view.handle}),operationId:request.operationId});}
   catch(error){
    if(error.code==='route_conflict'){const reference=await operationReferenceForRoute({home,handle:record.view.handle});if(reference?.owner===record.owner&&reference.operationId===record.operationId)return observe({...await status({home,handle:reference.handle}),operationId:request.operationId});}
