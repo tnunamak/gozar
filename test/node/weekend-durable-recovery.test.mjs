@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,lstat,writeFile,readFile,readdir,rm} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {createRouteApi} from '../../packages/gozar-node/route-api.mjs';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -65,4 +65,42 @@ test('public durable enumeration refuses malformed record identity without rewri
     }
     f.pass();
   });
+});
+
+test('public durable enumeration refuses malformed JSON with a sanitized error and preserves evidence',async t=>{
+  const f=await scratch(t),dir=join(f.home,'routes'),path=join(dir,hash('recoverable')+'.json');
+  const api=createRouteApi(),valid=JSON.stringify(record());
+  await writeFile(path,valid,{mode:0o600});
+  assert.deepEqual(await api.listRoutes({home:f.home,owner:'other-owner'}),{routes:[]});
+  assert.ok((await readFile(path,'utf8'))===valid,'valid foreign control leaves evidence unchanged');
+
+  // Not a credential: a fresh marker detects accidental parser-message disclosure.
+  const canary='malformed-record-'+randomUUID();
+  const bytes=Buffer.from('{"marker":"'+canary+'","broken":]}','utf8');
+  assert.ok(bytes.length<65536,'exercise syntax refusal, not the size limit');
+  await writeFile(path,bytes,{mode:0o600});
+  const names=(await readdir(dir)).sort(),homeNames=(await readdir(f.home)).sort();
+  for(const owner of ['recovery-test','other-owner',undefined]){
+    let refused;
+    try{await api.listRoutes({home:f.home,...(owner===undefined?{}:{owner})});}
+    catch(error){refused=error;}
+    // Use boolean checks throughout: even a regression must not print raw errors.
+    assert.ok(refused instanceof Error,'malformed JSON must reject, never enumerate empty');
+    assert.ok(refused.code==='internal_error','parse failure uses the exact public code');
+    assert.ok(refused.message==='Unexpected Gozar fault','parse failure uses the exact public message');
+    assert.ok(refused.nextAction===null,'parse failure has no public recovery action');
+    assert.ok(!Object.hasOwn(refused,'cause')&&refused.cause===undefined,'public error strips the raw parser cause');
+    assert.ok(JSON.stringify(Object.keys(refused).sort())===JSON.stringify(['code','nextAction']),
+      'public enumerable diagnostics contain only code and nextAction');
+    let diagnostic;
+    try{diagnostic=JSON.stringify({message:refused.message,cause:refused.cause,diagnostics:{...refused}});}
+    catch{assert.fail('public diagnostics must serialize without exposing the raw fault');}
+    for(const privateText of [canary,bytes.toString('utf8'),path,f.home,'SyntaxError','Unexpected token','JSON.parse']){
+      assert.ok(!diagnostic.includes(privateText),'public diagnostics must not disclose malformed bytes or record details');
+    }
+    assert.ok((await readFile(path)).equals(bytes),'each refusal preserves exact malformed evidence');
+    assert.deepEqual((await readdir(dir)).sort(),names,'each refusal leaves route entries unchanged');
+    assert.deepEqual((await readdir(f.home)).sort(),homeNames,'each refusal leaves recovery entries unchanged');
+  }
+  f.pass();
 });
