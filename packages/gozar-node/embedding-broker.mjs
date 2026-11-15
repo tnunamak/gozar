@@ -11,13 +11,16 @@ export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{}
  home=await canonicalHome(home,true);identity??=await services.resolveIdentity({home});
  const descriptor={socketPath:join(home,`resolver-${randomBytes(6).toString('hex')}.sock`),token:randomBytes(32).toString('hex'),...identity};
  const sockets=new Set();let closed=false,registered=false;
+ let closePromise=null,serverClosed=false,closeComplete=false;
  const admittedBoots=new Set();
  const server=net.createServer(socket=>{
+  if(closed){socket.destroy();return;}
   sockets.add(socket);socket.setEncoding('utf8');let buffer='';let queue=Promise.resolve();
   socket.on('error',()=>{});socket.on('close',()=>{sockets.delete(socket);if(!closed)onLoss(embeddingError('secret_backend_unavailable'));});
   socket.on('data',chunk=>{
    buffer+=chunk;if(buffer.length>1024*1024){socket.destroy();return;}
    let cut;while((cut=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,cut);buffer=buffer.slice(cut+1);queue=queue.then(async()=>{
+    if(closed){socket.destroy();return;}
     let request;try{request=JSON.parse(line);}catch{socket.destroy();return;}
     if(!same(request.token,descriptor.token)||request.bootId!==identity.bootId||request.instanceId!==identity.instanceId||!allowed.has(request.method)){socket.end(JSON.stringify({id:request.id,error:'secret_backend_unavailable'})+'\n');return;}
     try{if(request.method==='dispatchEffect'&&!dispatchEffect)throw embeddingError('unsupported');
@@ -43,7 +46,28 @@ export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{}
    for(const socket of sockets)socket.destroy();
    identity={...nextIdentity};Object.assign(descriptor,identity,{token:randomBytes(32).toString('hex')});
    onLoss(embeddingError('secret_backend_unavailable'));return {...descriptor};
-  },async close(){if(closed)return;closed=true;for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));await unlink(descriptor.socketPath).catch(e=>{if(e.code!=='ENOENT')throw e;});onLoss(embeddingError('secret_backend_unavailable'));}};
+  },
+  // Shutdown-started is not cleanup proof. Registration and queued RPC stay fenced.
+  // Fulfillment means tracked sockets destroyed, server closed, socket unlinked
+  // (ENOENT is already absent), and onLoss returned. Rejection preserves unfinished
+  // finalization for retry; concurrent calls share one promise, never false success.
+  // If onLoss throws, a retry invokes it again. Never recursively delete replacements.
+  close(){
+   if(closeComplete)return closePromise;
+   if(closePromise)return closePromise;
+   closed=true;
+   closePromise=(async()=>{
+    for(const socket of sockets)socket.destroy();
+    if(!serverClosed){
+     await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+     serverClosed=true;
+    }
+    await unlink(descriptor.socketPath).catch(error=>{if(error.code!=='ENOENT')throw error;});
+    onLoss(embeddingError('secret_backend_unavailable'));
+    closeComplete=true;
+   })().catch(error=>{closePromise=null;throw error;});
+   return closePromise;
+  }};
 }
 export async function connectEmbeddingBroker({descriptor,identity,onLoss=()=>{}}){
  if(!identity||identity.bootId!==descriptor.bootId||identity.instanceId!==descriptor.instanceId)throw embeddingError('secret_backend_unavailable');
