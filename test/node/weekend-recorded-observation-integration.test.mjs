@@ -103,15 +103,45 @@ async function controls(home,owner,deps,handle){
 test('generic session cached enumeration preserves real admitted proof and closes only its listener',async()=>{
  await fixture(async f=>{
   const id='observation-'+randomUUID();
-  const registry=await fakeRegistry({id,dir:join(f.home,'registry'),kinds:['session'],reach:'this-device',transport:'tcp',proofProtocol:'echo'});
+  // The generated detect's attached-capable branch needs no external probe.
+  // Declared capability establishes readiness; requested usage remains session.
+  const registry=await fakeRegistry({id,dir:join(f.home,'registry'),kinds:['attached','session'],reach:'this-device',transport:'tcp',proofProtocol:'echo'});
   f.setRegistry(registry);
+  const definition=JSON.parse(await readFile(join(registry.root,'providers',id,'definition.json'),'utf8')).adapter;
+  assert.equal(definition.id,id);
+  assert.deepEqual(definition.supportedKinds,['attached','session']);
   const api=createGozar({manifest:registry.manifest,root:registry.root});f.setApi(api);
   const q=request(f.home,f.target,'generic-owner',id,'this-device','tcp');
-  const candidate=(await api.catalogRoutes(q)).candidates.find(row=>row.eligible);
-  assert.ok(candidate,'known-valid generic fixture must be eligible');
+  assert.deepEqual(q.usage,{kind:'session',lifetimeMs:60000});
+  const catalog=await api.catalogRoutes(q);
+  // Whitelist diagnostics: never serialize a candidate, token, consent or actual value.
+  const safeWord=(value,allowed)=>allowed.includes(value)?value:'other';
+  const diagnostic=JSON.stringify(catalog.candidates.map(row=>({
+   requestedProvider:row.providerId===id,eligible:row.eligible===true,
+   state:safeWord(row.setup?.state,['ready','unknown','unsupported','action-required','detect-only']),
+   unmet:(row.unmet??[]).map(item=>({
+    requirement:safeWord(item.requirement,['usage','reach','transport','payloadAccess','address','protocols','setup','platform']),
+    reason:safeWord(item.reasonCode,['not_met','unknown','unsupported_platform']),
+   })),
+  })));
+  assert.equal(catalog.candidates.length,1,diagnostic);
+  const candidate=catalog.candidates.find(row=>row.providerId===id);
+  assert.ok(candidate,'exact generic fixture candidate missing: '+diagnostic);
+  assert.equal(candidate.setup.state,'ready',diagnostic);
+  assert.equal(candidate.eligible,true,diagnostic);
+  assert.equal(candidate.unmet.length,0,diagnostic);
   const route=await f.expose({...q,wait:'verified',approval:approval(candidate)});
   assert.equal(route.handle.kind,'session');
+  assert.match(route.handle.id,/^port-[0-9]+:[A-Za-z0-9_-]+$/);
+  assert.equal(route.handle.generation,1);
+  const bootstrap=JSON.parse(await readFile(join(f.home,route.handle.id.split(':')[0],'bootstrap.json'),'utf8'));
+  assert.equal(bootstrap.execution,'generic-session-v1');
+  assert.deepEqual(bootstrap.handle,route.handle);
+  assert.equal(bootstrap.id,route.handle.id);
+  assert.equal(bootstrap.adapterId,id);
+  assert.deepEqual(bootstrap.request.usage,q.usage);
   const status=await api.routeStatus({home:f.home,handle:route.handle});
+  assert.deepEqual(status.handle,route.handle);
   assert.equal(status.verification.status,'verified');
   const deps={adapters:await loadAdapters(registry),registryId:candidate.consent.scope.registryId};
   const events=async()=> (await readFile(join(registry.root,'providers',id,'events.jsonl'),'utf8')).trim().split('\n')
