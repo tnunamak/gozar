@@ -235,7 +235,7 @@ const runtimeUrl = pathToFileURL(fileURLToPath(new URL('./adapter-runtime.mjs', 
  * `protocols` uses the Query's words ('sse', 'streamable-http', 'oauth-dcr'); a fake carries all three unless a test narrows it,
  * so an app's protocol requirements do not make its own fake ineligible.
  */
-export async function fakeRegistry({ id, label, kinds, reach, transport = 'https', protocols = PROTOCOLS, dir, facts = [], setupActions = [], proofProtocol = 'http' } = {}) {
+export async function fakeRegistry({ id, label, kinds, reach, transport = 'https', protocols = PROTOCOLS, dir, facts = [], setupActions = [], effectOperations = [], proofProtocol = 'http' } = {}) {
   if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) throw gozarError('invalid_input', 'fakeRegistry needs an id of lowercase letters, digits and hyphens');
   // An attached fake would make expose start a real controller process, so only session and durable fakes exist.
   if (!Array.isArray(kinds) || !kinds.length || kinds.some(kind => !KINDS.includes(kind))) throw gozarError('invalid_input', `fakeRegistry kinds must be a non-empty list of ${KINDS.join(' and ')}: only session and durable fakes are supported`);
@@ -248,6 +248,7 @@ export async function fakeRegistry({ id, label, kinds, reach, transport = 'https
   await mkdir(folder, { recursive: true });
   const definition = {
     schemaVersion: 1, id, label: label ?? `Fake ${id}`, needs: 'Needs nothing: this is a test fake.',
+    ...(effectOperations.length ? {effectOperations: structuredClone(effectOperations)} : {}),
     capabilities: {
       reach, transport,
       traffic: { tlsTermination: transport === 'https' ? 'provider' : 'unknown', providerCanReadPayload: ['tcp','tls'].includes(transport) ? null : false, readers: [], metadataVisibleTo: [], evidenceRef: 'testing' },
