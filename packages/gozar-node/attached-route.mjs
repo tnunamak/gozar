@@ -352,18 +352,68 @@ export async function attachedStatus(request, deps = {}) {
   }
 }
 
+// Pure retained observations need neither a provider runtime nor new effect authority.
+export async function retainedCloseObservation(request) {
+  const handle=checkRef(request);
+  if(!['attached','session'].includes(handle.kind))return null;
+  if(handle.kind==='session'&&!await genericSessionRecord(request))return null;
+  let directory,state,bootstrap;
+  try{
+    directory=await routeDirectory(request.home,handle);
+    state=await viewFromRecord(directory,handle);
+    bootstrap=await readJson(join(directory,'bootstrap.json'));
+  }catch(error){if(error.code==='route_not_found')return null;throw error;}
+  if(request.owner!==undefined&&bootstrap?.owner!==undefined&&request.owner!==bootstrap.owner)
+    throw gozarError('route_conflict','Retained route belongs to another owner');
+  const evidence=state.startupCompensation,scope=evidence?.scope;
+  if(state.lastView?.cleanup.state==='confirmed'&&evidence?.providerAbsent===true&&evidence.controllerAbsent===true&&
+      evidence.referenceReleased===true&&evidence.brokerClosed===true&&scope?.handle?.kind===handle.kind&&
+      scope.handle.id===handle.id&&scope.handle.generation===handle.generation&&scope.home===await canonicalHome(request.home)&&
+      scope.owner===bootstrap?.owner&&scope.providerId===bootstrap?.adapterId&&scope.registryId===bootstrap?.registryId)
+    return releasedView(state.lastView,handle);
+  if(state.phase==='failed'&&(!bootstrap?.home||!bootstrap?.registryId||!state.request||!state.plan||
+      !state.receipt?.adapterId||!state.receipt?.resourceKey||!Number.isSafeInteger(state.receipt?.generation)))
+    return recoveryHistory(state.lastView,'Recorded startup scope or receipt is incomplete; retain the exact handle');
+  return null;
+}
+
+// A factory may recover an omitted public owner only from a complete exact record.
+// This lookup grants no provider effects; the caller still owns registry/adapters.
+export async function recordedRecoveryScope(request, registryId) {
+  const handle=checkRef(request);
+  if(!['attached','session'].includes(handle.kind))return null;
+  if(handle.kind==='session'&&!await genericSessionRecord(request))return null;
+  const home=await canonicalHome(request.home),directory=await routeDirectory(home,handle);
+  const state=await viewFromRecord(directory,handle),bootstrap=await readJson(join(directory,'bootstrap.json'));
+  if(request.owner!==undefined&&bootstrap?.owner!==undefined&&request.owner!==bootstrap.owner)
+    throw gozarError('route_conflict','Retained route belongs to another owner');
+  const identity=handle.kind==='session'
+    ? bootstrap?.execution==='generic-session-v1'&&bootstrap.handle?.kind===handle.kind&&bootstrap.handle.id===handle.id&&bootstrap.handle.generation===handle.generation
+    : bootstrap?.id===handle.id;
+  if(!identity||bootstrap.home!==home||typeof bootstrap.owner!=='string'||!bootstrap.owner||
+      typeof registryId!=='string'||!registryId||bootstrap.registryId!==registryId||
+      typeof bootstrap.adapterId!=='string'||!bootstrap.adapterId||bootstrap.adapterId!==state.adapterId||
+      !state.request||!state.plan||JSON.stringify(state.request)!==JSON.stringify(bootstrap.request)||
+      JSON.stringify(state.plan)!==JSON.stringify(bootstrap.plan))return null;
+  return {home,owner:bootstrap.owner};
+}
+
 /** Ends the lease now: the controller removes the route and answers with the released view. */
 export async function closeAttachedRoute(request, deps = {}) {
   const handle = checkRef(request);
   const directory = await routeDirectory(request.home, handle);
+  const recorded=await readJson(join(directory,'bootstrap.json'));
+  if(request.owner!==undefined&&recorded?.owner!==undefined&&request.owner!==recorded.owner)
+    throw gozarError('route_conflict','Retained route belongs to another owner');
   dropLease(handle.id);
   try { const result=(await controlAttached(directory, { type: 'close', generation: handle.generation, handleId:handle.id }, 120_000)).view;if(result.cleanup.state==='confirmed')await dropBroker(handle.id);return result; }
   catch (error) {
     if (!error.gone) throw error;
     const state = await viewFromRecord(directory, handle);
     const savedScope=await readJson(join(directory,'bootstrap.json'));
-    if(savedScope?.owner!==request.owner||savedScope?.registryId!==deps.registryId||savedScope?.home!==await canonicalHome(request.home))
-      throw gozarError('route_conflict','Retained route belongs to another recovery scope');
+    // Missing metadata is historical uncertainty, not foreign ownership or removal authority.
+    if(request.owner===undefined&&typeof savedScope?.owner==='string'&&deps.owner===savedScope.owner)
+      request={...request,owner:savedScope.owner};
     if(state.startupCompensation&&state.lastView?.cleanup.state!=='confirmed'){
       const evidence=state.startupCompensation,scope=evidence.scope,bootstrap=await readJson(join(directory,'bootstrap.json'));
       const matches=scope&&scope.handle?.kind===handle.kind&&scope.handle.id===handle.id&&scope.handle.generation===handle.generation&&
@@ -384,9 +434,17 @@ export async function closeAttachedRoute(request, deps = {}) {
       const state=await viewFromRecord(directory,handle);
       const bootstrap=await readJson(join(directory,'bootstrap.json'));
       const home=await canonicalHome(request.home);
-      const matches=bootstrap&&bootstrap.home===home&&bootstrap.owner===request.owner&&
+      const complete=bootstrap&&typeof bootstrap.home==='string'&&typeof bootstrap.owner==='string'&&bootstrap.owner&&
+        typeof bootstrap.registryId==='string'&&bootstrap.registryId&&state.request&&state.plan&&
+        state.receipt&&typeof state.receipt.adapterId==='string'&&typeof state.receipt.resourceKey==='string'&&Number.isSafeInteger(state.receipt.generation);
+      if(!complete)return recoveryHistory(state.lastView,'Recorded startup scope or receipt is incomplete; retain the exact handle');
+      if(request.owner===undefined||deps.registryId===undefined)return recoveryHistory(state.lastView,'No trusted recovery context is available; retain the exact handle');
+      const identity=handle.kind==='session'
+        ? bootstrap.execution==='generic-session-v1'&&bootstrap.handle?.kind===handle.kind&&bootstrap.handle.id===handle.id&&bootstrap.handle.generation===handle.generation
+        : bootstrap.id===handle.id;
+      const matches=identity&&bootstrap.home===home&&bootstrap.owner===request.owner&&
         bootstrap.registryId===deps.registryId&&bootstrap.adapterId===state.adapterId&&
-        bootstrap.id===handle.id&&JSON.stringify(state.request)===JSON.stringify(bootstrap.request)&&
+        JSON.stringify(state.request)===JSON.stringify(bootstrap.request)&&
         JSON.stringify(state.plan)===JSON.stringify(bootstrap.plan)&&state.receipt&&
         state.receipt.adapterId===state.adapterId&&state.receipt.resourceKey===state.plan?.resourceKey&&
         state.receipt.generation===handle.generation&&

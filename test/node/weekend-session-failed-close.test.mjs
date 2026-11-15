@@ -9,6 +9,7 @@ import {once} from 'node:events';
 import {createHash} from 'node:crypto';
 const repositoryRoot = new URL('../../', import.meta.url);
 const {closeAttachedRoute} = await import(new URL('packages/gozar-node/attached-route.mjs', repositoryRoot));
+const {createRouteApi} = await import(new URL('packages/gozar-node/route-api.mjs', repositoryRoot));
 const {startingRoute, listRecordedRoutes} = await import(new URL('packages/gozar-node/route-operations.mjs', repositoryRoot));
 const {recordController, stopController} = await import(new URL('packages/gozar-node/controller-start.mjs', repositoryRoot));
 
@@ -67,13 +68,22 @@ for (const receipt of [null, {generation: 1, resourceKey: 'synthetic-owned'}]) {
       assert.equal(listed.routes[0].operationId,'failed-operation');
       let runtimeReads=0;
       const deps = {get adapters(){runtimeReads++;throw new Error('transient runtime must not be loaded');}};
-      for (let i=0;i<2;i++) {
-        const view=await closeAttachedRoute({home,handle},deps);
+      await assert.rejects(closeAttachedRoute({home,handle,owner:'foreign-owner'},deps),{code:'route_conflict'});
+      for (const owner of [undefined,'synthetic-owner',undefined]) {
+        const view=await closeAttachedRoute({home,handle,...(owner===undefined?{}:{owner})},deps);
         assert.deepEqual(view.handle,handle);
         assert.equal(view.cleanup.state,'unconfirmed');
         assert.ok(view.cleanup.nextAction);
         assert.equal(view.published,null);
         assert.equal(view.operationId,'failed-operation');
+      }
+      const publicApi=createRouteApi(deps);
+      await assert.rejects(publicApi.closeRoute({home,handle,owner:'foreign-owner',mode:'remove'}),{code:'route_conflict'});
+      for(let i=0;i<2;i++){
+        const view=await publicApi.closeRoute({home,handle,mode:'remove'});
+        assert.deepEqual(view.handle,handle);
+        assert.equal(view.cleanup.state,'unconfirmed');assert.ok(view.cleanup.nextAction);
+        assert.equal(view.published,null);assert.equal(view.operationId,'failed-operation');
       }
       assert.equal(runtimeReads,0);
     } finally {await rm(home,{recursive:true,force:true});}

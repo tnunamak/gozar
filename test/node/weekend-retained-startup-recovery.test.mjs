@@ -74,7 +74,8 @@ test('retained startup recovery checkpoints physical removal before fallible ref
   const draft=await api.beginConfigurationDraft({home,owner:q.owner,providerId:state.adapterId,expectedConfigurationRevision:current.configuration.revision});
   const commit=()=>api.commitConfigurationDraft({home,owner:q.owner,providerId:state.adapterId,draftId:draft.draftId,expectedConfigurationRevision:draft.configuration.revision});
   await assert.rejects(commit(),{code:'configuration_in_use'});
-  const close={home,owner:q.owner,handle,mode:'remove'};
+  // Public close owner is optional; factory must bind only the persisted scope.
+  const close={home,handle,mode:'remove'};
   await assert.rejects(api.closeRoute({...close,handle:{...handle,generation:handle.generation+1}}));
   await assert.rejects(api.closeRoute({...close,owner:'foreign-owner'}));
   assert.equal(fixture.observations().physicalRemovals,0);

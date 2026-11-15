@@ -152,7 +152,12 @@ for(const fault of ['writeBootstrap','spawnController','recordController','refer
   }
   const after=await events(ledger);
   assert.equal(after.filter(e=>e.event==='start').length-before.filter(e=>e.event==='start').length,fault==='recordController'?1:0);
+  await assert.rejects(createGozar(deps).closeRoute({home,owner:'foreign-owner',handle:retained.handle,mode:'remove'}),{code:'route_conflict'});
+  assert.deepEqual(await events(ledger),after);
   const repeated=await createGozar(deps).closeRoute({home,handle:retained.handle,mode:'remove'});assert.equal(repeated.cleanup.state,'confirmed');
+  const historyOnly=createRouteApi({get adapters(){throw new Error('terminal history must not load runtime');}});
+  assert.equal((await historyOnly.closeRoute({home,handle:retained.handle,mode:'remove'})).cleanup.state,'confirmed');
+  assert.deepEqual(await events(ledger),after);
   assert.deepEqual(await events(ledger),after);
   await normal.closeRoute({home,handle:foreign.handle,mode:'remove'});await oracle(normal,base,false);
   // Broker sockets, not merely bookkeeping, must no longer accept connections.
