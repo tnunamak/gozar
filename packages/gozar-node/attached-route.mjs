@@ -1,3 +1,4 @@
+import {startingRoute} from './route-operations.mjs';
 import {sessionRecipeFor, validateSessionRecipe} from './adapter-runtime.mjs';
 // Attached routes: one provider runtime held by a Gozar controller process, for as long as the process that
 // asked for it holds the lease.
@@ -70,6 +71,8 @@ export async function preflightExpose(request, deps = {}) {
       throw gozarError('unsupported', 'This usage is not admitted for execution in this release');
   }
   checkExpose(request, request.usage.kind);
+  if(deps.registryId&&deps.registry&&await registryIdentity(deps.registry)!==deps.registryId)
+    throw gozarError('artifact_integrity_failed','The approved registry content changed before reservation');
 }
 
 async function adaptersOf(deps) {
@@ -153,7 +156,7 @@ function holdLease(directory, id, heartbeatMs) {
   leases.set(id, timer); beat();
 }
 function dropLease(id) { clearInterval(leases.get(id)); leases.delete(id); }
-async function dropBroker(id){const broker=brokers.get(id);brokers.delete(id);await broker?.close();}
+async function dropBroker(id){const broker=brokers.get(id);await broker?.close();if(brokers.get(id)===broker)brokers.delete(id);}
 
 async function attachedRoot(home, create = true) {
   const directory = join(home, 'attached');
@@ -201,8 +204,11 @@ export async function openAttachedRoute(request, deps = {}) {
     const directory = session?.directory ?? join(root, id);
     const handle = session?.handle ?? {kind:'attached',id,generation:1};
     // Redeem, re-observe and start the controller under one reservation, so two opens cannot both win one resource.
-    const controller = await withExclusiveLock(join(root, '.open.lock'), async () => {
+    const startup={acquired:false,child:null,record:null,bootstrap:null,registered:false,redeemed:null};
+    let controller;
+    try{controller = await withExclusiveLock(join(root, '.open.lock'), async () => {
       const redeemed = session?.redeemed ?? await redeemApproval(request, { ...deps, adapters });
+      startup.redeemed=redeemed;
       await trustedDirectory(directory, true);
       await privateDirectory(directory);
       if (session) {
@@ -214,28 +220,39 @@ export async function openAttachedRoute(request, deps = {}) {
           for(const name of ['state.json','failure.json','control.json'])await unlink(join(directory,name)).catch(error=>{if(error.code!=='ENOENT')throw error;});
         }
       }
+      startup.acquired=true;
+      startup.bootstrap={schemaVersion:1,id,home:redeemed.home,owner:request.owner,adapterId:redeemed.adapter.id,
+        registryId:deps.registryId,operationId:request.operationId??null,request:redeemed.request,plan:redeemed.plan,
+        ...(session?{execution:'generic-session-v1',handle,expiresAtMs:session.expiresAtMs}:{})};
       let broker,identity;
       if(deps.embeddingServices){
         const hostIdentity=await deps.embeddingServices.resolveIdentity({home:redeemed.home});
         broker=await startEmbeddingBroker({services:deps.embeddingServices,home:redeemed.home,identity:hostIdentity,
           dispatchEffect:deps.dispatchEffect,onLoss:()=>{if(brokers.has(id))void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
+        brokers.set(id,broker);
         const descriptor=await broker.registerController({identity:hostIdentity});
         identity={instanceId:descriptor.instanceId,bootId:descriptor.bootId};
-        brokers.set(id,broker);
+        startup.registered=true;
         try{await deps.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle});}
         catch(error){await dropBroker(id);throw error;}
       }
-      await atomicWrite(join(directory, 'bootstrap.json'), { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
+      startup.bootstrap={ schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
         operationId:request.operationId??null,
         ...(session ? {execution:'generic-session-v1',handle,expiresAtMs:session.expiresAtMs} : {}),
         ...(broker?{resolver:broker.descriptor,identity,registryId:deps.registryId,owner:request.owner,consentReview:redeemed.consentReview,fixtureEffects:!!deps.dispatchEffect}:{}),
-        ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) });
-      const child = spawn(process.execPath, [here, '--controller', directory], { detached: true, stdio: 'ignore',
+        ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) };
+      await (deps.startup?.writeBootstrap??atomicWrite)(join(directory,'bootstrap.json'),startup.bootstrap);
+      const child = (deps.startup?.spawnController??spawn)(process.execPath, [here, '--controller', directory], { detached: true, stdio: 'ignore',
         env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
+      startup.child=child;
+      startup.record={pid:child.pid,startIdentity:null,child};
       child.unref();
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-      return await recordController(child);
-    }, { waitSeconds: 30 });
+      startup.record.pid=child.pid;
+      startup.record=await (deps.startup?.recordController??recordController)(child,{directory});
+      return startup.record;
+    }, { waitSeconds: 30 });}
+    catch(error){throw await compensateAttachedStartup({error,startup,directory,handle,request,deps});}
     if (!session) holdLease(directory, id, deps.heartbeatMs ?? HEARTBEAT_MS);
     const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
     try {
@@ -257,23 +274,48 @@ export async function openAttachedRoute(request, deps = {}) {
         await new Promise(resolve => setTimeout(resolve, 150));
       }
     } catch (error) {
-      dropLease(id);
-      const cleanup=await controlAttached(directory, { type: 'close', generation:handle.generation, handleId:handle.id }, 60_000).catch(() => null);
-      if (cleanup?.view) error.route=cleanup.view;
-      if(cleanup?.view?.cleanup.state==='unconfirmed'){
-        error.route=cleanup.view;
-        throw error;
-      }
-      const recorded=await readJson(join(directory,'state.json'));
-      if (!cleanup && recorded?.handle?.id===handle.id && recorded.handle.generation===handle.generation) error.route=recorded.lastView;
-      if(!cleanup&&recorded?.lastView?.cleanup.state==='unconfirmed'){
-        error.route=recorded.lastView;
-        throw error;
-      }
-      const stopped=await stopController(controller);await dropBroker(id);
-      throw withCleanupOutcome(error, stopped);
+      throw await compensateAttachedStartup({error,startup,directory,handle,request,deps});
     }
   } catch (error) { throw normalizeError(error); }
+}
+
+
+/** Compensation uses acquired milestones; a missing control file is never absence evidence. */
+async function compensateAttachedStartup({error,startup,directory,handle,request,deps}){
+  if(!startup.acquired)return error;
+  dropLease(handle.id);
+  const spawned=Number.isInteger(startup.child?.pid);
+  let reply=null,recorded=null;
+  if(spawned)reply=await controlAttached(directory,{type:'close',generation:handle.generation,handleId:handle.id},60000).catch(()=>null);
+  try{recorded=await readJson(join(directory,'state.json'));}catch{}
+  const exact=recorded?.handle?.id===handle.id&&recorded.handle.kind===handle.kind&&recorded.handle.generation===handle.generation;
+  const providerAbsent=!spawned||(reply?.view?.handle?.id===handle.id&&reply.view.handle.kind===handle.kind&&reply.view.handle.generation===handle.generation&&reply.view.cleanup?.state==='confirmed')||(exact&&recorded.lastView?.cleanup?.state==='confirmed');
+  const stopped=spawned?await stopController(startup.record):{state:'gone'};
+  const controllerAbsent=['gone','stopped','killed'].includes(stopped.state);
+  let referenceReleased=!startup.registered,brokerClosed=false,persisted=true;
+  try{await dropBroker(handle.id);brokerClosed=true;}catch{}
+  const scope=startup.redeemed?{registryId:deps.registryId,home:startup.redeemed.home,owner:request.owner,providerId:startup.redeemed.adapter.id,handle}:null;
+  if(providerAbsent&&controllerAbsent&&brokerClosed&&startup.registered){
+    try{await releaseRecordedConfigurationUse(scope,deps);referenceReleased=true;}catch{}
+  }
+  const base={...(exact?recorded.lastView:startingRoute(handle,request.target,request.operationId??null)),operationId:request.operationId??null};
+  const debt=()=>({...base,state:'uncertain',routeState:'cleanup-unconfirmed',published:null,ingress:null,
+    verification:{...base.verification,status:'unverified'},cleanup:{state:'unconfirmed',
+      nextAction:instructionAction('retry-startup-cleanup','Retry startup cleanup','Retain this exact handle and retry closeRoute; do not start a replacement.')}});
+  let view=providerAbsent&&controllerAbsent&&referenceReleased&&brokerClosed?{...releasedView(base,handle),operationId:base.operationId}:debt();
+  try{
+    if(startup.bootstrap)await atomicWrite(join(directory,'bootstrap.json'),startup.bootstrap);
+    if(startup.redeemed)await atomicWrite(join(directory,'state.json'),{...(exact?recorded:{}),schemaVersion:1,handle,
+      adapterId:startup.redeemed.adapter.id,request:startup.redeemed.request,plan:startup.redeemed.plan,
+      phase:view.cleanup.state==='confirmed'?'released':'recovery',lastView:view,
+      startupCompensation:{scope,providerAbsent,controllerAbsent,referenceReleased,brokerClosed,
+        controller:startup.record?{pid:startup.record.pid,startIdentity:startup.record.startIdentity}:null}});
+  }catch{persisted=false;view=debt();}
+  const result=view.cleanup.state==='confirmed'?withCleanupOutcome(error,stopped):
+    gozarError('cleanup_debt','Startup compensation remains unconfirmed',view.cleanup.nextAction,error);
+  result.route=view;result.controllerCleanup=stopped;
+  if(!persisted)result.route=debt();
+  return result;
 }
 
 async function viewFromRecord(directory, handle) {
@@ -305,6 +347,21 @@ export async function closeAttachedRoute(request, deps = {}) {
   catch (error) {
     if (!error.gone) throw error;
     const state = await viewFromRecord(directory, handle);
+    if(state.startupCompensation&&state.lastView?.cleanup.state!=='confirmed'){
+      const evidence=state.startupCompensation,scope=evidence.scope,bootstrap=await readJson(join(directory,'bootstrap.json'));
+      const matches=scope&&scope.handle?.kind===handle.kind&&scope.handle.id===handle.id&&scope.handle.generation===handle.generation&&
+        scope.home===await canonicalHome(request.home)&&scope.owner===bootstrap?.owner&&scope.providerId===bootstrap?.adapterId&&scope.registryId===bootstrap?.registryId;
+      if(!matches||!evidence.providerAbsent||!evidence.controllerAbsent)return recoveryHistory(state.lastView,'Startup resource absence is not confirmed; retain the exact handle.');
+      try{
+        await dropBroker(handle.id);await releaseRecordedConfigurationUse(scope,deps);
+        state.lastView={...releasedView(state.lastView,handle),operationId:state.lastView.operationId??null};state.phase='released';
+        state.startupCompensation={...evidence,referenceReleased:true,brokerClosed:true};
+        await atomicWrite(join(directory,'state.json'),state);return state.lastView;
+      }catch(cause){
+        const failure=gozarError('cleanup_debt','Startup reference cleanup remains unconfirmed',state.lastView.cleanup.nextAction,cause);
+        failure.route=state.lastView;throw failure;
+      }
+    }
     if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') return releasedView(state.lastView, handle);
     // Without an owned receipt or recovery effects, retain debt without loading transient runtime.
     if (!state.receipt || !deps.effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
