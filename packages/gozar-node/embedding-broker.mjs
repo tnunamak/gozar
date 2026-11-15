@@ -49,9 +49,10 @@ export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{}
   },
   // Shutdown-started is not cleanup proof. Registration and queued RPC stay fenced.
   // Fulfillment means tracked sockets destroyed, server closed, socket unlinked
-  // (ENOENT is already absent), and onLoss returned. Rejection preserves unfinished
+  // (ENOENT is already absent), and onLoss settled successfully. Rejection preserves unfinished
   // finalization for retry; concurrent calls share one promise, never false success.
-  // If onLoss throws, a retry invokes it again. Never recursively delete replacements.
+  // If onLoss throws or rejects, a retry invokes it again. Never recursively delete replacements.
+  // This is not a drain of already-executing service work.
   close(){
    if(closeComplete)return closePromise;
    if(closePromise)return closePromise;
@@ -63,7 +64,7 @@ export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{}
      serverClosed=true;
     }
     await unlink(descriptor.socketPath).catch(error=>{if(error.code!=='ENOENT')throw error;});
-    onLoss(embeddingError('secret_backend_unavailable'));
+    await onLoss(embeddingError('secret_backend_unavailable'));
     closeComplete=true;
    })().catch(error=>{closePromise=null;throw error;});
    return closePromise;

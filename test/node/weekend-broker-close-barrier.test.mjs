@@ -79,3 +79,78 @@ test('failed owned-socket finalization stays rejected until obstruction is remov
   if(!broker||closed)await rm(home,{recursive:true,force:true});
  }
 });
+
+test('async close notification rejection remains retryable after transport shutdown',async()=>{
+ const home=await mkdtemp(join(process.env.DOT_BRIDGE_TEST_TMP??tmpdir(),'broker-async-'));
+ const root=await lstat(home);
+ const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
+ const notices=[deferred(),deferred()],entered=[deferred(),deferred()];
+ const failure=new Error('test-owned final notification rejected');
+ let broker,client,calls=0,closed=false,started=false,primary;
+ const cleanup=[];
+ try{
+  started=true;
+  broker=await startEmbeddingBroker({services:{},home,identity,onLoss:async()=>{
+   const index=calls++;
+   if(index>=notices.length)throw new Error('unexpected duplicate notification');
+   entered[index].resolve();
+   await notices[index].promise;
+  }});
+  client=await connectEmbeddingBroker({descriptor:broker.descriptor,identity});
+  await assert.rejects(client.dispatchEffect({}),{code:'unsupported'});
+  let firstState='pending';
+  const first=broker.close();
+  // Observe rejection immediately, before either deferred callback can reject.
+  const observed=first.then(()=>{firstState='fulfilled';return null;},error=>{firstState='rejected';return error;});
+  assert.strictEqual(broker.close(),first);
+  await bounded(entered[0].promise);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(firstState,'pending','notification settlement is part of fulfilled close');
+  await assert.rejects(lstat(broker.descriptor.socketPath),{code:'ENOENT'});
+  await refusesConnection(broker.descriptor.socketPath);
+  await assert.rejects(bounded(client.dispatchEffect({})),{code:'secret_backend_unavailable'});
+  await assert.rejects(broker.registerController(),{code:'secret_backend_unavailable'});
+  assert.equal(calls,1);
+  notices[0].reject(failure);
+  assert.strictEqual(await bounded(observed),failure,'exact async notification error rejects close');
+  assert.equal(firstState,'rejected');
+
+  let retryState='pending';
+  const retry=broker.close();
+  const retried=retry.then(()=>{retryState='fulfilled';return null;},error=>{retryState='rejected';return error;});
+  assert.notStrictEqual(retry,first,'rejection cannot mark close complete');
+  assert.strictEqual(broker.close(),retry,'retry shares its unfinished finalizer');
+  await bounded(entered[1].promise);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(retryState,'pending');
+  assert.equal(calls,2);
+  await assert.rejects(lstat(broker.descriptor.socketPath),{code:'ENOENT'});
+  await refusesConnection(broker.descriptor.socketPath);
+  await assert.rejects(bounded(client.dispatchEffect({})),{code:'secret_backend_unavailable'});
+  notices[1].resolve();
+  assert.strictEqual(await bounded(retried),null);
+  closed=true;
+  assert.strictEqual(broker.close(),retry);
+  await bounded(broker.close());
+  assert.equal(calls,2,'successful finalization is not repeated');
+ }catch(error){primary=error;}
+ finally{
+  // Unblock owned notifications even if an assertion failed before normal settlement.
+  for(const notice of notices)notice.resolve();
+  try{client?.close();}catch(error){cleanup.push(error);}
+  if(broker){
+   try{await bounded(broker.close());closed=true;}catch(error){cleanup.push(error);}
+   try{await assert.rejects(lstat(broker.descriptor.socketPath),{code:'ENOENT'});}catch(error){closed=false;cleanup.push(error);}
+   try{await refusesConnection(broker.descriptor.socketPath);}catch(error){closed=false;cleanup.push(error);}
+  }
+  if(started&&!broker)cleanup.push(new Error('broker startup ownership uncertain; private root retained'));
+  if(!started||closed){
+   try{
+    const now=await lstat(home);
+    assert.ok(now.isDirectory()&&!now.isSymbolicLink()&&now.dev===root.dev&&now.ino===root.ino,'private root identity changed');
+    await rm(home,{recursive:true,force:true});
+   }catch(error){cleanup.push(error);}
+  }
+ }
+ if(primary||cleanup.length)throw new AggregateError([...(primary?[primary]:[]),...cleanup],'async broker close regression or cleanup failed');
+});
