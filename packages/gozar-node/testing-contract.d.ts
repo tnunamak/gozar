@@ -1,4 +1,24 @@
 import type {GozarOptions,createGozar} from './route-contract.js';
+/** Internal prerequisite only, NOT connected to the public testing factory.
+ * Driver owns listener create/read/remove and durable receipts. Loopback is never LAN proof.
+ */
+export interface FixtureLocalTransportInput {
+  sessionId:string; generation:number; selectedAddress:string;
+  targetHost:'127.0.0.1'; targetPort:number; nowMs:number;
+}
+export interface FixtureLocalTransportAuthority extends FixtureLocalTransportInput {
+  fixture:true; authorityRef:string; firewallApproved:true;
+  observedAtMs:number; expiresAtMs:number;
+  interfaces:Record<string,{address:string;internal:boolean}[]>;
+}
+export interface FixtureLocalTransportPort {
+  kind:'local-forwarder'; operation:'authorize';
+  handle(input:FixtureLocalTransportInput,context:{fixture:true}):Promise<FixtureLocalTransportAuthority>;
+}
+export interface FixtureLocalTransportResult {
+  resourceId:string; origin:string; port:number;
+  syntheticTransport:{fixture:true;bindAddress:'127.0.0.1';port:number};
+}
 export type JsonValue=null|boolean|number|string|JsonValue[]|{[key:string]:JsonValue};
 export interface TestingEffectContext {signal:AbortSignal;fixture:true}
 export interface TestingEffect {kind:string;operation:string;handle(input:JsonValue,context:TestingEffectContext):Promise<JsonValue>}
