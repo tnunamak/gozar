@@ -61,7 +61,10 @@ async function hostChild() {
     routes.push(await api.expose({...item,approval:approval(ready),wait:'verified'}));
   }
   await assertHeld(api,query);
-  await wire({type:'ready',routes});
+  const applied=(await api.catalogRoutes({...query,owner:query.owner,providerId:query.providerId})).candidates[0].configuration;
+  assert.equal(applied.credentials[requirement.id]?.known,true,'applied input presence is known');
+  assert.equal(applied.credentials[requirement.id]?.value,true,'applied input is configured');
+  await wire({type:'ready',routes,credentialInputId:requirement.id,appliedScopeId:applied.scopeId});
   // Keep the real broker host alive until the parent kills this exact process.
 }
 
@@ -149,14 +152,14 @@ if(process.argv.includes('--fixture-host-child')){
     const canary=Buffer.from(randomBytes(48).toString('hex'));
     const identity={instanceId:randomUUID(),bootId:randomUUID()};
     const providerId='loss-'+randomUUID(),owner='detached-owner';
-    const store=new Map(),backendCalls={read:0};
+    const store=new Map(),backendCalls={read:0,delete:0};
     const backend={
       async put(request){const handle=randomUUID();store.set(handle,{scopeId:request.scopeId,bytes:Buffer.from(request.bytes)});return {handle};},
       async presence({handle,scopeId}){return {known:true,value:store.get(handle)?.scopeId===scopeId};},
-      async delete({handle,scopeId}){const row=store.get(handle);return {deleted:row?.scopeId===scopeId?store.delete(handle):false};},
+      async delete({handle,scopeId}){backendCalls.delete++;const row=store.get(handle);return {deleted:row?.scopeId===scopeId?store.delete(handle):false};},
       async withSecret({handle,scopeId},use){const row=store.get(handle);assert.ok(row&&row.scopeId===scopeId);backendCalls.read++;return use(new Uint8Array(row.bytes));},
     };
-    let registry,child,api,routes=[],queries=[],apps=[],exit;
+    let registry,child,api,routes=[],queries=[],apps=[],exit,credentialInputId,appliedScopeId;
     const projections=[],errors=[];
     t.after(async()=>{
       try {
@@ -189,7 +192,7 @@ if(process.argv.includes('--fixture-host-child')){
       child.once('error',error=>{clearTimeout(timer);reject(error);});
       child.once('exit',()=>{clearTimeout(timer);reject(new Error('host exited before ready'));});
       child.on('message',async message=>{
-        if(message.type==='ready'){clearTimeout(timer);resolve(message.routes);}
+        if(message.type==='ready'){clearTimeout(timer);credentialInputId=message.credentialInputId;appliedScopeId=message.appliedScopeId;resolve(message.routes);}
         else if(message.type==='failure'){clearTimeout(timer);errors.push(message.error);reject(Object.assign(new Error(message.error.message),message.error));}
         else if(message.type==='backend'){
           try{
@@ -213,6 +216,28 @@ if(process.argv.includes('--fixture-host-child')){
       assert.deepEqual(await exchange(route.origin,nonce),nonce,'route reaches independent app');
     }
     assert.ok(store.size>0,'parent keychain remains independent of host lifetime');
+    assert.ok(typeof credentialInputId==='string'&&credentialInputId.length>0,'applied input is identified');
+    // Snapshot only this fixture's host backend, never Gozar's private storage.
+    const savedCredentials=[...store].map(([handle,row])=>({handle,scopeId:row.scopeId,bytes:Buffer.from(row.bytes)}));
+    const deletesBefore=backendCalls.delete;
+    for(const saved of savedCredentials){
+      assert.ok(saved.scopeId===appliedScopeId,'saved applied scope matches public setup');
+      assert.ok(saved.bytes.equals(canary),'initial saved bytes match the synthetic canary');
+    }
+    const assertSavedCredentials=async()=>{
+      assert.equal(backendCalls.delete,deletesBefore,'route lifecycle never requests credential deletion');
+      for(const saved of savedCredentials){
+        const retained=store.get(saved.handle);
+        // Boolean checks avoid including opaque handles/scopes/bytes in failure output.
+        assert.ok(retained!==undefined,'each saved applied record remains');
+        assert.ok(retained.scopeId===saved.scopeId,'saved applied scope remains identical');
+        assert.ok(retained.bytes.equals(saved.bytes)&&retained.bytes.equals(canary),'saved applied bytes remain identical');
+      }
+      const configuration=(await api.catalogRoutes({...queries[0],home,owner,providerId})).candidates[0].configuration;
+      assert.ok(configuration.scopeId===appliedScopeId,'public catalog retains the applied scope');
+      assert.equal(configuration.credentials[credentialInputId]?.known,true,'saved input presence remains known');
+      assert.equal(configuration.credentials[credentialInputId]?.value,true,'saved input remains configured');
+    };
     assert.ok(await scanOwnTree(root,canary,home)>0,'live private control sockets exist');
     const before=await ledgerEvents(registry,providerId);
     assert.equal(before.filter(row=>row.event==='start').length,2);
@@ -286,6 +311,8 @@ if(process.argv.includes('--fixture-host-child')){
     const after=await ledgerEvents(registry,providerId);
     assert.equal(after.filter(row=>row.event==='start').length,2,'no replacement allocation');
     assert.equal(after.filter(row=>row.event==='proof').length,proofsBefore,'no replacement proof');
+    // Outside the historical no-effect interval, including honest cleanup debt.
+    await assertSavedCredentials();
     // A fresh trusted boot may start a separately approved NEW operation.
     const recoveryQuery={...queries[0],operationId:randomUUID()};
     const recoveryCandidate=(await api.catalogRoutes(recoveryQuery)).candidates[0];
@@ -326,6 +353,8 @@ if(process.argv.includes('--fixture-host-child')){
     projections.push(recoveryReplay);
     assert.deepEqual(recoveryReplay.handle,recovered.handle);
     assert.equal(recoveryReplay.operationId,recoveryQuery.operationId);
+    assert.equal(recoveryReplay.published,recovered.origin);
+    assert.equal(recoveryReplay.verification.status,'verified');
     const replayEffects=await ledgerEvents(registry,providerId);
     assert.equal(replayEffects.filter(row=>row.event==='start').length,3,'new-operation replay does not allocate');
     assert.equal(replayEffects.filter(row=>row.event==='proof').length,proofsBefore+1,'new-operation replay does not reprove');
@@ -342,6 +371,7 @@ if(process.argv.includes('--fixture-host-child')){
     const finalEffects=await ledgerEvents(registry,providerId);
     assert.equal(finalEffects.filter(row=>row.event==='start').length,3);
     assert.equal(finalEffects.filter(row=>row.event==='proof').length,proofsBefore+1);
+    await assertSavedCredentials(); // Deliberate presence reads are outside replay/effect measurements.
     assert.equal(Buffer.from(JSON.stringify({projections,errors,after,finalEffects})).includes(canary),false);
     assert.equal(stderr.includes(canary),false);
     await scanOwnTree(root,canary,home); // Bytes only: no private journal fields parsed.
