@@ -2,17 +2,28 @@
 // these do not claim provider integration, real publication or consent testing.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,readdir,readFile} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
+import {mkdtemp,rm,readdir,readFile,mkdir,lstat} from 'node:fs/promises';
+import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {withRouteOperation,recordOperationView,startingRoute} from '../../packages/gozar-node/route-operations.mjs';
+import {withRouteOperation,recordOperationView,startingRoute,recordPendingReferenceCleanup,retryRecordedReferenceCleanup,listRecordedRoutes} from '../../packages/gozar-node/route-operations.mjs';
 
 const deferred=()=>{let resolve;const promise=new Promise(r=>{resolve=r;});return {promise,resolve};};
 const missing=()=>Object.assign(new Error('Creator unavailable'),{code:'provider_unavailable'});
 async function fixture(t){
- const home=await mkdtemp(join(tmpdir(),'gozar-operation-'));
- t.after(()=>rm(home,{recursive:true,force:true}));
+ const parent=join(homedir(),'.tmp0700');
+ try{await mkdir(parent,{mode:0o700});}catch(error){if(error.code!=='EEXIST')throw error;}
+ const parentInfo=await lstat(parent);
+ assert.ok(parentInfo.isDirectory()&&!parentInfo.isSymbolicLink());
+ assert.equal(parentInfo.uid,process.getuid());assert.equal(parentInfo.mode&0o777,0o700);
+ const home=await mkdtemp(join(parent,'op-')),original=await lstat(home);
+ t.after(async()=>{
+  const current=await lstat(home);
+  assert.ok(current.isDirectory()&&!current.isSymbolicLink());
+  assert.equal(current.uid,original.uid);assert.equal(current.mode&0o777,0o700);
+  assert.equal(current.dev,original.dev);assert.equal(current.ino,original.ino);
+  await rm(home,{recursive:true});
+ });
  const request={home,owner:'operation-test-owner',operationId:randomUUID(),providerId:'ledger-fixture',
   target:'127.0.0.1:41237',usage:{kind:'attached'},requirements:{reach:'internet',transport:'https',protocols:['http']},approval:{}};
  const configuration={revision:1,scopeId:'fixture-scope'};
@@ -142,4 +153,69 @@ test('supplied wrong reference handle cannot mutate an exact same-generation ope
  assert.equal(stopped.cleanup.state,'confirmed');
  const replay=await f.invoke({}, {status:async()=>assert.fail('terminal replay must not probe creator')});
  assert.deepEqual(replay,stopped);assert.equal(f.allocations.length,1);
+});
+
+for(const lateFailure of [false,true])test('pending reference debt dominates ordinary writes and late allocation '+(lateFailure?'error':'result'),{timeout:10000},async t=>{
+ const f=await fixture(t),entered=deferred(),finish=deferred();
+ const pending=f.invoke({}, {run:async handle=>{
+  const view=await f.allocate(handle);entered.resolve(view);await finish.promise;
+  if(lateFailure)throw missing();return view;
+ }});
+ const settled=pending.then(view=>({view}),error=>({error}));
+ const replayEntered=deferred(),replayFinish=deferred();let replaySettled;
+ try{
+ const allocated=await Promise.race([entered.promise,settled.then(()=>assert.fail('allocation barrier not reached'))]);
+ const replay=f.invoke({}, {status:async()=>{
+  replayEntered.resolve();await replayFinish.promise;return allocated;
+ }});
+ replaySettled=replay.then(view=>({view}),error=>({error}));
+ await Promise.race([replayEntered.promise,replaySettled.then(()=>assert.fail('replay barrier not reached'))]);
+ // This fixture ledger owns the removal observation; no real-provider claim.
+ assert.equal(f.ledger.delete(allocated.handle.id),true);f.removals.push(allocated.handle.id);
+ const removed={...allocated,state:'released',routeState:'released',published:null,ingress:null,cleanup:{state:'confirmed'}};
+ const reference={owner:f.request.owner,operationId:f.request.operationId,handle:allocated.handle};
+ const debt=await recordPendingReferenceCleanup({home:f.home,view:removed,reference});
+ const assertDebt=view=>{
+  assert.deepEqual(view.handle,allocated.handle);assert.equal(view.operationId,f.request.operationId);
+  assert.equal(view.published,null);assert.equal(view.verification.status,'unverified');
+  assert.equal(view.cleanup.state,'unconfirmed');assert.equal(view.cleanup.nextAction.kind,'instructions');
+  assert.equal(view.cleanup.nextAction.id,'retry-reference-release');assert.equal(view.state,'uncertain');
+ };
+ assertDebt(debt);
+ const entry=(await readdir(join(f.home,'operations'))).find(name=>name.endsWith('.json'));
+ const journal=async()=>JSON.parse(await readFile(join(f.home,'operations',entry),'utf8'));
+ const milestone=(await journal()).referenceCleanup;assert.ok(milestone);
+ for(const supplied of [reference,{owner:reference.owner,operationId:reference.operationId}]){
+  assertDebt(await recordOperationView({home:f.home,view:removed,reference:supplied}));
+  assert.deepEqual((await journal()).referenceCleanup,milestone);
+  assert.equal((await journal()).phase,'recovery');
+ }
+ assertDebt(await f.invoke({}, {status:async()=>allocated}));
+ replayFinish.resolve();
+ const replayResult=await replaySettled;assert.equal(replayResult.error,undefined);
+ assertDebt(replayResult.view);
+ finish.resolve();
+ const result=await settled;
+ if(lateFailure){assert.equal(result.error.code,'provider_unavailable');assertDebt(result.error.route);}
+ else assertDebt(result.view);
+ assert.deepEqual((await journal()).referenceCleanup,milestone);
+ assertDebt((await listRecordedRoutes({home:f.home,owner:f.request.owner})).routes[0]);
+ let fail=true,releases=0;
+ const runtime={registryId:f.options.registryId,embeddingServices:{releaseConfigurationUse:async scope=>{
+  assert.deepEqual(scope,{home:f.home,owner:f.request.owner,providerId:f.request.providerId,handle:allocated.handle});
+  releases++;if(fail)throw new Error('controlled metadata outage');
+ }}};
+ await assert.rejects(retryRecordedReferenceCleanup({home:f.home,handle:allocated.handle},runtime),error=>{
+  assert.equal(error.code,'cleanup_debt');assertDebt(error.route);return true;
+ });
+ assert.deepEqual((await journal()).referenceCleanup,milestone);
+ fail=false;
+ const stopped=await retryRecordedReferenceCleanup({home:f.home,handle:allocated.handle},runtime);
+ assert.equal(stopped.cleanup.state,'confirmed');assert.equal(stopped.state,'released');
+ assert.equal(Object.hasOwn(await journal(),'referenceCleanup'),false);
+ assert.equal((await journal()).phase,'terminal');assert.equal(releases,2);
+ assert.deepEqual(await f.invoke({}, {status:async()=>assert.fail('terminal replay must not probe')}),stopped);
+ assert.equal(f.allocations.length,1);assert.equal(f.publications.length,1);
+ assert.equal(f.ledger.size,0);assert.deepEqual(f.removals,[allocated.handle.id]);
+ }finally{replayFinish.resolve();finish.resolve();await settled;if(replaySettled)await replaySettled;}
 });

@@ -52,17 +52,27 @@ export async function withRouteOperation(request,{registryId,embeddingServices,a
  // Allocation completion and Stop persist under the same reservation lock.
  const persist=async value=>withExclusiveLock(join(dir,'.reservation-lock'),async()=>{
   const current=checkRecord(await readRecord(path));
+  if(current.referenceCleanup)return pendingReferenceView(current,home);
   if(current.view.cleanup.state==='confirmed')return structuredClone(current.view);
   await atomicWrite(path,value);return structuredClone(value.view);
  },{waitSeconds:30});
  if(!winner){
+  // Status may have begun before Stop persisted debt; re-read after that await.
+  // This observer never writes the stale status over the operation journal.
+  const observe=async view=>withExclusiveLock(join(dir,'.reservation-lock'),async()=>{
+   const current=checkRecord(await readRecord(path));
+   if(current.referenceCleanup)return pendingReferenceView(current,home);
+   if(current.view.cleanup.state==='confirmed')return structuredClone(current.view);
+   return view;
+  },{waitSeconds:30});
+  if(record.referenceCleanup)return pendingReferenceView(record,home);
   if(record.view.cleanup.state==='confirmed')return structuredClone(record.view);
-  try{return {...await status({home,handle:record.view.handle}),operationId:request.operationId};}
+  try{return await observe({...await status({home,handle:record.view.handle}),operationId:request.operationId});}
   catch(error){
-   if(error.code==='route_conflict'){const reference=await operationReferenceForRoute({home,handle:record.view.handle});if(reference?.owner===record.owner&&reference.operationId===record.operationId)return {...await status({home,handle:reference.handle}),operationId:request.operationId};}
+   if(error.code==='route_conflict'){const reference=await operationReferenceForRoute({home,handle:record.view.handle});if(reference?.owner===record.owner&&reference.operationId===record.operationId)return observe({...await status({home,handle:reference.handle}),operationId:request.operationId});}
    if(!['route_not_found','provider_unavailable',...(record.phase==='starting'?['route_conflict']:[])].includes(error.code))throw error;
-   return {...structuredClone(record.view),state:'uncertain',routeState:'cleanup-unconfirmed',published:null,ingress:null,
-    verification:{...record.view.verification,status:'unverified'},cleanup:{state:'unconfirmed',nextAction:null}};
+   return observe({...structuredClone(record.view),state:'uncertain',routeState:'cleanup-unconfirmed',published:null,ingress:null,
+    verification:{...record.view.verification,status:'unverified'},cleanup:{state:'unconfirmed',nextAction:null}});
   }
  }
  try{const view={...await run(record.view.handle),operationId:request.operationId};record.view=view;record.phase='allocated';return await persist(record);}
@@ -110,7 +120,7 @@ export async function recordOperationView({home,view,reference}){
    if(current&&(!sameHandle(current.handle,view.handle)||current.owner!==reference.owner||
       current.operationId!==reference.operationId))return view;
   }
-  if(view.cleanup.state==='confirmed')delete record.referenceCleanup;
+  if(record.referenceCleanup)return pendingReferenceView(record,await canonicalHome(home,false));
   record.view={...view,operationId:record.operationId};record.phase=view.cleanup.state==='confirmed'?'terminal':'recovery';await atomicWrite(path,record);return record.view;
  },{waitSeconds:30});
 }
@@ -131,6 +141,17 @@ function validReferenceRecord(record){
     !['attached','session'].includes(record.view.handle.kind))
   throw gozarError('cleanup_debt','The recorded configuration reference scope cannot be verified');
  return record;
+}
+// Ordinary writers may observe debt but only exact metadata retry may finish it.
+function pendingReferenceView(record,home){
+ validReferenceRecord(record);
+ const pending=record.referenceCleanup,handle=record.view.handle;
+ const expected={registryId:record.intent.registryId,home,owner:record.owner,providerId:record.intent.providerId,handle};
+ if(!pending||pending.intentDigest!==record.intentDigest||!sameHandle(pending.handle,handle)||
+    canonicalDigest(pending.scope)!==canonicalDigest(expected)||!sameHandle(pending.resourceView?.handle,handle)||
+    pending.resourceView?.cleanup?.state!=='confirmed'||pending.resourceView.operationId!==record.operationId)
+  throw gozarError('cleanup_debt','Recorded resource-removal evidence does not match this reference');
+ return referenceCleanupDebt(structuredClone(pending.resourceView));
 }
 /** Called only after the facade has obtained confirmed resource removal from viewClose. */
 export async function recordPendingReferenceCleanup({home,view,reference}){
