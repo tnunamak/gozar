@@ -20,7 +20,8 @@ test('native cached observation is detached, deadline-bound and effect-free',asy
     const driver=controller.driver;
     driver.gate=gate;
     driver.host.probe={...gate.rotate(),expiresAtMs:driver.nowMs()+15000};
-    const origin='http://'+gate.target;
+    const origin=gate.target;
+    assert.equal(new URL(origin).origin,`http://127.0.0.1:${gate.port}`,'gate target is already the complete probe origin');
     counts.verify++;
     await driver.verifyProbe({url:origin,vantage:'local',generation:7,timeoutMs:3000});
     const receipt=structuredClone(driver.acceptedProbeReceipt);
