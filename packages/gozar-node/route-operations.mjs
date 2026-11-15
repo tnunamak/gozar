@@ -3,9 +3,9 @@ import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {readdir,readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {canonicalHome,trustedDirectory,privateDirectory,readRecord,withExclusiveLock} from './service-state.mjs';
-import {atomicWrite,processIdentity} from './journal.mjs';
+import {atomicWrite} from './journal.mjs';
 import {canonicalDigest,peekConsentGrant} from './consent-token.mjs';
-import {unknownProperties,projectSession,projectDurable,projectExternal,recoveryHistory} from './route-view.mjs';
+import {unknownProperties,projectSession,projectDurable,projectExternal,recoveryHistory,propertiesFor} from './route-view.mjs';
 import {enrichRoute} from './embedding-state.mjs';
 import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
 import {gozarError,instructionAction} from './error-normalizer.mjs';
@@ -236,35 +236,157 @@ export async function retainedOperationView({home,handle,owner}={}){
  return structuredClone(matches[0].view);
 }
 
-/** Read persisted snapshots only. Listing never mints consent or refreshes a provider proof. */
+/** Read current cached controller evidence only; never refresh proof or invoke providers. */
 export async function listRecordedRoutes({home,owner}={},deps={}){
  if(owner!==undefined&&(typeof owner!=='string'||!owner))throw gozarError('invalid_input','owner must be a non-empty string');
- home=await canonicalHome(home,false);const routes=new Map(),referencePending=new Set();
+ home=await canonicalHome(home,false);
+ const routes=new Map(),priorities=new Map(),current=new Map();
  const routeKey=handle=>JSON.stringify([handle.kind,handle.id]);
- const put=view=>{
+ const history=view=>view.state==='released'&&view.cleanup?.state==='confirmed'?view:
+  recoveryHistory(view,'Current cached authority unavailable; retained evidence only.');
+ const put=(view,priority=0)=>{
   const key=routeKey(view.handle),previous=routes.get(key);
-  // Enumeration order is not lifecycle order. A stale active snapshot cannot
-  // undo exact terminal evidence, and an older generation cannot hide a newer one.
-  if(previous){
-   if(referencePending.has(key)&&previous.handle.generation===view.handle.generation)return;
-   if(previous.handle.generation>view.handle.generation)return;
-   if(previous.handle.generation===view.handle.generation&&previous.state==='released'&&previous.cleanup?.state==='confirmed')return;
-  }
-  routes.set(key,{...view,operationId:view.operationId??null});
+  if(previous&&(previous.handle.generation>view.handle.generation||
+   previous.handle.generation===view.handle.generation&&(priorities.get(key)??0)>priority))return;
+  routes.set(key,{...view,operationId:view.operationId??null});priorities.set(key,priority);
  };
  const names=async dir=>{try{await trustedDirectory(dir,false);return await readdir(dir,{withFileTypes:true});}catch(error){if(error.code==='ENOENT')return [];throw error;}};
- for(const entry of await names(join(home,'operations'))){if(!entry.isFile()||!/[a-f0-9]{64}\.json$/.test(entry.name))continue;const record=checkRecord(await readRecord(join(home,'operations',entry.name)));if(owner===undefined||record.owner===owner){put(record.view);if(record.referenceCleanup)referencePending.add(routeKey(record.view.handle));}}
- for(const entry of await names(join(home,'attached'))){if(!entry.isDirectory()||!/^att_[a-f0-9]{16}$/.test(entry.name))continue;const root=join(home,'attached',entry.name),bootstrap=await readRecord(join(root,'bootstrap.json'));if(owner!==undefined&&bootstrap.owner!==owner)continue;const record=await optionalRead(join(root,'state.json'));if(!record)continue;if(!record.lastView?.handle)throw gozarError('provider_unavailable','The attached recovery snapshot is unreadable');let view=record.lastView;
-  const controller=await optionalRead(join(root,'control.json'));
-  if(view.state!=='released'&&(!controller||await processIdentity(controller.pid)!==controller.startIdentity))view={...view,state:'uncertain',published:null,routeState:'cleanup-unconfirmed',verification:{...view.verification,status:'unverified'},cleanup:{state:'unconfirmed',nextAction:null}};
-  put({...view,operationId:bootstrap.operationId??routes.get(routeKey(view.handle))?.operationId??null});
+ const lifecycle=async()=>{
+  for(const entry of await names(join(home,'operations'))){
+   if(!entry.isFile()||!/^[a-f0-9]{64}\.json$/.test(entry.name))continue;
+   const record=checkRecord(await readRecord(join(home,'operations',entry.name)));
+   if(entry.name!==hash(JSON.stringify([record.owner,record.operationId]))+'.json')throw gozarError('cleanup_debt','Operation filename mismatch');
+   if(owner!==undefined&&record.owner!==owner)continue;
+   if(record.referenceCleanup)put(pendingReferenceView(record,home),30);
+   else if(record.phase==='terminal'&&record.view.state==='released'&&record.view.cleanup?.state==='confirmed')put(record.view,40);
+   else put(history(record.view),0);
+  }
+  for(const record of await cleanupRecords(home)){
+   if(owner!==undefined&&record.scope.owner!==owner)continue;
+   put(record.view,record.phase==='terminal'?40:record.phase==='resource-removed'?30:-1);
+  }
+ };
+ const boundContext=(bootstrap,native=false)=>{
+  const binding=native?bootstrap.embedding:bootstrap;
+  return typeof deps.registryId==='string'&&deps.registryId.length>0&&binding?.registryId===deps.registryId&&
+   Array.isArray(deps.adapters)&&deps.adapters.some(adapter=>adapter.id===bootstrap.adapterId);
+ };
+ // Both controller families authenticate the live incarnation. A subsequent disk
+ // binding check prevents a replacement during the await from acquiring its reply.
+ const observe=async(root,bootstrap,handle,fallback,native=false)=>{
+  if(!boundContext(bootstrap,native))return history(fallback);
+  try{
+   let view,expiresAtMs;
+   if(native){
+    const binding=bootstrap.embedding;
+    if(typeof bootstrap.owner!=='string'||!bootstrap.owner||
+       !sameHandle(binding?.handle,handle)||binding.request?.owner!==bootstrap.owner||
+       binding.request?.home!==home||bootstrap.sessionId!==handle.id.split(':')[1])
+     throw gozarError('route_conflict','Native observation binding changed');
+    const {observeSession}=await import('./daemon.mjs');
+    const reply=await observeSession(root,{sessionId:bootstrap.sessionId,handleGeneration:handle.generation});
+    if(reply.owner!==bootstrap.owner||reply.snapshot?.adapterId!==bootstrap.adapterId||
+       reply.proofSubject?.instanceId!==binding.identity?.instanceId||reply.proofSubject?.bootId!==binding.identity?.bootId)
+     throw gozarError('route_conflict','Native observation identity changed');
+    view=projectSession(reply,{handle,now:Date.now(),...await propertiesFor(bootstrap.adapterId,deps,'session')});
+    expiresAtMs=reply.expiresAtMs??reply.snapshot?.expiresAtMs;
+    // A session must have a finite absolute lifetime, never an inferred duration.
+    if(!Number.isFinite(expiresAtMs))return history(view);
+   }else{
+    const {observeAttachedRoute}=await import('./attached-route.mjs');
+    view=await observeAttachedRoute({home,owner:bootstrap.owner,handle});
+    expiresAtMs=bootstrap.expiresAtMs??null;
+   }
+   const after=await optionalRead(join(root,'bootstrap.json'));
+   if(!after||canonicalDigest(after)!==canonicalDigest(bootstrap)||!sameHandle(view.handle,handle))
+    throw gozarError('route_conflict','Controller binding changed during enumeration');
+   current.set(routeKey(handle),{view,expiresAtMs,root,bootstrap,native});
+   return view;
+  }catch(error){
+   if(error.code==='route_conflict')throw error;
+   return history(fallback);
+  }
+ };
+ await lifecycle();
+ for(const entry of await names(join(home,'attached'))){
+  if(!entry.isDirectory()||!/^att_[a-f0-9]{16}$/.test(entry.name))continue;
+  const root=join(home,'attached',entry.name),bootstrap=await readRecord(join(root,'bootstrap.json'));
+  if(owner!==undefined&&bootstrap.owner!==owner)continue;
+  const record=await optionalRead(join(root,'state.json')),handle={kind:'attached',id:entry.name,generation:1};
+  if(!record?.lastView?.handle||!sameHandle(record.handle,handle)||!sameHandle(record.lastView.handle,handle)||
+     bootstrap.id!==entry.name||bootstrap.home!==home||typeof bootstrap.owner!=='string')
+   throw gozarError('provider_unavailable','The attached recovery binding is unreadable');
+  const view=record.resourceRemoval?referenceCleanupDebt(record.lastView):
+   record.phase==='released'||record.lastView.cleanup?.state==='confirmed'?record.lastView:
+   await observe(root,bootstrap,handle,record.lastView);
+  put({...view,operationId:bootstrap.operationId??view.operationId??null},record.resourceRemoval?30:view.cleanup?.state==='confirmed'?40:10);
  }
- for(const entry of await names(join(home,'routes'))){if(!entry.isFile()||!/[a-f0-9]{64}\.json$/.test(entry.name))continue;const record=await readRecord(join(home,'routes',entry.name));if(record?.schemaVersion!==1||typeof record.routeId!=='string'||!record.routeId||record.ownership!=='gozar-owned'||typeof record.owner!=='string'||!record.owner||!Number.isSafeInteger(record.generation)||record.generation<1||entry.name!==hash(record.routeId)+'.json')throw gozarError('provider_unavailable','The durable route record is unreadable');if(owner!==undefined&&record.owner!==owner)continue;const handle={kind:'durable',id:record.routeId,generation:record.generation};const previous=routes.get(routeKey(handle));put({...projectDurable(record,{handle,properties:unknownProperties()}),operationId:record.operationId??previous?.operationId??null});}
- for(const entry of await names(home)){if(!entry.isDirectory()||!/^port-[0-9]+$/.test(entry.name))continue;const bootstrap=await optionalRead(join(home,entry.name,'bootstrap.json'));if(!bootstrap||(owner!==undefined&&bootstrap.owner!==owner))continue;const journal=await optionalRead(join(home,entry.name,'session.json'));if(!journal?.snapshot)continue;const handle={kind:'session',id:`${entry.name}:${journal.snapshot.sessionId}`,generation:1};put({...projectSession(journal.embeddingView??{snapshot:journal.snapshot},{handle,properties:unknownProperties()}),operationId:bootstrap.operationId??routes.get(routeKey(handle))?.operationId??null});}
- for(const entry of await names(join(home,'services'))){if(!entry.isFile()||!/[a-f0-9]{64}\.json$/.test(entry.name))continue;const record=await readRecord(join(home,'services',entry.name));if(record.ownership!=='external-owned'||typeof record.origin!=='string')throw gozarError('provider_unavailable','The owner-route recovery record is unreadable');if(owner!==undefined&&record.embedding?.request.owner!==owner)continue;put(projectExternal(record,{handle:{kind:'external',id:record.origin,generation:record.generation??0}}));}
- // A disk snapshot is recovery evidence. Only routeStatus can obtain a fresh subject-bound proof.
- return {routes:[...routes.values()].map(view=>view.state==='released'?view:{...view,state:view.state==='usable'?'unverified':view.state,published:null,
-  routeState:view.cleanup.state==='unconfirmed'?'cleanup-unconfirmed':view.origin?'detected':'unknown',verification:{...view.verification,status:'unverified',results:(view.verification.results??[]).map(result=>({...result,status:'unknown'}))}})};
+ for(const entry of await names(join(home,'routes'))){
+  if(!entry.isFile()||!/^[a-f0-9]{64}\.json$/.test(entry.name))continue;
+  const record=await readRecord(join(home,'routes',entry.name));
+  if(record?.schemaVersion!==1||typeof record.routeId!=='string'||!record.routeId||record.ownership!=='gozar-owned'||typeof record.owner!=='string'||!record.owner||!Number.isSafeInteger(record.generation)||record.generation<1||entry.name!==hash(record.routeId)+'.json')throw gozarError('provider_unavailable','The durable route record is unreadable');
+  if(owner!==undefined&&record.owner!==owner)continue;
+  const handle={kind:'durable',id:record.routeId,generation:record.generation};
+  put(history({...projectDurable(record,{handle,properties:unknownProperties()}),operationId:record.operationId??null}),10);
+ }
+ for(const entry of await names(home)){
+  if(!entry.isDirectory()||!/^port-[0-9]+$/.test(entry.name))continue;
+  const root=join(home,entry.name),bootstrap=await optionalRead(join(root,'bootstrap.json'));
+  if(!bootstrap||(owner!==undefined&&bootstrap.owner!==owner))continue;
+  if(bootstrap.execution==='generic-session-v1'){
+   const handle=bootstrap.handle,record=await optionalRead(join(root,'state.json'));
+   if(handle?.kind!=='session'||typeof handle.id!=='string'||!handle.id.startsWith(entry.name+':')||handle.generation!==1||
+      bootstrap.home!==home||!record?.lastView||!sameHandle(record.handle,handle)||!sameHandle(record.lastView.handle,handle))
+    throw gozarError('provider_unavailable','The generic session recovery binding is unreadable');
+   const view=record.resourceRemoval?referenceCleanupDebt(record.lastView):
+    record.phase==='released'||record.lastView.cleanup?.state==='confirmed'?record.lastView:
+    await observe(root,bootstrap,handle,record.lastView);
+   put({...view,operationId:bootstrap.operationId??view.operationId??null},record.resourceRemoval?30:view.cleanup?.state==='confirmed'?40:10);
+   continue;
+  }
+  const journal=await optionalRead(join(root,'session.json'));
+  if(!journal?.snapshot)throw gozarError('provider_unavailable','The native session recovery snapshot is unreadable');
+  const handle={kind:'session',id:entry.name+':'+journal.snapshot.sessionId,generation:1};
+  const fallback=projectSession(journal.embeddingView??{snapshot:journal.snapshot},{handle,properties:unknownProperties()});
+  put({...await observe(root,bootstrap,handle,fallback,true),operationId:bootstrap.operationId??fallback.operationId??null},10);
+ }
+ for(const entry of await names(join(home,'services'))){
+  if(!entry.isFile()||!/^[a-f0-9]{64}\.json$/.test(entry.name))continue;
+  const record=await readRecord(join(home,'services',entry.name));
+  if(record.ownership!=='external-owned'||typeof record.origin!=='string')throw gozarError('provider_unavailable','The owner-route recovery record is unreadable');
+  if(owner!==undefined&&record.embedding?.request.owner!==owner)continue;
+  put(history(projectExternal(record,{handle:{kind:'external',id:record.origin,generation:record.generation??0}})),10);
+ }
+ // Re-read lifecycle after every controller await has completed. Exact removal
+ // and terminal records dominate cached views; prepared remains fallback only.
+ for(const [key,observed] of current){
+  const after=await optionalRead(join(observed.root,'bootstrap.json'));
+  if(!after||canonicalDigest(after)!==canonicalDigest(observed.bootstrap)){
+   put(history(observed.view),20);continue;
+  }
+  const record=await optionalRead(join(observed.root,observed.native?'session.json':'state.json'));
+  if(!record){put(history(observed.view),20);continue;}
+  if(observed.native){
+   if(record.snapshot?.sessionId!==observed.bootstrap.sessionId){put(history(observed.view),20);continue;}
+   if(record.snapshot?.phase!=='published-ready')put(history(observed.view),20);
+  }else{
+   if(!sameHandle(record.handle,observed.view.handle))throw gozarError('route_conflict','Controller generation changed');
+   if(record.resourceRemoval)put(referenceCleanupDebt(record.lastView),30);
+   else if(record.phase==='released'||record.lastView?.cleanup?.state==='confirmed')put(record.lastView,40);
+   else if(record.phase==='failed'||record.phase==='blocked')put(history(observed.view),20);
+  }
+ }
+ await lifecycle();
+ const now=Date.now();
+ return {routes:[...routes.values()].map(view=>{
+  const observed=current.get(routeKey(view.handle));
+  if(!observed||!sameHandle(observed.view.handle,view.handle)||(priorities.get(routeKey(view.handle))??0)>=30)return view;
+  const until=view.verification?.validUntil;
+  if(view.state!=='usable'||view.cleanup?.state!=='none'||view.verification?.status!=='verified'||view.consentChange||
+    until?.known!==true||!Number.isFinite(Date.parse(until.value))||Date.parse(until.value)<=now||
+    observed.expiresAtMs!==null&&(!Number.isFinite(observed.expiresAtMs)||observed.expiresAtMs<=now))return history(view);
+  return view;
+ })};
 }
 
 

@@ -7,6 +7,9 @@ import {fileURLToPath} from 'node:url';
 import {createGozar} from '@tnunamak/gozar';
 import {fakeRegistry} from '@tnunamak/gozar/testing';
 import {scratch,query} from './route-schema-check.mjs';
+import {loadAdapters} from '../../packages/gozar-node/adapter-runtime.mjs';
+import {listRecordedRoutes} from '../../packages/gozar-node/route-operations.mjs';
+import {projectControllerObservation} from '../../packages/gozar-node/route-view.mjs';
 test('host crash before saving its handle recovers by operation enumeration and exact close',async t=>{
  const home=await scratch(t),owner='crashed-host',operationId='saved-before-call';
  const registry=await fakeRegistry({id:'crash-recovery',dir:join(home,'registry'),kinds:['attached'],reach:'this-device',transport:'tcp',proofProtocol:'echo'});t.after(registry.cleanup);
@@ -32,9 +35,30 @@ test('concurrent operation replay allocates once, conflicts before effects and s
  let route;t.after(async()=>{if(route)await api.closeRoute({home,handle:route.handle,mode:'remove'}).catch(()=>{});});
  const [first,second]=await Promise.all([api.expose(request),api.expose(request)]);route=first;
  assert.deepEqual(first.handle,second.handle);assert.equal(first.handle.generation,1);
+ const deps={adapters:await loadAdapters(registry),registryId:choice.consent.scope.registryId};
+ const eventPath=join(registry.root,'providers','operation-replay','events.jsonl');
+ const effects=async()=> (await readFile(eventPath,'utf8')).trim().split('\n').map(line=>JSON.parse(line).event).filter(event=>event==='start'||event==='proof');
+ const before=await effects(),current=await listRecordedRoutes({home,owner:q.owner},deps);
+ assert.equal(current.routes.length,1);assert.notEqual(first.published,null);
+ const live=current.routes[0];
+ for(const key of ['handle','published','properties','limits'])assert.deepEqual(live[key],first[key]);
+ for(const key of ['subject','checkedAt','validUntil'])assert.deepEqual(live.verification[key],first.verification[key]);
+ assert.deepEqual(await effects(),before,'enumeration must not start or refresh proof');
+ assert.equal((await listRecordedRoutes({home,owner:'foreign'},deps)).routes.length,0);
+ assert.equal((await listRecordedRoutes({home,owner:q.owner})).routes[0].published,null);
+ assert.equal((await listRecordedRoutes({home,owner:q.owner},{...deps,registryId:'different-registry'})).routes[0].published,null);
+ // Deterministic expiry at the actual pure projector using genuine admitted proof.
+ const expired=projectControllerObservation(first,{now:Date.parse(first.verification.validUntil.value),
+  heartbeat:false,initialSettled:true,identity:first.verification.subject});
+ assert.equal(expired.published,null);assert.equal(expired.verification.status,'unverified');
+ assert.deepEqual(expired.verification.subject,first.verification.subject);
+ assert.equal(expired.verification.checkedAt,first.verification.checkedAt);
+ // Public facade retains its prior conservative behavior until the separate API leaf.
  await assert.rejects(api.expose({...request,target:'127.0.0.1:2'}),{code:'operation_conflict'});
  const listed=await api.listRoutes({home,owner:q.owner});assert.equal(listed.routes.length,1);assert.equal(listed.routes[0].published,null);assert.equal(listed.routes[0].operationId,q.operationId);
  assert.equal((await api.closeRoute({home,handle:first.handle,mode:'remove'})).cleanup.state,'confirmed');
+ const terminal=(await listRecordedRoutes({home,owner:q.owner},deps)).routes[0];
+ assert.equal(terminal.state,'released');assert.equal(terminal.published,null);
  assert.equal((await api.expose(request)).state,'released');
  const events=await readFile(join(registry.root,'providers','operation-replay','events.jsonl'),'utf8');assert.equal(events.split('"start"').length-1,1);
  const files=await readdir(join(home,'operations'));const record=files.find(name=>name.endsWith('.json'));await writeFile(join(home,'operations',record),'{unreadable');
