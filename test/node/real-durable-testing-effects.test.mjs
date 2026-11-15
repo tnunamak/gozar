@@ -65,6 +65,13 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
   const afterResume=writes;assert.deepEqual((await api.ensureRoute(request)).handle,resumed.handle);assert.equal(writes,afterResume,'replay reconciles the existing generation without another allocation');
   const recovery=(await api.listRoutes({home,owner})).routes.filter(row=>row.handle.kind==='durable'&&row.handle.id===resumed.handle.id);assert.equal(recovery.length,1);assert.deepEqual(recovery[0].handle,resumed.handle);assert.equal(recovery[0].published,null);
   assert.equal((await api.closeRoute({home,handle:resumed.handle,mode:'remove'})).cleanup.state,'confirmed');
+  const terminalName=createHash('sha256').update(JSON.stringify([owner,q.operationId])).digest('hex')+'.json';
+  const terminalJournal=JSON.parse(await readFile(join(home,'operations',terminalName),'utf8'));
+  assert.equal(terminalJournal.owner,owner);
+  assert.equal(terminalJournal.operationId,q.operationId);
+  assert.equal(terminalJournal.phase,'terminal','resumed Stop persists terminal operation evidence');
+  assert.deepEqual(terminalJournal.view.handle,resumed.handle,'terminal journal follows exact committed restoration');
+  assert.equal(terminalJournal.view.cleanup.state,'confirmed');
   assert.deepEqual(config,foreign);assert.equal(writes,afterResume+1,'Stop removes exactly the resumed rule');
   const terminalWrites=writes,terminal=await api.ensureRoute(request);
   assert.equal(terminal.state,'released');assert.deepEqual(terminal.handle,resumed.handle);

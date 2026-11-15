@@ -98,7 +98,18 @@ export async function recordOperationView({home,view,reference}){
  return withExclusiveLock(join(dir,'.reservation-lock'),async()=>{
   const path=join(dir,hash(JSON.stringify([reference.owner,reference.operationId]))+'.json'),record=await optionalRead(path);if(!record)return view;checkRecord(record);
   if(record.view.handle.kind!==view.handle.kind||record.view.handle.id!==view.handle.id)return view;
-  if(record.view.handle.generation!==view.handle.generation)return view;
+  if(record.owner!==reference.owner||record.operationId!==reference.operationId||
+     !sameHandle(reference.handle,view.handle))return view;
+  if(record.view.handle.generation!==view.handle.generation){
+   // A committed durable restoration may precede its operation-journal update.
+   // The facade obtained this exact reference before generation-fenced close.
+   if(view.handle.kind!=='durable'||record.view.handle.generation>=view.handle.generation||
+      !Number.isSafeInteger(view.handle.generation)||record.phase==='terminal')return view;
+   // A replacement committed during close dominates this older reply.
+   const current=await operationReferenceForRoute({home,handle:view.handle});
+   if(current&&(!sameHandle(current.handle,view.handle)||current.owner!==reference.owner||
+      current.operationId!==reference.operationId))return view;
+  }
   if(view.cleanup.state==='confirmed')delete record.referenceCleanup;
   record.view={...view,operationId:record.operationId};record.phase=view.cleanup.state==='confirmed'?'terminal':'recovery';await atomicWrite(path,record);return record.view;
  },{waitSeconds:30});
