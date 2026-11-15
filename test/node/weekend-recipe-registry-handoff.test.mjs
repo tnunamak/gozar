@@ -3,7 +3,7 @@
 // only registry identity/labels change. Positive output honors the declared parser.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,rm,lstat} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,rm,lstat,readdir} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -11,6 +11,7 @@ import {randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import http from 'node:http';
+import net from 'node:net';
 import {loadAdapters,sessionRecipeFor,validateSessionRecipe} from '../../packages/gozar-node/adapter-runtime.mjs';
 import {launch,serve} from '../../packages/gozar-node/daemon.mjs';
 import {createTestingGozar} from '../../packages/gozar-node/testing.mjs';
@@ -40,6 +41,14 @@ async function endpointUnavailable(port) {
     req.once('error',error=>error.code==='ECONNREFUSED'?resolve():reject(error));
   });
 }
+async function resolverUnavailable(path) {
+  await new Promise((resolve,reject)=>{
+    const socket=net.createConnection(path);
+    const timer=setTimeout(()=>{socket.destroy();reject(new Error('resolver absence unconfirmed: timeout'));},1500);
+    socket.once('connect',()=>{clearTimeout(timer);socket.destroy();reject(new Error('resolver still listening after cleanup'));});
+    socket.once('error',error=>{clearTimeout(timer);socket.destroy();['ENOENT','ECONNREFUSED'].includes(error.code)?resolve():reject(error);});
+  });
+}
 async function fixture(t) {
   const temporary=join(homedir(),'.tmp');
   await mkdir(temporary,{recursive:true,mode:0o700});
@@ -47,13 +56,13 @@ async function fixture(t) {
   assert.ok(stat.isDirectory()&&!stat.isSymbolicLink());
   assert.equal(stat.mode&0o777,0o700,'fixture parent must already be trusted');
   const root=await mkdtemp(join(temporary,'gr-'));
-  const cleanups=[];
+  const cleanups=[];let retainEvidence=false;
   // Node reports this hook's errors alongside any original body failure.
   t.after(async()=>{const errors=[];
     for(const [index,cleanup] of [...cleanups].reverse().entries())
       try{await bounded('owned cleanup '+index,cleanup);}catch(error){errors.push(error);}
     // Do not erase ownership evidence while any cleanup outcome is uncertain.
-    if(!errors.length)try{await bounded('fixture outputs removal',()=>rm(root,{recursive:true,force:true}));}
+    if(!errors.length&&!retainEvidence)try{await bounded('fixture outputs removal',()=>rm(root,{recursive:true,force:true}));}
       catch(error){errors.push(error);}
     if(errors.length)throw new AggregateError(errors,'Owned fixture cleanup incomplete; evidence retained');
   });
@@ -73,7 +82,7 @@ async function fixture(t) {
     "import {recipeAdapter} from "+JSON.stringify(runtimeURL)+";\nexport default recipeAdapter({definition:new URL('./definition.json',import.meta.url)});\n",{mode:0o600});
   const manifest={providers:[{id,module:'providers/'+id+'/index.mjs',definition:'providers/'+id+'/definition.json'}]};
   const home=join(root,'h');await mkdir(home,{mode:0o700});
-  return {id,root,manifest,home,recipe,wrappedPath,cleanups};
+  return {id,root,manifest,home,recipe,wrappedPath,cleanups,retainEvidence:()=>{retainEvidence=true;}};
 }
 async function handoff(f) {
   const [adapter]=await loadAdapters(f);
@@ -136,7 +145,7 @@ async function stopChild(child) {
   }
 }
 async function transport(t,f,mode) {
-  const children=new Map(),upstreams=new Set();let creates=0,closes=0,gatePort,nonceResponses=0,requests=0,closing=false;
+  const children=new Map(),upstreams=new Set(),resolvers=new Set();let creates=0,closes=0,gatePort,nonceResponses=0,requests=0,closing=false;
   f.cleanups.push(async()=>{for(const req of upstreams)req.destroy(new Error('fixture teardown'));});
   const origin='https://'+f.id+'.tunnl.gg';
   const foreign=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',env:{}});
@@ -166,6 +175,11 @@ async function transport(t,f,mode) {
       if(!longRunning)return probe(args);
       assert.ok(args.includes('output=json'));
       gatePort=Number(args[args.indexOf('-R')+1].split(':').at(-1));assert.ok(gatePort>0);
+      const entries=await readdir(f.home,{withFileTypes:true});
+      for(const entry of entries.filter(e=>/^resolver-[a-f0-9]{12}\.sock$/.test(e.name))){
+        assert.ok(entry.isSocket(),'resolver entry must be a socket');resolvers.add(join(f.home,entry.name));
+      }
+      assert.ok(resolvers.size,'capture actual resolver before allocation');
       const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',env:{}});
       const handle=randomUUID();children.set(handle,child);creates++;
       await bounded('owned fixture spawn',()=>once(child,'spawn'));
@@ -209,6 +223,11 @@ async function transport(t,f,mode) {
       for(const child of children.values())await waitReaped(child,'public cleanup owned PID');
       assert.ok([...children.values()].every(exited),'no live saved owned child');
       await endpointUnavailable(gatePort);
+      try {
+        assert.ok((await lstat(f.home)).isDirectory(),'home must exist before absence checks');
+        for(const path of resolvers)await bounded('resolver connection refusal',()=>resolverUnavailable(path));
+        assert.deepEqual((await readdir(f.home)).filter(name=>/^resolver-[a-f0-9]{12}\.sock$/.test(name)),[]);
+      } catch(error){f.retainEvidence();throw error;}
     },
     facts:()=>({creates,closes,nonceResponses,requests,ownedPids:[...children.values()].map(c=>c.pid),live:[...children.values()].filter(c=>c.exitCode===null&&c.signalCode===null).length})};
 }
@@ -230,6 +249,11 @@ for(const mode of ['positive','invalid','late-failure'])test('actual daemon, gat
     assert.equal(effect.facts().creates,1);assert.ok(effect.facts().nonceResponses>0);
     const status=await bounded('public route status',()=>effect.gozar.routeStatus({home:f.home,handle:route.handle}));
     assert.equal(status.handle.id,route.handle.id);assert.equal(status.state,'usable');
+    const scope={home:f.home,owner:request.owner,providerId:f.id};
+    const current=(await bounded('live configuration',()=>effect.gozar.catalogRoutes(request),OPERATION_MS)).candidates.find(c=>c.providerId===f.id).configuration;
+    const liveDraft=await bounded('live draft',()=>effect.gozar.beginConfigurationDraft({...scope,expectedConfigurationRevision:current.revision}));
+    await assert.rejects(bounded('live commit must remain in use',()=>effect.gozar.commitConfigurationDraft({...scope,draftId:liveDraft.draftId,expectedConfigurationRevision:liveDraft.configuration.revision})),{code:'configuration_in_use'});
+    await bounded('discard live draft',()=>effect.gozar.discardConfigurationDraft({...scope,draftId:liveDraft.draftId}));
     const stopped=await bounded('public route removal',()=>effect.gozar.closeRoute({home:f.home,handle:route.handle,mode:'remove'}));
     t.diagnostic(JSON.stringify({mode,publicCleanup:stopped.cleanup?.state,...effect.facts()}));
     assert.equal(stopped.cleanup.state,'confirmed');
@@ -240,6 +264,11 @@ for(const mode of ['positive','invalid','late-failure'])test('actual daemon, gat
     else assert.ok(effect.facts().requests>0);
   }
   await effect.confirmRemoved();
+  const current=(await bounded('current applied configuration',()=>effect.gozar.catalogRoutes(request),OPERATION_MS)).candidates.find(c=>c.providerId===f.id).configuration;
+  const scope={home:f.home,owner:request.owner,providerId:f.id};
+  const draft=await bounded('unchanged draft',()=>effect.gozar.beginConfigurationDraft({...scope,expectedConfigurationRevision:current.revision}));
+  const committed=await bounded('commit after exact reference release',()=>effect.gozar.commitConfigurationDraft({...scope,draftId:draft.draftId,expectedConfigurationRevision:draft.configuration.revision}));
+  assert.ok(committed.revision);
   assert.equal(effect.facts().live,0,'every owned fixture process stopped');
   assert.equal(effect.foreign.exitCode,null);assert.equal(effect.foreign.signalCode,null);
 });

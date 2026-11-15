@@ -690,19 +690,22 @@ export async function openSessionRoute(request, deps = {}) {
     if(deps.embeddingServices){
       const broker=await startEmbeddingBroker({services:deps.embeddingServices,home,identity:await deps.embeddingServices.resolveIdentity({home}),dispatchEffect:deps.dispatchEffect,
         onLoss:()=>{void import('./daemon.mjs').then(module=>module.control(directory,{type:'resolver-lost'})).catch(()=>{});}});
-      const descriptor=await broker.registerController();brokers.set(stableHandle.id,broker);
+      brokers.set(stableHandle.id,broker);
+      let descriptor;
+      try{descriptor=await broker.registerController();}catch(error){await dropBroker(stableHandle.id);throw error;}
       try{await deps.embeddingServices.registerConfigurationUse({home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle:stableHandle});}
       catch(error){await dropBroker(stableHandle.id);throw error;}
       embedding={resolver:descriptor,identity:{instanceId:descriptor.instanceId,bootId:descriptor.bootId},...(deps.registry?{registry:deps.registry}:{}),registryId:deps.registryId,request:{...redeemed.request,home,owner:request.owner,...(request.intent?{intent:request.intent}:{})},consentReview:redeemed.consentReview,handle:stableHandle,fixtureEffects:!!deps.dispatchEffect};
     }
-    let reply = await (deps.startSession ?? legacyStartSession)({ home, directory, adapterId: redeemed.adapter.id, port, lifetimeMs: request.usage.lifetimeMs,
+    let reply;
+    try {
+      reply = await (deps.startSession ?? legacyStartSession)({ home, directory, adapterId: redeemed.adapter.id, port, lifetimeMs: request.usage.lifetimeMs,
       ...recipeHandoff,owner:request.owner,operationId:request.operationId,sessionId:stableHandle.id.split(':').slice(1).join(':'),embedding,
       origin: request.origin ?? redeemed.plan.origin ?? null, requirements: request.requirements, wait: request.wait });
     const sessionId = reply.snapshot?.sessionId;
     const handle = { kind: 'session', id: sessionId ? `port-${port}:${sessionId}` : `port-${port}`, generation: 1 };
     const project = value => projectSession(value, { handle, properties: redeemed.adapter.definition.capabilities, now: (deps.now ?? Date.now)() });
     // Like an attached route, a session returns when `wait` is met and fails, cleaned up, when it cannot be.
-    try {
       const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
       for (;;) {
         const view = project(reply);
@@ -714,7 +717,7 @@ export async function openSessionRoute(request, deps = {}) {
         try { reply = await (deps.sessionStatus ?? (async () => (await import('./daemon.mjs')).control(directory, { type: 'status' }, 30_000)))(); }
         catch (cause) { throw gozarError('provider_unavailable', 'The session controller stopped before the route was ready', null, cause); }
       }
-    } catch (error) { throw await failedSessionStart(directory, error, deps); }
+    } catch (error) { throw await failedSessionStart(directory, error, deps, {home,handle:stableHandle,owner:request.owner,providerId:redeemed.adapter.id,properties:redeemed.adapter.definition.capabilities}); }
   } catch (error) { throw normalizeError(error); }
 }
 
@@ -759,16 +762,41 @@ async function sessionStartFailure(reply, { home, adapterId, deps }) {
  * A session that did not reach `wait` must not keep running: stop it through the session's own path (which removes the
  * provider state), then prove the controller process is gone. The reported error stays the original one unless cleanup is unconfirmed.
  */
-async function failedSessionStart(directory, error, deps) {
-  let identity = null;
-  try { identity = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8')); } catch {}
-  let stopped = null, stopFailure = null;
-  try { stopped = await (deps.stopSession ?? (async () => (await import('./daemon.mjs')).stopSession(directory)))(); } catch (cause) { stopFailure = cause; }
-  const outcome = identity?.startIdentity ? await stopController({ pid: identity.pid, startIdentity: identity.startIdentity }) : { state: 'gone' };
-  const unconfirmed = stopFailure || stopped?.snapshot?.phase === 'cleanup-pending' || stopped?.localCleanupFailures?.length;
-  const stop = `Run: ${cliCommand('stop', Number(directory.slice(directory.lastIndexOf('-') + 1)), dirname(directory))}`;
-  return withCleanupOutcome(unconfirmed ? gozarError('cleanup_debt', 'The route failed to start and its cleanup is not confirmed; stop the session again',
-    instructionAction('stop-session', 'Stop the failed session', stop), error) : error, outcome);
+async function failedSessionStart(directory, error, deps, scope) {
+  let identity = null, stopped = null, cleanupFailure = null, outcome = {state:'unconfirmed'};
+  let bootstrap;
+  try {
+    bootstrap=await readJson(join(directory,'bootstrap.json'));
+    // A failed launch can encounter another session. Never stop that controller.
+    if(deps.embeddingServices && (bootstrap?.embedding?.handle?.id!==scope.handle.id ||
+        bootstrap.embedding.handle.generation!==scope.handle.generation))
+      throw gozarError('cleanup_debt','No matching recorded session proves ownership of startup cleanup');
+    identity=await readJson(join(directory,'control.json'));
+    try { stopped=await (deps.stopSession ?? (async()=> (await import('./daemon.mjs')).stopSession(directory)))(); }
+    catch(cause){cleanupFailure=cause;}
+    outcome=identity?.startIdentity
+      ? await stopController({pid:identity.pid,startIdentity:identity.startIdentity})
+      : error.controllerCleanup ?? {state:'unconfirmed'};
+    // Controller death alone is not proof of provider/resource removal.
+    if(cleanupFailure || stopped?.snapshot?.phase!=='stopped' ||
+        stopped?.localCleanupFailures?.length || outcome.state==='unconfirmed')
+      throw cleanupFailure ?? gozarError('cleanup_debt','Resource or controller cleanup remains unconfirmed');
+    if(deps.embeddingServices)await releaseRecordedConfigurationUse({registryId:bootstrap.embedding.registryId,home:scope.home,
+      owner:bootstrap.owner,providerId:bootstrap.adapterId,handle:scope.handle},deps);
+  } catch(cause){cleanupFailure=cause;}
+  finally {
+    // Revoke only this abandoned parent's broker, even if metadata must be retried.
+    try{await dropBroker(scope.handle.id);}catch(cause){cleanupFailure??=cause;}
+  }
+  const stop=`Run: ${cliCommand('stop', Number(directory.slice(directory.lastIndexOf('-') + 1)), dirname(directory))}`;
+  const nextAction=instructionAction('stop-session','Stop the failed session',stop);
+  const result=cleanupFailure ? gozarError('cleanup_debt','The route failed to start and cleanup or reference release is unconfirmed; retry removal with the retained handle',nextAction,error) : error;
+  const decorated=withCleanupOutcome(result,outcome);
+  if(stopped?.snapshot){
+    const view=projectSession(stopped,{handle:scope.handle,properties:scope.properties,now:(deps.now??Date.now)()});
+    decorated.route=cleanupFailure ? {...view,state:'uncertain',cleanup:{state:'unconfirmed',nextAction,message:result.message}} : view;
+  } else if(error.route) decorated.route={...error.route,handle:scope.handle,state:'uncertain',cleanup:{state:'unconfirmed',nextAction,message:result.message}};
+  return decorated;
 }
 
 // --- Detached controller entry ------------------------------------------------------------------
