@@ -28,7 +28,8 @@ const server=net.createServer(socket=>{
   const {nonce:provided,command}=JSON.parse(input.split('\\n')[0]);
   if(provided!==nonce){socket.destroy();return;}
   const stop=command.type==='stop';
-  socket.end(JSON.stringify({snapshot:{sessionId:config.sessionId,adapterId:config.adapterId,phase:stop?'stopped':'starting'}})+'\\n',()=>{if(stop)shutdown();});
+  // No provider resources are allocated; actual owned PID/socket exit is asserted independently.
+  socket.end(JSON.stringify({snapshot:{sessionId:config.sessionId,adapterId:config.adapterId,phase:stop?'stopped':'starting',...(stop?{resources:[]}:{})},...(stop?{localCleanupFailures:[]}:{})})+'\\n',()=>{if(stop)shutdown();});
  });
 });
 process.on('SIGTERM',shutdown);
