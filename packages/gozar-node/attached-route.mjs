@@ -361,6 +361,9 @@ export async function closeAttachedRoute(request, deps = {}) {
   catch (error) {
     if (!error.gone) throw error;
     const state = await viewFromRecord(directory, handle);
+    const savedScope=await readJson(join(directory,'bootstrap.json'));
+    if(savedScope?.owner!==request.owner||savedScope?.registryId!==deps.registryId||savedScope?.home!==await canonicalHome(request.home))
+      throw gozarError('route_conflict','Retained route belongs to another recovery scope');
     if(state.startupCompensation&&state.lastView?.cleanup.state!=='confirmed'){
       const evidence=state.startupCompensation,scope=evidence.scope,bootstrap=await readJson(join(directory,'bootstrap.json'));
       const matches=scope&&scope.handle?.kind===handle.kind&&scope.handle.id===handle.id&&scope.handle.generation===handle.generation&&
@@ -377,17 +380,58 @@ export async function closeAttachedRoute(request, deps = {}) {
       }
     }
     if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') return releasedView(state.lastView, handle);
-    // Without an owned receipt or recovery effects, retain debt without loading transient runtime.
-    if (!state.receipt || !deps.effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
-    // The controller died with the route up: remove it from the saved receipt, in this process.
-    const adapters = await adaptersOf(deps);
-    const adapter = adapters.find(item => item.id === state.adapterId);
-    if (!adapter || !state.receipt || !deps.effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
-    const read = bindConfiguration(await readContextFor(deps, await canonicalHome(request.home), deps.platform ?? process.platform), adapter.id);
-    const observed = await adapter.observe(read, state.request);
-    const removal = await adapter.remove(bindConfiguration({ ...read, generation: state.handle.generation, ...deps.effectContext({ adapter, readContext: read, request: state.request, plan: state.plan, generation: state.handle.generation }) }, adapter.id), state.receipt, observed);
-    return removal.removed && !removal.debt ? releasedView(state.lastView, handle)
-      : { ...releasedView(state.lastView, handle), state: 'uncertain', cleanup: { state: 'unconfirmed', message: removal.debt?.message ?? 'The route could not be removed' } };
+    return withExclusiveLock(join(directory,'.recovery.lock'),async()=>{
+      const state=await viewFromRecord(directory,handle);
+      const bootstrap=await readJson(join(directory,'bootstrap.json'));
+      const home=await canonicalHome(request.home);
+      const matches=bootstrap&&bootstrap.home===home&&bootstrap.owner===request.owner&&
+        bootstrap.registryId===deps.registryId&&bootstrap.adapterId===state.adapterId&&
+        bootstrap.id===handle.id&&JSON.stringify(state.request)===JSON.stringify(bootstrap.request)&&
+        JSON.stringify(state.plan)===JSON.stringify(bootstrap.plan)&&state.receipt&&
+        state.receipt.adapterId===state.adapterId&&state.receipt.resourceKey===state.plan?.resourceKey&&
+        state.receipt.generation===handle.generation&&
+        (state.receipt.operationId??null)===(bootstrap.operationId??null);
+      if(!matches)throw gozarError('route_conflict','Retained removal does not match this owner and allocation');
+      const control=await readJson(join(directory,'control.json'));
+      if(!control?.startIdentity||await processIdentity(control.pid)===control.startIdentity)
+        return recoveryHistory(state.lastView,'Controller absence is not established; retain the exact handle');
+      const exact=state.resourceRemoval?.removed===true&&
+        JSON.stringify(state.resourceRemoval.handle)===JSON.stringify(handle)&&
+        JSON.stringify(state.resourceRemoval.receipt)===JSON.stringify(state.receipt);
+      if(state.resourceRemoval&&!exact)throw gozarError('route_conflict','Removal milestone names another receipt');
+      if(!exact){
+        if(!deps.effectContext)return recoveryHistory(state.lastView,'No admitted recovery effects are available');
+        const adapter=(await adaptersOf(deps)).find(item=>item.id===state.adapterId);
+        if(!adapter)return recoveryHistory(state.lastView,'The recorded adapter is unavailable');
+        const read=bindConfiguration(await readContextFor(deps,home,deps.platform??process.platform,request.owner),adapter.id);
+        const observed=await adapter.observe(read,state.request);
+        const removal=await adapter.remove(bindConfiguration({...read,generation:handle.generation,
+          ...deps.effectContext({adapter,readContext:read,request:state.request,plan:state.plan,generation:handle.generation})},adapter.id),state.receipt,observed);
+        if(!removal.removed||removal.debt)return recoveryHistory(state.lastView,removal.debt?.message??'Physical removal remains unconfirmed');
+        state.resourceRemoval={removed:true,handle:{...handle},receipt:structuredClone(state.receipt)};
+        state.phase='recovery';
+        state.lastView={...state.lastView,state:'uncertain',published:null,ingress:null,
+          cleanup:{state:'unconfirmed',message:'Physical removal is complete; reference cleanup remains'}};
+        // Durable physical fact precedes every fallible broker/reference finalizer.
+        await atomicWrite(join(directory,'state.json'),state);
+      }
+      try{
+        if(!state.resourceRemoval.brokerClosed){
+          if(!brokers.has(handle.id))throw gozarError('cleanup_debt','Creator broker shutdown is not known in this starter');
+          await dropBroker(handle.id);
+          state.resourceRemoval.brokerClosed=true;
+          await atomicWrite(join(directory,'state.json'),state);
+        }
+        await releaseRecordedConfigurationUse({registryId:bootstrap.registryId,home,owner:bootstrap.owner,
+          providerId:bootstrap.adapterId,handle},deps);
+        state.lastView={...releasedView(state.lastView,handle),operationId:state.lastView.operationId??null};
+        state.phase='released';await atomicWrite(join(directory,'state.json'),state);
+        return state.lastView;
+      }catch(cause){
+        const failure=gozarError('cleanup_debt','Physical removal completed but finalization remains unconfirmed',null,cause);
+        failure.route=state.lastView;throw failure;
+      }
+    },{waitSeconds:30});
   }
 }
 
@@ -468,11 +512,12 @@ export async function runAttachedController(directory, runtime = {}) {
   const expired=()=>session&&now()>=bootstrap.expiresAtMs;
   const lease = { ...(session?{expiresAtMs:bootstrap.expiresAtMs}:{}), target: bootstrap.request.target, state: 'creating', origin: null, properties: adapter.definition.capabilities, ingress: null, identity:bootstrap.identity??null,
     limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
+  let resourceRemoval=null;
   let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null, proofSession = null,initialSettled=false;
   const nonce = randomBytes(32).toString('hex');
   const lastView = () => ({...projectAttached(expired()&&lease.state==='usable'?{...lease,state:'unverified'}:lease, { handle, now: now() }),operationId:bootstrap.operationId??null,...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
   const save = () => atomicWrite(join(directory, 'state.json'), { schemaVersion: 1, adapterId: adapter.id, request: bootstrap.request, plan: bootstrap.plan,
-    receipt, handle, phase: lease.state, lastView: lastView() });
+    receipt, resourceRemoval, handle, phase: lease.state, lastView: lastView() });
 
   const admitted = (runtime.effectContext ?? (await loadRuntime())?.createAttachedEffectContext)?.({ adapter, readContext: read, request: bootstrap.request, plan: bootstrap.plan, generation: 1 });
   // The effect is admitted for generation 1: a new route. Receipts carry the generation create returns.
@@ -568,9 +613,17 @@ export async function runAttachedController(directory, runtime = {}) {
     } catch { if (!releasing) { lease.state = 'unverified'; await save(); } }
   }
   async function removeRoute() {
+    if(resourceRemoval?.removed&&JSON.stringify(resourceRemoval.receipt)===JSON.stringify(receipt)){
+      await save();return {removed:true,debt:null};
+    }
     let observed;
     try{observed=await adapter.observe(read,bootstrap.request);}catch{observed={known:false,reason:'provider-observation-unavailable'};}
-    return adapter.remove(context, receipt, observed);
+    const removal=await adapter.remove(context, receipt, observed);
+    if(removal.removed&&!removal.debt){
+      resourceRemoval={removed:true,handle:{...handle},receipt:structuredClone(receipt)};
+      await save();
+    }
+    return removal;
   }
   const debtOf = removal => ({ state: 'unconfirmed', message: removal.debt?.message ?? 'The route could not be removed' });
   const creation = (async () => {
@@ -612,7 +665,7 @@ export async function runAttachedController(directory, runtime = {}) {
       failure = { code: error.code, message: error.message,nextAction:error.nextAction??null };
       lease.state = 'lost';
       if (receipt) {
-        try { const removal = await removeRoute(); if (!removal.removed || removal.debt) Object.assign(lease, { state: 'uncertain', cleanup: debtOf(removal) }); else {lease.cleanup = {state:'confirmed'};await releaseUse();} }
+        try { const removal = await removeRoute(); if (!removal.removed || removal.debt) Object.assign(lease, { state: 'uncertain', cleanup: debtOf(removal) }); else {await releaseUse();lease.cleanup = {state:'confirmed'};} }
         catch { Object.assign(lease, { state: 'uncertain', cleanup: { state: 'unconfirmed', message: 'The route could not be withdrawn; close it again' } }); }
       } else { lease.state = 'uncertain'; lease.cleanup = {state:'unconfirmed',message:'Startup failed before an owned runtime receipt was returned'}; }
       await atomicWrite(join(directory, 'failure.json'), failure);
@@ -631,7 +684,7 @@ export async function runAttachedController(directory, runtime = {}) {
       try {
         if(!receipt)throw gozarError('cleanup_debt','Startup outcome remains unknown; retain this recovery handle');
         const removal = await removeRoute();
-        if (removal.removed && !removal.debt) { lease.state = 'released'; lease.cleanup = { state: 'confirmed' };await releaseUse(); }
+        if (removal.removed && !removal.debt) { await releaseUse();lease.state = 'released'; lease.cleanup = { state: 'confirmed' }; }
         else { lease.state = 'uncertain'; lease.cleanup = debtOf(removal); }
       } catch (cause) { lease.state = 'uncertain'; lease.cleanup = { state: 'unconfirmed', message: `Removal failed (${normalizeError(cause).code})` }; }
       await save();
@@ -664,6 +717,8 @@ export async function runAttachedController(directory, runtime = {}) {
         if (command.generation !== undefined && command.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
         if (command.type === 'status') { if (command.fresh) await verify(); return reply({ view: lastView(),startupComplete:initialSettled }); }
         if(command.type==='review-consent'){
+          // Failed startup remains cleanup authority, never a withdrawn live route.
+          if(failure)throw gozarError(failure.code,failure.message,failure.nextAction??null);
           lease.state='unverified';lease.consentChange={reason:safeRefresh()?'review-requested':'proof-refresh-unsupported',nextAction:safeRefresh()?instructionAction('review-route-consent','Review route consent','Approve the current review before publication can resume.'):null};await save();
           if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
           const current=await currentConsent();if(!current)throw gozarError('unsupported','This route has no current consent snapshot');
@@ -675,6 +730,7 @@ export async function runAttachedController(directory, runtime = {}) {
           reviewTokens.set(token,{snapshot,current});return reply({review:snapshot});
         }
         if(command.type==='approve-consent'){
+          if(failure)throw gozarError(failure.code,failure.message,failure.nextAction??null);
           lease.state='unverified';await save();
           if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
           const stored=reviewTokens.get(command.approvalToken);reviewTokens.delete(command.approvalToken);
