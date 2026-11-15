@@ -22,7 +22,12 @@ export type ProcessEffectResult={available:boolean}|{handle:string}|{present:boo
 export type LocalApiEffectRequest={kind:'local-api';operation:'request';input:{path:string;method:string;headers:Record<string,string>;body:JsonValue}};
 export type LocalApiEffectResult={status:number;headers:Record<string,string>;body:string};
 export type RecipeProbeRequest={kind:'recipe';operation:'probe';input:{recipe:JsonValue}};
-export type RecipeProbeResult={stdout:string;stderr:string;exitCode:number};
+/** Interface inventory is current observation only, never a selection/firewall/peer proof.
+ * It uses the already-declared recipe/probe operation with recipe.kind interfaces.
+ * Missing mappings fail closed without falling back to the real host.
+ */
+export type InterfaceProbeResult={interfaces:Record<string,{address:string;internal:boolean}[]>};
+export type RecipeProbeResult={stdout:string;stderr:string;exitCode:number}|InterfaceProbeResult;
 /** Long-running fixtures return an actual harmless child PID; the normal owned-PID ledger still governs removal. */
 export type SpawnEffectRequest=
  |{kind:'spawn';operation:'run';input:{program:string;args:string[];longRunning:boolean}}

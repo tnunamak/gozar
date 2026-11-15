@@ -20,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
+import { selectedInterfaceAddress } from './interfaces.mjs';
 
 const packageRoot = fileURLToPath(new URL('../../', import.meta.url));
 const defaultAdaptersRoot = resolve(packageRoot, 'adapters');
@@ -371,9 +372,22 @@ async function runDetectRecipe(recipe,dispatchEffect) {
     const [effect] = output.effects;
     let completion;
     if(dispatchEffect){
-      if(effect.operation!=='detect'||effect.kind!=='spawn')throw effectError('unsupported','Fixture detection accepts only declared read-only process observations');
+      if(effect.operation!=='detect'||!['spawn','interfaces'].includes(effect.kind))throw effectError('unsupported','Fixture detection accepts only declared read-only observations');
       const result=await dispatchEffect({kind:'recipe',operation:'probe',input:{recipe}});
-      if(typeof result?.stdout!=='string'||typeof result?.stderr!=='string'||!Number.isInteger(result?.exitCode)||Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr)>Math.min(recipe.maxOutputBytes??65536,65536))throw effectError('provider_unavailable','The fixture probe returned an invalid bounded observation');
+      const limit=Math.min(recipe.maxOutputBytes??65536,65536);
+      if(effect.kind==='spawn') {
+        if(typeof result?.stdout!=='string'||typeof result?.stderr!=='string'||!Number.isInteger(result?.exitCode)||Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr)>limit)throw effectError('provider_unavailable','The fixture probe returned an invalid bounded observation');
+      } else {
+        // The same document shape as EffectDriver.interfaces; Rust owns the recipe predicate.
+        // Reuse the existing address classifier, never interpret inventory as reachability proof.
+        const plain=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&Object.getPrototypeOf(value)===Object.prototype;
+        if(!plain(result)||Object.keys(result).some(key=>key!=='interfaces')||!plain(result.interfaces)||
+          Buffer.byteLength(JSON.stringify(result))>limit||
+          Object.values(result.interfaces).some(rows=>!Array.isArray(rows)||rows.some(row=>!plain(row)||
+            typeof row.address!=='string'||typeof row.internal!=='boolean'||
+            (!row.internal&&!selectedInterfaceAddress(row.address)))))
+          throw effectError('provider_unavailable','The fixture probe returned an invalid bounded interface observation');
+      }
       completion={type:'effect-result',effectId:effect.id,sessionId:effect.sessionId,generation:effect.generation,ok:true,result};
     }else completion=await driver.execute(effect);
     output = coreStep({ state: output.state, command: { sessionId: 'probe', ...completion }, adapters, requirements, host: { ...driver.host, nowMs: driver.nowMs() } });
