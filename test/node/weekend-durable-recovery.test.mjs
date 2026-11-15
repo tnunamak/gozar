@@ -43,16 +43,32 @@ const corruptions=[
   ['filename does not bind route ID',{routeId:'another-route'}],
 ];
 
+async function validControls(api,home,path,valid){
+  const dir=join(home,'routes'),names=(await readdir(dir)).sort(),homeNames=(await readdir(home)).sort();
+  const unchanged=async()=>{
+    assert.equal(await readFile(path,'utf8'),valid,'valid enumeration preserves exact record bytes');
+    assert.deepEqual((await readdir(dir)).sort(),names,'valid enumeration preserves route entries');
+    assert.deepEqual((await readdir(home)).sort(),homeNames,'valid enumeration creates no recovery state');
+  };
+  for(const selector of [{home,owner:'recovery-test'},{home}]){
+    const result=await api.listRoutes(selector);
+    assert.ok(Array.isArray(result.routes),'public enumeration returns routes');
+    assert.equal(result.routes.length,1,'eligible valid record must not be rejected or silently omitted');
+    assert.deepEqual(result.routes[0].handle,{kind:'durable',id:'recoverable',generation:1});
+    await unchanged();
+  }
+  // Filtering is separate from the two nonempty eligibility controls.
+  assert.deepEqual(await api.listRoutes({home,owner:'other-owner'}),{routes:[]});
+  await unchanged();
+}
+
 test('public durable enumeration refuses malformed record identity without rewriting evidence',async t=>{
   for(const [name,overrides] of corruptions)await t.test(name,async t=>{
     const f=await scratch(t),dir=join(f.home,'routes'),path=join(dir,hash('recoverable')+'.json');
     const api=createRouteApi();
     const valid=JSON.stringify(record());
     await writeFile(path,valid,{mode:0o600});
-    // Positive control: an otherwise valid foreign record is filtered normally.
-    // An always-reject implementation cannot satisfy this test.
-    assert.deepEqual(await api.listRoutes({home:f.home,owner:'other-owner'}),{routes:[]});
-    assert.equal(await readFile(path,'utf8'),valid);
+    await validControls(api,f.home,path,valid);
     const bytes=JSON.stringify({...record(),...overrides});
     await writeFile(path,bytes,{mode:0o600});
     const names=await readdir(dir),homeNames=await readdir(f.home);
@@ -71,8 +87,7 @@ test('public durable enumeration refuses malformed JSON with a sanitized error a
   const f=await scratch(t),dir=join(f.home,'routes'),path=join(dir,hash('recoverable')+'.json');
   const api=createRouteApi(),valid=JSON.stringify(record());
   await writeFile(path,valid,{mode:0o600});
-  assert.deepEqual(await api.listRoutes({home:f.home,owner:'other-owner'}),{routes:[]});
-  assert.ok((await readFile(path,'utf8'))===valid,'valid foreign control leaves evidence unchanged');
+  await validControls(api,f.home,path,valid);
 
   // Not a credential: a fresh marker detects accidental parser-message disclosure.
   const canary='malformed-record-'+randomUUID();
