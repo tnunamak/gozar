@@ -139,7 +139,10 @@ test('native authenticated observation preserves current proof and demotes publi
   // Public review is explicitly outside the measured interval; no assigned private flags.
   await bounded(api.reviewRouteConsent({home,owner:q.owner,handle}));
   const blocked=await bounded(observeSession(directory,ask));
-  assert.equal(blocked.snapshot.published,null);assert.equal(blocked.validation,null);
+  assert.equal(blocked.snapshot.published,null);
+  assert.equal(Object.hasOwn(blocked,'validation'),false,'private envelope must omit current validation when authority is blocked');
+  assert.equal(blocked.snapshot.phase,'degraded');
+  assert.deepEqual(blocked.consentChange,{reason:'cached-authority-unavailable',nextAction:null});
   assert.equal(owned.child.pid,savedPid);assert.equal(alive(owned.child),true);
   const response=await bounded(fetch('http://127.0.0.1:'+app.address().port+'/foreign',{signal:AbortSignal.timeout(3000)}));
   assert.equal(await bounded(response.text()),'foreign-alive');
