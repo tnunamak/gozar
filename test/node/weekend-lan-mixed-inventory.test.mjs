@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, chmod, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { isIP } from 'node:net';
 import { createTestingGozar } from '../../packages/gozar-node/testing.mjs';
 import { selectedInterfaceAddress } from '../../packages/gozar-node/interfaces.mjs';
 
@@ -65,6 +66,49 @@ test('usable IPv4 survives unselected rows, order changes and multiple interface
   assert.equal(internal.candidateToken, null);
   assert.equal((await read(inventory([linkLocal(), ipv4()]))).setup.state, 'ready');
 });
+
+test('zoned IPv6 observations preserve public catalog availability without granting bind authority', async t => {
+  const read = await fixture(t);
+  for (const address of ['fe80::1%eth0', 'fe80::1%1']) {
+    assert.equal(isIP(address), 6, 'Node recognizes the actual zoned IPv6 observation');
+    assert.equal(selectedInterfaceAddress(address), true, 'existing selector accepts this explicit zone');
+    const shapes = [
+      value => inventory([row(value)]),
+      value => inventory([row(value), ipv4()]),
+      value => inventory([ipv4(), row(value)]),
+      value => ({ interfaces: { zoned: [row(value)], sibling: [ipv4()] } }),
+      value => ({ interfaces: { sibling: [ipv4()], zoned: [row(value)] } }),
+    ];
+    for (const shape of shapes) {
+      // Same shape/internal flags, replacing only one valid raw address.
+      // Compare availability, never opaque token bytes or published-route claims.
+      const baseline = await read(shape('192.0.2.18'));
+      assert.equal(baseline.setup.state, 'ready');
+      assert.equal(typeof baseline.candidateToken, 'string');
+      assert.ok(baseline.candidateToken.length > 0);
+      for (let repeat = 0; repeat < 2; repeat++) {
+        const candidate = await read(shape(address));
+        assert.equal(candidate.setup.state, baseline.setup.state);
+        assert.notEqual(candidate.setup.state, 'unknown');
+        assert.equal(typeof candidate.candidateToken, typeof baseline.candidateToken);
+        assert.ok(candidate.candidateToken.length > 0);
+      }
+    }
+    const internal = await read(inventory([row(address, true)]));
+    assert.notEqual(internal.setup.state, 'ready');
+    assert.equal(internal.candidateToken, null);
+    const restored = await read(inventory([row(address)]));
+    assert.equal(restored.setup.state, 'ready');
+    assert.equal(typeof restored.candidateToken, 'string');
+    assert.ok(restored.candidateToken.length > 0);
+  }
+  for (const address of ['fe80::1', '::1', 'ff02::1']) {
+    assert.equal(isIP(address), 6, 'raw validity is distinct from selected bind eligibility');
+    assert.equal(selectedInterfaceAddress(address), false);
+  }
+  // No underscore-zone policy is fixed here; no binding, firewall or peer proof is supplied.
+});
+
 
 test('well-formed unselectable addresses reach the existing core predicate without gaining bind authority', async t => {
   const read = await fixture(t);

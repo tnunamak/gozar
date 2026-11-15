@@ -5,7 +5,7 @@ import { safeOrigin } from './catalog.mjs';
 
 // Only core transitions are serialized. Slow effects do not prevent a stop from fencing publication.
 export class Controller {
-  constructor({ step, journal, adapters, requirements, targetPort, servicePort, sessionId = randomUUID(), origin, bindAddresses = [], firewallApproved = false, driver, onAutomaticStop }) {
+  constructor({ step, journal, adapters, requirements, targetPort, servicePort, sessionId = randomUUID(), origin, bindAddresses = [], firewallApproved = false, fixtureLocalTransport = null, driver, onAutomaticStop }) {
     Object.assign(this, { step, journal, adapters, requirements, targetPort, servicePort, sessionId, origin });
     this.state = undefined;
     this.last = undefined;
@@ -14,7 +14,7 @@ export class Controller {
     this.background = new Set();
     this.hostLimitations = new Set();
     this.keyLease = null;
-    this.driver = driver ?? new EffectDriver({ adapters, journal, sessionId, targetPort, origin, bindAddresses, firewallApproved,
+    this.driver = driver ?? new EffectDriver({ adapters, journal, sessionId, targetPort, origin, bindAddresses, firewallApproved, fixtureLocalTransport,
       onExit: () => { if (!this.driver.stopped) {
         // Never await finalization from an effect completion that it must drain.
         setImmediate(() => (onAutomaticStop ? onAutomaticStop() : this.shutdown()).catch(() => {}));
