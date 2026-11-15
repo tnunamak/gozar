@@ -87,7 +87,10 @@ export async function launch(directory, configuration, executable, options = {})
   if (configuration.lifetimeMs !== undefined) validateLifetimeMs(configuration.lifetimeMs);
   try {
     await control(directory, { type:'status', initial:true }, 1_000);
-    return await control(directory, { type:'status' }, 1_000);
+    const reply = await control(directory, { type:'status' }, 1_000);
+    if (configuration.sessionId !== undefined && reply.snapshot?.sessionId !== configuration.sessionId)
+      throw gozarError('route_conflict', 'The running controller belongs to a different session incarnation');
+    return reply;
   }
   catch (error) { if (!['ENOENT', 'ECONNREFUSED'].includes(error.code) && !error.message.includes('not running')) throw error; }
   await mkdir(directory, { recursive: true, mode: 0o700 });

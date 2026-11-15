@@ -7,7 +7,7 @@ import {mkdir,mkdtemp,lstat,readFile,writeFile,rm} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {openSessionRoute} from '../../packages/gozar-node/attached-route.mjs';
-import {control} from '../../packages/gozar-node/daemon.mjs';
+import {control,launch} from '../../packages/gozar-node/daemon.mjs';
 import {processIdentity} from '../../packages/gozar-node/process-identity.mjs';
 import {query,stubAdapter,tokenStubs} from './route-schema-check.mjs';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -119,4 +119,39 @@ test('matching owned failed allocation is stopped while independent foreign chil
  await gone(owned,w.directory);
  assert.ok(live(foreign));assert.equal((await control(other,{type:'status'},1000)).snapshot.sessionId,foreignId);
  assert.deepEqual(await Promise.all(['bootstrap.json','control.json'].map(n=>readFile(join(other,n)))),before);
+});
+
+for(const supplied of ['different','missing'])test('live launch refuses '+supplied+' expected incarnation without touching foreign controller',{timeout:20000},async t=>{
+ const w=await world(t),sessionId='foreign-'+randomUUID();
+ const config={targetPort:w.port,adapterId:'stub-b',...(supplied==='missing'?{}:{sessionId})};
+ const child=await w.start(w.directory,config);
+ const before=await Promise.all(['bootstrap.json','control.json'].map(name=>readFile(join(w.directory,name))));
+ const marker=join(w.home,'unexpected-launch'),executable=join(w.home,'unexpected.mjs');
+ await writeFile(executable,"import {writeFile} from 'node:fs/promises'; await writeFile("+JSON.stringify(marker)+",'spawned');");
+ let kills=0;
+ await assert.rejects(launch(w.directory,{targetPort:w.port,sessionId:'reserved-'+randomUUID()},executable,{
+  startupTimeoutMs:500,kill:()=>{kills++;assert.fail('foreign controller must not be signalled');},
+ }),{code:'route_conflict'});
+ assert.equal(kills,0);assert.ok(live(child));
+ assert.deepEqual((await control(w.directory,{type:'status'},1000)).snapshot,
+  {adapterId:'stub-b',phase:'starting',...(supplied==='missing'?{}:{sessionId})});
+ assert.deepEqual(await Promise.all(['bootstrap.json','control.json'].map(name=>readFile(join(w.directory,name)))),before);
+ for(const path of [marker,join(w.directory,'launch.json')])
+  await assert.rejects(lstat(path),error=>error.code==='ENOENT');
+});
+
+test('live launch matching expected incarnation and omitted legacy identity reuse exact status',{timeout:20000},async t=>{
+ const w=await world(t),sessionId='owned-'+randomUUID();
+ const child=await w.start(w.directory,{sessionId,targetPort:w.port,adapterId:'stub-b'});
+ const before=await Promise.all(['bootstrap.json','control.json'].map(name=>readFile(join(w.directory,name))));
+ const expected=await control(w.directory,{type:'status'},1000);
+ for(const configuration of [{sessionId,targetPort:w.port},{targetPort:w.port}]){
+  const reply=await launch(w.directory,configuration,join(w.home,'must-not-start.mjs'),{
+   kill:()=>assert.fail('reused controller must not be signalled'),
+  });
+  assert.deepEqual(reply,expected);assert.ok(live(child));
+  assert.deepEqual(await control(w.directory,{type:'status'},1000),expected);
+  assert.deepEqual(await Promise.all(['bootstrap.json','control.json'].map(name=>readFile(join(w.directory,name)))),before);
+  await assert.rejects(lstat(join(w.directory,'launch.json')),error=>error.code==='ENOENT');
+ }
 });
