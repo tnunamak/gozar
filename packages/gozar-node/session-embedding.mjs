@@ -11,7 +11,11 @@ import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
 import {gozarError,instructionAction} from './error-normalizer.mjs';
 
 export async function connectSessionEmbedding(config,{onLoss}){
- const saved=config.embedding;if(!saved)return null;
+ const source=config.embedding;if(!source)return null;
+ const fixtureEffects=source.fixtureEffects===true;
+ // Normalize only this local view; persisted configuration is never mutated.
+ // Every capability branch and the projected flag below sees the same boolean.
+ const saved={...source,fixtureEffects};
  if(await registryIdentity(saved.registry)!==saved.registryId)throw gozarError('artifact_integrity_failed','The controller registry content changed');
  let lost=false,blocked=false,approved=saved.consentReview,current,subject=null;
  const services=await connectEmbeddingBroker({descriptor:saved.resolver,identity:saved.identity,onLoss:()=>{lost=true;blocked=true;onLoss();}});
