@@ -181,12 +181,21 @@ export async function loadAdapters({ manifest, root } = {}) {
 
 // --- recipeAdapter ------------------------------------------------------------------------------------
 
+// Inspection errors describe a stale/unreadable executable snapshot, not provider effects.
+// Never retain the original message, inspected path/text or cause.
+function artifactInspectionError(error) {
+  if (error?.name === 'AbortError' || ['ABORT_ERR', 'cancelled', 'operation_cancelled'].includes(error?.code)) return error;
+  return Object.assign(new Error('Session recipe artifact could not be validated'), {code:'artifact_integrity_failed'});
+}
+
 const sessionRecipes = new WeakMap();
 // Provenance is private to recipeAdapter; callers receive data, never executable closures.
 export function sessionRecipeFor(adapter) {
   const source = sessionRecipes.get(adapter);
   const definition = source?.wrapped;
-  const current = source && readDefinition(source.location);
+  let current;
+  try { current = source && readDefinition(source.location); }
+  catch (error) { throw artifactInspectionError(error); }
   if (!definition || !isDeepStrictEqual(current.wrapped, definition) ||
       !isDeepStrictEqual(current.adapter, adapter.definition) || definition.id !== adapter.id ||
       definition.planVersion !== 1 || definition.admission?.state !== 'admitted' ||
@@ -204,15 +213,17 @@ export async function validateSessionRecipe(configuration) {
   if(mapping?.schemaVersion!==1 || mapping.adapterId!==configuration.adapterId ||
       !registry || typeof configuration.recipeRegistryId!=='string' ||
       !mapping.definition || mapping.digest!==sha(mapping.definition))reject();
-  const {registryIdentity}=await import('./registry-identity.mjs');
-  if(configuration.embedding && configuration.embedding.registryId!==configuration.recipeRegistryId)reject();
-  if(await registryIdentity(registry)!==configuration.recipeRegistryId)reject();
-  const adapter=(await loadAdapters(registry)).find(item=>item.id===configuration.adapterId);
-  if(!adapter)reject();
-  const current=sessionRecipeFor(adapter);
-  if(await registryIdentity(registry)!==configuration.recipeRegistryId ||
-      !isDeepStrictEqual(current,mapping) || !isDeepStrictEqual(configuration.adapters,[current.definition]))reject();
-  return current.definition;
+  try {
+    const {registryIdentity}=await import('./registry-identity.mjs');
+    if(configuration.embedding && configuration.embedding.registryId!==configuration.recipeRegistryId)reject();
+    if(await registryIdentity(registry)!==configuration.recipeRegistryId)reject();
+    const adapter=(await loadAdapters(registry)).find(item=>item.id===configuration.adapterId);
+    if(!adapter)reject();
+    const current=sessionRecipeFor(adapter);
+    if(await registryIdentity(registry)!==configuration.recipeRegistryId ||
+        !isDeepStrictEqual(current,mapping) || !isDeepStrictEqual(configuration.adapters,[current.definition]))reject();
+    return current.definition;
+  } catch (error) { throw artifactInspectionError(error); }
 }
 
 // `load` loads the durable engine. `serve` optionally loads a transport module handed to the facet's `inspect`; a facet
