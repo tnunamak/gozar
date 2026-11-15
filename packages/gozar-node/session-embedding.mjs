@@ -18,9 +18,10 @@ export async function connectSessionEmbedding(config,{onLoss}){
  const saved={...source,fixtureEffects};
  if(await registryIdentity(saved.registry)!==saved.registryId)throw gozarError('artifact_integrity_failed','The controller registry content changed');
  let lost=false,blocked=false,approved=saved.consentReview,current,subject=null;
- const services=await connectEmbeddingBroker({descriptor:saved.resolver,identity:saved.identity,onLoss:()=>{lost=true;blocked=true;onLoss();}});
+ // Validate the selected adapter before acquiring a client that needs an owner.
  const adapters=await loadAdapters(saved.registry),adapter=adapters.find(a=>a.id===config.adapterId);
  if(!adapter)throw gozarError('artifact_integrity_failed','The selected controller adapter is absent');
+ const services=await connectEmbeddingBroker({descriptor:saved.resolver,identity:saved.identity,onLoss:()=>{lost=true;blocked=true;onLoss();}});
  const dispatch=async request=>{
   if(!(adapter.definition.effectOperations??[]).some(row=>row.kind===request.kind&&row.operation===request.operation))throw gozarError('unsupported','The adapter has not declared this fixture effect operation');
   return services.dispatchEffect(request);
