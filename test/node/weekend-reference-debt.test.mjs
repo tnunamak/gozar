@@ -4,8 +4,8 @@ import net from 'node:net';
 import {fork} from 'node:child_process';
 import {once} from 'node:events';
 import {randomUUID,randomBytes} from 'node:crypto';
-import {mkdir,mkdtemp,lstat,readFile} from 'node:fs/promises';
-import {join} from 'node:path';
+import {mkdir,mkdtemp,lstat,readFile,rm} from 'node:fs/promises';
+import {join,dirname,basename} from 'node:path';
 import {homedir} from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {createRouteApi} from '../../packages/gozar-node/route-api.mjs';
@@ -48,14 +48,14 @@ async function app(){
   const sockets=new Set(),server=net.createServer(socket=>{sockets.add(socket);socket.once('close',()=>sockets.delete(socket));socket.pipe(socket);});
   try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});}
   catch(error){server.close();throw error;}
-  return {target:'127.0.0.1:'+server.address().port,close:async()=>{for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));}};
+  return {target:'127.0.0.1:'+server.address().port,close:async()=>{for(const socket of sockets)socket.destroy();await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}};
 }
 function query(home,owner,providerId,target,kind='attached'){
   return {schemaVersion:1,home,owner,providerId,target,operationId:randomUUID(),
     usage:kind==='session'?{kind,lifetimeMs:60000}:{kind},
     requirements:{reach:'this-device',transport:'tcp',payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}};
 }
-async function fixture(){
+async function fixture(own){
   const parent=join(homedir(),'.tmp0700');
   try{await mkdir(parent,{mode:0o700});}catch(error){if(error.code!=='EEXIST')throw error;}
   const info=await lstat(parent);
@@ -63,18 +63,39 @@ async function fixture(){
   assert.equal(info.uid,process.getuid(),'scratch parent must belong to this user');
   assert.equal(info.mode&0o777,0o700,'scratch parent must already be private');
   const root=await mkdtemp(join(parent,'rd-'));
+  const rootInfo=await lstat(root);
+  let registry;
+  const assertOwnedRoot=async()=>{
+    const currentParent=await lstat(parent),current=await lstat(root);
+    assert.equal(dirname(root),parent,'remove only the exact fixture child');
+    assert.match(basename(root),/^rd-[A-Za-z0-9]+$/);
+    for(const [currentInfo,original] of [[currentParent,info],[current,rootInfo]]){
+      assert.ok(currentInfo.isDirectory()&&!currentInfo.isSymbolicLink(),'fixture path must remain a real directory');
+      assert.equal(currentInfo.uid,process.getuid(),'fixture path must remain owned');
+      assert.equal(currentInfo.mode&0o777,0o700,'fixture path must remain private');
+      assert.equal(currentInfo.dev,original.dev,'fixture device must not change');
+      assert.equal(currentInfo.ino,original.ino,'fixture identity must not change');
+    }
+  };
+  // Register retention before setup: a failed setup still has a named root.
+  own.evidenceCleanup(root,async()=>{
+    await assertOwnedRoot();
+    await registry.cleanup();
+    await assertOwnedRoot();
+    await rm(root,{recursive:true});
+  });
   const home=join(root,'home');await mkdir(home,{mode:0o700});
-  const providerId='ref-'+randomUUID(),registry=await fakeRegistry({id:providerId,dir:join(root,'registry'),
+  const providerId='ref-'+randomUUID();registry=await fakeRegistry({id:providerId,dir:join(root,'registry'),
     kinds:['attached','session'],reach:'this-device',transport:'tcp',proofProtocol:'echo',setupActions:[]});
-  return {root,home,providerId,registry,close:async()=>{await registry.cleanup();}};
+  return {root,home,providerId,registry};
 }
 
 async function owned(body){
   const actions=[],attempts=[],beforeRoutes=[],evidenceCleanup=[];
-  let primary;
+  let primary,bodyFailed=false;
   const own={
     add(cleanup){actions.push(cleanup);},
-    evidenceCleanup(cleanup){evidenceCleanup.push(cleanup);},
+    evidenceCleanup(root,cleanup){evidenceCleanup.push({root,cleanup});},
     beforeRoutes(cleanup){beforeRoutes.push(cleanup);},
     track(api,q){attempts.push({api,q});},
     async open(api,q){
@@ -83,7 +104,7 @@ async function owned(body){
       return open(api,q);
     },
   };
-  try{await body(own);}catch(error){primary=error;}
+  try{await body(own);}catch(error){bodyFailed=true;primary=error;}
   const errors=[];
   const attempt=async action=>{try{await action();}catch(error){errors.push(error);}};
   for(const action of beforeRoutes)await attempt(action);
@@ -99,11 +120,19 @@ async function owned(body){
   });
   // Reverse acquisition order; every action runs even if another fails.
   for(const action of actions.reverse())await attempt(action);
-  // Failed observations keep provider events and homes for diagnosis.
-  if(!primary&&!errors.length)for(const action of evidenceCleanup)await attempt(action);
-  if(primary||errors.length)throw new AggregateError(
-    [...(primary?[primary]:[]),...errors],'reference-debt assertion or owned cleanup failed',
-    primary?{cause:primary}:undefined);
+  // Evidence disposal is last, only after body and every owned resource cleanup.
+  if(!bodyFailed&&!errors.length){
+    for(const {cleanup} of evidenceCleanup){
+      await attempt(cleanup);
+      if(errors.length)break;
+    }
+  }
+  if(bodyFailed||errors.length){
+    for(const {root} of evidenceCleanup)console.error('reference-debt retained fixture root: '+JSON.stringify(root));
+    throw new AggregateError(
+      [...(bodyFailed?[primary]:[]),...errors],'reference-debt assertion or owned cleanup failed',
+      bodyFailed?{cause:primary}:undefined);
+  }
 }
 
 async function counts(f){
@@ -137,7 +166,7 @@ if(childMode){
 }else{
   test('operation-bound reference debt survives fresh factory, preserves second and foreign holds, and releases without new proof',
     {timeout:30000},async()=>owned(async own=>{
-    const f=await fixture();own.evidenceCleanup(()=>f.close());
+    const f=await fixture(own);
     const apps=[];
     for(let i=0;i<3;i++){const server=await app();own.add(()=>server.close());apps.push(server);}
     const deps={manifest:f.registry.manifest,root:f.registry.root,identity:identity()};
@@ -196,7 +225,7 @@ if(childMode){
   }));
   test('session host loss withdraws readiness and exact operation-bound cleanup releases stored use',
     {timeout:30000},async()=>owned(async own=>{
-    const f=await fixture();own.evidenceCleanup(()=>f.close());
+    const f=await fixture(own);
     const server=await app();own.add(()=>server.close());
     const foreignApp=await app();own.add(()=>foreignApp.close());
     const deps={manifest:f.registry.manifest,root:f.registry.root,identity:identity()},api=createRouteApi(deps);
