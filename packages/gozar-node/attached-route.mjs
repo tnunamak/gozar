@@ -253,6 +253,7 @@ export async function openAttachedRoute(request, deps = {}) {
       return startup.record;
     }, { waitSeconds: 30 });}
     catch(error){throw await compensateAttachedStartup({error,startup,directory,handle,request,deps});}
+    startup.ready=true;
     if (!session) holdLease(directory, id, deps.heartbeatMs ?? HEARTBEAT_MS);
     const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
     try {
@@ -290,6 +291,19 @@ async function compensateAttachedStartup({error,startup,directory,handle,request
   try{recorded=await readJson(join(directory,'state.json'));}catch{}
   const exact=recorded?.handle?.id===handle.id&&recorded.handle.kind===handle.kind&&recorded.handle.generation===handle.generation;
   const providerAbsent=!spawned||(reply?.view?.handle?.id===handle.id&&reply.view.handle.kind===handle.kind&&reply.view.handle.generation===handle.generation&&reply.view.cleanup?.state==='confirmed')||(exact&&recorded.lastView?.cleanup?.state==='confirmed');
+  // Once startup reached polling, the live controller owns the exact provider
+  // receipt. A refused removal must keep that authority and its broker alive so
+  // closeRoute can retry; stopping the process is not provider absence evidence.
+  if(startup.ready&&!providerAbsent){
+    const sameReply=reply?.view?.handle?.id===handle.id&&reply.view.handle.kind===handle.kind&&
+      reply.view.handle.generation===handle.generation;
+    const retained=(sameReply?reply.view:null)??(exact?recorded.lastView:null)??
+      startingRoute(handle,request.target,request.operationId??null);
+    error.route={...retained,handle,operationId:request.operationId??null,published:null,ingress:null,
+      cleanup:{...retained.cleanup,state:'unconfirmed',
+        nextAction:instructionAction('retry-startup-cleanup','Retry startup cleanup','Retain this exact handle and retry closeRoute; do not start a replacement.')}};
+    return error;
+  }
   const stopped=spawned?await stopController(startup.record):{state:'gone'};
   const controllerAbsent=['gone','stopped','killed'].includes(stopped.state);
   let referenceReleased=!startup.registered,brokerClosed=false,persisted=true;
