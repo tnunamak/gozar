@@ -35,6 +35,16 @@ export async function connectSessionEmbedding(config,{onLoss}){
  const check=async()=>{await refresh();if(blocked)throw gozarError('consent_mismatch','Runtime consent changed; review the current route');};
  const tokens=new Map();
  return {
+  ...(saved.fixtureEffects===true&&(adapter.definition.effectOperations??[]).some(row=>row.kind==='local-forwarder'&&row.operation==='authorize')?{fixtureLocalTransport:{
+   kind:'local-forwarder',operation:'authorize',
+   async handle(input,context){
+    if(context?.fixture!==true)throw gozarError('unsupported','The local transport port requires an explicit fixture context');
+    // Re-check consent and resolver liveness for every request. The existing
+    // authenticated dispatcher owns execution; never bind a native listener here.
+    await check();
+    return dispatch({kind:'local-forwarder',operation:'authorize',input});
+   },
+  }}:{}),
   ...(saved.fixtureEffects?{spawnProcess:fixtureSpawn(dispatch),fixtureVerifier:gate=>({vantages:['public','tailnet','lan'],async verify({origin,vantage,authorization,requirements,signal}){
    if(requirements.streamableHttp||requirements.oauthDcr)throw gozarError('unsupported','This fixture executor has no application protocol proof');
    const checked=await gate.verify(origin,{sse:requirements.sse,signal,fetch:testingFetch(dispatch)}),observedAtMs=Date.now();
