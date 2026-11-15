@@ -220,8 +220,9 @@ if(process.argv.includes('--fixture-host-child')){
     const readsBefore=backendCalls.read;
     assert.equal(child.kill('SIGKILL'),true);
     const [,signal]=await exit;assert.equal(signal,'SIGKILL');
+    const recoveryIdentity={instanceId:identity.instanceId,bootId:randomUUID()};
     api=createGozar({manifest:registry.manifest,root:registry.root,secretBackend:backend,
-      identity:{instanceId:identity.instanceId,bootId:randomUUID()}});
+      identity:recoveryIdentity});
     for(const route of routes){
       let status;
       const deadline=Date.now()+5000;
@@ -285,7 +286,63 @@ if(process.argv.includes('--fixture-host-child')){
     const after=await ledgerEvents(registry,providerId);
     assert.equal(after.filter(row=>row.event==='start').length,2,'no replacement allocation');
     assert.equal(after.filter(row=>row.event==='proof').length,proofsBefore,'no replacement proof');
-    assert.equal(Buffer.from(JSON.stringify({projections,errors,after})).includes(canary),false);
+    // A fresh trusted boot may start a separately approved NEW operation.
+    const recoveryQuery={...queries[0],operationId:randomUUID()};
+    const recoveryCandidate=(await api.catalogRoutes(recoveryQuery)).candidates[0];
+    assert.ok(recoveryCandidate,'fresh recovery catalog candidate exists');
+    const beforeRecovery=await ledgerEvents(registry,providerId);
+    assert.equal(beforeRecovery.filter(row=>row.event==='start').length,2);
+    assert.equal(beforeRecovery.filter(row=>row.event==='proof').length,proofsBefore);
+    let recovered;
+    try{
+      recovered=await api.expose({...recoveryQuery,approval:approval(recoveryCandidate),wait:'verified'});
+    }catch(error){
+      if(error.route?.handle){
+        routes.push(error.route);
+        t.diagnostic('Failed recovery exact handle: '+JSON.stringify(error.route.handle));
+      }
+      throw error; // Retain exact-owned cleanup without accepting a product failure.
+    }
+    routes.push(recovered); // t.after owns this exact handle before any assertion can fail.
+    t.diagnostic('Recovery route exact handle: '+JSON.stringify(recovered.handle));
+    projections.push(recovered);
+    assert.equal(recovered.operationId,recoveryQuery.operationId);
+    assert.equal(recovered.handle.generation,1);
+    for(const old of routes.slice(0,2))assert.notDeepEqual(recovered.handle,old.handle);
+    assert.equal(recovered.verification.status,'verified');
+    assert.equal(recovered.published,recovered.origin);
+    assert.equal(recovered.verification.subject.instanceId,recoveryIdentity.instanceId);
+    assert.equal(recovered.verification.subject.bootId,recoveryIdentity.bootId);
+    const recoveryNonce=randomBytes(32);
+    assert.deepEqual(await exchange(recovered.origin,recoveryNonce),recoveryNonce,'new route reaches independent app');
+    const recoveryEffects=await ledgerEvents(registry,providerId);
+    assert.equal(recoveryEffects.filter(row=>row.event==='start').length,3,'one deliberate new allocation');
+    assert.equal(recoveryEffects.filter(row=>row.event==='proof').length,proofsBefore+1,'one deliberate new proof');
+    const replayCandidate=(await api.catalogRoutes(recoveryQuery)).candidates[0];
+    // A live replay reads public status, which may resolve current configuration.
+    // Unlike dead-authority replay above, its contract is no allocation/reproof,
+    // not zero credential reads by the deliberately authorized recovery boot.
+    const recoveryReplay=await api.expose({...recoveryQuery,approval:approval(replayCandidate),wait:'verified'});
+    projections.push(recoveryReplay);
+    assert.deepEqual(recoveryReplay.handle,recovered.handle);
+    assert.equal(recoveryReplay.operationId,recoveryQuery.operationId);
+    const replayEffects=await ledgerEvents(registry,providerId);
+    assert.equal(replayEffects.filter(row=>row.event==='start').length,3,'new-operation replay does not allocate');
+    assert.equal(replayEffects.filter(row=>row.event==='proof').length,proofsBefore+1,'new-operation replay does not reprove');
+    const recoveryClosed=await api.closeRoute({home,handle:recovered.handle,mode:'remove'});
+    projections.push(recoveryClosed);
+    assert.deepEqual(recoveryClosed.handle,recovered.handle);
+    assert.equal(recoveryClosed.cleanup.state,'confirmed','live recovery authority must release its own route');
+    await absent(recovered.origin);
+    for(const app of apps){
+      const nonce=randomBytes(32);
+      assert.deepEqual(await exchange('tcp://'+app.target,nonce),nonce,'independent apps survive recovery cleanup');
+    }
+    assert.ok(store.size>0,'saved credentials remain after route cleanup');
+    const finalEffects=await ledgerEvents(registry,providerId);
+    assert.equal(finalEffects.filter(row=>row.event==='start').length,3);
+    assert.equal(finalEffects.filter(row=>row.event==='proof').length,proofsBefore+1);
+    assert.equal(Buffer.from(JSON.stringify({projections,errors,after,finalEffects})).includes(canary),false);
     assert.equal(stderr.includes(canary),false);
     await scanOwnTree(root,canary,home); // Bytes only: no private journal fields parsed.
   });
