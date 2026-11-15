@@ -20,7 +20,7 @@ import { createEmbeddingServices } from './embedding-services.mjs';
 import { listProviders as inventory } from './embedding-inventory.mjs';
 import { setupConsentReview,consentSnapshot } from './consent-facts.mjs';
 import {offeredConfiguration,readConfigurationDraft,clearConfigurationInput} from './embedding-setup.mjs';
-import {withRouteOperation,listRecordedRoutes,recordOperationView,operationReferenceForRoute,retainedOperationView} from './route-operations.mjs';
+import {withRouteOperation,listRecordedRoutes,recordOperationView,operationReferenceForRoute,retainedOperationView,recordPendingReferenceCleanup,retryRecordedReferenceCleanup,referenceCleanupDebt} from './route-operations.mjs';
 import {withServiceContext,reviewExternalConsent,approveExternalConsent} from './service.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
 
@@ -110,7 +110,41 @@ export function createRouteApi(deps = {}) {
     }),
 
     routeStatus: request => guard(() => verified(async () => viewStatus(request, { adapters: await adapters(), ...deps.view }),request)),
-    closeRoute: request => guard(() => verified(async () => {const reference=await operationReferenceForRoute(request);let view;try{view=await viewClose(request, { adapters: await adapters(), ...deps.view });}catch(error){if(error.code!=='route_not_found')throw error;const retained=await retainedOperationView(request);if(!retained)throw error;return retained;}if(view.cleanup.state==='confirmed'){if(request.handle.kind==='attached')await releaseAttachedConfiguration(request,await services());if(request.handle.kind==='session')await releaseSessionConfiguration(request,await services());}return recordOperationView({home:request.home,view,reference});},request)),
+    closeRoute: request => guard(() => verified(async () => {
+      const context=await services();
+      // This path consumes only an exact private resource-removal milestone.
+      const retried=await retryRecordedReferenceCleanup(request,{...context,
+        ...(request.handle?.kind==='session'?{afterReferenceRelease:()=>releaseSessionConfiguration(request,context)}:{})});
+      if(retried)return retried;
+      const reference=await operationReferenceForRoute(request);
+      if(request.owner!==undefined&&reference&&request.owner!==reference.owner)throw gozarError('route_conflict','The retained route belongs to a different owner');
+      let view;
+      try{view=await viewClose(request,{adapters:await adapters(),...deps.view});}
+      catch(error){
+        if(error.code!=='route_not_found')throw error;
+        const retained=await retainedOperationView(request);
+        if(!retained)throw error;
+        return retained;
+      }
+      if(view.cleanup.state==='confirmed'&&['attached','session'].includes(request.handle.kind)){
+        let debt=referenceCleanupDebt(view);
+        try{
+          debt=await recordPendingReferenceCleanup({home:request.home,view,reference});
+          if(request.handle.kind==='attached')await releaseAttachedConfiguration(request,context);
+          else await releaseSessionConfiguration(request,context);
+          // Confirm the recorded exact hold too; a missing bootstrap cannot silently skip it.
+          const released=await retryRecordedReferenceCleanup(request,context);
+          if(released)view=released;
+        }catch(cause){
+          // Persisted pending milestone survives a new factory and missing route files.
+          const error=gozarError('cleanup_debt','Resource removal is confirmed but configuration reference release is unconfirmed',
+            debt.cleanup.nextAction,cause);
+          error.route=referenceCleanupDebt(debt);
+          throw error;
+        }
+      }
+      return recordOperationView({home:request.home,view,reference});
+    },request)),
     suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }),request)),
     watchRoutes:async function*(request){try{for await(const event of pollRoutes(request,{routeStatus:r=>verified(async()=>viewStatus(r,{adapters:await adapters(),...deps.view}),r),...deps.watch}))yield structuredClone(event);}catch(error){throw publicError(error);}},
     getRoutePreferences, setRoutePreferences,

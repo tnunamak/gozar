@@ -7,7 +7,8 @@ import {atomicWrite,processIdentity} from './journal.mjs';
 import {canonicalDigest,peekConsentGrant} from './consent-token.mjs';
 import {unknownProperties,projectSession,projectDurable,projectExternal,recoveryHistory} from './route-view.mjs';
 import {enrichRoute} from './embedding-state.mjs';
-import {gozarError} from './error-normalizer.mjs';
+import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
+import {gozarError,instructionAction} from './error-normalizer.mjs';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const optionalRead=async path=>{try{return await readRecord(path);}catch(error){if(error.code==='ENOENT')return null;throw error;}};
 async function directory(home,create){const path=join(await canonicalHome(home,create),'operations');await trustedDirectory(path,create);await privateDirectory(path);return path;}
@@ -97,13 +98,86 @@ export async function recordOperationView({home,view,reference}){
  return withExclusiveLock(join(dir,'.reservation-lock'),async()=>{
   const path=join(dir,hash(JSON.stringify([reference.owner,reference.operationId]))+'.json'),record=await optionalRead(path);if(!record)return view;checkRecord(record);
   if(record.view.handle.kind!==view.handle.kind||record.view.handle.id!==view.handle.id)return view;
+  if(record.view.handle.generation!==view.handle.generation)return view;
+  if(view.cleanup.state==='confirmed')delete record.referenceCleanup;
   record.view={...view,operationId:record.operationId};record.phase=view.cleanup.state==='confirmed'?'terminal':'recovery';await atomicWrite(path,record);return record.view;
+ },{waitSeconds:30});
+}
+
+
+const sameHandle=(a,b)=>a?.kind===b?.kind&&a?.id===b?.id&&a?.generation===b?.generation;
+export function referenceCleanupDebt(view){
+ return {...view,state:'uncertain',routeState:'cleanup-unconfirmed',published:null,ingress:null,
+  verification:{...view.verification,status:'unverified',results:(view.verification?.results??[]).map(row=>({...row,status:'unknown'}))},
+  cleanup:{state:'unconfirmed',nextAction:instructionAction('retry-reference-release','Retry configuration reference release',
+   'Call closeRoute with this exact retained handle and mode remove; resource removal is already recorded.')}};
+}
+function validReferenceRecord(record){
+ checkRecord(record);
+ if(record.intent?.owner!==record.owner||canonicalDigest(record.intent)!==record.intentDigest||
+    typeof record.intent.registryId!=='string'||!record.intent.registryId||
+    typeof record.intent.providerId!=='string'||!record.intent.providerId||
+    !['attached','session'].includes(record.view.handle.kind))
+  throw gozarError('cleanup_debt','The recorded configuration reference scope cannot be verified');
+ return record;
+}
+/** Called only after the facade has obtained confirmed resource removal from viewClose. */
+export async function recordPendingReferenceCleanup({home,view,reference}){
+ if(!reference)return referenceCleanupDebt(view);
+ home=await canonicalHome(home,false);
+ const dir=await directory(home,false),path=join(dir,hash(JSON.stringify([reference.owner,reference.operationId]))+'.json');
+ return withExclusiveLock(join(dir,'.reservation-lock'),async()=>{
+  const record=validReferenceRecord(await readRecord(path));
+  if(record.owner!==reference.owner||record.operationId!==reference.operationId||
+     !sameHandle(record.view.handle,view.handle)||view.cleanup?.state!=='confirmed')
+   throw gozarError('route_conflict','Reference cleanup does not match the recorded operation');
+  const resourceView={...view,published:null,ingress:null,verification:{...view.verification,status:'unverified'},operationId:record.operationId};
+  record.referenceCleanup={intentDigest:record.intentDigest,handle:structuredClone(view.handle),
+   scope:{registryId:record.intent.registryId,home,owner:record.owner,providerId:record.intent.providerId,handle:structuredClone(view.handle)},
+   resourceView};
+  record.view=referenceCleanupDebt(resourceView);record.phase='recovery';
+  await atomicWrite(path,record);return record.view;
+ },{waitSeconds:30});
+}
+/** A private library-written milestone, never caller flags, authorizes metadata-only recovery. */
+export async function retryRecordedReferenceCleanup({home,handle,owner}={},runtime={}){
+ if(!['attached','session'].includes(handle?.kind))return null;
+ try{home=await canonicalHome(home,false);}catch(error){if(error.code==='ENOENT')return null;throw error;}
+ let dir;try{dir=await directory(home,false);}catch(error){if(error.code==='ENOENT')return null;throw error;}
+ return withExclusiveLock(join(dir,'.reservation-lock'),async()=>{
+  const matches=[];
+  for(const entry of await readdir(dir,{withFileTypes:true})){
+   if(!entry.isFile()||!/^[a-f0-9]{64}\.json$/.test(entry.name))continue;
+   const path=join(dir,entry.name),record=checkRecord(await readRecord(path));
+   if(entry.name!==hash(JSON.stringify([record.owner,record.operationId]))+'.json')throw gozarError('cleanup_debt','Operation filename mismatch');
+   if(!sameHandle(record.view.handle,handle)||(owner!==undefined&&owner!==record.owner))continue;
+   matches.push({path,record});
+  }
+  if(!matches.length)return null;
+  if(matches.length!==1)throw gozarError('cleanup_debt','Ambiguous reference cleanup ownership');
+  const {path,record}=matches[0],pending=record.referenceCleanup;
+  if(!pending)return null;
+  validReferenceRecord(record);
+  const expected={registryId:record.intent.registryId,home,owner:record.owner,providerId:record.intent.providerId,handle:record.view.handle};
+  if(pending.intentDigest!==record.intentDigest||!sameHandle(pending.handle,handle)||
+     canonicalDigest(pending.scope)!==canonicalDigest(expected)||!sameHandle(pending.resourceView?.handle,handle)||
+     pending.resourceView?.cleanup?.state!=='confirmed'||pending.resourceView.operationId!==record.operationId)
+   throw gozarError('cleanup_debt','Recorded resource-removal evidence does not match this reference');
+  try{await releaseRecordedConfigurationUse(pending.scope,runtime);await runtime.afterReferenceRelease?.();}
+  catch(cause){
+   record.view=referenceCleanupDebt(pending.resourceView);record.phase='recovery';await atomicWrite(path,record);
+   const error=gozarError('cleanup_debt','Resource removal is confirmed but configuration reference release failed',record.view.cleanup.nextAction,cause);
+   error.route=structuredClone(record.view);throw error;
+  }
+  record.view={...pending.resourceView,state:'released',routeState:'released',cleanup:{state:'confirmed'}};
+  record.phase='terminal';delete record.referenceCleanup;await atomicWrite(path,record);
+  return structuredClone(record.view);
  },{waitSeconds:30});
 }
 
 /** Missing route files are not absence evidence; only exact terminal journals are. */
 export async function retainedOperationView({home,handle,owner}={}){
- if(handle?.kind!=='durable')return null;
+ if(!['durable','attached','session'].includes(handle?.kind))return null;
  let dir;
  try{dir=await directory(home,false);}catch(error){if(error.code==='ENOENT')return null;throw error;}
  const matches=[];
@@ -127,20 +201,21 @@ export async function retainedOperationView({home,handle,owner}={}){
 /** Read persisted snapshots only. Listing never mints consent or refreshes a provider proof. */
 export async function listRecordedRoutes({home,owner}={},deps={}){
  if(owner!==undefined&&(typeof owner!=='string'||!owner))throw gozarError('invalid_input','owner must be a non-empty string');
- home=await canonicalHome(home,false);const routes=new Map();
+ home=await canonicalHome(home,false);const routes=new Map(),referencePending=new Set();
  const routeKey=handle=>JSON.stringify([handle.kind,handle.id]);
  const put=view=>{
   const key=routeKey(view.handle),previous=routes.get(key);
   // Enumeration order is not lifecycle order. A stale active snapshot cannot
   // undo exact terminal evidence, and an older generation cannot hide a newer one.
   if(previous){
+   if(referencePending.has(key)&&previous.handle.generation===view.handle.generation)return;
    if(previous.handle.generation>view.handle.generation)return;
    if(previous.handle.generation===view.handle.generation&&previous.state==='released'&&previous.cleanup?.state==='confirmed')return;
   }
   routes.set(key,{...view,operationId:view.operationId??null});
  };
  const names=async dir=>{try{await trustedDirectory(dir,false);return await readdir(dir,{withFileTypes:true});}catch(error){if(error.code==='ENOENT')return [];throw error;}};
- for(const entry of await names(join(home,'operations'))){if(!entry.isFile()||!/[a-f0-9]{64}\.json$/.test(entry.name))continue;const record=checkRecord(await readRecord(join(home,'operations',entry.name)));if(owner===undefined||record.owner===owner)put(record.view);}
+ for(const entry of await names(join(home,'operations'))){if(!entry.isFile()||!/[a-f0-9]{64}\.json$/.test(entry.name))continue;const record=checkRecord(await readRecord(join(home,'operations',entry.name)));if(owner===undefined||record.owner===owner){put(record.view);if(record.referenceCleanup)referencePending.add(routeKey(record.view.handle));}}
  for(const entry of await names(join(home,'attached'))){if(!entry.isDirectory()||!/^att_[a-f0-9]{16}$/.test(entry.name))continue;const root=join(home,'attached',entry.name),bootstrap=await readRecord(join(root,'bootstrap.json'));if(owner!==undefined&&bootstrap.owner!==owner)continue;const record=await optionalRead(join(root,'state.json'));if(!record)continue;if(!record.lastView?.handle)throw gozarError('provider_unavailable','The attached recovery snapshot is unreadable');let view=record.lastView;
   const controller=await optionalRead(join(root,'control.json'));
   if(view.state!=='released'&&(!controller||await processIdentity(controller.pid)!==controller.startIdentity))view={...view,state:'uncertain',published:null,routeState:'cleanup-unconfirmed',verification:{...view.verification,status:'unverified'},cleanup:{state:'unconfirmed',nextAction:null}};

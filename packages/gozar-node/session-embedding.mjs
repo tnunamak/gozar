@@ -7,6 +7,7 @@ import {currentRouteReview} from './route-consent.mjs';
 import {consentReview,consentSnapshot} from './consent-facts.mjs';
 import {fixtureSpawn} from './fixture-spawn.mjs';
 import {testingFetch} from './testing-network.mjs';
+import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
 import {gozarError,instructionAction} from './error-normalizer.mjs';
 
 export async function connectSessionEmbedding(config,{onLoss}){
@@ -59,7 +60,18 @@ export async function connectSessionEmbedding(config,{onLoss}){
    approved=current.review;blocked=false;
    try{const output=await reprove();await check();if(output.snapshot.phase!=='published-ready')throw gozarError('verification_failed','The existing route did not pass fresh proof');return output;}catch(error){blocked=true;throw error;}
   },
-  async release(){if(!lost)await services.releaseConfigurationUse({owner:saved.request.owner,providerId:adapter.id,handle:saved.handle});},
+  async release(){
+   if(!lost)return services.releaseConfigurationUse({owner:saved.request.owner,providerId:adapter.id,handle:saved.handle});
+   // The dead resolver cannot release metadata; recorded scope owns only its exact hold.
+   const home=config.home??saved.request?.home;
+   if(typeof home!=='string'||!home||typeof saved.request?.owner!=='string'||!saved.request.owner||
+      !saved.handle||saved.handle.kind!=='session'||!Number.isSafeInteger(saved.handle.generation)||saved.handle.generation<1||
+      typeof saved.handle.id!=='string'||!/^port-[0-9]+:[A-Za-z0-9_-]+$/.test(saved.handle.id)||
+      saved.request.home!==home)
+    throw gozarError('cleanup_debt','The recorded session configuration scope is unavailable; retain its reference');
+   await releaseRecordedConfigurationUse({registryId:saved.registryId,home,owner:saved.request.owner,
+    providerId:adapter.id,handle:saved.handle});
+  },
   close(){services.close();},
  };
 }
