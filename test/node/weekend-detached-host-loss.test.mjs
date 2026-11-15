@@ -69,12 +69,13 @@ async function assertHeld(api,query) {
   const configuration=(await api.catalogRoutes(query)).candidates[0].configuration;
   let draft;
   try {
-    await assert.rejects(async()=>{
-      draft=await api.beginConfigurationDraft({home:query.home,owner:query.owner,providerId:query.providerId,
-        expectedConfigurationRevision:configuration.revision});
-      await api.commitConfigurationDraft({home:query.home,owner:query.owner,providerId:query.providerId,
-        expectedConfigurationRevision:draft.baseRevision,draftId:draft.draftId});
-    },{code:'configuration_in_use'});
+    draft=await api.beginConfigurationDraft({home:query.home,owner:query.owner,providerId:query.providerId,
+      expectedConfigurationRevision:configuration.revision});
+    assert.notEqual(draft.configuration.revision,draft.baseRevision);
+    await assert.rejects(()=>api.commitConfigurationDraft({home:query.home,owner:query.owner,providerId:query.providerId,
+      expectedConfigurationRevision:draft.baseRevision,draftId:draft.draftId}),{code:'configuration_stale'});
+    await assert.rejects(()=>api.commitConfigurationDraft({home:query.home,owner:query.owner,providerId:query.providerId,
+      expectedConfigurationRevision:draft.configuration.revision,draftId:draft.draftId}),{code:'configuration_in_use'});
   } finally {
     if(draft)await api.discardConfigurationDraft({home:query.home,owner:query.owner,providerId:query.providerId,draftId:draft.draftId});
   }
@@ -238,19 +239,25 @@ if(process.argv.includes('--fixture-host-child')){
       assert.equal(row.verification.status,'unverified');
     }
     assert.equal(backendCalls.read,readsBefore,'historical reads do not revive the dead broker');
-    // Negative authority checks attempt replacement, not merely historical status.
+    // Replaying retained intent is historical access, not a new approved operation.
     for(const invalidIdentity of [undefined,identity,{instanceId:randomUUID(),bootId:randomUUID()}]){
       const facade=createGozar({manifest:registry.manifest,root:registry.root,secretBackend:backend,
         ...(invalidIdentity?{identity:invalidIdentity}:{})});
       await assert.rejects(facade.reviewRouteConsent({home,handle:routes[0].handle}));
-      const replacementQuery={...queries[0],operationId:randomUUID()};
-      let unexpected,rejected;
-      try {
-        const current=(await facade.catalogRoutes(replacementQuery)).candidates[0];
-        unexpected=await facade.expose({...replacementQuery,approval:approval(current),wait:'verified'});
-      }catch(error){rejected=error;errors.push(safeError(error));}
-      if(unexpected)await facade.closeRoute({home,handle:unexpected.handle,mode:'remove'});
-      assert.ok(rejected,'omitted, reused or foreign identity must not mint replacement authority');
+      const replayQuery={...queries[0]};
+      const current=(await facade.catalogRoutes(replayQuery)).candidates[0];
+      const replayReadsBefore=backendCalls.read;
+      const replay=await facade.expose({...replayQuery,approval:approval(current),wait:'verified'});
+      assert.equal(backendCalls.read,replayReadsBefore,'replay itself performs no credential read');
+      projections.push(replay);
+      assert.deepEqual(replay.handle,routes[0].handle);
+      assert.equal(replay.operationId,queries[0].operationId);
+      assert.equal(replay.published,null);
+      assert.equal(replay.verification.status,'unverified');
+      if(replay.verification.subject)assert.deepEqual(replay.verification.subject,routes[0].verification.subject);
+      const effects=await ledgerEvents(registry,providerId);
+      assert.equal(effects.filter(row=>row.event==='start').length,2,'replay never allocates a replacement');
+      assert.equal(effects.filter(row=>row.event==='proof').length,proofsBefore,'replay never re-proves old authority');
     }
     await assertHeld(api,queries[0]);
     const closed=[];
@@ -268,7 +275,7 @@ if(process.argv.includes('--fixture-host-child')){
     if(closed.every(route=>route.cleanup.state==='confirmed')){
       const configuration=(await api.catalogRoutes(queries[0])).candidates[0].configuration;
       const draft=await api.beginConfigurationDraft({home,owner,providerId,expectedConfigurationRevision:configuration.revision});
-      const committed=await api.commitConfigurationDraft({home,owner,providerId,draftId:draft.draftId,expectedConfigurationRevision:draft.baseRevision});
+      const committed=await api.commitConfigurationDraft({home,owner,providerId,draftId:draft.draftId,expectedConfigurationRevision:draft.configuration.revision});
       assert.ok(committed.revision,'reference release independently permits configuration commit');
     }else{
       assert.ok(closed.some(route=>route.cleanup.state==='unconfirmed'));
