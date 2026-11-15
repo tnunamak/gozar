@@ -114,11 +114,11 @@ for(const [label,options,code,operations]of [
     assert.ok(after.setup.actions.some(action=>action.id==='install-fixture'));
   });
 }
-for(const [label,value]of [['omitted',undefined],['denied',{known:true,value:false}],['unknown',{known:false,reason:'fixture'}],['malformed',{known:true,value:'yes'}]]){
+for(const [label,value,expectedCode]of [['omitted',undefined,'unsupported'],['denied',{known:true,value:false},'host_policy_denied'],['unknown',{known:false,reason:'fixture'},'unsupported'],['malformed',{known:true,value:'yes'},'unsupported']]){
   test('public setup '+label+' installer capability refuses before callbacks',async t=>{
     const hostCapabilities=value===undefined?{}:{'installer.execute':value};
     const f=await fixture(t,{hostCapabilities});
-    await assert.rejects(f.api.runSetupAction(f.request(await f.catalog())),{code:'host_policy_denied'});
+    await assert.rejects(f.api.runSetupAction(f.request(await f.catalog())),{code:expectedCode});
     assert.deepEqual(f.calls,[]);assert.deepEqual(f.events,[]);
   });
 }
