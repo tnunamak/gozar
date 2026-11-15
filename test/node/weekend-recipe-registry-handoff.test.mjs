@@ -218,6 +218,18 @@ async function transport(t,f,mode) {
   const testing=await createTestingGozar({...f,effects,identity:{instanceId:'recipe-fixture-'+f.id,bootId:randomUUID()}});
   f.cleanups.push(()=>{closing=true;return testing.close();});
   return {...testing,origin,port:app.address().port,foreign,
+    confirmForeign:async()=>{
+      assert.equal(foreign.exitCode,null);assert.equal(foreign.signalCode,null);
+      await bounded('foreign application survives',()=>new Promise((resolve,reject)=>{
+        const req=http.get({host:'127.0.0.1',port:app.address().port,path:'/'},res=>{
+          let body='';res.setEncoding('utf8');res.on('data',chunk=>body+=chunk);
+          res.once('end',()=>{try{assert.equal(res.statusCode,200);assert.equal(body,'fixture app');resolve();}catch(error){reject(error);}});
+          res.once('error',reject);
+        });
+        req.setTimeout(1500,()=>req.destroy(new Error('foreign application timeout')));
+        req.once('error',reject);
+      }));
+    },
     confirmRemoved:async()=>{
       assert.equal(children.size,1,'exactly one saved owned child');
       for(const child of children.values())await waitReaped(child,'public cleanup owned PID');
@@ -234,6 +246,7 @@ async function transport(t,f,mode) {
 for(const mode of ['positive','invalid','late-failure'])test('actual daemon, gate and exact cleanup: '+mode,{timeout:90000},async t=>{
   const f=await fixture(t),effect=await transport(t,f,mode),request=query(f,effect.port);
   t.after(()=>t.diagnostic(JSON.stringify({mode,...effect.facts()})));
+  try {
   const catalog=await bounded('public route catalog',()=>effect.gozar.catalogRoutes(request),OPERATION_MS),candidate=catalog.candidates.find(c=>c.providerId===f.id);
   assert.equal(candidate?.eligible,true);assert.equal(candidate.setup.state,'ready');assert.ok(candidate.candidateToken);
   const start=effect.gozar.expose({...request,approval:{kind:'route',candidateToken:candidate.candidateToken,
@@ -258,10 +271,63 @@ for(const mode of ['positive','invalid','late-failure'])test('actual daemon, gat
     t.diagnostic(JSON.stringify({mode,publicCleanup:stopped.cleanup?.state,...effect.facts()}));
     assert.equal(stopped.cleanup.state,'confirmed');
   } else {
-    await assert.rejects(bounded('negative expose '+mode,()=>start,OPERATION_MS),error=>['provider_unavailable','verification_failed','requirements_unsatisfied'].includes(error.code));
-    assert.equal(effect.facts().creates,1,'negative must exercise the real allocated recipe, not an earlier refusal');
-    if(mode==='invalid')assert.equal(effect.facts().nonceResponses,0);
-    else assert.ok(effect.facts().requests>0);
+    let failure;
+    await assert.rejects(bounded('negative expose '+mode,()=>start,OPERATION_MS),error=>{
+      failure=error;
+      return ['provider_unavailable','verification_failed','requirements_unsatisfied'].includes(error.code)
+        ||(mode==='late-failure'&&error.code==='cleanup_debt');
+    });
+    const allocated=effect.facts();
+    assert.equal(allocated.creates,1,'negative must exercise the real allocated recipe, not an earlier refusal');
+    assert.equal(allocated.nonceResponses,0,'failed transport cannot prove a nonce');
+    if(mode==='late-failure')assert.ok(allocated.requests>0);
+    if(failure.code==='cleanup_debt'){
+      assert.equal(mode,'late-failure');
+      const retained=failure.route;
+      assert.ok(retained,'cleanup debt needs the exact public recovery handle');
+      const handle=structuredClone(retained.handle);
+      assert.equal(handle.kind,'session');assert.equal(handle.generation,1);
+      assert.match(handle.id,new RegExp('^port-'+effect.port+':[A-Za-z0-9_-]+$'));
+      assert.equal(retained.hostConfiguration.target.known,true);
+      assert.equal(retained.hostConfiguration.target.value,request.target);
+      if(request.operationId!==undefined)assert.equal(retained.operationId,request.operationId);
+      assert.equal(retained.published,null);assert.equal(retained.verification.status,'unverified');
+      assert.equal(retained.cleanup.state,'unconfirmed');
+      assert.equal(retained.cleanup.nextAction?.kind,'instructions');
+      assert.equal(retained.cleanup.nextAction.id,'stop-session');
+      assert.ok(retained.cleanup.nextAction.instructions);
+      await effect.confirmForeign();
+      const scope={home:f.home,owner:request.owner,providerId:f.id};
+      const current=(await bounded('debt configuration',()=>effect.gozar.catalogRoutes(request),OPERATION_MS))
+        .candidates.find(c=>c.providerId===f.id).configuration;
+      const draft=await bounded('debt draft',()=>effect.gozar.beginConfigurationDraft({...scope,expectedConfigurationRevision:current.revision}));
+      try{
+        await assert.rejects(bounded('debt blocks current draft',()=>effect.gozar.commitConfigurationDraft({
+          ...scope,draftId:draft.draftId,expectedConfigurationRevision:draft.configuration.revision})),{code:'configuration_in_use'});
+      }finally{await bounded('discard debt draft',()=>effect.gozar.discardConfigurationDraft({...scope,draftId:draft.draftId}));}
+      const before=effect.facts();
+      let closed;
+      for(let attempt=1;attempt<=3;attempt++){
+        try{closed=await bounded('exact debt close '+attempt,()=>effect.gozar.closeRoute({home:f.home,handle,mode:'remove'}));}
+        catch(error){
+          assert.equal(error.code,'cleanup_debt','only typed retained debt permits another close');
+          closed=error.route;assert.ok(closed,'close debt must preserve recovery identity');
+        }
+        assert.deepEqual(closed.handle,handle,'close must retain exact session and generation');
+        assert.equal(closed.published,null);
+        const after=effect.facts();
+        assert.equal(after.creates,before.creates,'reconciliation must not allocate');
+        assert.equal(after.requests,before.requests,'reconciliation must not verify');
+        assert.equal(after.nonceResponses,0);
+        assert.deepEqual(after.ownedPids,before.ownedPids,'no replacement PID');
+        if(closed.cleanup.state==='confirmed')break;
+        assert.equal(closed.cleanup.state,'unconfirmed','unknown cleanup is not recovery');
+        assert.equal(closed.cleanup.nextAction?.kind,'instructions');
+      }
+      assert.equal(closed.cleanup.state,'confirmed','persistent debt after three exact closes; evidence retained');
+      t.diagnostic(JSON.stringify({mode,publicCleanup:closed.cleanup.state,handle,...effect.facts()}));
+      await effect.confirmForeign();
+    }
   }
   await effect.confirmRemoved();
   const current=(await bounded('current applied configuration',()=>effect.gozar.catalogRoutes(request),OPERATION_MS)).candidates.find(c=>c.providerId===f.id).configuration;
@@ -270,5 +336,6 @@ for(const mode of ['positive','invalid','late-failure'])test('actual daemon, gat
   const committed=await bounded('commit after exact reference release',()=>effect.gozar.commitConfigurationDraft({...scope,draftId:draft.draftId,expectedConfigurationRevision:draft.configuration.revision}));
   assert.ok(committed.revision);
   assert.equal(effect.facts().live,0,'every owned fixture process stopped');
-  assert.equal(effect.foreign.exitCode,null);assert.equal(effect.foreign.signalCode,null);
+  await effect.confirmForeign();
+  }catch(error){f.retainEvidence();throw error;}
 });

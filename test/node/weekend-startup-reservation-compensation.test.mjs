@@ -120,6 +120,9 @@ for(const fault of ['writeBootstrap','spawnController','recordController','refer
     throw new Error('injected '+fault);
    }
   };
+  if(fault==='spawnController')startup.spawnController=function(){
+   calls++;throw new Error('injected spawnController');
+  };
   const initial=(await normal.catalogRoutes(request)).candidates[0];
   const services=createEmbeddingServices({registryId:initial.consent.scope.registryId,identity:deps.identity});
   let releaseFails=fault==='referenceRelease';
