@@ -13,6 +13,7 @@ export const LOCAL_PLAN_FEATURES = ['recipe-sequence', 'typed-bindings', 'predic
   'owned-process', 'interface-forwarder', 'private-file-reference', 'private-file-materialization', 'transport-origin-mapping', 'unused-port-selection', 'install-ed25519', 'json-event-origin', 'immutable-origin'];
 
 export async function prepareHost(driver, adapter, { origin, gate, probeExecutor, authorities = {}, generation = 1, resolveCredential } = {}) {
+  const fixtureSelection = driver.fixtureLocalTransport ? await driver.fixtureSelection(generation) : null;
   const nowMs = driver.nowMs(), expiresAtMs = nowMs + 900_000;
   const host = { nowMs, features: [...LOCAL_PLAN_FEATURES], bindings: {}, facts: {}, probe: null };
   if (gate) {
@@ -32,7 +33,7 @@ export async function prepareHost(driver, adapter, { origin, gate, probeExecutor
       if (!value.startsWith('https://')) throw new Error('External origin requires HTTPS');
     } else if (spec.type === 'selected-interface-address' && driver.bindAddresses.length === 1) {
       const selected = driver.bindAddresses[0];
-      if (selectedInterfaceAddress(selected) && Object.values(networkInterfaces()).flat().some(address => address.address === selected && !address.internal)) value = selected;
+      if (fixtureSelection?.selectedAddress === selected || (!driver.fixtureLocalTransport && selectedInterfaceAddress(selected) && Object.values(networkInterfaces()).flat().some(address => address.address === selected && !address.internal))) value = selected;
     } else if (spec.type === 'session-private-path' && !spec.materialize && !spec.provision) {
       const { fileHandle } = await driver.privateFiles.create();
       host.bindings[name] = { ...receipt(undefined), type: spec.type, handleRef: fileHandle, mode: '0600', parentMode: '0700' };
@@ -41,11 +42,19 @@ export async function prepareHost(driver, adapter, { origin, gate, probeExecutor
     if (value !== undefined) {
       const expiry = ['loopback-port', 'loopback-http-origin', 'credential-free-https-origin'].includes(spec.type) ? stableBindingExpiry : expiresAtMs;
       host.bindings[name] = { ...receipt(value, expiry), type: spec.type };
+      if (fixtureSelection && spec.type === 'selected-interface-address') Object.assign(host.bindings[name], { fixture: true, authorityRef: fixtureSelection.authorityRef, observedAtMs: fixtureSelection.observedAtMs, expiresAtMs: fixtureSelection.expiresAtMs });
     }
   }
   const exactInterface = driver.bindAddresses.length === 1 && selectedInterfaceAddress(driver.bindAddresses[0]) && Object.values(networkInterfaces()).flat().some(address => address.address === driver.bindAddresses[0] && !address.internal);
-  if (exactInterface) host.facts['selected-interface-still-present'] = receipt({ address: driver.bindAddresses[0] });
-  if (exactInterface && driver.firewallApproved) host.facts['firewall-user-approved'] = receipt({ bindAddress: driver.bindAddresses[0], port: 0, targetHost: '127.0.0.1', targetPort: driver.targetPort, scheme: 'http' });
+  if (!driver.fixtureLocalTransport && exactInterface) host.facts['selected-interface-still-present'] = receipt({ address: driver.bindAddresses[0] });
+  if (!driver.fixtureLocalTransport && exactInterface && driver.firewallApproved) host.facts['firewall-user-approved'] = receipt({ bindAddress: driver.bindAddresses[0], port: 0, targetHost: '127.0.0.1', targetPort: driver.targetPort, scheme: 'http' });
+  if (fixtureSelection) {
+    const fixtureReceipt = value => ({ ...receipt(value, fixtureSelection.expiresAtMs), fixture: true,
+      authorityRef: fixtureSelection.authorityRef, observedAtMs: fixtureSelection.observedAtMs });
+    host.facts['selected-interface-still-present'] = fixtureReceipt({ address: fixtureSelection.selectedAddress });
+    host.facts['firewall-user-approved'] = fixtureReceipt({ bindAddress: fixtureSelection.selectedAddress,
+      port: 0, targetHost: '127.0.0.1', targetPort: driver.targetPort, scheme: 'http' });
+  }
   // Current profile, remote address reachability, provider permission and remote continuity are never synthesized.
   const supplied = typeof authorities === 'function' ? await authorities({ sessionId: driver.sessionId, adapterId: adapter.id, targetPort: driver.targetPort, nowMs, expiresAtMs, bindings: adapter.bindings }) : authorities;
   for (const [name, fact] of Object.entries(supplied.facts ?? {})) {
