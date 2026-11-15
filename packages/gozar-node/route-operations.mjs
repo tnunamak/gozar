@@ -296,6 +296,9 @@ async function cleanupRecords(home){
  const rows=[];
  for(const entry of await readdir(dir,{withFileTypes:true})){
   if(entry.name==='.cleanup-lock')continue;
+  // journal.atomicWrite creates only regular <record>.UUIDv4.tmp siblings.
+  // Never read them as authority; symlinks and malformed authoritative records still fail closed.
+  if(entry.isFile()&&/^[a-f0-9]{64}\.json\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.tmp$/.test(entry.name))continue;
   if(!entry.isFile()||!/^[a-f0-9]{64}\.json$/.test(entry.name))throw gozarError('cleanup_debt','Unexpected cleanup reference entry');
   rows.push(checkCleanupRecord(await readRecord(join(dir,entry.name)),home,entry.name));
  }

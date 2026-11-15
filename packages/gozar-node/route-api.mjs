@@ -113,7 +113,19 @@ export function createRouteApi(deps = {}) {
 
     routeStatus: request => guard(() => verified(async () => {
       const retained=await cleanupReferenceRecord(request,await services());
-      if(retained)return retained.view;
+      if(retained){
+        if(retained.phase!=='prepared')return retained.view;
+        // Preparation is intent, not proof of removal. Consult the actual controller.
+        let observed;
+        try{observed=await viewStatus(request,{adapters:await adapters(),...deps.view});}
+        catch(error){if(error.code!=='route_not_found')throw error;}
+        const current=await cleanupReferenceRecord(request,await services());
+        if(current?.phase!=='prepared')return current?.view??retained.view;
+        if(!observed)return current.view;
+        if(observed.handle?.kind!==request.handle.kind||observed.handle?.id!==request.handle.id||observed.handle?.generation!==request.handle.generation)
+          throw gozarError('route_conflict','Current observation belongs to another handle');
+        return observed;
+      }
       return viewStatus(request,{adapters:await adapters(),...deps.view});
     },request)),
     closeRoute: request => guard(() => verified(async () => {
@@ -183,7 +195,11 @@ export function createRouteApi(deps = {}) {
       const base=await listRecordedRoutes(request),retained=await listCleanupReferences(request);
       const key=handle=>JSON.stringify([handle.kind,handle.id,handle.generation]);
       const views=new Map(base.routes.map(view=>[key(view.handle),view]));
-      for(const view of retained)views.set(key(view.handle),view);
+      for(const view of retained){
+        if([...views.values()].some(other=>other.handle.kind===view.handle.kind&&other.handle.id===view.handle.id&&other.handle.generation>view.handle.generation))continue;
+        const observed=await api.routeStatus({...request,handle:view.handle});
+        views.set(key(view.handle),observed);
+      }
       return {routes:[...views.values()]};
     }),
     ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft'].map(method=>[method,request=>guard(async()=> (await services()).embeddingServices[method](request))])),
