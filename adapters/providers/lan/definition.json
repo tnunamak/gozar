@@ -521,6 +521,10 @@
     ],
     "effectOperations": [
       {
+        "kind": "local-forwarder",
+        "operation": "authorize"
+      },
+      {
         "kind": "recipe",
         "operation": "probe"
       },
