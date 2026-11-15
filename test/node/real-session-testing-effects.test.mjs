@@ -104,12 +104,17 @@ test('public process effects preserve the session parser, witnessed proof and ex
  for(const record of resources.values()){await waitClosed(record);assert.ok(exited(record.child));}
  assert.equal(exited(foreign.child),false,'foreign child must survive route close');assert.equal(foreign.child.kill(0),true);
  await refused(target);
- await commitOracle(api,q,false);
+ // Catalog reads are outside the no-new-provider-effects interval.
+ const replayCandidate=(await api.catalogRoutes(q)).candidates.find(row=>row.providerId===q.providerId);
+ assert.ok(replayCandidate);assert.equal(replayCandidate.configuration.revision,candidate.configuration.revision);
  const beforeRepeat={spawn:serial,proof:proofFetches};
  const repeated=await api.closeRoute({home,handle:route.handle,mode:'remove'});
  assert.deepEqual(repeated.handle,route.handle);assert.equal(repeated.cleanup.state,'confirmed');assert.equal(repeated.state,stopped.state);
- assert.equal((await api.expose(request)).state,'released');
+ // Replay still binds the original configuration revision and operation key.
+ const replay=await api.expose(request);assert.equal(replay.state,'released');assert.deepEqual(replay.handle,route.handle);
  assert.deepEqual({spawn:serial,proof:proofFetches},beforeRepeat);
  assert.equal(serial,1);assert.equal(exited(foreign.child),false);assert.equal(foreign.child.kill(0),true);
+ // Only now deliberately advance the configuration revision, proving release.
+ await commitOracle(api,q,false);
  }catch(error){primary=error;throw error;}
 });
