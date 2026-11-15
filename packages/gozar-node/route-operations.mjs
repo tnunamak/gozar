@@ -99,11 +99,11 @@ export async function recordOperationView({home,view,reference}){
   const path=join(dir,hash(JSON.stringify([reference.owner,reference.operationId]))+'.json'),record=await optionalRead(path);if(!record)return view;checkRecord(record);
   if(record.view.handle.kind!==view.handle.kind||record.view.handle.id!==view.handle.id)return view;
   if(record.owner!==reference.owner||record.operationId!==reference.operationId||
-     !sameHandle(reference.handle,view.handle))return view;
+     (reference.handle!==undefined&&!sameHandle(reference.handle,view.handle)))return view;
   if(record.view.handle.generation!==view.handle.generation){
    // A committed durable restoration may precede its operation-journal update.
    // The facade obtained this exact reference before generation-fenced close.
-   if(view.handle.kind!=='durable'||record.view.handle.generation>=view.handle.generation||
+   if(!sameHandle(reference.handle,view.handle)||view.handle.kind!=='durable'||record.view.handle.generation>=view.handle.generation||
       !Number.isSafeInteger(view.handle.generation)||record.phase==='terminal')return view;
    // A replacement committed during close dominates this older reply.
    const current=await operationReferenceForRoute({home,handle:view.handle});

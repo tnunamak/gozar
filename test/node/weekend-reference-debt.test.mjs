@@ -112,6 +112,7 @@ async function counts(f){
 }
 function debt(view,handle){
   assert.deepEqual(view.handle,handle);assert.equal(view.published,null);assert.equal(view.verification.status,'unverified');
+  assert.equal(view.ingress,null);assert.equal(view.state,'uncertain');
   assert.equal(view.cleanup.state,'unconfirmed');assert.ok(view.cleanup.nextAction);assert.equal(view.routeState,'cleanup-unconfirmed');
 }
 async function commitOracle(api,q,blocked){
@@ -143,10 +144,14 @@ if(childMode){
     const normal=createRouteApi(deps),q=query(f.home,'owner',f.providerId,apps[0].target);
     const offered=await candidate(normal,q),registryId=offered.consent.scope.registryId;
     const real=createEmbeddingServices({registryId,identity:deps.identity});
-    let fail=false;
+    let fail=false,failedHandle=null,failedReleases=0;
+    own.beforeRoutes(()=>{fail=false;});
     const injected=new Proxy(real,{get(target,key){
       if(key==='releaseConfigurationUse')return async request=>{
-        if(fail){fail=false;throw new Error('injected metadata release failure');}
+        if(fail&&request.handle?.kind===failedHandle.kind&&request.handle?.id===failedHandle.id&&
+            request.handle?.generation===failedHandle.generation){
+          failedReleases++;throw new Error('injected exact metadata release unavailable');
+        }
         return target.releaseConfigurationUse(request);
       };
       const value=target[key];return typeof value==='function'?value.bind(target):value;
@@ -157,11 +162,12 @@ if(childMode){
       const foreignQ=query(f.home,'foreign-owner',f.providerId,apps[2].target),foreign=await own.open(normal,foreignQ);
       await echo(second.origin);await echo(foreign.origin);
       const before=await counts(f);assert.deepEqual(before,{start:3,proof:3});
-      fail=true;
-      await assert.rejects(api.closeRoute({home:f.home,owner:q.owner,handle:first.handle,mode:'remove'}),error=>{
-        assert.equal(error.code,'cleanup_debt');debt(error.route,first.handle);return true;
-      });
-      const fresh=createRouteApi(deps);
+      failedHandle=structuredClone(first.handle);fail=true;
+      let pending;
+      try{pending=await api.closeRoute({home:f.home,owner:q.owner,handle:first.handle,mode:'remove'});}
+      catch(error){assert.equal(error.code,'cleanup_debt');pending=error.route;}
+      debt(pending,first.handle);assert.ok(failedReleases>0,'exact release failure must be observed');
+      let fresh=createRouteApi({...deps,embeddingServices:injected});
       debt((await fresh.listRoutes({home:f.home,owner:q.owner})).routes.find(row=>row.handle.id===first.handle.id),first.handle);
       await commitOracle(fresh,q,true);
       await assert.rejects(fresh.closeRoute({home:f.home,owner:'foreign-owner',handle:first.handle,mode:'remove'}),{code:'route_conflict'});
@@ -170,6 +176,15 @@ if(childMode){
       await echo(second.origin);await echo(foreign.origin);
       assert.equal((await fresh.closeRoute({home:f.home,owner:q.owner,handle:second.handle,mode:'remove'})).cleanup.state,'confirmed');
       await commitOracle(fresh,q,true); // Now only the failed first reference can block this exact scope.
+      debt((await fresh.listRoutes({home:f.home,owner:q.owner})).routes.find(row=>row.handle.id===first.handle.id),first.handle);
+      const failuresBeforeRetry=failedReleases;
+      let stillPending;
+      try{stillPending=await fresh.closeRoute({home:f.home,owner:q.owner,handle:first.handle,mode:'remove'});}
+      catch(error){assert.equal(error.code,'cleanup_debt');stillPending=error.route;}
+      debt(stillPending,first.handle);
+      assert.ok(failedReleases>failuresBeforeRetry,'persistent exact release outage must still block retry');
+      await commitOracle(fresh,q,true);
+      fail=false;fresh=createRouteApi(deps);
       const released=await fresh.closeRoute({home:f.home,owner:q.owner,handle:first.handle,mode:'remove'});
       assert.equal(released.cleanup.state,'confirmed');assert.deepEqual(released.handle,first.handle);
       assert.equal((await fresh.closeRoute({home:f.home,owner:q.owner,handle:first.handle,mode:'remove'})).cleanup.state,'confirmed');

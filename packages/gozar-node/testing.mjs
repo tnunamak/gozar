@@ -147,11 +147,12 @@ export default {
     }
   }:{}),
   async create(ctx, plan) {
-    if (plan.readback.kind === 'attached' && proofProtocol === 'echo') {
+    const forwarding = ['attached', 'session'].includes(plan.readback.kind);
+    if (forwarding && proofProtocol === 'echo') {
       const [host,port]=plan.effects[0].target.split(':');
       const server=net.createServer({allowHalfOpen:true}, socket=>{const upstream=net.connect(Number(port),host);upstream.on('error',()=>socket.destroy());socket.on('error',()=>upstream.destroy());socket.pipe(upstream).pipe(socket);});
       await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});servers.set(plan.resourceKey,server);plan={...plan,origin:'tcp://127.0.0.1:'+server.address().port};mark('start');
-    } else if (plan.readback.kind === 'attached') {
+    } else if (forwarding) {
       const target = new URL('http://' + plan.effects[0].target);
       const server = http.createServer((req,res) => {
         const upstream = http.request({hostname:target.hostname,port:target.port,path:req.url,method:req.method,headers:req.headers}, reply => { res.writeHead(reply.statusCode,reply.headers); reply.pipe(res); });

@@ -122,3 +122,24 @@ test('confirmed stop survives an error from the allocating caller',async t=>{
  assert.deepEqual(replay,terminal);
  assert.equal(f.allocations.length,1);assert.equal(f.ledger.size,0);
 });
+
+test('supplied wrong reference handle cannot mutate an exact same-generation operation',async t=>{
+ const f=await fixture(t),first=await f.invoke();
+ const entry=(await readdir(join(f.home,'operations'))).find(name=>name.endsWith('.json'));
+ const path=join(f.home,'operations',entry),before=await readFile(path,'utf8');
+ const terminal={...first,state:'released',routeState:'released',published:null,ingress:null,cleanup:{state:'confirmed'}};
+ for(const handle of [
+  {...first.handle,id:first.handle.id+'-other'},
+  {...first.handle,generation:first.handle.generation+1},
+  {...first.handle,kind:'session'},
+ ]){
+  await recordOperationView({home:f.home,view:terminal,
+   reference:{owner:f.request.owner,operationId:f.request.operationId,handle}});
+  assert.equal(await readFile(path,'utf8'),before,'mismatching supplied handle must leave journal unchanged');
+ }
+ assert.equal(f.ledger.size,1);assert.equal(f.removals.length,0);
+ const stopped=await f.stop(first.handle);
+ assert.equal(stopped.cleanup.state,'confirmed');
+ const replay=await f.invoke({}, {status:async()=>assert.fail('terminal replay must not probe creator')});
+ assert.deepEqual(replay,stopped);assert.equal(f.allocations.length,1);
+});
