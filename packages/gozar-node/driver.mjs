@@ -37,7 +37,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const ABSENCE_SETTLE_MS = 3000, ABSENCE_POLL_MS = 100;
 
 export class EffectDriver {
-  constructor({ adapters, journal, sessionId, targetPort, origin, consent = false, handles = {}, bindAddresses = [], firewallApproved = false, recoveryOnly = false, resolveCredential, observeProcessOutput = false, onProcessOutput, resolveProgram = createProgramResolver(), host = { features: [], bindings: {}, facts: {} }, onExit = () => {} }) {
+  constructor({ adapters, journal, sessionId, targetPort, origin, consent = false, handles = {}, bindAddresses = [], firewallApproved = false, fixtureLocalTransport = null, recoveryOnly = false, resolveCredential, observeProcessOutput = false, onProcessOutput, resolveProgram = createProgramResolver(), host = { features: [], bindings: {}, facts: {} }, onExit = () => {} }) {
     this.adapters = structuredClone(adapters);
     this.host = host;
     this.privateFiles = new PrivateFiles({ journal, sessionId, resolveCredential });
@@ -58,6 +58,9 @@ export class EffectDriver {
     this.routeLineBuffers = new Map();
     this.routeOutputReady = new Set();
     this.forwarders = new Map();
+    // Internal opt-in fixture port; not wired to the public factory.
+    this.fixtureLocalTransport = fixtureLocalTransport;
+    this.fixtureForwarders = new Map();
     this.receipts = new Map();
     this.intentRecords = new Map();
     this.timers = new Map();
@@ -498,12 +501,13 @@ export class EffectDriver {
     if (!resource || resource.sessionId !== this.sessionId || !resource.continuityRef) return null;
     if (resource.retired && resource.kind === 'process') return null;
     if (resource.retired && resource.kind === 'local-forwarder') {
+      if (resource.syntheticTransport?.fixture) return null; // No absence proof from a missing fixture map.
       const stillGone = !this.forwarders.has(id);
       if (!stillGone) return null;
       const nowMs = this.nowMs(); return { handleRef: id, continuityRef: resource.continuityRef, sessionId: this.sessionId, observedAtMs: nowMs, expiresAtMs: nowMs + 5000, continuous: true };
     }
     const owned = resource.kind === 'process' ? await attributable(resource, this.sessionId) :
-      resource.kind === 'local-forwarder' && this.forwarders.has(id) && resource.daemonPid === process.pid && resource.daemonStartIdentity === await processIdentity(process.pid);
+      resource.kind === 'local-forwarder' && (resource.syntheticTransport?.fixture ? this.fixtureForwarders : this.forwarders).has(id) && resource.daemonPid === process.pid && resource.daemonStartIdentity === await processIdentity(process.pid);
     if (!owned) return null;
     const nowMs = this.nowMs();
     return { handleRef: id, continuityRef: resource.continuityRef, sessionId: this.sessionId, observedAtMs: nowMs, expiresAtMs: nowMs + 5000, continuous: true };
@@ -619,9 +623,37 @@ export class EffectDriver {
     this.proofExpiries.set(effect.generation, probeReceipt.expiresAtMs);
     return { status: 200, vantage: 'local', streaming: checked.streaming, streamableHttp: false, oauthDcr: false, probeReceipt };
   }
+  async fixtureSelection(generation) {
+    const port = this.fixtureLocalTransport;
+    if (!port || port.kind !== 'local-forwarder' || port.operation !== 'authorize' || typeof port.handle !== 'function') throw new Error('Fixture transport authorization missing');
+    const selectedAddress = this.bindAddresses.length === 1 ? this.bindAddresses[0] : null;
+    if (!selectedInterfaceAddress(selectedAddress) || !Number.isSafeInteger(generation) || generation < 1 || !Number.isSafeInteger(this.targetPort) || this.targetPort < 1 || this.targetPort > 65535) throw new Error('Fixture selected address or target missing');
+    const input = { sessionId: this.sessionId, generation, selectedAddress,
+      targetHost: '127.0.0.1', targetPort: this.targetPort, nowMs: this.nowMs() };
+    const result = structuredClone(await port.handle(structuredClone(input), { fixture: true }));
+    const nowMs = this.nowMs();
+    if (this.stopped || this.fixtureLocalTransport !== port || this.bindAddresses.length !== 1 || this.bindAddresses[0] !== selectedAddress ||
+        this.targetPort !== input.targetPort || generation < this.generation ||
+        !result || result.fixture !== true || result.sessionId !== this.sessionId || result.generation !== generation ||
+        result.selectedAddress !== selectedAddress || result.targetHost !== '127.0.0.1' || result.targetPort !== this.targetPort ||
+        result.firewallApproved !== true || typeof result.authorityRef !== 'string' || !result.authorityRef ||
+        !Number.isSafeInteger(result.observedAtMs) || !Number.isSafeInteger(result.expiresAtMs) ||
+        result.observedAtMs > nowMs || result.observedAtMs < nowMs - 5000 ||
+        result.expiresAtMs <= nowMs || result.expiresAtMs > result.observedAtMs + 5000 ||
+        !result.interfaces || !Object.values(result.interfaces).some(entries => Array.isArray(entries) &&
+          entries.some(entry => entry?.address === selectedAddress && entry.internal === false))) throw new Error('Fixture transport authority missing, stale or mismatched');
+    return result;
+  }
   async forward(effect) {
     if (effect.operation === 'remove') {
-      const server = this.forwarders.get(effect.resourceId);
+      const resource = this.journal.value.owned[effect.resourceId];
+      if (!resource || resource.kind !== 'local-forwarder' || resource.sessionId !== this.sessionId) throw new Error('Unknown owned forwarder');
+      const fixture = resource.syntheticTransport?.fixture === true;
+      const listeners = fixture ? this.fixtureForwarders : this.forwarders;
+      const server = listeners.get(effect.resourceId);
+      if (fixture && (!server || resource.daemonPid !== process.pid || resource.daemonStartIdentity !== await processIdentity(process.pid))) {
+        throw new Error('Fixture forwarder removal unconfirmed; original transport ownership required');
+      }
       if (!server) {
         const resource = this.journal.value.owned[effect.resourceId];
         if (!resource || resource.kind !== 'local-forwarder' || resource.sessionId !== this.sessionId || !resource.nonce ||
@@ -636,35 +668,47 @@ export class EffectDriver {
       const closed = new Promise(resolve => server.once('close', resolve));
       server.close(); server._ownedSockets.forEach(socket => socket.destroy());
       await closed;
-      this.forwarders.delete(effect.resourceId);
+      listeners.delete(effect.resourceId);
       if (effect.recipeRef || effect.retainRecord) { this.journal.value.owned[effect.resourceId].retired = true; await this.journal.save(); }
       else await this.journal.removed(effect.resourceId);
       return { removed: true, resourceId: effect.resourceId };
     }
     if (effect.targetPort !== undefined && effect.targetPort !== this.targetPort) throw new Error('Forward target is outside approved port');
     if (effect.targetHost && effect.targetHost !== '127.0.0.1') throw new Error('Forward target must be loopback');
+    const targetPort = this.targetPort;
     const host = effect.bindAddress ?? '127.0.0.1';
+    const fixturePort = this.fixtureLocalTransport;
+    const fixture = fixturePort !== null;
+    const selection = fixture ? await this.fixtureSelection(effect.generation) : null;
+    if (fixture && host !== selection.selectedAddress) throw new Error('Fixture effect selected address mismatch');
     const exactInterface = selectedInterfaceAddress(host) && Object.values(networkInterfaces()).flat().some(address => address?.address === host && address.internal === false);
-    if (host !== '127.0.0.1' && (!exactInterface || !this.bindAddresses.includes(host) || !this.firewallApproved)) {
+    if (!fixture && host !== '127.0.0.1' && (!exactInterface || !this.bindAddresses.includes(host) || !this.firewallApproved)) {
       throw new Error('Firewall prerequisite: approve the exact interface before starting the forwarder');
     }
     if (effect.port && effect.port !== 0) throw new Error('Forwarder requires an owned ephemeral port');
     const details = this.ledgerDetails(effect, { bindAddress: host, targetHost: '127.0.0.1', targetPort: this.targetPort, scheme: 'http' });
     const sockets = new Set();
     const server = net.createServer(client => {
-      const upstream = net.connect({ host: '127.0.0.1', port: this.targetPort });
+      const upstream = net.connect({ host: '127.0.0.1', port: targetPort });
       for (const socket of [client, upstream]) { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); }
       client.on('error', () => upstream.destroy()); upstream.on('error', () => client.destroy());
       client.pipe(upstream); upstream.pipe(client);
     });
     server._ownedSockets = sockets;
-    await new Promise((resolve, reject) => { server.once('error', reject); server.listen({ host, port: 0, exclusive: true }, resolve); });
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen({ host: fixture ? '127.0.0.1' : host, port: 0, exclusive: true }, resolve); });
+    if (fixture && (this.stopped || this.fixtureLocalTransport !== fixturePort || this.generation !== effect.generation ||
+        this.bindAddresses.length !== 1 || this.bindAddresses[0] !== host || this.targetPort !== selection.targetPort || this.nowMs() >= selection.expiresAtMs)) {
+      await new Promise(resolve => { server.close(resolve); sockets.forEach(socket => socket.destroy()); });
+      throw new Error('Fixture authority changed during allocation');
+    }
     const id = randomUUID();
     const result = { resourceId: id, origin: `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`, port: server.address().port };
-    this.forwarders.set(id, server);
+    if (fixture) result.syntheticTransport = { fixture: true, bindAddress: '127.0.0.1', port: result.port };
+    const listeners = fixture ? this.fixtureForwarders : this.forwarders;
+    listeners.set(id, server);
     try { await this.journal.own({ id, kind: 'local-forwarder', sessionId: this.sessionId, generation: effect.generation,
-      adapterId: this.selectedAdapter, continuityRef: randomUUID(), details, baseline: this.intentRecords.get(this.receiptKey(effect))?.baseline ?? {}, bindings: effect.bindings ?? {}, daemonPid: process.pid, daemonStartIdentity: await processIdentity(process.pid), nonce: randomUUID(), origin: result.origin }); }
-    catch (error) { server.close(); this.forwarders.delete(id); throw error; }
+      adapterId: this.selectedAdapter, continuityRef: randomUUID(), details, baseline: this.intentRecords.get(this.receiptKey(effect))?.baseline ?? {}, bindings: effect.bindings ?? {}, daemonPid: process.pid, daemonStartIdentity: await processIdentity(process.pid), nonce: randomUUID(), origin: result.origin, ...(fixture ? { syntheticTransport: result.syntheticTransport } : {}) }); }
+    catch (error) { server.close(); sockets.forEach(socket => socket.destroy()); listeners.delete(id); throw error; }
     if (effect.recipeRef) result.ownership = this.ownership(this.journal.value.owned[id]);
     return result;
   }
@@ -674,7 +718,7 @@ export class EffectDriver {
     for (const [id, resource] of Object.entries(this.journal.value.owned)) {
       try {
         if (resource.kind === 'process') await this.removeProcess(id, { retainRecord: this.journal.value.state?.resources?.some(owned => owned.id === id && owned.cleanup !== 'removed') });
-        else if (this.forwarders.has(id)) await this.forward({ operation: 'remove', resourceId: id, retainRecord: this.journal.value.state?.resources?.some(owned => owned.id === id && owned.cleanup !== 'removed') });
+        else if (this.forwarders.has(id) || this.fixtureForwarders.has(id) || resource.syntheticTransport?.fixture) await this.forward({ operation: 'remove', resourceId: id, retainRecord: this.journal.value.state?.resources?.some(owned => owned.id === id && owned.cleanup !== 'removed') });
       } catch (error) { failures.push({ resourceId: id, detail: error.message }); }
     }
     for (const [id, resource] of Object.entries(this.journal.value.owned)) {
