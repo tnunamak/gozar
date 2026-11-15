@@ -72,7 +72,7 @@ async function fixture(t) {
   assert.equal(recipe.definition.durableLifetime,null);
   assert.equal(adapter.definition.availability.durable.state,'unsupported');
   assert.equal(adapter.definition.availability.session.state,'available','red before shipped admission change');
-  return {id,root:installedRoot,manifest:installedManifest,home,cleanups,retainEvidence:()=>{retainEvidence=true;}};
+  return {id,root:installedRoot,manifest:installedManifest,home,cleanups,retainEvidence:()=>{retainEvidence=true;t.diagnostic('Retained fixture root: '+root);}};
 }
 // Public candidate contract: bind only this fresh candidate, never log/decode/fabricate its token.
 const approvalFor = candidate => {
@@ -86,7 +86,7 @@ const approvalFor = candidate => {
 };
 const query=(f,port)=>({schemaVersion:1,owner:'tunnl-shipped-fixture',home:f.home,target:'127.0.0.1:'+port,
   providerId:f.id,usage:{kind:'session',lifetimeMs:HOST_LIFETIME_MS},
-  requirements:{reach:'internet',transport:'https',payloadAccess:'allow-provider',address:'any',setup:'none',protocols:[]}});
+  requirements:{reach:'internet',transport:'https',payloadAccess:'allow-provider',address:'any',setup:'none',protocols:['sse']}});
 async function stopChild(child) {
   if(exited(child))return;
   // Only ChildProcess handles saved at allocation are signalled.
@@ -198,9 +198,56 @@ async function transport(t,f,mode) {
     },
     facts:()=>({creates,closes,nonceResponses,requests,ownedPids:[...children.values()].map(c=>c.pid),live:[...children.values()].filter(c=>c.exitCode===null&&c.signalCode===null).length})};
 }
+async function recoverStartDebt(t,f,effect,request,error) {
+  const retained=error.route;
+  assert.ok(retained,'cleanup debt must retain a public route');
+  const handle=structuredClone(retained.handle);
+  assert.equal(handle.kind,'session');assert.equal(handle.generation,1);
+  const port=Number(request.target.split(':').at(-1));
+  assert.ok(handle.id.startsWith('port-'+port+':'));
+  assert.match(handle.id.slice(('port-'+port+':').length),/^[A-Za-z0-9_-]+$/);
+  assert.equal(retained.hostConfiguration.target.known,true);
+  assert.equal(retained.hostConfiguration.target.value,request.target);
+  if(request.operationId!==undefined)assert.equal(retained.operationId,request.operationId);
+  assert.equal(retained.published,null);assert.equal(retained.verification.status,'unverified');
+  assert.equal(retained.cleanup.state,'unconfirmed');
+  const action=retained.cleanup.nextAction;
+  assert.ok(action);assert.equal(action.kind,'instructions');
+  assert.equal(action.id,'stop-session');assert.ok(action.instructions?.length);
+  const before=effect.facts();
+  assert.equal(before.creates,1);assert.ok(before.requests>0);assert.equal(before.nonceResponses,0);
+  const scope={home:f.home,owner:request.owner,providerId:f.id};
+  const current=(await bounded('debt configuration',()=>effect.gozar.catalogRoutes(request),OPERATION_MS)).candidates.find(c=>c.providerId===f.id).configuration;
+  const draft=await bounded('debt draft',()=>effect.gozar.beginConfigurationDraft({...scope,expectedConfigurationRevision:current.revision}));
+  await assert.rejects(bounded('debt must retain exact reference',()=>effect.gozar.commitConfigurationDraft({...scope,draftId:draft.draftId,expectedConfigurationRevision:draft.configuration.revision})),{code:'configuration_in_use'});
+  await bounded('discard debt draft',()=>effect.gozar.discardConfigurationDraft({...scope,draftId:draft.draftId}));
+  let stopped,last;
+  for(let attempt=0;attempt<3;attempt++){
+    try {
+      stopped=await bounded('retry exact session removal '+attempt,()=>effect.gozar.closeRoute({home:f.home,handle,mode:'remove'}));
+      assert.deepEqual(stopped.handle,handle);
+      assert.equal(stopped.published,null);assert.equal(stopped.verification.status,'unverified');
+      if(stopped.cleanup.state==='confirmed')break;
+      assert.equal(stopped.cleanup.state,'unconfirmed');assert.ok(stopped.cleanup.nextAction);
+      last=new Error('Public removal still has cleanup debt');
+    } catch(failure) {
+      if(failure.code!=='cleanup_debt')throw failure;
+      if(failure.route)assert.deepEqual(failure.route.handle,handle);
+      last=failure;
+    }
+    if(attempt<2)await new Promise(resolve=>setTimeout(resolve,200));
+  }
+  assert.equal(stopped?.cleanup?.state,'confirmed',last?.message??'Public cleanup never confirmed');
+  const after=effect.facts();
+  for(const key of ['creates','requests','nonceResponses'])assert.equal(after[key],before[key],'cleanup changed '+key);
+  assert.deepEqual(after.ownedPids,before.ownedPids,'cleanup changed owned allocation');
+  await effect.confirmRemoved();
+  t.diagnostic(JSON.stringify({recoveredHandle:handle,publicCleanup:stopped.cleanup.state,...after}));
+}
 for(const mode of ['positive','invalid','late-failure'])test('shipped tunnl-gg synthetic daemon/gate admission: '+mode,{timeout:90000},async t=>{
   const f=await fixture(t),effect=await transport(t,f,mode),request=query(f,effect.port);
   t.after(()=>t.diagnostic(JSON.stringify({mode,...effect.facts()})));
+  try {
   const catalog=await bounded('public route catalog',()=>effect.gozar.catalogRoutes(request),OPERATION_MS),candidate=catalog.candidates.find(c=>c.providerId===f.id);
   assert.equal(candidate?.eligible,true);assert.equal(candidate.setup.state,'ready');assert.ok(candidate.candidateToken);
   const start=effect.gozar.expose({...request,approval:approvalFor(candidate),wait:'verified'});
@@ -224,10 +271,19 @@ for(const mode of ['positive','invalid','late-failure'])test('shipped tunnl-gg s
     t.diagnostic(JSON.stringify({mode,publicCleanup:stopped.cleanup?.state,...effect.facts()}));
     assert.equal(stopped.cleanup.state,'confirmed');
   } else {
-    await assert.rejects(bounded('negative expose '+mode,()=>start,OPERATION_MS),error=>['provider_unavailable','verification_failed','requirements_unsatisfied'].includes(error.code));
-    assert.equal(effect.facts().creates,1,'negative must exercise the real allocated recipe, not an earlier refusal');
-    if(mode==='invalid')assert.equal(effect.facts().nonceResponses,0);
-    else assert.ok(effect.facts().requests>0);
+    let failure;
+    try {await bounded('negative expose '+mode,()=>start,OPERATION_MS);}
+    catch(error){failure=error;}
+    try {
+      assert.ok(failure,'negative expose must reject');
+      assert.equal(effect.facts().creates,1,'negative must exercise the real allocated recipe, not an earlier refusal');
+      assert.equal(effect.facts().nonceResponses,0,'failed origin/transport must never publish nonce proof');
+      if(mode==='late-failure')assert.ok(effect.facts().requests>0);
+      if(failure.code==='cleanup_debt'){
+        assert.equal(mode,'late-failure','invalid-origin control retains its existing refusal contract');
+        await recoverStartDebt(t,f,effect,request,failure);
+      } else assert.ok(['provider_unavailable','verification_failed','requirements_unsatisfied'].includes(failure.code),'unexpected refusal '+failure.code);
+    } catch(error){f.retainEvidence();t.diagnostic('Negative recovery failed: '+error.message);throw error;}
   }
   await effect.confirmRemoved();
   const current=(await bounded('current applied configuration',()=>effect.gozar.catalogRoutes(request),OPERATION_MS)).candidates.find(c=>c.providerId===f.id).configuration;
@@ -239,4 +295,5 @@ for(const mode of ['positive','invalid','late-failure'])test('shipped tunnl-gg s
   const appResponse=await bounded('independent app survives',()=>fetch('http://127.0.0.1:'+effect.port));
   assert.equal(await bounded('independent app body',()=>appResponse.text()),'fixture app');
   assert.equal(effect.foreign.exitCode,null);assert.equal(effect.foreign.signalCode,null);
+  } catch(error){f.retainEvidence();t.diagnostic('Fixture failed: '+error.message);throw error;}
 });
