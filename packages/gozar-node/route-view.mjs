@@ -131,6 +131,26 @@ export function projectAttached(lease, { handle, now = Date.now() }) {
 }
 
 
+/** Private controller projection. Reads only supplied in-memory evidence; never refreshes or cleans up. */
+export function projectControllerObservation(view, {
+  now, lastBeat, expiryMs, heartbeat, expiresAtMs, initialSettled,
+  failure, releasing, resourceRemoval, resolverLost, identity,
+}) {
+  const subject=view.verification?.subject,proofUntil=view.verification?.validUntil;
+  const validProof=proofUntil?.known===true&&Number.isFinite(Date.parse(proofUntil.value))&&Date.parse(proofUntil.value)>now;
+  const sameIdentity=identity&&subject&&subject.instanceId===identity.instanceId&&subject.bootId===identity.bootId&&
+    subject.handleGeneration===view.handle.generation&&subject.origin===view.origin&&
+    view.hostConfiguration?.target?.known===true&&subject.target===view.hostConfiguration.target.value;
+  const liveLease=Number.isFinite(now)&&(!heartbeat||(Number.isFinite(lastBeat)&&Number.isFinite(expiryMs)&&expiryMs>0&&now-lastBeat<=expiryMs&&lastBeat<=now))&&
+    (expiresAtMs==null||(Number.isFinite(expiresAtMs)&&now<expiresAtMs));
+  if(initialSettled&&!failure&&!releasing&&!resourceRemoval&&!resolverLost&&!view.consentChange&&
+      liveLease&&validProof&&sameIdentity&&view.state==='usable'&&view.verification.status==='verified'&&view.cleanup.state==='none')return view;
+  return {...view,state:view.state==='usable'?'unverified':view.state,
+    routeState:view.cleanup.state==='unconfirmed'?'cleanup-unconfirmed':'unknown',published:null,ingress:null,
+    verification:{...view.verification,status:'unverified',checks:[],
+      results:(view.verification.results??[]).map(result=>({...result,status:'unknown'}))}};
+}
+
 /** Retain old proof as history; loss is not a fresh observation or proof of absence. */
 export function recoveryHistory(last, message) {
   return { ...last, state: 'uncertain', routeState: 'cleanup-unconfirmed', published: null, ingress: null,

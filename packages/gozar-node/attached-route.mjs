@@ -18,7 +18,7 @@ import { canonicalHome, trustedDirectory, privateDirectory, withExclusiveLock } 
 import { gozarError, instructionAction, normalizeError } from './error-normalizer.mjs';
 import { cliCommand } from './cli-command.mjs';
 import { createGate } from './gate.mjs';
-import { projectAttached, projectSession, releasedView, recoveryHistory, checkRef } from './route-view.mjs';
+import { projectAttached, projectSession, releasedView, recoveryHistory, checkRef, projectControllerObservation } from './route-view.mjs';
 import { validateQuery, adapterRequest, readContextFor, loadRuntime, consentDisclosureRevision,inspectAdapter } from './route-catalog.mjs';
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
@@ -123,9 +123,17 @@ export function controlAttached(directory, command, timeoutMs = 15_000) {
     const deadline = setTimeout(() => finish(gozarError('provider_unavailable', 'The route controller did not answer in time')), timeoutMs);
     readFile(join(directory, 'control.json'), 'utf8').then(async text => {
       const identity = JSON.parse(text);
-      if (!identity.startIdentity || await processIdentity(identity.pid) !== identity.startIdentity) throw Object.assign(new Error('The route controller is not running'), { gone: true });
+      if(command.type==='observe'){
+        if(!Number.isInteger(identity.pid)||!identity.startIdentity)
+          throw gozarError('route_conflict','Incomplete controller process identity');
+        const actual=await processIdentity(identity.pid);
+        if(!actual)throw Object.assign(new Error('The route controller is not running'),{gone:true});
+        if(actual!==identity.startIdentity)throw gozarError('route_conflict','Controller process identity changed');
+      } else if (!identity.startIdentity || await processIdentity(identity.pid) !== identity.startIdentity) {
+        throw Object.assign(new Error('The route controller is not running'), { gone: true });
+      }
       socket = net.createConnection(join(directory, 'control.sock'));
-      socket.once('connect', () => socket.write(`${JSON.stringify({ nonce: identity.nonce, command })}\n`));
+      socket.once('connect', () => socket.write(`${JSON.stringify({ nonce: identity.nonce, command, ...(command.type==='observe'?{controllerIdentity:{pid:identity.pid,startIdentity:identity.startIdentity}}:{}) })}\n`));
       socket.on('data', chunk => {
         output += chunk;
         if (output.length > 1_048_576) return finish(gozarError('internal_error', 'The controller reply is too large'));
@@ -280,6 +288,25 @@ async function viewFromRecord(directory, handle) {
   if (!state) throw gozarError('route_not_found', `No attached route ${handle.id}`);
   if (state.handle.id !== handle.id || state.handle.kind !== handle.kind || state.handle.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
   return state;
+}
+
+/** Private authenticated controller observation; never asks for fresh proof or cleanup. */
+export async function observeAttachedRoute(request) {
+  const handle=checkRef(request);
+  if(!['attached','session'].includes(handle.kind))throw gozarError('unsupported','Not a generic controller handle');
+  const home=await canonicalHome(request.home,false),directory=await routeDirectory(home,handle);
+  const bootstrap=await readJson(join(directory,'bootstrap.json'));
+  const bound=handle.kind==='attached'?{kind:'attached',id:bootstrap?.id,generation:1}:bootstrap?.handle;
+  if(!bootstrap||bootstrap.home!==home||typeof request.owner!=='string'||request.owner!==bootstrap.owner||
+      bound?.kind!==handle.kind||bound.id!==handle.id||bound.generation!==handle.generation)
+    throw gozarError('route_conflict','Observation scope does not match the current controller');
+  try {
+    return (await controlAttached(directory,{type:'observe',handleKind:handle.kind,handleId:handle.id,generation:handle.generation})).view;
+  } catch(error) {
+    if(!error.gone&&error.code!=='provider_unavailable')throw error;
+    const state=await viewFromRecord(directory,handle);
+    return recoveryHistory(state.lastView,'Current controller observation unavailable; historical evidence only');
+  }
 }
 
 /** Fresh proof from the controller. Without a controller the last record is all there is, and it says so. */
@@ -622,6 +649,7 @@ export async function runAttachedController(directory, runtime = {}) {
   let finish;
   const finished = new Promise(resolve => { finish = resolve; });
   const sockets = new Set();
+  const controllerStartIdentity = await processIdentity(process.pid);
   const server = net.createServer(socket => {
     sockets.add(socket); socket.once('close', () => sockets.delete(socket));
     let input = '', dispatched = false;
@@ -637,6 +665,15 @@ export async function runAttachedController(directory, runtime = {}) {
         const message = JSON.parse(input.split('\n')[0]);
         if (message.nonce !== nonce) throw gozarError('internal_error', 'Controller identity mismatch');
         const command = message.command ?? {};
+        if(command.type==='observe'){
+          if(message.controllerIdentity?.pid!==process.pid||!controllerStartIdentity||message.controllerIdentity?.startIdentity!==controllerStartIdentity)
+            throw gozarError('route_conflict','Controller process identity changed');
+          if(command.handleKind!==handle.kind||command.handleId!==handle.id||command.generation!==handle.generation)
+            throw gozarError('route_conflict','Observation handle does not match the controller');
+          return reply({view:projectControllerObservation(lastView(),{now:now(),lastBeat,expiryMs,
+            heartbeat:!session&&runtime.lease?.kind!=='stdin',expiresAtMs:session?bootstrap.expiresAtMs:null,
+            initialSettled,failure,releasing,resourceRemoval,resolverLost,identity:lease.identity}),startupComplete:initialSettled});
+        }
         if(session&&command.handleId!==undefined&&command.handleId!==handle.id)throw gozarError('route_conflict','The session was replaced');
         if(expired()&&command.type!=='close'){await release();if(command.type==='status')return reply({view:lastView(),startupComplete:initialSettled});throw gozarError('verification_failed','The session lifetime has expired');}
         if (command.type === 'heartbeat') { if(!session)lastBeat = now(); return reply({ ok: true }); }
@@ -671,7 +708,7 @@ export async function runAttachedController(directory, runtime = {}) {
   await unlink(socketPath).catch(() => {});
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
   await chmod(socketPath, 0o600);
-  await atomicWrite(join(directory, 'control.json'), { pid: process.pid, startIdentity: await processIdentity(process.pid), nonce });
+  await atomicWrite(join(directory, 'control.json'), { pid: process.pid, startIdentity: controllerStartIdentity, nonce });
 
   let monitor;
   const stdin = !session && runtime.lease?.kind === 'stdin' ? runtime.lease.stream : null;
