@@ -25,7 +25,7 @@ function newHandle(request){
  if(request.usage.kind==='session'){const port=request.target.split(':').at(-1);return {kind:'session',id:`port-${port}:${randomUUID()}`,generation:1};}
  return {kind:'durable',id:request.usage.routeId,generation:1};
 }
-export async function withRouteOperation(request,{registryId,embeddingServices,adapters,run,status}){
+export async function withRouteOperation(request,{registryId,embeddingServices,adapters,run,status,startTimeoutMs=120_000,replayWait=ms=>new Promise(resolve=>setTimeout(resolve,ms))}){
  if(request.operationId===undefined)return run(null);
  if(typeof request.operationId!=='string'||!request.operationId||request.operationId.length>256||typeof request.owner!=='string'||!request.owner)throw gozarError('invalid_input','A route operation needs a non-empty operationId and owner');
  const home=await canonicalHome(request.home,true),dir=await directory(home,true),path=join(dir,hash(JSON.stringify([request.owner,request.operationId]))+'.json');
@@ -57,6 +57,7 @@ export async function withRouteOperation(request,{registryId,embeddingServices,a
   await atomicWrite(path,value);return structuredClone(value.view);
  },{waitSeconds:30});
  if(!winner){
+  let currentRecord=record;
   // All replay decisions linearize at a current locked read, including immediate replies.
   // This observer never writes the stale status over the operation journal.
   const observe=async view=>withExclusiveLock(join(dir,'.reservation-lock'),async()=>{
@@ -64,6 +65,7 @@ export async function withRouteOperation(request,{registryId,embeddingServices,a
    if(current.owner!==record.owner||current.operationId!==record.operationId||current.intentDigest!==record.intentDigest||
       canonicalDigest(current.intent)!==current.intentDigest||current.view.handle.kind!==record.view.handle.kind||current.view.handle.id!==record.view.handle.id)
     throw gozarError('operation_conflict','The operation recovery identity changed');
+   currentRecord=structuredClone(current);
    if(current.referenceCleanup)return pendingReferenceView(current,home);
    if(current.view.cleanup.state==='confirmed')return structuredClone(current.view);
    if(view&&view.handle?.kind==='durable'&&current.view.handle.kind==='durable'&&view.handle.id===current.view.handle.id&&
@@ -73,12 +75,40 @@ export async function withRouteOperation(request,{registryId,embeddingServices,a
   },{waitSeconds:30});
   const immediate=await observe(null);
   if(immediate)return immediate;
-  try{return await observe({...await status({home,handle:record.view.handle}),operationId:request.operationId});}
+  // Only initial startup owes a wait; settled replay remains historical recovery.
+  // Status can refresh proof, so do not call it while the winner owns startup.
+  if(request.wait==='verified'||request.wait==='allocated'){
+   const timeout=Number.isFinite(startTimeoutMs)&&startTimeoutMs>=0?startTimeoutMs:120_000;
+   const deadline=Date.now()+timeout;
+   while(currentRecord.phase==='starting'){
+    const remaining=deadline-Date.now();
+    let waitError,timer;
+    if(remaining<=0)waitError=gozarError('provider_unavailable','The original route operation did not finish in time');
+    else try{
+     await Promise.race([
+      Promise.resolve().then(()=>replayWait(Math.min(150,remaining))),
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(gozarError('provider_unavailable','The original route operation did not finish in time')),remaining);}),
+     ]);
+    }catch(error){waitError=error;}finally{clearTimeout(timer);}
+    // Stop, reference cleanup and completed startup dominate even at timeout.
+    const terminal=await observe(null);if(terminal)return terminal;
+    if(currentRecord.phase!=='starting')break;
+    if(waitError){
+     const debt={...structuredClone(currentRecord.view),state:'uncertain',routeState:'cleanup-unconfirmed',published:null,ingress:null,
+      verification:{...currentRecord.view.verification,status:'unverified'},cleanup:{state:'unconfirmed',nextAction:null}};
+     const retained=await observe(debt);
+     if(currentRecord.referenceCleanup||retained.cleanup.state==='confirmed')return retained;
+     if(currentRecord.phase!=='starting')break;
+     waitError.route=retained;throw waitError;
+    }
+   }
+  }
+  try{return await observe({...await status({home,handle:currentRecord.view.handle}),operationId:request.operationId});}
   catch(error){
-   if(error.code==='route_conflict'){const reference=await operationReferenceForRoute({home,handle:record.view.handle});if(reference?.owner===record.owner&&reference.operationId===record.operationId)return observe({...await status({home,handle:reference.handle}),operationId:request.operationId});}
-   if(!['route_not_found','provider_unavailable',...(record.phase==='starting'?['route_conflict']:[])].includes(error.code))throw error;
-   return observe({...structuredClone(record.view),state:'uncertain',routeState:'cleanup-unconfirmed',published:null,ingress:null,
-    verification:{...record.view.verification,status:'unverified'},cleanup:{state:'unconfirmed',nextAction:null}});
+   if(error.code==='route_conflict'){const reference=await operationReferenceForRoute({home,handle:currentRecord.view.handle});if(reference?.owner===record.owner&&reference.operationId===record.operationId)return observe({...await status({home,handle:reference.handle}),operationId:request.operationId});}
+   if(!['route_not_found','provider_unavailable',...(currentRecord.phase==='starting'?['route_conflict']:[])].includes(error.code))throw error;
+   return observe({...structuredClone(currentRecord.view),state:'uncertain',routeState:'cleanup-unconfirmed',published:null,ingress:null,
+    verification:{...currentRecord.view.verification,status:'unverified'},cleanup:{state:'unconfirmed',nextAction:null}});
   }
  }
  try{const view={...await run(record.view.handle),operationId:request.operationId};record.view=view;record.phase='allocated';return await persist(record);}
