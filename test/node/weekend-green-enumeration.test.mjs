@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import {mkdtemp,rm,readFile} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
+import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {createGozar} from '@tnunamak/gozar';
 import {fakeRegistry} from '@tnunamak/gozar/testing';
@@ -13,7 +13,7 @@ async function listener(){
   socket.on('error',()=>{});socket.on('data',data=>socket.end(data));
  });
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
- return {address:'127.0.0.1:'+server.address().port,async close(){for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));}};
+ return {address:'127.0.0.1:'+server.address().port,async close(){for(const socket of sockets)socket.destroy();await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}};
 }
 function exchange(address){
  const url=new URL(address.includes('://')?address:'tcp://'+address);
@@ -28,15 +28,24 @@ function exchange(address){
 }
 for(const kind of ['attached','session']){
  test('public cached enumeration preserves '+kind+' observation without effects',{timeout:20000},async t=>{
-  const home=await mkdtemp(join(tmpdir(),'green-enumeration-'));
-  let api,route,registry;const listeners=[];
+  const home=await mkdtemp(join(homedir(),'.tmp','green-enumeration-'));
+  let api,route,registry,bodyPassed=false;const listeners=[];
   t.after(async()=>{
-   try{if(route)await api.closeRoute({home,owner:'inventory-owner',handle:route.handle,mode:'remove'});}finally{
-    for(const item of listeners)await item.close();
-    await registry?.cleanup();await rm(home,{recursive:true,force:true});
+   const errors=[];
+   if(route?.handle)try{
+    const closed=await api.closeRoute({home,owner:'inventory-owner',handle:route.handle,mode:'remove'});
+    assert.equal(closed.cleanup.state,'confirmed');
+   }catch(error){errors.push(error);}
+   for(const item of listeners)try{await item.close();}catch(error){errors.push(error);}
+   if(errors.length){
+    t.diagnostic(`Unconfirmed enumeration cleanup retained at ${home}`);
+    throw new AggregateError(errors,'Enumeration fixture cleanup failed');
    }
+   if(bodyPassed){await registry?.cleanup();await rm(home,{recursive:true});}
+   else t.diagnostic(`Enumeration failure evidence retained at ${home}`);
   });
-  listeners.push(await listener(),await listener());
+  listeners.push(await listener());
+  listeners.push(await listener());
   const target=listeners[0].address,foreign=listeners[1].address,id='unfamiliar-enumeration-'+kind;
   registry=await fakeRegistry({id,dir:join(home,'registry'),kinds:['attached','session'],
    reach:'this-device',transport:'tcp',proofProtocol:'echo'});
@@ -47,7 +56,8 @@ for(const kind of ['attached','session']){
   const choice=(await api.catalogRoutes(q)).candidates[0];assert.ok(choice);
   const authority=Object.fromEntries(Object.entries(choice).filter(([name])=>['candidateToken','consentFactsDigest'].includes(name)));
   const request={...q,wait:'verified',approval:{kind:'route',...authority,disclosureRevision:choice.disclosure.revision}};
-  route=await api.expose(request);assert.equal(route.handle.kind,kind);assert.equal(route.handle.generation,1);
+  try{route=await api.expose(request);}catch(error){route=error.route;throw error;}
+  assert.equal(route.handle.kind,kind);assert.equal(route.handle.generation,1);
   const current=await api.routeStatus({home,owner:q.owner,handle:route.handle});
   assert.equal(current.verification.status,'verified');assert.notEqual(current.published,null);
   if(kind==='session'){
@@ -68,11 +78,12 @@ for(const kind of ['attached','session']){
   assert.equal(await exchange(current.published),'inventory-probe');
   const closed=await api.closeRoute({home,owner:q.owner,handle:route.handle,mode:'remove'});
   assert.equal(closed.cleanup.state,'confirmed');
-  await assert.rejects(exchange(current.published));
+  await assert.rejects(exchange(current.published),{code:'ECONNREFUSED'});
   assert.equal(await exchange(foreign),'inventory-probe','unrelated application survives');
   const terminal=(await api.listRoutes({home,owner:q.owner})).routes[0];
   assert.equal(terminal.state,'released');assert.equal(terminal.published,null);
   assert.equal((await api.expose(request)).state,'released');
   const ledger=await events();assert.equal(ledger.split('"start"').length-1,1);
+  bodyPassed=true;
  });
 }
