@@ -145,11 +145,24 @@ export function createRouteApi(deps = {}) {
         if(cleanupScope)await prepareCleanupReference(cleanupScope);
       }
       // This path consumes only an exact private resource-removal milestone.
-      const retried=await retryRecordedReferenceCleanup(request,{...context,
-        ...(request.handle?.kind==='session'?{afterReferenceRelease:()=>releaseSessionConfiguration(request,context)}:{})});
+      const operationCleanupRuntime={...context,afterReferenceRelease:()=>finishCleanupController(request)};
+      const retried=await retryRecordedReferenceCleanup(request,operationCleanupRuntime);
       if(retried)return retried;
       const reference=await operationReferenceForRoute(request);
       if(request.owner!==undefined&&reference&&request.owner!==reference.owner)throw gozarError('route_conflict','The retained route belongs to a different owner');
+      // Operation-bound bootstrap scope is admitted only with its exact operation reference.
+      // Absence is not reference release: journal the debt before invoking current services.
+      const operationScope=request.mode==='remove'&&reference&&['attached','session'].includes(request.handle?.kind)
+        ?await attachedCleanupReference(request,context,reference):null;
+      const reconcileRemoval=async()=>{
+        if(!operationScope)return null;
+        const evidence=await attachedRemovalEvidence(request,operationScope);
+        if(!evidence)return null;
+        await recordPendingReferenceCleanup({home:request.home,view:evidence,reference,scope:operationScope});
+        return retryRecordedReferenceCleanup(request,operationCleanupRuntime);
+      };
+      const removed=await reconcileRemoval();
+      if(removed)return removed;
       let view;
       try{view=await viewClose(request,{adapters:await adapters(),...deps.view});}
       catch(error){
@@ -159,6 +172,8 @@ export function createRouteApi(deps = {}) {
         if(!retained)throw error;
         return retained;
       }
+      const reconciled=await reconcileRemoval();
+      if(reconciled)return reconciled;
       if(cleanupScope){
         const evidence=view.cleanup.state==='confirmed'?view:await attachedRemovalEvidence(request,cleanupScope);
         if(evidence){

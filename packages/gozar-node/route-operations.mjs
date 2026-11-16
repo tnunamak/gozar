@@ -189,8 +189,8 @@ function pendingReferenceView(record,home){
   throw gozarError('cleanup_debt','Recorded resource-removal evidence does not match this reference');
  return referenceCleanupDebt(structuredClone(pending.resourceView));
 }
-/** Called only after the facade has obtained confirmed resource removal from viewClose. */
-export async function recordPendingReferenceCleanup({home,view,reference}){
+/** Called only after confirmed provider absence from viewClose or validated controller removal evidence. */
+export async function recordPendingReferenceCleanup({home,view,reference,scope}){
  if(!reference)return referenceCleanupDebt(view);
  home=await canonicalHome(home,false);
  const dir=await directory(home,false),path=join(dir,hash(JSON.stringify([reference.owner,reference.operationId]))+'.json');
@@ -199,6 +199,11 @@ export async function recordPendingReferenceCleanup({home,view,reference}){
   if(record.owner!==reference.owner||record.operationId!==reference.operationId||
      !sameHandle(record.view.handle,view.handle)||view.cleanup?.state!=='confirmed')
    throw gozarError('route_conflict','Reference cleanup does not match the recorded operation');
+  const expectedScope={registryId:record.intent.registryId,home,owner:record.owner,
+   providerId:record.intent.providerId,handle:record.view.handle};
+  if(scope!==undefined&&(canonicalDigest(scope)!==canonicalDigest(expectedScope)||
+     !sameHandle(reference.handle,view.handle)))
+   throw gozarError('route_conflict','Removal evidence scope does not match the operation intent');
   const resourceView={...view,published:null,ingress:null,verification:{...view.verification,status:'unverified'},operationId:record.operationId};
   record.referenceCleanup={intentDigest:record.intentDigest,handle:structuredClone(view.handle),
    scope:{registryId:record.intent.registryId,home,owner:record.owner,providerId:record.intent.providerId,handle:structuredClone(view.handle)},
