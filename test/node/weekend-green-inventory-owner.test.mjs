@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {listProviders} from '../../packages/gozar-node/embedding-inventory.mjs';
 import {createEmbeddingServices} from '../../packages/gozar-node/embedding-services.mjs';
 
-for(const [requestedOwner,dependencyOwner] of [['owner-A','owner-B'],['owner-B','owner-A'],[undefined,'owner-B']]){
+for(const [requestedOwner,dependencyOwner] of [['owner-A','owner-B'],['owner-B','owner-A'],[undefined,'owner-B'],[undefined,undefined]]){
  test('inventory configuration owner: '+(requestedOwner??'omitted')+' versus '+dependencyOwner,async t=>{
   const home=await mkdtemp(join(tmpdir(),'inventory-owner-'));
   t.after(()=>rm(home,{recursive:true,force:true}));
@@ -49,19 +49,18 @@ for(const [requestedOwner,dependencyOwner] of [['owner-A','owner-B'],['owner-B',
   const request={home,...(requestedOwner===undefined?{}:{owner:requestedOwner})};
   const view=await listProviders(request,{adapters,embeddingServices,owner:dependencyOwner,
    platform:'linux',readContext:{configuration:async()=>null}});
-  const effectiveOwner=requestedOwner??dependencyOwner;
+  const effectiveOwner=requestedOwner===undefined?dependencyOwner:requestedOwner;
   assert.deepEqual(resolved.sort((a,b)=>a.providerId.localeCompare(b.providerId)),
    ids.map(providerId=>({home,owner:effectiveOwner,providerId})));
   assert.equal(observed.length,ids.length);assert.equal(saved.length,ids.length);
   assert.deepEqual(view.providers.map(p=>p.providerId),ids);
   for(const [n,provider] of view.providers.entries()){
    const read=observed.find(row=>row.id===provider.providerId);
-   assert.deepEqual(read,{id:provider.providerId,home,platform:'linux',value:{'fixture-owner':effectiveOwner}});
+   assert.deepEqual(read,{id:provider.providerId,home,platform:'linux',value:{'fixture-owner':effectiveOwner??'unnamed'}});
    const capture=saved.find(row=>row.input.providerId===provider.providerId);
-   assert.deepEqual(capture.input,{...request,providerId:provider.providerId});
-   // Omission preserves BOTH existing contracts: inspector falls back to deps.owner,
-   // while the saved configuration call retains the unnamed request scope.
-   const expected=configurations.get(key(provider.providerId,requestedOwner));
+   assert.deepEqual(capture.input,{...request,owner:effectiveOwner,providerId:provider.providerId});
+   // Inspection and the emitted configuration must use the same canonical scope.
+   const expected=configurations.get(key(provider.providerId,effectiveOwner));
    assert.equal(capture.value.scopeId,expected.scopeId);
    assert.equal(capture.value.revision,expected.revision);
    assert.equal(provider.configuration.scopeId,expected.scopeId);
