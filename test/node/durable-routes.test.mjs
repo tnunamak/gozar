@@ -1442,7 +1442,7 @@ test('41. S8 crashes before and after delete retain the receipt until confirmed;
   }
 });
 
-test('stopped durable removal succeeds repeatedly without provider calls while suspend refuses', async t => {
+test('stopped durable tombstone refuses cleanup confirmation without terminal ownership evidence', async t => {
   const w = await world(t);
   const created = await w.ensure();
   assert.equal(created.result.route.state, 'usable');
