@@ -128,7 +128,11 @@ test('red: an unknown provider added through a test manifest is offered by the c
 
   const status = await w.api('routeStatus', { home: w.home, handle: view.handle });
   assert.equal(status.error, undefined, JSON.stringify(status.error));
-  assert.equal(status.result.state, 'usable');
+  // The opening process held the host resolver and has exited: the controller withdraws publication (embedding contract,
+  // "Resolver loss must withdraw publication"), so the route is no longer usable although the resource is still there.
+  assert.equal(status.result.state, 'unverified');
+  assert.equal(status.result.published, null);
+  assert.equal(status.result.origin, view.origin);
   const closed = await w.api('closeRoute', { home: w.home, handle: view.handle, mode: 'remove' });
   assert.equal(closed.error, undefined, JSON.stringify(closed.error));
   assert.equal(closed.result.state, 'released');

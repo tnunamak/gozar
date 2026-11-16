@@ -37,7 +37,7 @@ import { readFile } from 'node:fs/promises';
 const dts = await readFile(new URL('./node_modules/@tnunamak/gozar/packages/gozar-node/route-contract.d.ts', import.meta.url), 'utf8');
 const pkg = JSON.parse(await readFile(new URL('./node_modules/@tnunamak/gozar/package.json', import.meta.url), 'utf8'));
 const manifest = JSON.parse(await readFile(new URL('./node_modules/@tnunamak/gozar/adapters/manifest.json', import.meta.url), 'utf8'));
-const declared = [...dts.matchAll(/^export function (\\w+)/gm)].map(match => match[1]);
+const declared = [...dts.matchAll(/^export (?:function|const) (\\w+)/gm)].map(match => match[1]);
 const catalog = await root.catalogRoutes({ schemaVersion: 1, owner: 'example-app', target: '127.0.0.1:9', home: ${JSON.stringify(stateHome)},
   usage: { kind: 'attached' }, requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] } });
 const registry = await testing.fakeRegistry({ id: 'fake-0a1b2c3d', kinds: ['session'], reach: 'internet' });
@@ -52,8 +52,10 @@ console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeId
   const { stdout } = await exec(process.execPath, [probe], { cwd: project, timeout: 60_000, env: { PATH: emptyBin, HOME: stateHome, GOZAR_HOME: stateHome, TMPDIR: stateHome } });
   const seen = JSON.parse(stdout);
   assert.deepEqual(seen.rootExports, seen.declared, 'the root exports exactly the functions route-contract.d.ts declares');
-  assert.deepEqual(seen.serviceExports, ['addService', 'cancelHandBack', 'confirmHandBack', 'createServiceVerifier', 'releaseRoute', 'removeService', 'statusServices']);
-  assert.deepEqual(seen.testingExports, ['createReadContext', 'createRouteApi', 'fakeReadContext', 'fakeRegistry', 'fakeRouteScenarios'], 'the testing export is in the archive and names its public helpers');
+  // 0.4 adds the external-route consent review/approval and the service context the host API uses; they ship from the same module.
+  assert.deepEqual(seen.serviceExports, ['addService', 'approveExternalConsent', 'cancelHandBack', 'confirmHandBack', 'createServiceVerifier', 'releaseRoute', 'removeService',
+    'reviewExternalConsent', 'statusServices', 'withServiceContext']);
+  assert.deepEqual(seen.testingExports, ['createReadContext', 'createRouteApi', 'createTestingGozar', 'fakeReadContext', 'fakeRegistry', 'fakeRouteScenarios'], 'the testing export is in the archive and names its public helpers');
   assert.deepEqual(seen.fakeIds, ['fake-0a1b2c3d']);
   assert.deepEqual(seen.fakeEligible, [true], 'the fake provider is listed from the installed bytes');
   assert.equal(seen.types, './packages/gozar-node/route-contract.d.ts');

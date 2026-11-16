@@ -29,13 +29,18 @@ async function scratch() {
 
 // --- Fakes ----------------------------------------------------------------------------------------------
 
-const readContext = (extra = {}) => ({
-  now: () => 1_700_000_000_000, platform: 'linux', home: '/synthetic/home',
-  configuration: async () => ({ auth: STUB, 'reserved-domain': reserved }),
-  probe: async () => ({ ok: true }),
-  verifyChallenge: async () => ({ status: 'verified', checkedAt: '2026-01-01T00:00:00.000Z' }),
-  ...extra,
-});
+// A null configuration reference means "this adapter's own bound values", which the runtime reads through providerConfiguration;
+// the synthetic values below stand in for what the host bound.
+const readContext = (extra = {}) => {
+  const configuration = extra.configuration ?? (async () => ({ auth: STUB, 'reserved-domain': reserved }));
+  return {
+    now: () => 1_700_000_000_000, platform: 'linux', home: '/synthetic/home',
+    configuration, providerConfiguration: () => configuration(null),
+    probe: async () => ({ ok: true }),
+    verifyChallenge: async () => ({ status: 'verified', checkedAt: '2026-01-01T00:00:00.000Z' }),
+    ...extra,
+  };
+};
 
 /** A fake engine: counts writes, can crash at chosen points, and holds the journal. */
 function fakeEngine(adapterId, { revision = null } = {}) {

@@ -1452,12 +1452,11 @@ test('stopped durable removal succeeds repeatedly without provider calls while s
   const handle = { kind: 'durable', id: 'coordinator', generation: 1 };
   for (let repeat = 0; repeat < 2; repeat++) {
     assert.equal((await w.run('apiSuspend', { handle })).error?.code, 'stopped_by_user');
+    // A stop tombstone is revocation, not provider absence for this generation: this route has no terminal operation journal,
+    // so a handle names no retained evidence and Gozar claims no confirmed removal (0.4 releaseRoute contract).
     const closed = await w.run('apiClose', { handle, mode: 'remove' });
-    assert.equal(closed.result?.state, 'released', JSON.stringify(closed));
-    assert.equal(closed.result.origin, null);
-    assert.equal(closed.result.published, null);
-    assert.deepEqual(closed.result.cleanup, { state: 'confirmed',nextAction:null });
-    assertShape('RouteView', closed.result);
+    assert.equal(closed.error?.code, 'route_not_found', JSON.stringify(closed));
+    assert.equal(closed.result, undefined);
     assert.deepEqual((await w.run('release', { routeId: 'coordinator', mode: 'remove' })).result,
       { schemaVersion: 1, routeId: 'coordinator', removed: false, providerRemoved: false, cleanupDebt: null });
     assert.equal((await w.run('ensure', w.request)).error?.code, 'stopped_by_user');

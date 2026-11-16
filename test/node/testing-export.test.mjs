@@ -25,7 +25,7 @@ test('red: a fake registry provider is listed by the testing route API, and expo
   const [own] = catalog.candidates;
   assert.equal(own.eligible, true, JSON.stringify(own.unmet));
   assert.equal(typeof own.candidateToken, 'string');
-  const view = await api.expose({ ...session(home), approval: { candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision }, wait: 'allocated' });
+  const view = await api.expose({ ...session(home), approval: { kind: 'route', consentFactsDigest: own.consentFactsDigest, candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision }, wait: 'allocated' });
   assertShape('RouteView', view);
   assert.equal(view.ownership, 'gozar-owned');
   assert.notEqual(view.origin, null);
@@ -75,7 +75,7 @@ test('red: a durable fake is created, checked, shown usable and verified, and cl
   const [own] = catalog.candidates;
   assert.equal(own.providerId, id);
   assert.equal(own.eligible, true, JSON.stringify(own.unmet));
-  const view = await api.ensureRoute({ ...durable, approval: { candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision } });
+  const view = await api.ensureRoute({ ...durable, approval: { kind: 'route', consentFactsDigest: own.consentFactsDigest, candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision } });
   assertShape('RouteView', view);
   assert.deepEqual(await rules(), ['a'], 'the rule is in the store file');
   const status = await api.routeStatus({ home, handle: view.handle });
@@ -95,7 +95,7 @@ test('a durable fake answers the check as told: an unverified answer leaves the 
   const api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home, verified: false }) });
   const durable = query({ home, usage: { kind: 'durable', routeId: 'coordinator' } });
   const [own] = (await api.catalogRoutes(durable)).candidates;
-  const view = await api.ensureRoute({ ...durable, approval: { candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision } });
+  const view = await api.ensureRoute({ ...durable, approval: { kind: 'route', consentFactsDigest: own.consentFactsDigest, candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision } });
   assert.equal(view.state, 'unverified');
   assert.equal(view.verification.status, 'unverified');
   assert.equal((await api.routeStatus({ home, handle: view.handle })).state, 'unverified', 'a later status asks the same fake');

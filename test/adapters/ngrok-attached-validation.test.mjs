@@ -6,6 +6,7 @@ import http from 'node:http';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { createNgrokAdapter } from '../../adapters/providers/ngrok-https-edge/index.mjs';
 import { runAttachedController, controlAttached } from '../../packages/gozar-node/attached-route.mjs';
 import { createAttachedEffectContext } from '../../packages/gozar-node/adapter-runtime.mjs';
@@ -60,7 +61,9 @@ async function world(t, { buffer }) {
   const directory = join(dir, 'att_0123456789abcdef');
   const { mkdir } = await import('node:fs/promises');
   await mkdir(directory, { mode: 0o700 });
-  await writeFile(join(directory, 'bootstrap.json'), JSON.stringify({ schemaVersion: 1, id: 'att_0123456789abcdef', home: dir, platform: 'linux', adapterId: adapter.id, request, plan, leaseExpiryMs: 60_000 }));
+  await writeFile(join(directory, 'bootstrap.json'), JSON.stringify({ schemaVersion: 1, id: 'att_0123456789abcdef', home: dir, platform: 'linux', adapterId: adapter.id, request, plan, leaseExpiryMs: 60_000,
+    // 0.4 binds a verified route to the registered controller instance; a production controller gets this from the host resolver.
+    identity: { instanceId: randomUUID(), bootId: randomUUID() } }));
   // The public origin is mapped to the edge the SDK opened.
   const fetchThroughEdge = (url, init) => {
     const target = new URL(url);

@@ -182,11 +182,11 @@ test('a durable catalog asks the engine for plan facts with the loaded adapters 
 });
 
 test('RouteView.verification says where the last check ran from and what it passed', () => {
-  const handle = { kind: 'external', id: 'https://example.test', generation: 0 };
-  const subject={origin:handle.id,target:'127.0.0.1:8799',instanceId:'fixture',bootId:'fixture-boot',handleGeneration:0},checkedAt='2026-11-12T12:00:00.000Z';
-  const verified = projectExternal({ origin:handle.id, verification: { status: 'verified', checkedAt,observedAt:checkedAt,subject } }, { handle });
+  const handle = { kind: 'external', id: 'https://example.test', generation: 1 };
+  const subject={origin:handle.id,target:'127.0.0.1:8799',instanceId:'fixture',bootId:'fixture-boot',handleGeneration:1},checkedAt='2026-11-12T12:00:00.000Z';
+  const verified = projectExternal({ origin:handle.id, generation: 1, verification: { status: 'verified', checkedAt,observedAt:checkedAt,subject } }, { handle });
   assert.deepEqual(verified.verification, { status: 'verified', checkedAt,observedAt:checkedAt,subject, vantage: 'this-device', checks: ['nonce', 'tls'], validUntil: {known: false, reason: 'not-observed'}, results: [{check:'nonce',status:'passed'},{check:'tls',status:'passed'}] });
-  const failed = projectExternal({ origin: 'https://example.test', verification: { status: 'failed', checkedAt: '2026-11-12T12:00:00.000Z' } }, { handle });
+  const failed = projectExternal({ origin: 'https://example.test', generation: 1, verification: { status: 'failed', checkedAt: '2026-11-12T12:00:00.000Z' } }, { handle });
   assert.deepEqual(failed.verification, { status: 'unverified', checkedAt,observedAt:checkedAt,subject:null, vantage: 'this-device', checks: [], validUntil: {known: false, reason: 'not-observed'}, results: [] });
   const props = { ...adapters.find(a => a.id === 'tailscale-funnel').definition.capabilities };
   const sessionHandle = { handle: { kind: 'session', id: 's', generation: 0 }, properties: props, now: 1_000 };

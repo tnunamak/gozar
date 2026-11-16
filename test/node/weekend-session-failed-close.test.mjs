@@ -54,7 +54,7 @@ for (const receipt of [null, {generation: 1, resourceKey: 'synthetic-owned'}]) {
       const lastView = {...startingRoute(handle, '127.0.0.1:43219', 'failed-operation'),
         state:'uncertain', cleanup:{state:'unconfirmed'}};
       await writeFile(join(directory,'bootstrap.json'), JSON.stringify({
-        execution:'generic-session-v1',handle,owner:'synthetic-owner',operationId:'failed-operation'}), {mode:0o600});
+        execution:'generic-session-v1',handle,home,owner:'synthetic-owner',operationId:'failed-operation'}), {mode:0o600});
       await writeFile(join(directory,'state.json'), JSON.stringify({
         handle, phase:'failed', adapterId:'synthetic-runtime-absent', receipt, lastView}), {mode:0o600});
       await mkdir(join(home,'operations'),{mode:0o700});

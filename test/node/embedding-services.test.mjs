@@ -44,9 +44,10 @@ test('failed rotation, foreign scopes and conflicting drafts keep the old creden
  }finally{await rm(home,{recursive:true,force:true});}
 });
 test('backend lock never becomes absent or file fallback, and unbound discard repeats safely',async()=>{
- const home=await mkdtemp(join(tmpdir(),'embedding-'));let deletes=0;let locked=false;
- const s=createEmbeddingServices({registryId:'fixture',secretBackend:{put:async()=>{if(locked)throw {code:'secret_backend_locked',message:'never disclose this'};return {handle:'key'};},withSecret:async()=>{throw {code:'secret_backend_locked'};},presence:async()=>{throw {code:'secret_backend_locked'};},delete:async()=>{deletes++;return {deleted:true};}}});
- try{const c=await s.readConfiguration({home,providerId:'p'});const r={home,providerId:'p',inputId:'key',scopeId:c.scopeId,expectedConfigurationRevision:c.revision,bytes:Buffer.from('canary')};locked=true;await assert.rejects(s.storeSecret(r),code('secret_backend_locked'));locked=false;const {handle}=await s.storeSecret(r);assert.equal((await s.discardSecret({home,handle})).discarded,true);assert.equal((await s.discardSecret({home,handle})).discarded,false);assert.equal(deletes,1);await assert.rejects(readFile(join(home,'secrets',handle)),{code:'ENOENT'});
+ const home=await mkdtemp(join(tmpdir(),'embedding-'));let deletes=0;let locked=false;let stored=false;
+ // A locked backend refuses to answer presence as well; an unlocked one reports exactly what it holds.
+ const s=createEmbeddingServices({registryId:'fixture',secretBackend:{put:async()=>{if(locked)throw {code:'secret_backend_locked',message:'never disclose this'};stored=true;return {handle:'key'};},withSecret:async()=>{throw {code:'secret_backend_locked'};},presence:async()=>{if(locked)throw {code:'secret_backend_locked'};return {known:true,value:stored};},delete:async()=>{deletes++;stored=false;return {deleted:true};}}});
+ try{const c=await s.readConfiguration({home,providerId:'p'});const r={home,providerId:'p',inputId:'key',scopeId:c.scopeId,expectedConfigurationRevision:c.revision,bytes:Buffer.from('canary')};locked=true;await assert.rejects(s.storeSecret(r),code('secret_backend_locked'));locked=false;const {handle}=await s.storeSecret(r);locked=true;await assert.rejects(s.discardSecret({home,handle}),code('secret_backend_locked'));assert.equal(deletes,0);locked=false;assert.equal((await s.discardSecret({home,handle})).discarded,true);assert.equal((await s.discardSecret({home,handle})).discarded,false);assert.equal(deletes,1);await assert.rejects(readFile(join(home,'secrets',handle)),{code:'ENOENT'});
  }finally{await rm(home,{recursive:true,force:true});}
 });
 test('default backend imports legacy references only; named owners require explicit migration',async()=>{
@@ -70,8 +71,8 @@ test('draft binding promotion survives revision changes and commits; stale compe
  }finally{await rm(home,{recursive:true,force:true});}
 });
 test('approved draft clear releases the reference only after commit; applied use blocks deletion',async()=>{
- const home=await mkdtemp(join(tmpdir(),'embed-clear-'));const {clearConfigurationInput,clearInputActions}=await import('../../packages/gozar-node/embedding-setup.mjs');let deleted=0;
- const s=createEmbeddingServices({registryId:'fixture',secretBackend:{put:async()=>({handle:'h'}),withSecret:async(_,use)=>use(Buffer.from('secret')),presence:async()=>({known:true,value:true}),delete:async()=>{deleted++;return {deleted:true};}}});
+ const home=await mkdtemp(join(tmpdir(),'embed-clear-'));const {clearConfigurationInput,clearInputActions}=await import('../../packages/gozar-node/embedding-setup.mjs');let deleted=0;let held=false;
+ const s=createEmbeddingServices({registryId:'fixture',secretBackend:{put:async()=>{held=true;return {handle:'h'};},withSecret:async(_,use)=>use(Buffer.from('secret')),presence:async()=>({known:true,value:held}),delete:async()=>{deleted++;held=false;return {deleted:true};}}});
  try{const c=await s.readConfiguration({home,providerId:'p'});const r={home,providerId:'p',scopeId:c.scopeId,expectedConfigurationRevision:c.revision};const stored=await s.storeSecret({...r,inputId:'key',bytes:Buffer.from('secret')});assert.equal(stored.configurationRevision,c.revision);const applied=await s.mutateConfiguration(r,tx=>tx.bindSecret('key','h'));const d=await s.beginConfigurationDraft({...r,expectedConfigurationRevision:applied.configuration.revision});const action=clearInputActions(d.configuration)[0];
  const request={...r,draftId:d.draftId,inputId:'key',expectedConfigurationRevision:d.configuration.revision,approval:{kind:'setup',digest:action.digest,disclosureRevision:action.disclosure.revision}};
  const adapter={id:'p',definition:{capabilities:{}},detect:async()=>({state:'ready',facts:{}}),properties:()=>({}),setupActions:()=>[]};const next=await clearConfigurationInput(request,{embeddingServices:s,adapters:[adapter],readContext:{configuration:async()=>null}});

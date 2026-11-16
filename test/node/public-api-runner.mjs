@@ -13,6 +13,8 @@ const api = registry
 
 const [operation, input] = process.argv.slice(2);
 const request = JSON.parse(input);
+// A reply can exceed one pipe buffer (a catalog carries consent snapshots): exit only after the reply is flushed.
+const reply = value => new Promise(resolve => process.stdout.write(`${JSON.stringify(value)}\n`, resolve));
 const printable = error => ({ code: error.code ?? null, message: error.message, nextAction: error.nextAction ?? null });
 try {
   if (operation === 'watchRoutes') {
@@ -24,11 +26,11 @@ try {
       seen.push(event);
       if (seen.length >= events || event.type === 'terminal') controller.abort();
     }
-    console.log(JSON.stringify({ result: seen }));
+    await reply({ result: seen });
   } else if (typeof api[operation] === 'function') {
-    console.log(JSON.stringify({ result: await api[operation](request) }));
+    await reply({ result: await api[operation](request) });
   } else throw Object.assign(new Error(`${operation} is not exported`), { code: 'not_implemented' });
 } catch (error) {
-  console.log(JSON.stringify({ error: printable(error) }));
+  await reply({ error: printable(error) });
 }
 process.exit(0);

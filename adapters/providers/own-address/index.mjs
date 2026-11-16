@@ -87,6 +87,8 @@ export default recipeAdapter({
 
       async plan(ctx, request) {
         platformOf(ctx);
+        // A kind this adapter does not declare is refused as unsupported before any address is required.
+        if (!definition.supportedKinds.includes(request?.usage?.kind)) return base.plan(ctx, request);
         const origin = request?.origin == null ? await given(ctx) : parseOrigin(request.origin);
         if (request?.origin != null && !origin) throw effectError('invalid_input', 'The requested origin is invalid');
         if (!origin) throw effectError('setup_required', 'Provide the HTTPS address you run first');

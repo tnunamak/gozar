@@ -58,7 +58,7 @@
       "attached"
     ],
     "disclosure": {
-      "revision": "disc-named-040-owned-connector",
+      "revision": "disc-8dcc5142aae6",
       "text": "The Cloudflare edge terminates TLS and can read payloads. Gozar starts and stops its connector and local gate. The owner keeps the tunnel registration, DNS route, Access policy and token revocation.",
       "links": [
         {

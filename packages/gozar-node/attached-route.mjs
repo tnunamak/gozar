@@ -404,6 +404,8 @@ export async function attachedCleanupReference(request,runtime) {
   if(!bootstrap)throw gozarError('cleanup_debt','Cleanup authority is unavailable');
   if(typeof bootstrap.operationId==='string')return null;
   const bound=handle.kind==='attached'?{kind:'attached',id:bootstrap.id,generation:1}:bootstrap.handle??bootstrap.embedding?.handle;
+  // A session started before 0.4 recorded no handle, owner or embedding: nothing to capture; stopping it is by its exact session id.
+  if(handle.kind==='session'&&!bound&&bootstrap.owner===undefined&&!bootstrap.embedding)return null;
   if(bound?.kind!==handle.kind||bound.id!==handle.id||bound.generation!==handle.generation)
     throw gozarError('route_conflict','Cleanup handle does not match its bootstrap');
   const registryId=bootstrap.registryId??bootstrap.embedding?.registryId;
@@ -543,13 +545,17 @@ export async function runAttachedController(directory, runtime = {}) {
     return checked;
   }
 
+  // What the provider reports now: a consent review shows this, not what the last proof saw.
+  async function refreshRuntimeFacts(){
+    const facts=await adapter.runtimeFacts(read,receipt);
+    Object.assign(lease,{properties:facts.properties,binding:facts.binding,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
+  }
   let verification;
   function verify(){if(verification)return verification;verification=refreshProof().finally(()=>{verification=null;});return verification;}
   async function refreshProof() {
     if (expired()) { await release(); return; }
     if (!receipt || resourceRemoval || releasing || !initialSettled || failure || lease.cleanup.state==='confirmed') return;
-    const facts=await adapter.runtimeFacts(read,receipt);
-    Object.assign(lease,{properties:facts.properties,binding:facts.binding,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
+    await refreshRuntimeFacts();
     if(!await enforceConsent())return;
     if (proofSession && !proofSession.refresh) return;
     try {
@@ -632,7 +638,12 @@ export async function runAttachedController(directory, runtime = {}) {
     proofAbort.abort();
     releasing ??= (async () => {
       await creation;
-      if (resourceRemoval) {await releaseUse();lease.state='released';lease.cleanup={state:'confirmed'};await save();return;}
+      if (resourceRemoval) {
+        // The route is already removed; only the configuration reference remains. A failed release keeps that debt recorded and retryable.
+        try {await releaseUse();lease.state='released';lease.cleanup={state:'confirmed'};}
+        catch (cause) {lease.state='uncertain';lease.cleanup={state:'unconfirmed',message:'Resource removed; configuration reference release remains unconfirmed'};}
+        await save();return;
+      }
       if (lease.cleanup.state === 'confirmed') {lease.state='released';await save();return;}
       lease.state = 'releasing'; await save().catch(() => {});
       try {
@@ -683,6 +694,7 @@ export async function runAttachedController(directory, runtime = {}) {
         if(command.type==='review-consent'){
           lease.state='unverified';lease.consentChange={reason:safeRefresh()?'review-requested':'proof-refresh-unsupported',nextAction:safeRefresh()?instructionAction('review-route-consent','Review route consent','Approve the current review before publication can resume.'):null};await save();
           if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
+          if(receipt&&!resourceRemoval&&!releasing&&initialSettled&&!failure)await refreshRuntimeFacts();
           const current=await currentConsent();if(!current)throw gozarError('unsupported','This route has no current consent snapshot');
           const scope={...current.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation};
           const {consentReview}=await import('./consent-facts.mjs');
@@ -695,6 +707,7 @@ export async function runAttachedController(directory, runtime = {}) {
           lease.state='unverified';await save();
           if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
           const stored=reviewTokens.get(command.approvalToken);reviewTokens.delete(command.approvalToken);
+          if(receipt&&!resourceRemoval&&!releasing&&initialSettled&&!failure)await refreshRuntimeFacts();
           const current=await currentConsent();
           if(!stored||Date.parse(stored.snapshot.expiresAt)<=now()||stored.snapshot.consentFactsDigest!==command.consentFactsDigest||stored.current.consentFactsDigest!==current?.consentFactsDigest||JSON.stringify(stored.snapshot.subject)!==JSON.stringify(lease.proofSubject??null))throw gozarError('consent_mismatch','The runtime review changed; request a new review');
           lease.approvedReview=current;delete lease.consentChange;await verify();return reply({view:lastView()});

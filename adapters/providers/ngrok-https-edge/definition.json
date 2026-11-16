@@ -58,7 +58,7 @@
       "attached"
     ],
     "disclosure": {
-      "revision": "disc-ngrok-https-040",
+      "revision": "disc-da9c3b77b850",
       "text": "Serve this app through an ngrok HTTPS listener on your assigned development or permitted reserved domain while the app runs. The ngrok edge terminates TLS and can read payloads. Credential custody stays with the configured host backend.",
       "links": [
         {

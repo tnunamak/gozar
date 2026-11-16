@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { defaultProfileHome, getRoutePreferences, setRoutePreferences } from '../../packages/gozar-node/route-preferences.mjs';
 import { catalogRoutes, preferenceRefFor } from '../../packages/gozar-node/route-catalog.mjs';
+import { createEmbeddingServices } from '../../packages/gozar-node/embedding-services.mjs';
 import { assertShape, codeOf, query, scratch, stubAdapter, tokenStubs } from './route-schema-check.mjs';
 
 const env = (t, name, value) => { const was = process.env[name]; if (value === undefined) delete process.env[name]; else process.env[name] = value; t.after(() => { if (was === undefined) delete process.env[name]; else process.env[name] = was; }); };
@@ -72,12 +73,12 @@ test('invalid preference lists fail closed with invalid_input', async t => {
 
 test('red: a durable pin does not move when the preference changes', async t => {
   const profileHome = await scratch(t), home = await scratch(t);
-  const tokens = tokenStubs();
+  const tokens = tokenStubs(), embeddingServices = createEmbeddingServices({ registryId: 'synthetic-registry' });
   const adapters = [stubAdapter('alpha'), stubAdapter('bravo')];
   const pin = { adapterId: 'bravo' };           // what the durable engine recorded when the route was created
   const ask = async () => {
     const record = await getRoutePreferences({ profileHome });
-    return catalogRoutes(query({ home, usage: { kind: 'durable', routeId: 'route-1' } }), { adapters, platform: 'linux', preferenceRecord: record, issue: tokens.issue, consentBinding: tokens.consentBinding,
+    return catalogRoutes(query({ home, usage: { kind: 'durable', routeId: 'route-1' } }), { adapters, registryId: 'synthetic-registry', embeddingServices, platform: 'linux', preferenceRecord: record, issue: tokens.issue, consentBinding: tokens.consentBinding,
       durablePlanFacts: async ({ adapterId }) => ({ planDigest: `d-${adapterId}`, observedResource: `r-${adapterId}` }), pinnedAdapterId: async () => pin.adapterId,
       readContext: { now: () => 0, configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified' }) } });
   };
@@ -92,7 +93,7 @@ test('red: a durable pin does not move when the preference changes', async t => 
   assert.equal(after.candidates[0].preferenceRef, preferenceRefFor('bravo'), 'the pinned adapter stays first');
   assert.equal(pin.adapterId, 'bravo');
   // A new (non-durable) ask follows the new preference.
-  const fresh = await catalogRoutes(query({ home }), { adapters, platform: 'linux', preferenceRecord: await getRoutePreferences({ profileHome }), issue: tokens.issue, consentBinding: tokens.consentBinding,
+  const fresh = await catalogRoutes(query({ home }), { adapters, registryId: 'synthetic-registry', embeddingServices, platform: 'linux', preferenceRecord: await getRoutePreferences({ profileHome }), issue: tokens.issue, consentBinding: tokens.consentBinding,
     durablePlanFacts: async () => ({}), readContext: { now: () => 0, configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified' }) } });
   assert.equal(fresh.candidates[0].preferenceRef, preferenceRefFor('alpha'));
 });

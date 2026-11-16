@@ -56,7 +56,7 @@ test('private daemon exposes fake loopback target, status works across invocatio
   await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
   t.after(() => { target.closeAllConnections(); target.close(); });
   const { directory } = await fixture(t, {});
-  const adapter = { id: 'loopback-fixture', audience: 'local', ownership: 'owned', capabilities: { https: false }, recipes: {
+  const adapter = { id: 'loopback-fixture', planVersion: 1, admission: { state: 'admitted', requiredFeatures: [] }, audience: 'local', ownership: 'owned', capabilities: { https: false }, recipes: {
     create: { kind: 'local-forwarder', bindAddress: '127.0.0.1', port: 0, parser: { kind: 'json', pointer: '/origin' } },
     remove: { kind: 'local-forwarder' },
   } };
@@ -104,16 +104,28 @@ test('CLI stop recovers a crashed daemon, removes its exact local child, preserv
   const home = join(directory, 'home');
   const port = target.address().port;
   const sessionDirectory = join(home, `port-${port}`);
-  const adapter = { id: 'owned-process-fixture', audience: 'local', ownership: 'owned', capabilities: { https: false }, recipes: {
-    create: { kind: 'spawn', program: process.execPath, args: ['-e', `console.log('http://127.0.0.1:${port}');setInterval(()=>{},1000)`], longRunning: true, collectMs: 20,
-      parser: { kind: 'url' }, timeoutMs: 1000 },
-    remove: { kind: 'spawn', program: 'owned-process-stop', args: ['{resourceId}'] },
+  // An admitted plan publishes through the session gate, so the owned child is a loopback forwarder to the gate port it is given.
+  const forwarder = join(directory, 'forward.cjs');
+  await writeFile(forwarder, `const net = require('net');
+const gatePort = Number(process.argv[2]);
+const server = net.createServer(client => {
+  const upstream = net.connect(gatePort, '127.0.0.1');
+  client.on('error', () => upstream.destroy()); upstream.on('error', () => client.destroy());
+  client.pipe(upstream); upstream.pipe(client);
+});
+server.listen(0, '127.0.0.1', () => console.log('http://127.0.0.1:' + server.address().port));
+`);
+  const adapter = { id: 'owned-process-fixture', planVersion: 1, admission: { state: 'admitted', requiredFeatures: [] }, audience: 'local', ownership: 'owned', capabilities: { https: false },
+    bindings: { gatePort: { type: 'loopback-port' } }, recipes: {
+    create: { kind: 'spawn', program: process.execPath, args: [forwarder, '{gatePort}'], longRunning: true, collectMs: 200,
+      parser: { kind: 'url' }, timeoutMs: 1000, before: [], requires: [], after: [] },
+    remove: { kind: 'owned-process', signal: 'SIGTERM', thenSignal: 'SIGKILL', graceMs: 1000, confirmExit: true, before: [], requires: [], after: [] },
   } };
   const config = { adapters: [adapter], requirements: { clientReach: 'this-device' }, targetPort: port, adapterId: adapter.id, consent: true, approveOrigin: true };
   const executable = fileURLToPath(new URL('./fixtures/daemon.mjs', import.meta.url));
   t.after(async () => { try { await control(sessionDirectory, { type: 'stop' }); } catch {} });
   const first = await launch(sessionDirectory, config, executable);
-  assert.equal(first.snapshot.phase, 'published-ready');
+  assert.equal(first.snapshot.phase, 'published-ready', JSON.stringify(first));
   const journal = JSON.parse(await readFile(join(sessionDirectory, 'session.json'), 'utf8'));
   const owned = Object.values(journal.owned)[0];
   const identity = JSON.parse(await readFile(join(sessionDirectory, 'control.json'), 'utf8'));
