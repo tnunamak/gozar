@@ -7,6 +7,6 @@ export async function releaseRecordedConfigurationUse(request,runtime={}){
  const matching=registryId===undefined||registryId===runtime.registryId;
  const services=matching&&runtime.embeddingServices?runtime.embeddingServices:
   registryId?createEmbeddingServices({registryId}):null;
- if(!services)throw embeddingError('secret_backend_unavailable');
+ if(typeof services?.releaseConfigurationUse!=='function')throw embeddingError('secret_backend_unavailable');
  await services.releaseConfigurationUse(scope);
 }
