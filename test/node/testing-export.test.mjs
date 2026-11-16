@@ -23,7 +23,7 @@ test('red: a fake registry provider is listed by the testing route API, and expo
   assert.match(id, /^fake-[0-9a-f]{8}$/);
   const registry = await fakeRegistry({ id, kinds: ['session'], reach: 'internet', transport: 'tcp', proofProtocol: 'echo' });
   const requested = { ...session(home), requirements: { ...session(home).requirements, transport: 'tcp', protocols: [] } };
-  let api, handle;
+  let api, handle, bodyFailure, bodyFailed = false;
   try {
     api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home }),
       expose: { startSession: undefined } }); // Exercise a real owned lifecycle, including close.
@@ -45,13 +45,22 @@ test('red: a fake registry provider is listed by the testing route API, and expo
     assert.equal(view.ownership, 'gozar-owned');
     assert.notEqual(view.origin, null);
     assert.equal(view.properties.reach, 'internet');
+  } catch (error) {
+    bodyFailed = true;
+    bodyFailure = error;
+    throw error;
   } finally {
-    if (handle) {
-      const closed = await api.closeRoute({ home, handle, mode: 'remove' });
-      assert.equal(closed.cleanup.state, 'confirmed');
+    try {
+      if (handle) {
+        const closed = await api.closeRoute({ home, handle, mode: 'remove' });
+        assert.equal(closed.cleanup.state, 'confirmed');
+      }
+      await registry.cleanup();
+      cleaned = true;
+    } catch (cleanupFailure) {
+      if (bodyFailed) throw new AggregateError([bodyFailure, cleanupFailure], 'Fixture body and cleanup failed');
+      throw cleanupFailure;
     }
-    await registry.cleanup();
-    cleaned = true;
   }
 });
 
