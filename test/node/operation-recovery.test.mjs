@@ -53,9 +53,9 @@ test('concurrent operation replay allocates once, conflicts before effects and s
  assert.equal(expired.published,null);assert.equal(expired.verification.status,'unverified');
  assert.deepEqual(expired.verification.subject,first.verification.subject);
  assert.equal(expired.verification.checkedAt,first.verification.checkedAt);
- // Public facade retains its prior conservative behavior until the separate API leaf.
+ // Public facade consumes the same authenticated cached observation.
  await assert.rejects(api.expose({...request,target:'127.0.0.1:2'}),{code:'operation_conflict'});
- const listed=await api.listRoutes({home,owner:q.owner});assert.equal(listed.routes.length,1);assert.equal(listed.routes[0].published,null);assert.equal(listed.routes[0].operationId,q.operationId);
+ const listed=await api.listRoutes({home,owner:q.owner});assert.equal(listed.routes.length,1);assert.deepEqual(listed.routes[0].published,live.published);assert.equal(listed.routes[0].operationId,q.operationId);
  assert.equal((await api.closeRoute({home,handle:first.handle,mode:'remove'})).cleanup.state,'confirmed');
  const terminal=(await listRecordedRoutes({home,owner:q.owner},deps)).routes[0];
  assert.equal(terminal.state,'released');assert.equal(terminal.published,null);

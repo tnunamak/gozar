@@ -192,13 +192,20 @@ export function createRouteApi(deps = {}) {
     runSetupAction: request => guard(async () => runSetup(request,await setupDeps(request))),
     listProviders: request => guard(async()=>inventory(request,await shared(request))),
     listRoutes:request=>guard(async()=>{
-      const base=await listRecordedRoutes(request),retained=await listCleanupReferences(request);
+      const context=await shared(request);
+      const base=await listRecordedRoutes(request,context),retained=await listCleanupReferences(request);
       const key=handle=>JSON.stringify([handle.kind,handle.id,handle.generation]);
       const views=new Map(base.routes.map(view=>[key(view.handle),view]));
       for(const view of retained){
         if([...views.values()].some(other=>other.handle.kind===view.handle.kind&&other.handle.id===view.handle.id&&other.handle.generation>view.handle.generation))continue;
-        const observed=await api.routeStatus({...request,handle:view.handle});
-        views.set(key(view.handle),observed);
+        const current=await cleanupReferenceRecord({...request,handle:view.handle},context);
+        if(!current)continue;
+        const observed=current.view;
+        if(observed.handle.kind!==view.handle.kind||observed.handle.id!==view.handle.id||observed.handle.generation!==view.handle.generation)
+          throw gozarError('route_conflict','Cleanup metadata belongs to another handle');
+        // Awaited metadata must not displace a newer owning observation.
+        if([...views.values()].some(other=>other.handle.kind===observed.handle.kind&&other.handle.id===observed.handle.id&&other.handle.generation>observed.handle.generation))continue;
+        if(current.phase!=='prepared'||!views.has(key(observed.handle)))views.set(key(observed.handle),observed);
       }
       return {routes:[...views.values()]};
     }),
