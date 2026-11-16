@@ -1,4 +1,4 @@
-// The @tnunamak/gozar/testing helpers: an app lists and uses a fake provider with no code of ours changed and no network.
+// The @tnunamak/gozar/testing helpers use synthetic providers and isolated loopback transport.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -14,22 +14,45 @@ const fakeId = () => `fake-${randomBytes(4).toString('hex')}`;
 const session = home => query({ home, usage: { kind: 'session', lifetimeMs: 60_000 } });
 
 test('red: a fake registry provider is listed by the testing route API, and expose with session usage succeeds against it', async t => {
-  const home = await scratch(t), id = fakeId();
+  const home = await mkdtemp(join(homedir(), '.tmp', 'gozar-export-')), id = fakeId();
+  let cleaned = false;
+  t.after(async () => {
+    if (cleaned) await rm(home, { recursive: true });
+    else t.diagnostic(`Unconfirmed fixture cleanup retained at ${home}`);
+  });
   assert.match(id, /^fake-[0-9a-f]{8}$/);
-  const registry = await fakeRegistry({ id, kinds: ['session'], reach: 'internet' });
-  t.after(registry.cleanup);
-  const api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home }) });
-  const catalog = await api.catalogRoutes(session(home));
-  assertShape('Catalog', catalog);
-  assert.deepEqual(catalog.candidates.map(item => item.providerId), [id], 'the fake is the whole registry');
-  const [own] = catalog.candidates;
-  assert.equal(own.eligible, true, JSON.stringify(own.unmet));
-  assert.equal(typeof own.candidateToken, 'string');
-  const view = await api.expose({ ...session(home), approval: { kind: 'route', consentFactsDigest: own.consentFactsDigest, candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision }, wait: 'allocated' });
-  assertShape('RouteView', view);
-  assert.equal(view.ownership, 'gozar-owned');
-  assert.notEqual(view.origin, null);
-  assert.equal(view.properties.reach, 'internet');
+  const registry = await fakeRegistry({ id, kinds: ['session'], reach: 'internet', transport: 'tcp', proofProtocol: 'echo' });
+  const requested = { ...session(home), requirements: { ...session(home).requirements, transport: 'tcp', protocols: [] } };
+  let api, handle;
+  try {
+    api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home }),
+      expose: { startSession: undefined } }); // Exercise a real owned lifecycle, including close.
+    const catalog = await api.catalogRoutes(requested);
+    assertShape('Catalog', catalog);
+    assert.deepEqual(catalog.candidates.map(item => item.providerId), [id], 'the fake is the whole registry');
+    const [own] = catalog.candidates;
+    assert.equal(own.eligible, true, JSON.stringify(own.unmet));
+    assert.equal(typeof own.candidateToken, 'string');
+    let view;
+    try {
+      view = await api.expose({ ...requested, approval: { kind: 'route', consentFactsDigest: own.consentFactsDigest, candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision }, wait: 'allocated' });
+      handle = view.handle;
+    } catch (error) {
+      handle = error.route?.handle;
+      throw error;
+    }
+    assertShape('RouteView', view);
+    assert.equal(view.ownership, 'gozar-owned');
+    assert.notEqual(view.origin, null);
+    assert.equal(view.properties.reach, 'internet');
+  } finally {
+    if (handle) {
+      const closed = await api.closeRoute({ home, handle, mode: 'remove' });
+      assert.equal(closed.cleanup.state, 'confirmed');
+    }
+    await registry.cleanup();
+    cleaned = true;
+  }
 });
 
 test('a fake whose probe fails is listed but not eligible, and plain HTTP does not meet an https need', async t => {
