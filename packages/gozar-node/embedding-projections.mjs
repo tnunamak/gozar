@@ -1,6 +1,9 @@
 import {instructionAction} from './error-normalizer.mjs';
 export function bindingFor({observedTarget,authority='unknown',remedy=null}={}){
- const target=observedTarget?.known===true&&typeof observedTarget.value==='string'?{known:true,value:observedTarget.value}:{known:false,reason:observedTarget?.reason??'effective-target-not-observed'};
+ const nonblank=value=>typeof value==='string'&&value.trim().length>0;
+ const target=observedTarget?.known===true&&nonblank(observedTarget.value)
+  ?{known:true,value:observedTarget.value}
+  :{known:false,reason:nonblank(observedTarget?.reason)?observedTarget.reason:'effective-target-not-observed'};
  return {authority:['adapter','owner'].includes(authority)?authority:'unknown',target,remedy};
 }
 // The action invokes the existing public closeRoute path; this module owns no receipt lifecycle.
