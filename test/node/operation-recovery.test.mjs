@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {readFile,readdir,writeFile,mkdtemp,mkdir,chmod,rm} from 'node:fs/promises';
+import {readFile,readdir,writeFile,mkdtemp,mkdir,chmod,rm,stat} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {inspect} from 'node:util';
 import {join} from 'node:path';
@@ -16,8 +16,9 @@ import {projectControllerObservation} from '../../packages/gozar-node/route-view
  // One ownership boundary replaces competing after hooks and scratch's eager deletion.
 async function withRecoveryCleanup(t, body) {
  const base=process.env.GOZAR_TEST_TMPDIR ?? join(homedir(),'.tmp','gozar-route-tests');
- await mkdir(base,{recursive:true,mode:0o700});await chmod(base,0o700);
+ await mkdir(base,{recursive:true,mode:0o700});
  const home=await mkdtemp(join(base,'op-')),owned=new Map(),confirmed=new Set(),children=[];
+ await chmod(home,0o700);
  let registry,api,recover,primary,failed=false;
  const diagnostic=(label,error)=>t.diagnostic(label+' '+inspect({
   stack:error?.stack??error,actual:error?.actual,expected:error?.expected,operator:error?.operator
@@ -126,3 +127,21 @@ test('concurrent operation replay allocates once, conflicts before effects and s
  const files=await readdir(join(home,'operations'));const record=files.find(name=>name.endsWith('.json'));await writeFile(join(home,'operations',record),'{unreadable');
  await assert.rejects(api.listRoutes({home,owner:q.owner}),error=>typeof error.code==='string');
 }));
+
+// A caller can share the scratch parent; this helper owns only its new child.
+test('recovery cleanup preserves caller scratch parent permissions',async t=>{
+ const parent=await mkdtemp(join(homedir(),'.tmp','shared-recovery-'));
+ const prior=process.env.GOZAR_TEST_TMPDIR;
+ try{
+  await chmod(parent,0o750);
+  process.env.GOZAR_TEST_TMPDIR=parent;
+  await withRecoveryCleanup(t,async({home})=>{
+   assert.equal((await stat(home)).mode&0o777,0o700);
+  });
+  assert.equal((await stat(parent)).mode&0o777,0o750);
+  assert.deepEqual(await readdir(parent),[]);
+ }finally{
+  if(prior===undefined)delete process.env.GOZAR_TEST_TMPDIR;else process.env.GOZAR_TEST_TMPDIR=prior;
+  await rm(parent,{recursive:true,force:true});
+ }
+});
