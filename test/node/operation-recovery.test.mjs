@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {readFile,readdir,writeFile,mkdtemp,mkdir,chmod,rm} from 'node:fs/promises';
+import {readFile,readdir,writeFile,mkdtemp,mkdir,chmod,rm,stat} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {inspect} from 'node:util';
 import {join} from 'node:path';
@@ -16,8 +16,9 @@ import {projectControllerObservation} from '../../packages/gozar-node/route-view
  // One ownership boundary replaces competing after hooks and scratch's eager deletion.
 async function withRecoveryCleanup(t, body) {
  const base=process.env.GOZAR_TEST_TMPDIR ?? join(homedir(),'.tmp','gozar-route-tests');
- await mkdir(base,{recursive:true,mode:0o700});await chmod(base,0o700);
+ await mkdir(base,{recursive:true,mode:0o700});
  const home=await mkdtemp(join(base,'op-')),owned=new Map(),confirmed=new Set(),children=[];
+ await chmod(home,0o700);
  let registry,api,recover,primary,failed=false;
  const diagnostic=(label,error)=>t.diagnostic(label+' '+inspect({
   stack:error?.stack??error,actual:error?.actual,expected:error?.expected,operator:error?.operator
@@ -126,3 +127,111 @@ test('concurrent operation replay allocates once, conflicts before effects and s
  const files=await readdir(join(home,'operations'));const record=files.find(name=>name.endsWith('.json'));await writeFile(join(home,'operations',record),'{unreadable');
  await assert.rejects(api.listRoutes({home,owner:q.owner}),error=>typeof error.code==='string');
 }));
+
+
+// A caller can share the scratch parent; this helper owns only its new child.
+test('recovery cleanup preserves caller scratch parent permissions',async t=>{
+ const parent=await mkdtemp(join(homedir(),'.tmp','shared-recovery-'));
+ const prior=process.env.GOZAR_TEST_TMPDIR;
+ try{
+  await chmod(parent,0o750);
+  process.env.GOZAR_TEST_TMPDIR=parent;
+  await withRecoveryCleanup(t,async({home})=>{
+   assert.equal((await stat(home)).mode&0o777,0o700);
+  });
+  assert.equal((await stat(parent)).mode&0o777,0o750);
+  assert.deepEqual(await readdir(parent),[]);
+ }finally{
+  if(prior===undefined)delete process.env.GOZAR_TEST_TMPDIR;else process.env.GOZAR_TEST_TMPDIR=prior;
+  await rm(parent,{recursive:true,force:true});
+ }
+});
+
+// These fake ports test only helper ownership bookkeeping, not provider authority.
+test('cleanup captures fulfilled and error routes while a sibling remains gated',async()=>{
+ const diagnostics=[],closed=[];
+ const handles=[
+  {kind:'fixture',id:'fulfilled',generation:1},
+  {kind:'fixture',id:'rejected',generation:2},
+  {kind:'fixture',id:'gated',generation:3},
+ ];
+ const original=Object.assign(new Error('primary capture sentinel'),{route:{handle:handles[1]}});
+ let home,release,registryCleanups=0;
+ const gate=new Promise(resolve=>{release=resolve;});
+ try{
+  await assert.rejects(withRecoveryCleanup({diagnostic:line=>diagnostics.push(line)},async owned=>{
+   home=owned.home;
+   await writeFile(join(home,'evidence-marker'),'owned evidence');
+   owned.registry({cleanup:async()=>{registryCleanups++;}});
+   owned.api({closeRoute:async input=>{
+    assert.equal(input.home,home);assert.equal(input.mode,'remove');
+    closed.push(input.handle);
+    return {cleanup:{state:'confirmed'}};
+   }});
+   const fulfilled=owned.capture(Promise.resolve({handle:handles[0]}));
+   const rejected=owned.capture(Promise.reject(original));
+   const rejection=assert.rejects(rejected,error=>error===original);
+   const sibling=owned.capture(gate.then(()=>({handle:handles[2]})));
+   try{
+    assert.deepEqual((await fulfilled).handle,handles[0]);
+    await rejection;
+    assert.deepEqual(closed,[],'no teardown while body owns the pending sibling');
+    assert.equal(await readFile(join(home,'evidence-marker'),'utf8'),'owned evidence');
+    // Early expose diagnostics belong to the public test body, not capture().
+    assert.deepEqual(diagnostics,[]);
+   }finally{
+    release();
+    await Promise.allSettled([fulfilled,rejected,sibling]);
+   }
+   throw original;
+  }),error=>error===original);
+  assert.deepEqual(closed,handles,'only the exact captured handles are closed');
+  assert.equal(registryCleanups,1);
+  assert.ok(diagnostics.some(line=>line.includes('primary failure')&&line.includes('primary capture sentinel')));
+  await assert.rejects(stat(home),{code:'ENOENT'});
+ }finally{
+  release();
+  if(home)await rm(home,{recursive:true,force:true});
+ }
+});
+
+test('cleanup aggregates the original failure and exact close error, retaining real evidence',async()=>{
+ const diagnostics=[],closed=[];
+ const handles=[
+  {kind:'fixture',id:'failed-close',generation:7},
+  {kind:'fixture',id:'successful-close',generation:8},
+ ];
+ const original=new assert.AssertionError({message:'primary assertion sentinel',actual:1,expected:2,operator:'strictEqual'});
+ const closeError=new Error('exact close sentinel');
+ let home,registryCleanups=0;
+ try{
+  await assert.rejects(withRecoveryCleanup({diagnostic:line=>diagnostics.push(line)},async owned=>{
+   home=owned.home;
+   await writeFile(join(home,'evidence-marker'),'retain this evidence');
+   owned.registry({cleanup:async()=>{registryCleanups++;}});
+   owned.api({closeRoute:async input=>{
+    assert.equal(input.home,home);assert.equal(input.mode,'remove');
+    closed.push(input.handle);
+    if(input.handle===handles[0])throw closeError;
+    return {cleanup:{state:'confirmed'}};
+   }});
+   handles.forEach(handle=>owned.own({handle}));
+   throw original;
+  }),error=>{
+   assert.ok(error instanceof AggregateError);
+   assert.equal(error.cause,original);
+   assert.deepEqual(error.errors,[original,closeError]);
+   assert.equal(error.errors[0],original);assert.equal(error.errors[1],closeError);
+   return true;
+  });
+  assert.deepEqual(closed,handles,'failure closing one handle cannot skip its sibling');
+  assert.equal(registryCleanups,0);
+  assert.equal(await readFile(join(home,'evidence-marker'),'utf8'),'retain this evidence');
+  assert.ok((await stat(home)).isDirectory());
+  assert.ok(diagnostics.some(line=>line.includes('primary failure')&&line.includes('primary assertion sentinel')));
+  assert.ok(diagnostics.some(line=>line.includes('route cleanup failure')&&line.includes('exact close sentinel')));
+  assert.ok(diagnostics.includes('Retaining recovery evidence at '+home));
+ }finally{
+  if(home)await rm(home,{recursive:true,force:true});
+ }
+});
