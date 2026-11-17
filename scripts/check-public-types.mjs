@@ -58,23 +58,48 @@ export async function checkPublicTypes({installedRoot,tsc,timeoutMs=30000}){
    target:'ES2022',module:'NodeNext',moduleResolution:'NodeNext',strict:true,noEmit:true,skipLibCheck:false,types:[],
   },files:['consumer.ts']},null,2));
   return await new Promise((resolveResult,reject)=>{
-   let stdout='',stderr='',timedOut=false,spawnError;
+   let stdout='',stderr='',timedOut=false,spawnError,settled=false;
+   let exitCode=null,exitSignal=null,exited=false,drainTimer,timer;
+   const terminationErrors=[];
    const grouped=process.platform!=='win32';
    const child=spawn(compiler,['--project',join(project,'tsconfig.json'),'--pretty','false'],{cwd:project,detached:grouped,stdio:['ignore','pipe','pipe']});
    child.stdout.on('data',data=>{stdout+=data;});child.stderr.on('data',data=>{stderr+=data;});
-   const timer=setTimeout(()=>{
+   const finish=(outputTruncated=false)=>{
+    if(settled)return;
+    settled=true;clearTimeout(timer);clearTimeout(drainTimer);
+    if(outputTruncated){
+     child.stdout.destroy();child.stderr.destroy();
+     // A failed kill must not give this child ownership of the gate's lifetime.
+     // This does not assert that the process or arbitrary descendants are gone.
+     if(!exited)child.unref();
+    }
+    if(spawnError){reject(new Error('Compiler could not start: '+spawnError.message,{cause:spawnError}));return;}
+    resolveResult({code:exitCode,signal:exitSignal,stdout,stderr,timedOut,outputTruncated,
+     descendantCleanup:timedOut?'unverified':'not-requested',terminationErrors});
+   };
+   timer=setTimeout(()=>{
     timedOut=true;
-    // Own process group only: descendants must not retain compiler output pipes.
-    if(grouped&&child.pid){
-     try{process.kill(-child.pid,'SIGKILL');}
-     catch(error){if(error.code!=='ESRCH')child.kill('SIGKILL');}
-    }else child.kill('SIGKILL');
+    // Terminate our group, but escaped descendants may still own output pipes.
+    // Independently bound draining those pipes instead of waiting for close forever.
+    drainTimer=setTimeout(()=>finish(true),250);
+    try{
+     if(grouped&&child.pid)process.kill(-child.pid,'SIGKILL');
+     else if(!exited)child.kill('SIGKILL');
+    }catch(error){
+     if(error.code!=='ESRCH'){
+      terminationErrors.push(error.message);
+      if(!exited){
+       try{child.kill('SIGKILL');}catch(fallback){terminationErrors.push(fallback.message);}
+      }
+     }
+    }
    },timeoutMs);
    child.on('error',error=>{spawnError=error;});
+   // exit records compiler status; only close proves its pipes have drained.
+   child.on('exit',(code,signal)=>{exited=true;exitCode=code;exitSignal=signal;});
    child.on('close',(code,signal)=>{
-    clearTimeout(timer);
-    if(spawnError){reject(new Error('Compiler could not start: '+spawnError.message,{cause:spawnError}));return;}
-    resolveResult({code,signal,stdout,stderr,timedOut});
+    if(!exited){exitCode=code;exitSignal=signal;}
+    finish();
    });
   });
  }finally{if(project)await rm(project,{recursive:true,force:true});}
@@ -83,7 +108,7 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  try{
   const result=await checkPublicTypes(parseArgs(process.argv.slice(2)));
   process.stdout.write(result.stdout);process.stderr.write(result.stderr);
-  if(result.timedOut){process.stderr.write('\nInstalled public type compiler timed out\n');process.exitCode=124;}
+  if(result.timedOut){process.stderr.write('\nInstalled public type compiler timed out; descendant cleanup is unverified'+(result.outputTruncated?'; output drain was truncated':'')+'\n');process.exitCode=124;}
   else if(result.code!==0){process.stderr.write('\nInstalled public type compilation failed (exit '+result.code+', signal '+result.signal+')\n');process.exitCode=result.code??1;}
   else process.stdout.write('Installed public consumer compiled. This is not archive/head provenance or release qualification.\n');
  }catch(error){process.stderr.write(error.message+'\n');process.exitCode=1;}

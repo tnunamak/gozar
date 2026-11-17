@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {createServer} from 'node:net';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,readdir,rm,chmod,rename,symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -67,4 +68,64 @@ test('escaped declaration export cannot qualify',async t=>{
  await writeFile(join(f.root,'outside.d.ts'),'export {};');
  await writeFile(join(f.pkg,'package.json'),JSON.stringify({exports:{'.':{types:'./../../../outside.d.ts'},'./testing':{types:'./testing.d.ts'}}}));
  await assert.rejects(checkPublicTypes({installedRoot:f.root,tsc:f.compiler}),/escaping/);
+});
+
+test('deadline settles even after compiler exit when a detached descendant holds its pipes',{skip:process.platform==='win32'},async t=>{
+ const server=createServer();
+ let ownedSocket;
+ const connected=new Promise(resolve=>server.once('connection',socket=>{ownedSocket=socket;resolve(socket);}));
+ await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
+ t.after(()=>{ownedSocket?.destroy();return new Promise(resolve=>server.close(resolve));});
+ const descendant="const socket=require('node:net').connect("+server.address().port+",'127.0.0.1',()=>process.send({pid:process.pid}));setInterval(()=>{},1000)";
+ const f=await fixture(t,`const fs=require('node:fs');const p=require('node:path');const {spawn}=require('node:child_process');
+ const child=spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{detached:true,stdio:['ignore',1,2,'ipc']});
+ if(child.pid)fs.writeFileSync(p.join(process.cwd(),'..','escaped.json'),JSON.stringify({pid:child.pid}));
+ child.once('message',()=>{
+  process.stdout.write('compiler exited with inherited pipes');
+  child.disconnect();
+  process.exit(0);
+ });`);
+ const sentinel=join(f.root,'keep');await writeFile(sentinel,'untouched');
+ let pid,deadline;
+ let socketClosed;
+ connected.then(socket=>{socketClosed=new Promise(resolve=>socket.once('close',resolve));socket.resume();});
+ const pending=checkPublicTypes({installedRoot:f.root,tsc:f.compiler,timeoutMs:1000});
+ // Attach rejection handling immediately; the finally block still joins it.
+ const settled=pending.then(result=>({result}),error=>({error}));
+ try{
+  const answer=await Promise.race([
+   settled,
+   new Promise((_,reject)=>{deadline=setTimeout(()=>reject(new Error('checkPublicTypes did not settle within its outer deadline')),3000);}),
+  ]);
+  if(answer.error)throw answer.error;
+  const result=answer.result;
+  assert.equal(result.timedOut,true);
+  assert.equal(result.code,0); // exit succeeded; pipe close is a different event.
+  assert.equal(result.signal,null);
+  assert.equal(result.outputTruncated,true);
+  assert.equal(result.descendantCleanup,'unverified');
+  assert.match(result.stdout,/compiler exited with inherited pipes/);
+  assert.equal((await readdir(f.root)).some(x=>x.startsWith('.gozar-public-types-')),false);
+  assert.equal(await readFile(sentinel,'utf8'),'untouched');
+  assert.ok(await readFile(f.compiler,'utf8'));
+  assert.ok(await readFile(join(f.pkg,'index.d.ts'),'utf8'));
+ }finally{
+  clearTimeout(deadline);
+  // The compiler records only its own child's group leader immediately on spawn.
+  // Never enumerate or signal unrelated processes/groups.
+  try{({pid}=JSON.parse(await readFile(join(f.root,'escaped.json'),'utf8')));}
+  catch(error){if(error.code!=='ENOENT')throw error;}
+  if(pid!==undefined){
+   assert.ok(Number.isSafeInteger(pid)&&pid>1&&pid!==process.pid);
+   try{process.kill(-pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}
+  }
+  // Killing the exact inherited-pipe holder lets even the unfixed check close.
+  // Bound cleanup too: never leave the test runner waiting on this regression.
+  let cleanupTimer;
+  try{
+   await Promise.race([Promise.all([settled,...(pid!==undefined?[connected.then(()=>socketClosed)]:[])]),new Promise((_,reject)=>{
+    cleanupTimer=setTimeout(()=>reject(new Error('Owned compiler/pipe cleanup could not be confirmed')),2000);
+   })]);
+  }finally{clearTimeout(cleanupTimer);}
+ }
 });
