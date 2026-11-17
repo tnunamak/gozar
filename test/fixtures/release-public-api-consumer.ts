@@ -3,6 +3,7 @@ import {
  createGozar, type GozarOptions, type Query, type Requirements, type Fact,
  type SetupConsentSnapshot, type RouteConsentSnapshot, type GozarThrownError,
  type RouteView, type SecretBackend, type HostIdentity,
+ type RunSetupOperationRequest, type SetupOperation,
 } from '@tnunamak/gozar';
 import {
  createTestingGozar, fakeRegistry, type TestingEffect, type NetworkEffectRequest,
@@ -170,3 +171,12 @@ async function fixtures(){
 void consume;void fixtures;void setupAction;void routeTraffic;void setupKind;void routeKind;
 void debt;void network;void networkResult;void spawn;void spawned;void artifact;void fetched;
 export type PublicTypesRemainSpecific=NotAny;
+
+// Draft overload and legacy result must both resolve through the installed public root.
+declare const setupOperation: RunSetupOperationRequest;
+async function consumeSetupOperation(api: Api) {
+ const view: SetupOperation = await api.runSetupAction(setupOperation);
+ const read: SetupOperation = await api.readSetupOperation(setupOperation);
+ const cancelled: SetupOperation = await api.cancelSetupOperation(setupOperation);
+ return [view, read, cancelled];
+}

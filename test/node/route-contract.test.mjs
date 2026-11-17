@@ -268,3 +268,27 @@ test('new direct observation shapes remain closed to unknown fields', () => {
     assert.notDeepEqual(check('route-catalog', shape, { ...item.value, unexpectedFixtureField: true }), []);
   }
 });
+
+test('setup journal projection rejects unsafe removal and secret-bearing evidence', () => {
+  const resource = {
+    handle: 'entry-1', kind: 'dns', label: 'Exact DNS record',
+    ownership: 'owned', removal: 'confirmed', presence: { known: true, value: false },
+  };
+  const operation = {
+    schemaVersion: 1, operationId: 'fixture-operation', revision: 1,
+    scope: { registryId: 'registry', scopeId: 'scope', providerId: 'provider', configurationRevision: 'revision', draftId: null },
+    state: 'cancelled', evidence: { known: false, reason: 'response-lost' }, nextAction: null,
+    resources: [resource],
+  };
+  assert.deepEqual(check('route-catalog', 'SetupOperation', operation), []);
+  for (const replacement of [
+    { ...resource, ownership: 'foreign' },
+    { ...resource, ownership: 'adopted' },
+    { ...resource, presence: { known: false, reason: 'read-denied' } },
+  ]) {
+    assert.notEqual(check('route-catalog', 'SetupOperation', { ...operation, resources: [replacement] }).length, 0);
+  }
+  assert.notEqual(check('route-catalog', 'SetupOperation', {
+    ...operation, evidence: { ...operation.evidence, secretHandle: 'fixture-secret-handle' },
+  }).length, 0);
+});

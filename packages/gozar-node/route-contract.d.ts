@@ -60,10 +60,14 @@ export type Disclosure = {
   links: { rel: 'terms' | 'privacy'; label: string; href: string }[];
 };
 
+export type {SetupStep,SetupEvidence,SetupResource,SetupOperationRef,RunSetupOperationRequest,SetupOperation} from './provider-setup-contract.js';
+import type {SetupStep,SetupOperationRef,RunSetupOperationRequest,SetupOperation} from './provider-setup-contract.js';
+
 export type Action = {
   id: string;
   kind: 'open-url' | 'instructions' | 'provide-secret' | 'provide-value' | 'gozar-runs'|'clear-input'|'install-artifact';
   inputId?:string;
+  step?:SetupStep;
   consent?:SetupConsentSnapshot;
   review?:{canonicalInput:unknown};
   label: string;
@@ -123,7 +127,7 @@ export type Observation<T> = { known: true; value: T } | { known: false; reason:
 export type Fact = { id: string; label: string; value: string | number | boolean | null; group: string;
   affectsConsent: boolean; source: string; asOf: string | null } &
   ({ known: true; reason?: string|null } | { known: false; reason: string });
-export type SetupConsentScope={kind:'setup';registryId:string;scopeId:string;providerId:string;configurationRevision:string;draftId:string|null;actionId:string;disclosureRevision:string;actionDigest:string};
+export type SetupConsentScope={kind:'setup';registryId:string;scopeId:string;providerId:string;configurationRevision:string;draftId:string|null;actionId:string;disclosureRevision:string;actionDigest:string;operation?:{id:string;revision:number}};
 export type RouteConsentScope={kind:'route';registryId:string;scopeId:string;providerId:string;configurationRevision:string;query:{usage:Usage;reach:Reach;transport:Properties['transport'];target:string;expectedOrigin:string|null};reviewHandle?:string;handleGeneration?:number};
 /** The actual typed canonical input. Setup includes the full trusted action, including artifact/effect disclosures. */
 export type SetupConsentDisclosures={action:Omit<Action,'consent'|'review'>};
@@ -366,6 +370,7 @@ export type SetRoutePreferencesRequest = {
   onUnavailable: 'ask';
 };
 export type RunSetupActionRequest = {
+  operationId?:never;
   home: string;
   owner?:string;providerId:string;expectedConfigurationRevision:string;draftId?:string;
   actionId: string;
@@ -408,7 +413,11 @@ export function closeRoute(request: CloseRouteRequest): Promise<RouteView>;
 export function watchRoutes(request: WatchRoutesRequest): AsyncIterable<WatchEvent>;
 export function getRoutePreferences(request: { profileHome: string }): Promise<PreferenceRecord>;
 export function setRoutePreferences(request: SetRoutePreferencesRequest): Promise<PreferenceRecord>;
+export function runSetupAction(request: RunSetupOperationRequest): Promise<SetupOperation>;
 export function runSetupAction(request: RunSetupActionRequest): Promise<SetupActionResult>;
+/** Ask for the ephemeral handoff only when opening it in an authorized interactive host. */
+export function readSetupOperation(request: SetupOperationRef & { includeBrowserHandoff?: boolean }): Promise<SetupOperation>;
+export function cancelSetupOperation(request: SetupOperationRef): Promise<SetupOperation>;
 export function resolveClientAddress(proof: ClientAddressProof, ingress: Ingress): ResolveClientAddressResult;
 
 /**
@@ -470,7 +479,8 @@ export function createGozar(options?: GozarOptions): import('./embedding-contrac
  catalogRoutes: typeof catalogRoutes; expose: (request:ExposeRequest)=>Promise<RouteView>;
  ensureRoute: typeof ensureRoute; adoptRoute: typeof adoptRoute; routeStatus: typeof routeStatus;
  closeRoute: typeof closeRoute; suspendRoute: typeof suspendRoute; watchRoutes: typeof watchRoutes;
- runSetupAction: typeof runSetupAction; inspectLegacyRoute: typeof inspectLegacyRoute;
+ runSetupAction: typeof runSetupAction; readSetupOperation:typeof readSetupOperation; cancelSetupOperation:typeof cancelSetupOperation;
+ inspectLegacyRoute: typeof inspectLegacyRoute;
  getRoutePreferences: typeof getRoutePreferences; setRoutePreferences: typeof setRoutePreferences;
  resolveClientAddress: typeof resolveClientAddress;
  reviewRouteConsent:typeof reviewRouteConsent;approveRouteConsent:typeof approveRouteConsent;
