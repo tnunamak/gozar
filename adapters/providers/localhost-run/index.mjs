@@ -1,7 +1,6 @@
-// localhost-run: one adapter, wrapped over its existing recipe definition. See ../../../packages/gozar-node/adapter-runtime.mjs.
-import { recipeAdapter } from '../../../packages/gozar-node/adapter-runtime.mjs';
+import { sshTrialAdapter } from './ssh-setup.mjs';
 
-export default recipeAdapter({
+export default sshTrialAdapter({
   definition: new URL('./definition.json', import.meta.url),
-  excludeActions: ['trial-consent'], // consent is carried by the consent token, not setup
+  relay: 'localhost.run',
 });

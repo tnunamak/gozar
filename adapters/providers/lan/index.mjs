@@ -1,10 +1,5 @@
-// lan: one adapter, wrapped over its existing recipe definition. See ../../../packages/gozar-node/adapter-runtime.mjs.
-// The owner chooses the interface and confirms the firewall scope through two declared `provide-value` inputs, so a
-// host that knows nothing about this provider can render and drive them:
-//   interface  the unicast address of a non-loopback interface observed on this computer;
-//   firewall   the same address again: the owner's approval of exactly that listener scope (no wildcard, no rule change).
-// Both are persisted adapter configuration. The adapter re-observes the interface inventory at catalog, plan and start,
-// and hands the exact choice to the session engine through `hostChoices`; nothing is inferred from the host or the target.
+// The two persisted inputs select an observed address and approve its HTTP listener scope.
+// The session engine owns the forwarder, and the intended LAN client provides independent proof.
 import { createHash } from 'node:crypto';
 import { recipeAdapter, effectError } from '../../../packages/gozar-node/adapter-runtime.mjs';
 import { selectedInterfaceAddress } from '../../../packages/gozar-node/interfaces.mjs';
@@ -25,16 +20,26 @@ export function observedInterfaces(inventory) {
 export default recipeAdapter({
   definition: new URL('./definition.json', import.meta.url),
   extend: ({ base, definition, platformOf }) => {
-    const action = (id, label, valueLabel, valuePlaceholder, detail) => {
-      const body = { id, kind: 'provide-value', label, valueLabel, valuePlaceholder, valueFormat: 'text', required: true, disclosure: definition.disclosure };
-      // The digest covers what the owner approves, not the observation text, so a changing inventory does not stale a decision.
-      return { ...body, digest: sha(body), ...(detail ? { help: detail } : {}) };
+    const action = (id, kind, label, actor, verification, purpose, fields, options) => {
+      const body = { id, kind, label, disclosure: definition.disclosure, ...fields,
+        step: { actor, permission: { id, label }, verification, purpose, ...(options ? { options } : {}) } };
+      return { ...body, digest: sha(body) };
     };
-    const interfaceAction = detail => action('interface', 'Choose a local network interface', 'Interface address', '192.168.1.20', detail);
-    const firewallAction = detail => action('firewall', 'Approve the firewall scope for that interface', 'Interface address to approve', '192.168.1.20', detail);
+    const textInput = (valueLabel, help) => ({ valueLabel, valueFormat: 'text', required: true, ...(help ? { help } : {}) });
+    const interfaceAction = (seen, help) => action('interface', 'provide-value', 'Choose a local network interface',
+      'owner', 'host', 'configure', textInput('Interface address', help),
+      seen && [...new Map(seen.map(({ name, address }) => [address, { value: address, label: `${name} (${address})` }])).values()]);
+    const scopeText = (address, port) => `Inbound HTTP over TCP on ${address ?? 'the selected interface'}${Number.isInteger(port) && port > 0 && port <= 65535 ? `, TCP port ${port}` : ', restricted to the single TCP port assigned to this route at start'}`;
+    const firewallAction = (address, port) => action('firewall', 'provide-value', 'Approve the firewall scope for that interface',
+      'owner', 'host', 'authorize', textInput('Interface address to approve',
+        `${scopeText(address, port)}. This approves the listener scope. If network policy requires a rule, ask the administrator to allow the intended LAN client or its local subnet on that exact address and port. Gozar applies no firewall changes.`),
+      address ? [{ value: address, label: `Approve HTTP on ${address}` }] : undefined);
+    const guidance = (id, label, actor, verification, purpose, instructions) =>
+      action(id, 'instructions', label, actor, verification, purpose, { instructions });
+    const unknown = reason => ({ known: false, reason });
 
     const choice = async ctx => {
-      const configured = await ctx.configuration(null).catch(() => null);
+      const configured = await ctx.configuration().catch(() => null);
       const text = key => (typeof configured?.[key] === 'string' && configured[key].trim() ? configured[key].trim() : null);
       return { interface: text('interface'), firewall: text('firewall') };
     };
@@ -48,7 +53,7 @@ export default recipeAdapter({
     const review = (chosen, seen) => {
       if (!chosen.interface) return { needs: ['interface'], why: 'Choose the interface to expose this service on.' };
       if (!selectedInterfaceAddress(chosen.interface) || !seen.some(item => item.address === chosen.interface)) {
-        return { needs: ['interface'], why: `The chosen interface ${chosen.interface.slice(0, 64)} is not a usable address observed on this computer. Choose another.` };
+        return { needs: ['interface'], why: 'The chosen interface is no longer observed as a usable address on this computer. Choose another.' };
       }
       if (chosen.firewall !== chosen.interface) {
         return { needs: ['firewall'], why: `Approve the firewall scope by entering exactly ${chosen.interface}. Gozar changes no firewall rule.` };
@@ -62,6 +67,7 @@ export default recipeAdapter({
         if (result.state !== 'ready' && result.state !== 'action-required') return result;
         const seen = await inventory(ctx), chosen = await choice(ctx), pending = review(chosen, seen);
         const facts = { ...result.facts, observedInterfaces: seen, setupNeeded: pending.needs.length > 0 || result.state === 'action-required',
+          selectedInterface: selectedInterfaceAddress(chosen.interface) ? chosen.interface : null,
           interfaceNeeded: pending.needs.includes('interface'), firewallNeeded: pending.needs.includes('firewall'), reason: pending.why };
         return { state: pending.needs.length || result.state !== 'ready' ? 'action-required' : 'ready', facts };
       },
@@ -71,14 +77,101 @@ export default recipeAdapter({
       setupActions(facts) {
         if (!facts?.setupNeeded) return [];
         const detail = [facts.reason, listed(facts.observedInterfaces ?? [])].filter(Boolean).join(' ');
-        if (facts.interfaceNeeded === undefined) return [interfaceAction(detail), firewallAction(detail)];
-        return [...(facts.interfaceNeeded ? [interfaceAction(detail)] : []), ...(facts.firewallNeeded ? [firewallAction(detail)] : [])];
+        if (!facts.interfaceNeeded && !facts.firewallNeeded) {
+          return [interfaceAction(facts.observedInterfaces, detail), firewallAction(facts.selectedInterface)];
+        }
+        return [
+          ...(facts.interfaceNeeded ? [interfaceAction(facts.observedInterfaces, detail)] : []),
+          ...(facts.firewallNeeded ? [firewallAction(facts.selectedInterface)] : []),
+        ];
       },
 
       async setup(ctx, actionId) {
         const offered = { interface: interfaceAction(), firewall: firewallAction() }[actionId];
         if (!offered) return base.setup(ctx, actionId);
         return { state: 'pending', nextAction: structuredClone(offered) };
+      },
+
+      async observeSetup(ctx, operation) {
+        const route = ctx.route;
+        if (route?.cleanup?.state === 'unconfirmed') {
+          return { state: 'reconciling', evidence: unknown('lan-listener-cleanup-unconfirmed'),
+            nextAction: guidance('reconcile-lan', 'Check the stopped LAN route', 'owner', 'host', 'reconcile',
+              'Retry stop for this exact route in Gozar. Keep the cleanup record until Gozar confirms the owned listener is closed. Ask the administrator to remove only a firewall rule created specifically for this route. Shared rules remain in place.') };
+        }
+        if (operation.cancelled) {
+          return { state: 'cancelled', evidence: unknown('firewall-rules-outside-gozar-custody'),
+            nextAction: route && route.state !== 'released'
+              ? guidance('stop-lan', 'Stop the LAN route', 'owner', 'host', 'stop-connector',
+                'Stop the exact route in Gozar. This closes the owned HTTP listener. Ask the administrator to remove any rule added solely for this route. Shared firewall rules remain in place.')
+              : null };
+        }
+        const chosen = await choice(ctx);
+        let seen;
+        try { seen = await inventory(ctx); }
+        catch {
+          return { state: 'blocked', evidence: unknown('interface-inventory-unavailable'),
+            nextAction: guidance('observe-interface', 'Check this computer’s network interfaces', 'owner', 'host', 'reconcile',
+              'Connect this computer to the intended LAN and grant the app permission to inspect network interfaces if the OS asks. Recheck the Gozar interface list.') };
+        }
+        const pending = review(chosen, seen);
+        if (pending.needs.includes('interface')) {
+          return {
+            state: !seen.length || chosen.interface ? 'blocked' : 'authorization-required',
+            nextAction: interfaceAction(seen, [pending.why, listed(seen)].join(' ')),
+            evidence: unknown(!seen.length ? 'no-usable-interface' : chosen.interface ? 'selected-interface-changed' : 'interface-not-selected'),
+          };
+        }
+        if (pending.needs.includes('firewall')) return {
+          state: 'authorization-required', nextAction: firewallAction(chosen.interface, ctx.localPort),
+          evidence: unknown('listener-scope-approval-pending'),
+        };
+        if (route && route.state !== 'released') {
+          let endpoint;
+          try { endpoint = new URL(route.origin); } catch { /* Listener may be starting. */ }
+          const configuredHost = chosen.interface.includes(':') ? `[${chosen.interface}]` : chosen.interface;
+          let chosenHost = configuredHost;
+          try { chosenHost = new URL(`http://${configuredHost}`).hostname; } catch { /* Scoped IPv6 cannot be a web origin. */ }
+          if (endpoint && (endpoint.protocol !== 'http:' || endpoint.origin !== route.origin || endpoint.hostname !== chosenHost)) {
+            return { state: 'blocked', evidence: unknown('listener-scope-changed'),
+              nextAction: guidance('review-lan', 'Review the LAN listener', 'owner', 'host', 'reconcile',
+                'The current route does not match the selected HTTP listener. Stop it in Gozar and approve a new route on the selected interface.') };
+          }
+          const port = endpoint ? Number(endpoint.port || 80) : ctx.localPort;
+          const proof = route.verification;
+          const target = route.hostConfiguration?.target;
+          if (endpoint && route.published === route.origin && proof?.status === 'verified' && proof.vantage === 'lan' &&
+              proof.subject?.origin === route.origin && target?.known === true && proof.subject.target === target.value &&
+              proof.subject.handleGeneration === route.handle?.generation && proof.checks?.includes('nonce') &&
+              Number.isFinite(Date.parse(proof.observedAt))) {
+            return { state: 'complete', nextAction: null, evidence: { known: true, value: {
+              stepId: 'verify-lan', source: 'trusted-client', observedAt: proof.observedAt,
+              summary: 'An independent LAN client passed the application challenge for the selected listener.',
+            } } };
+          }
+          if (route.state === 'lost') {
+            return { state: 'blocked', evidence: unknown('lan-listener-unavailable'),
+              nextAction: guidance('allow-lan', 'Check operating-system and firewall permission', 'administrator', 'host', 'configure',
+                `${scopeText(chosen.interface, port)}. Check the OS local network permission for this application and whether this address and port are free. If policy blocks the intended LAN client, allow only that client or local subnet to reach this scope. Retry the approved Gozar route after checking permission.`) };
+          }
+          return { state: 'pending', evidence: unknown('independent-lan-challenge-pending'),
+            nextAction: guidance('verify-lan', 'Verify from a trusted LAN client', 'trusted-client', 'trusted-client', 'reconcile',
+              `From another trusted device on this LAN, use ${endpoint?.origin ?? 'the exact HTTP address Gozar assigns'} to reach the actual app. Use the trusted LAN verifier connected to Gozar to return the route challenge from that device. Without a receipt from that verifier, verification stays pending. If blocked, ask the administrator to review ${scopeText(chosen.interface, port)} for that client.`) };
+        }
+        return { state: 'complete', nextAction: null, evidence: { known: true, value: {
+          stepId: 'firewall', source: 'host', observedAt: new Date(ctx.now()).toISOString(),
+          summary: 'The selected interface is present and its HTTP listener scope is approved. Firewall permission and client reach are still unverified.',
+        } } };
+      },
+
+      async executeSetup(ctx, { action: id, value }) {
+        if (id !== 'interface' && id !== 'firewall') throw effectError('invalid_input', 'Unknown LAN choice');
+        const seen = await inventory(ctx);
+        if (!seen.some(row => row.address === value) ||
+            (id === 'firewall' && (await choice(ctx)).interface !== value)) {
+          throw effectError('candidate_stale', 'Recheck the observed LAN interfaces and approve the current listener scope');
+        }
+        return { state: 'complete', nextAction: null };
       },
 
       async plan(ctx, request) {
