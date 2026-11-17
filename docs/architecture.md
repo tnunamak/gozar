@@ -32,7 +32,7 @@ Client identity is optional host-supplied data. The core filters on `clientReach
 
 A host passes requirements it already knows. Otherwise the CLI asks, “Where does the app that will use this run?”. An optional profile can supply requirements and an HTTPS `installLinkTemplate` containing `{url}`. The renderer encodes the endpoint into the template; profile names never choose code paths or relax proof requirements.
 
-The machine-readable contract is [core-protocol.json](../runtime/core-protocol.json). [PLAN-PROTOCOL.md](../crates/gozar-core/PLAN-PROTOCOL.md) describes ordered steps, typed captures and ownership records.
+The machine-readable contract is [core-protocol.json](../runtime/core-protocol.json). [PLAN-PROTOCOL.md](https://github.com/tnunamak/gozar/blob/ea3cdfeceb4ab52c153c03b4738d9bd5bac4c864/crates/gozar-core/PLAN-PROTOCOL.md) describes ordered steps, typed captures and ownership records.
 
 ## Route API layers
 

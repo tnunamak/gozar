@@ -1,5 +1,7 @@
 # Adapter authoring
 
+Registry-generation, build and test commands in this guide are source-checkout-only. Obtain the repository checkout described in [Contributing](../README.md#contributing) first; the npm package includes this guide, not the contributor scripts or tests.
+
 A provider is one directory under `adapters/providers/<id>/` and one entry in the `providers` list of `adapters/manifest.json`. Nothing else in Gozar names it: the catalog, the CLI, the docs and the package list read the registry.
 
 ```json
@@ -77,4 +79,4 @@ GOZAR_ADAPTER_TRACE_OUTPUT=adapters/evidence/drop1-wasm-traces.json nice -n 19 i
 nice -n 19 ionice -c3 node --test --test-concurrency=2 test/adapters/*.test.mjs
 ```
 
-The trace includes hashes of the WASM module, JavaScript bindings and each covered plan. If any of these changes, regenerate it. The pinned [Tailscale report](evidence/tailscale-serve-funnel-source-facts.md) establishes command and configuration semantics. The [cloudflared report](evidence/cloudflared-named-tunnel-source-facts.md) establishes why a token or startup message cannot prove DNS authority or the configured origin. Neither report supplies runtime evidence.
+The trace includes hashes of the WASM module, JavaScript bindings and each covered plan. If any of these changes, regenerate it. The pinned [Tailscale report](https://github.com/tnunamak/gozar/blob/ea3cdfeceb4ab52c153c03b4738d9bd5bac4c864/adapters/evidence/tailscale-serve-funnel-source-facts.md) establishes command and configuration semantics. The [cloudflared report](https://github.com/tnunamak/gozar/blob/ea3cdfeceb4ab52c153c03b4738d9bd5bac4c864/adapters/evidence/cloudflared-named-tunnel-source-facts.md) establishes why a token or startup message cannot prove DNS authority or the configured origin. Neither report supplies runtime evidence.
