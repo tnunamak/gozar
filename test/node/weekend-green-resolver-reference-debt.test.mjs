@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import {fork} from 'node:child_process';
-import {mkdtemp, mkdir, writeFile, readFile, rm, realpath} from 'node:fs/promises';
+import {mkdtemp, mkdir, writeFile, readFile, rm, realpath, lstat} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -134,6 +134,10 @@ test('registered reference survives creator loss: '+retry+' operation='+operatio
     const debt=await ready;assert.equal(debt.cleanup,'unconfirmed');assert.ok(handle);
     const directory=join(home,'attached',handle.id),statePath=join(directory,'state.json');
     const before=await json(statePath);
+    // The controller is a separate process that outlives its creator; its identity is recorded before any recovery.
+    const controller=await json(join(directory,'control.json'));
+    const alive=pid=>{try{process.kill(pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}};
+    assert.ok(Number.isInteger(controller.pid)&&alive(controller.pid),'the controller is alive while reference debt is retained');
     assert.equal(key(before.handle),key(handle));assert.equal(key(before.resourceRemoval.handle),key(handle));
     assert.equal(before.resourceRemoval.providerId,id);
     const ledger=await counts();assert.equal(ledger.stop,1);assert.equal(ledger.cleanup,1);assert.equal(ledger.start,1);assert.ok(ledger.proof>0);
@@ -168,6 +172,11 @@ test('registered reference survives creator loss: '+retry+' operation='+operatio
     const released=await trusted.closeRoute({home,owner,handle,mode:'remove'});
     assert.equal(released.cleanup.state,'confirmed');assert.ok(successes>0);
     await commit(scope,d);
+    // Recorded removal plus exact reference release finalize the controller: no lingering process, socket or route record.
+    await until(async()=>alive(controller.pid),gone=>gone===false,Date.now()+10000);
+    await assert.rejects(lstat(join(directory,'control.sock')),{code:'ENOENT'});
+    const again=await trusted.closeRoute({home,owner,handle,mode:'remove'});
+    assert.equal(again.cleanup.state,'confirmed');assert.deepEqual(await counts(),ledger);
     await assert.rejects(commit(foreignScope,fd),{code:'configuration_in_use'});
     assert.equal(app.listening,true);assert.equal(foreignApp.listening,true);assert.deepEqual(await counts(),ledger);
   }catch(error){primary=error;}

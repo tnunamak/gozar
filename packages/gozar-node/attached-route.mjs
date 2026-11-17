@@ -392,6 +392,15 @@ export async function genericSessionRecord(request) {
 /** Dispose controller ownership after exact recorded reference release. */
 export async function finishCleanupController(request){
   const handle=checkRef(request);dropLease(handle.id);await dropBroker(handle.id);
+  if(!['attached','session'].includes(handle.kind))return;
+  if(handle.kind==='session'&&!await genericSessionRecord(request))return; // A legacy session daemon has its own control protocol.
+  const home=await canonicalHome(request.home,false);
+  const directory=handle.kind==='attached'?await routeDirectory(home,handle):join(home,handle.id.split(':')[0]);
+  // The reference release is confirmed, so the controller may end. Its own persisted removal milestone, the handle, the generation
+  // and its private nonce fence the order; a controller that is already gone has nothing left to end.
+  try{await controlAttached(directory,{type:'finalize-removal',handleKind:handle.kind,handleId:handle.id,generation:handle.generation,
+    ...(typeof request.owner==='string'?{owner:request.owner}:{})},30_000);}
+  catch(error){if(!error.gone)throw error;}
 }
 
 /** Capture cleanup authority before close can retire the bootstrap. Not allocation identity. */
@@ -744,7 +753,7 @@ export async function runAttachedController(directory, runtime = {}) {
             initialSettled,failure,releasing,resourceRemoval,resolverLost,identity:lease.identity}),startupComplete:initialSettled});
         }
         if(session&&command.handleId!==undefined&&command.handleId!==handle.id)throw gozarError('route_conflict','The session was replaced');
-        if(expired()&&command.type!=='close'){await release();if(command.type==='status')return reply({view:lastView(),startupComplete:initialSettled});throw gozarError('verification_failed','The session lifetime has expired');}
+        if(expired()&&command.type!=='close'&&command.type!=='finalize-removal'){await release();if(command.type==='status')return reply({view:lastView(),startupComplete:initialSettled});throw gozarError('verification_failed','The session lifetime has expired');}
         if (command.type === 'heartbeat') { if(!session)lastBeat = now(); return reply({ ok: true }); }
         if(command.type==='resolver-lost'){resolverLost=true;lease.state='unverified';proofAbort.abort();await save();return reply({ok:true});}
         if (command.generation !== undefined && command.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
@@ -769,6 +778,16 @@ export async function runAttachedController(directory, runtime = {}) {
           const current=await currentConsent();
           if(!stored||Date.parse(stored.snapshot.expiresAt)<=now()||stored.snapshot.consentFactsDigest!==command.consentFactsDigest||stored.current.consentFactsDigest!==current?.consentFactsDigest||JSON.stringify(stored.snapshot.subject)!==JSON.stringify(lease.proofSubject??null))throw gozarError('consent_mismatch','The runtime review changed; request a new review');
           lease.approvedReview=current;delete lease.consentChange;await verify();return reply({view:lastView()});
+        }
+        if(command.type==='finalize-removal'){
+          // Only after the owner released the exact configuration reference, and only from this controller's own removal milestone.
+          if(command.handleKind!==handle.kind||command.handleId!==handle.id||command.generation!==handle.generation)throw gozarError('route_conflict','Finalization handle does not match the controller');
+          if(command.owner!==undefined&&command.owner!==bootstrap.owner)throw gozarError('route_conflict','Finalization owner does not match the controller');
+          await creation;await releasing?.catch(()=>{});
+          if(!resourceRemoval||resourceRemoval.handle?.id!==handle.id||resourceRemoval.handle.generation!==handle.generation||resourceRemoval.providerId!==adapter.id)
+            throw gozarError('cleanup_debt','This controller has not recorded a resource removal');
+          proofAbort.abort();lease.state='released';lease.cleanup={state:'confirmed'};await save();
+          reply({view:lastView()});finish();return;
         }
         if (command.type === 'close') { await release(); reply({ view: lastView() }); if(lease.cleanup.state==='confirmed')finish();return; }
         throw gozarError('invalid_input', 'Unsupported controller command');
