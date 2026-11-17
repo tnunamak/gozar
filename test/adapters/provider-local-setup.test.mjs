@@ -143,13 +143,16 @@ test('LAN separates exact firewall permission from independent client verificati
   assert.doesNotMatch(admin.nextAction.instructions, /disable (?:the |your )?firewall/i);
 });
 
-test('own-address keeps adoption pending for exact mapping and never claims remote proof from a local result', async () => {
+test('own-address completes configured setup, then waits for exact route mapping and proof', async () => {
   const origin = 'https://owner.example';
   assert.equal((await ownAddress.observeSetup(context(), operation)).nextAction.id, 'origin');
   const values = { origin };
-  const awaiting = await ownAddress.observeSetup(context({ values }), operation);
-  assert.equal(awaiting.state, 'pending');
-  assert.match(awaiting.nextAction.instructions, /DNS.*TLS|TLS.*DNS/);
+  const configured = await ownAddress.observeSetup(context({ values }), operation);
+  assert.equal(configured.state, 'complete');
+  assert.equal(configured.evidence.source, 'host');
+  assert.equal(configured.evidence.stepId, 'origin');
+  assert.equal(configured.nextAction.kind, 'instructions');
+  assert.match(configured.nextAction.instructions, /DNS.*TLS|TLS.*DNS/);
   const mapping = await ownAddress.observeSetup(context({
     values, route: routeView(origin, { verification: { status: 'verified', vantage: 'this-device', checks: ['tls', 'nonce'] } }),
   }), operation);
