@@ -152,7 +152,6 @@ if (saved.version !== 1 || saved.intent !== intent ||
   throw new Error('Different or unreadable intent: keep this file and reconcile the original request');
 }
 const operationId = saved.operationId;
-const catalog = await catalogRoutes(query);                    // read-only: nothing is exposed
 // Recover via public enumeration, never by scanning or editing Gozar's private files.
 // A failed listing refuses this run; retain the app intent and all recovery state.
 const matches = restarting
@@ -165,7 +164,9 @@ if (recovered?.cleanup.state === 'confirmed') {
   console.log('This logical request is already closed; its operation ID stays terminal.');
   process.exit(0);
 }
-const candidate = catalog.candidates.find(item => item.eligible && item.candidateToken);
+// Only a new allocation needs the catalog (read-only: nothing is exposed). Recovery never does.
+const catalog = recovered ? null : await catalogRoutes(query);
+const candidate = catalog?.candidates.find(item => item.eligible && item.candidateToken);
 if (!recovered && !candidate) throw new Error(catalog.noMatch?.code ?? 'setup needed');   // candidate.setup.actions says what the user can do
 
 const ask = createInterface({ input: process.stdin, output: process.stdout });

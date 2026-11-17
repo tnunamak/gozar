@@ -27,7 +27,10 @@ This table lists what the registry ships. Each row is read from the provider's d
 what \`catalogRoutes\` reports. The Id column is the value \`Query.providerId\` takes. Ports are the public
 ports Gozar tries, in order; where a durable route tries other ports, they follow \`durable:\`, and the
 catalog reports them, with the durable Needs line, for a durable query.
-Proof is what Gozar checks before it publishes; the sse check runs only when the app asks for SSE.
+Proof is what Gozar checks before it publishes. The catalog lists the sse check only when the app asks for SSE.
+What a check actually runs depends on the route: a generic attached route's first publication check follows
+the provider's declared SSE capability, an adapter that supplies \`prepareProof\` (for example the Cloudflare named adapter) follows
+the request, and a later refresh can differ. These rows are declarations, not evidence from a real deployment.
 
 Gozar 0.2.0 supports Linux and macOS. On any other platform (for example Windows) every candidate answers
 \`unsupported\`.

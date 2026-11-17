@@ -34,6 +34,8 @@ async function existing(path,label,directory=false){
 }
 // Compiler output is evidence, not a stream to buffer without limit.
 export const OUTPUT_CAP_BYTES=1024*1024;
+// Bound on waiting for pipes after the kill. Not a guarantee that any descendant is gone.
+const DRAIN_MS=250;
 // An installed package is plain files. Any link inside it, at any depth, can lead a declaration back to source.
 async function assertNoOwnedLinks(directory,pkg){
  for(const entry of await readdir(directory,{withFileTypes:true})){
@@ -70,30 +72,59 @@ export async function checkPublicTypes({installedRoot,tsc,timeoutMs=30000,output
    target:'ES2022',module:'NodeNext',moduleResolution:'NodeNext',strict:true,noEmit:true,skipLibCheck:false,types:[],
   },files:['consumer.ts']},null,2));
   return await new Promise((resolveResult,reject)=>{
-   let stdout='',stderr='',timedOut=false,overflow=false,spawnError;
+   const chunks={stdout:[],stderr:[]};
+   let kept=0,timedOut=false,overflow=false,spawnError,settled=false,exited=false,exitCode=null,exitSignal=null,timer,drainTimer;
+   const terminationErrors=[];
    const grouped=process.platform!=='win32';
    const child=spawn(compiler,['--project',join(project,'tsconfig.json'),'--pretty','false'],{cwd:project,detached:grouped,stdio:['ignore','pipe','pipe']});
+   // Kill our own process group once; a failed group kill falls back to the child itself.
+   let killed=false;
    const kill=()=>{
-    // Own process group only: descendants must not retain compiler output pipes.
-    if(grouped&&child.pid){
-     try{process.kill(-child.pid,'SIGKILL');}
-     catch(error){if(error.code!=='ESRCH')child.kill('SIGKILL');}
-    }else child.kill('SIGKILL');
+    if(killed)return;killed=true;
+    try{
+     if(grouped&&child.pid)process.kill(-child.pid,'SIGKILL');
+     else if(!exited)child.kill('SIGKILL');
+    }catch(error){
+     if(error.code==='ESRCH')return;
+     terminationErrors.push(error.message);
+     if(!exited){try{child.kill('SIGKILL');}catch(fallback){terminationErrors.push(fallback.message);}}
+    }
    };
-   const keep=(text,chunk)=>{
-    if(overflow)return text;
-    const room=outputCapBytes-Buffer.byteLength(text);
-    const next=Buffer.byteLength(chunk)>room?(overflow=true,kill(),Buffer.from(chunk).subarray(0,Math.max(room,0)).toString('utf8')):String(chunk);
-    return text+next;
-   };
-   child.stdout.on('data',data=>{stdout=keep(stdout,data);});child.stderr.on('data',data=>{stderr=keep(stderr,data);});
-   const timer=setTimeout(()=>{timedOut=true;kill();},timeoutMs);
-   child.on('error',error=>{spawnError=error;});
-   child.on('close',(code,signal)=>{
-    clearTimeout(timer);
+   // Escaped descendants can keep the pipes open after the compiler is gone. Give them a short, single drain window.
+   const startDrain=()=>{if(!drainTimer)drainTimer=setTimeout(()=>finish(true),DRAIN_MS);};
+   const finish=(truncated=false)=>{
+    if(settled)return;
+    settled=true;clearTimeout(timer);clearTimeout(drainTimer);
+    if(truncated){
+     child.stdout.destroy();child.stderr.destroy();
+     // This reader no longer owns the gate's lifetime. It does not assert the process or any descendant is gone.
+     if(!exited)child.unref();
+    }
     if(spawnError){reject(new Error('Compiler could not start: '+spawnError.message,{cause:spawnError}));return;}
-    resolveResult({code,signal,stdout,stderr,timedOut,overflow});
-   });
+    // Raw bytes are decoded once at the end, so a split multi-byte character cannot corrupt the text.
+    const text=name=>new TextDecoder('utf-8').decode(Buffer.concat(chunks[name]));
+    resolveResult({code:exitCode,signal:exitSignal,stdout:text('stdout'),stderr:text('stderr'),timedOut,overflow,
+     outputTruncated:truncated,descendantCleanup:timedOut||overflow?'unverified':'not-requested',terminationErrors});
+   };
+   const keep=name=>data=>{
+    if(overflow)return;
+    const room=outputCapBytes-kept;
+    if(data.length>room){
+     overflow=true;
+     // Cut at a character boundary: drop an incomplete trailing sequence rather than emit a broken one.
+     let end=Math.max(room,0);
+     while(end>0&&(data[end]&0xC0)===0x80)end--;
+     if(end>0)chunks[name].push(data.subarray(0,end));
+     kept+=end;
+     kill();startDrain();
+    }else{chunks[name].push(data);kept+=data.length;}
+   };
+   child.stdout.on('data',keep('stdout'));child.stderr.on('data',keep('stderr'));
+   timer=setTimeout(()=>{timedOut=true;kill();startDrain();},timeoutMs);
+   child.on('error',error=>{spawnError=error;if(!child.pid)finish();});
+   // exit records compiler status; only close proves its pipes drained.
+   child.on('exit',(code,signal)=>{exited=true;exitCode=code;exitSignal=signal;});
+   child.on('close',(code,signal)=>{if(!exited){exitCode=code;exitSignal=signal;}finish();});
   });
  }finally{if(project)await rm(project,{recursive:true,force:true});}
 }
@@ -101,8 +132,9 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  try{
   const result=await checkPublicTypes(parseArgs(process.argv.slice(2)));
   process.stdout.write(result.stdout);process.stderr.write(result.stderr);
-  if(result.overflow){process.stderr.write('\nInstalled public type compiler output exceeded the cap and was stopped\n');process.exitCode=125;}
-  else if(result.timedOut){process.stderr.write('\nInstalled public type compiler timed out\n');process.exitCode=124;}
+  const note=result.outputTruncated?'; output drain was cut off':'';
+  if(result.overflow){process.stderr.write('\nInstalled public type compiler output exceeded the cap and was stopped; descendant cleanup is unverified'+note+'\n');process.exitCode=125;}
+  else if(result.timedOut){process.stderr.write('\nInstalled public type compiler timed out; descendant cleanup is unverified'+note+'\n');process.exitCode=124;}
   else if(result.code!==0){process.stderr.write('\nInstalled public type compilation failed (exit '+result.code+', signal '+result.signal+')\n');process.exitCode=result.code??1;}
   else process.stdout.write('Installed public consumer compiled. This is not archive/head provenance or release qualification.\n');
  }catch(error){process.stderr.write(error.message+'\n');process.exitCode=1;}
