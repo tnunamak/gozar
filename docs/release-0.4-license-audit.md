@@ -85,3 +85,46 @@ The root lockfile version/license metadata now matches 0.4.0/Apache-2.0 without
 changing dependency resolutions. The WASM build generator now emits Apache-2.0
 in its generated package.json; ordinary prepack requires that declaration and
 the root LICENSE. The final integration report records the exact verification head.
+
+## Release reconciliation (2026-11-17)
+
+Release source reviewed: `a6385df4757acfedd4fdcb1facfcba0a6fe18590`.
+This is a reconciliation of release metadata and packaging checks, not a new
+registry audit or a restamping of the 2026-11-13 audit. The original source SHA
+and lockfile digests above remain the historical evidence for that audit.
+Its references to the stale 0.3.4 root lockfile and the missing generated
+artifact describe that earlier checkout, not the current release metadata.
+
+At this release source, `package-lock.json` declares 0.4.0 at both the
+top level and root package entry, and the root package license is Apache-2.0.
+The current lockfile SHA-256 is
+`be56ad3750bfded732483a4930e487096ccaf235ff091d82d9de689a1e0c8010`,
+as established by the primary-byte review supplied for this reconciliation.
+It differs from the historical npm lockfile digest because the root
+version/license metadata was repaired, not because dependency resolutions
+changed. The lockfile still contains only the root package entry, with the
+optional `@ngrok/ngrok@1.7.0` peer declaration, and no resolved npm
+dependency graph. No dependency versions or license evidence were changed by
+this reconciliation.
+
+The packaged notice manifest still lists exactly 24 Cargo package/version
+entries and records Cargo.lock SHA-256
+`9f157468ea6dce8129b5f4c03d98aa798ff04dc099f795c7e14bbd419bf749d4`.
+The project's own license remains Apache-2.0; it is not another third-party
+dependency entry. Static inspection of `scripts/check-package.mjs` confirms
+that ordinary prepack requires the root LICENSE, the notice manifest and
+notice index, validates generated Apache-2.0 package metadata, compares the
+Cargo lock digest, and checks each listed notice's actual bytes and archive
+membership. This describes the checks, not a newly executed release result.
+
+The 13 optional native packages retain the historical metadata-only MIT
+evidence limitation: no separate license text was present in their inspected
+tarballs, and no native binary provenance audit is claimed. The optional
+SDK/native peers are not bundled in Gozar's archive. Neither the metadata
+repair nor the packaged Rust notices resolves those npm evidence limits.
+
+Final assembled-release verification is still required: build the generated
+artifacts, run ordinary prepack and the full offline Node/Rust release gate,
+and record the exact assembled source head and results. No commands, tests,
+registry requests or archive builds were run for this documentation-only
+reconciliation.
