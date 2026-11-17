@@ -5,12 +5,15 @@ import {bindConfiguration} from './adapter-configuration.mjs';
 import {checkValue} from './route-setup.mjs';
 import {embeddingError} from './embedding-services.mjs';
 import {executeArtifact} from './embedding-prerequisites.mjs';
+import {supportedPlatform} from './platform.mjs';
 const fail=code=>{throw embeddingError(code);};
 export async function runEmbeddingSetup(request,deps){
- const {embeddingServices:services}=deps;
+ if(typeof deps?.validateSetupApproval!=='function')fail('unsupported');
  if(typeof request?.providerId!=='string'||!request.providerId||typeof request.expectedConfigurationRevision!=='string'||!request.actionId)fail('invalid_input');
  if(request.approval?.kind!=='setup')fail('consent_required');
  if(!request.approval?.digest||!request.approval?.disclosureRevision)fail('consent_required');
+ if(!supportedPlatform(deps.platform??process.platform))fail('unsupported');
+ const {embeddingServices:services}=deps;
  const adapter=deps.adapters?.find(a=>a.id===request.providerId);if(!adapter)fail('candidate_stale');
  const platform=deps.platform??process.platform;const read=await readContextFor(deps,request.home,platform);
  const preview=await inspectAdapter(adapter,{...read,providerConfiguration:providerId=>services.resolveConfiguration({...request,providerId})},platform);
@@ -22,7 +25,7 @@ export async function runEmbeddingSetup(request,deps){
   const action=item.actions.find(a=>a.id===request.actionId);
   if(action?.kind!==offered?.kind)fail('candidate_stale');
   if(!action||action.digest!==request.approval.digest||action.disclosure.revision!==request.approval.disclosureRevision)fail('candidate_stale');
-  await deps.validateSetupApproval?.({request,action,adapter,inspection:item,readContext:own,configuration:await tx.configuration()});
+  await deps.validateSetupApproval({request,action,adapter,inspection:item,readContext:own,configuration:await tx.configuration()});
   if(['open-url','instructions'].includes(action.kind))return {state:'pending',nextAction:action};
   const inputId=(adapter.definition.inputRequirements??[]).find(i=>i.actionId===action.id)?.id??action.id;
   if(action.kind==='provide-value'){
@@ -51,6 +54,7 @@ export function clearInputActions(configuration){
  });
 }
 export async function clearConfigurationInput(request,deps){
+ if(typeof deps?.validateSetupApproval!=='function')fail('unsupported');
  if(!request.draftId||!request.inputId||request.approval?.kind!=='setup')fail('invalid_input');
  const adapter=deps.adapters.find(a=>a.id===request.providerId);if(!adapter)fail('candidate_stale');
  const outcome=await deps.embeddingServices.mutateConfiguration(request,async tx=>{
@@ -58,7 +62,7 @@ export async function clearConfigurationInput(request,deps){
   if(!action||action.digest!==request.approval.digest||action.disclosure.revision!==request.approval.disclosureRevision)fail('candidate_stale');
   const read=await readContextFor(deps,request.home,deps.platform??process.platform);
   const own={...read,providerConfiguration:()=>tx.resolveConfiguration()};const inspection=await inspectAdapter(adapter,own,deps.platform??process.platform);
-  await deps.validateSetupApproval?.({request,action,adapter,configuration,inspection,readContext:own});tx.clearInput(request.inputId);
+  await deps.validateSetupApproval({request,action,adapter,configuration,inspection,readContext:own});tx.clearInput(request.inputId);
  });return offeredConfiguration(request,outcome.configuration,deps);
 }
 

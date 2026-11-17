@@ -10,7 +10,7 @@ test('provider and action CAS reject with zero adapter effects',async()=>{
  const home=await mkdtemp(join(tmpdir(),'embed-setup-'));let effects=0;
  const s=createEmbeddingServices({registryId:'test'});const action={id:'same',kind:'gozar-runs',digest:'digest',disclosure:{revision:'v'}};
  const adapter={id:'opaque',definition:{capabilities:{},supportedKinds:['attached'],disclosure:{revision:'v'}},detect:async()=>({state:'ready',facts:{}}),properties:()=>({}),setupActions:()=>[action],setup:async()=>{effects++;return {state:'complete'};}};
- try{const c=await s.readConfiguration({home,providerId:'opaque'});const r={home,providerId:'opaque',actionId:'same',expectedConfigurationRevision:c.revision,approval:{kind:'setup',digest:'digest',disclosureRevision:'v'}};const deps={embeddingServices:s,adapters:[adapter],readContext:{configuration:async()=>null}};
+ try{const c=await s.readConfiguration({home,providerId:'opaque'});const r={home,providerId:'opaque',actionId:'same',expectedConfigurationRevision:c.revision,approval:{kind:'setup',digest:'digest',disclosureRevision:'v'}};const deps={embeddingServices:s,adapters:[adapter],readContext:{configuration:async()=>null},validateSetupApproval:async({request,action})=>{assert.equal(request.approval.digest,action.digest);}};
  await assert.rejects(runEmbeddingSetup({...r,approval:{...r.approval,kind:'route'}},deps),{code:'consent_required'});
  await assert.rejects(runEmbeddingSetup({...r,expectedConfigurationRevision:'old'},deps),{code:'configuration_stale'});
  await assert.rejects(runEmbeddingSetup({...r,providerId:'other'},deps),{code:'candidate_stale'});

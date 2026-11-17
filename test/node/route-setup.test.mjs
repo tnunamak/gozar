@@ -38,7 +38,7 @@ async function runScoped(adapter, request, extra = {}) {
   const embeddingServices = extra.embeddingServices ?? createEmbeddingServices({ registryId: 'route-setup-test' });
   const configuration = await embeddingServices.readConfiguration({ home: request.home, providerId: adapter.id });
   return runSetupAction({ providerId: adapter.id, expectedConfigurationRevision: configuration.revision, ...request, approval: { kind: 'setup', ...request.approval } },
-    { adapters: [adapter], platform: 'linux', readContext, embeddingServices, executeApprovedAction: async id => { extra.ran?.push(id); return { state: 'complete', nextAction: null }; } });
+    { adapters: [adapter], platform: 'linux', readContext, embeddingServices, validateSetupApproval: async ({request, action}) => { assert.equal(request.approval.digest, action.digest); assert.equal(request.approval.disclosureRevision, action.disclosure.revision); }, executeApprovedAction: async id => { extra.ran?.push(id); return { state: 'complete', nextAction: null }; } });
 }
 
 test('an approved gozar-runs action runs once through the adapter and returns a valid SetupActionResult', async t => {
