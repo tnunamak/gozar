@@ -41,12 +41,12 @@
       ],
       "supervision": "host-supervised",
       "protocols": {
-        "sse": false,
-        "streamableHttp": false,
+        "sse": true,
+        "streamableHttp": true,
         "oauthDcr": false
       },
       "proof": {
-        "vantage": "public",
+        "vantage": "this-device",
         "checks": [
           "tls",
           "nonce",
@@ -696,8 +696,8 @@
       "https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/"
     ],
     "protocols": {
-      "sse/streamableHttp": "false. no admitted recipe: this adapter creates no route, so no timed stream probe gates a publication",
-      "oauthDcr": "Detected only: no kind, nothing is published."
+      "sse/streamableHttp": "Supported by the attached connector and local gate. Requested SSE is checked by the real timed stream verifier before a verified proof is returned; buffered delivery remains unverified. This is transport support, not proof of an application protocol or remote client journey.",
+      "oauthDcr": "Not verified: a stable HTTPS origin and transport proof do not establish OAuth dynamic client registration, deployed Access policy or application authorization."
     }
   }
 }
