@@ -12,11 +12,24 @@ const deferred=()=>{
   return {promise,resolve};
 };
 
+const capabilityRefusal = state => error => error?.code === (state === 'denied' ? 'host_policy_denied' : 'unsupported');
+
+test('capability refusal matcher rejects unrelated validation and stale-candidate errors',()=>{
+  for(const state of ['denied','undeclared']){
+    const matches=capabilityRefusal(state);
+    assert.equal(matches({code:state==='denied'?'host_policy_denied':'unsupported'}),true);
+    for(const code of ['invalid_input','candidate_stale','consent_mismatch',state==='denied'?'unsupported':'host_policy_denied']){
+      assert.equal(matches({code}),false, state+' must not accept '+code);
+    }
+    assert.equal(matches(undefined),false);
+  }
+});
+
 async function fixture() {
   const home=await mkdtemp(join(tmpdir(),'gozar-public-installer-'));
   let registry,harness;
   const bytes=Buffer.from('PUBLIC_ARTIFACT_BODY_CANARY_1117');
-  const calls={fetch:[],execute:[]},errors=[];
+  const calls={fetch:[],execute:[]},errors=[],results=[];
   const entered=deferred(),released=deferred();
   let wrong=false,hold=false;
   const capabilities={'installer.execute':{known:true,value:true},'privilege.elevate':{known:true,value:true}};
@@ -53,10 +66,10 @@ async function fixture() {
       approval:{kind:'setup',digest:offered.digest,disclosureRevision:offered.disclosure.revision,
         consentFactsDigest:consent.consentFactsDigest}};
     const invoke=async()=>{
-      try{return await harness.gozar.runSetupAction(request);}
+      try{const result=await harness.gozar.runSetupAction(request);results.push(structuredClone(result));return result;}
       catch(error){errors.push({code:error.code,message:error.message,nextAction:error.nextAction,serialized:JSON.stringify(error)});throw error;}
     };
-    return {harness,bytes,calls,errors,capabilities,action,consent,request,invoke,entered,
+    return {harness,bytes,calls,errors,results,capabilities,action,consent,request,invoke,entered,
       wrong:()=>{wrong=true;},hold:()=>{hold=true;},release:()=>released.resolve(),
       close:async()=>{
         released.resolve();
@@ -68,8 +81,9 @@ async function fixture() {
     throw error;
   }
 }
-function privateBodiesStayPrivate(f) {
-  const visible=JSON.stringify({events:f.harness.events,errors:f.errors});
+function privateBodiesStayPrivate(f,results=f.results) {
+  // Only public outputs: private fetch/execute inputs intentionally contain artifact bytes.
+  const visible=JSON.stringify({events:f.harness.events,errors:f.errors,results});
   for(const body of [f.bytes,Buffer.from('WRONG_ARTIFACT_BODY_CANARY_1117')]){
     assert.equal(visible.includes(body.toString()),false);
     assert.equal(visible.includes(body.toString('base64')),false);
@@ -77,13 +91,15 @@ function privateBodiesStayPrivate(f) {
 }
 
 for(const capability of ['installer.execute','privilege.elevate']) for(const state of ['denied','undeclared'])
-test('public installer rejects '+state+' '+capability+' without fetching or executing',{timeout:10000},async()=>{
+test('public installer enforces '+state+' '+capability+' with unchanged offered approval and no declared capability consent fact',{timeout:10000},async()=>{
   let f;
   try {
     f=await fixture();
+    const approved=structuredClone(f.request);
     if(state==='denied')f.capabilities[capability]={known:true,value:false};
     else delete f.capabilities[capability];
-    await assert.rejects(f.invoke(),error=>typeof error.code==='string'&&error.code.length>0);
+    await assert.rejects(f.invoke(),capabilityRefusal(state));
+    assert.deepEqual(f.request,approved,'capability mutation does not fabricate a new consent approval');
     assert.equal(f.calls.fetch.length,0);assert.equal(f.calls.execute.length,0);
     privateBodiesStayPrivate(f);
   } finally {await f?.close();}
@@ -107,6 +123,17 @@ test('public installer rejects wrong bytes then executes the exact approved snap
     assert.deepEqual(good.request,before);
     assert.deepEqual(good.consent.disclosures.action.artifact,good.calls.execute[0].artifact);
     assert.deepEqual(good.consent.disclosures.action.effects,good.calls.execute[0].effects);
+    assert.equal(good.results.length,1);
+    assert.deepEqual(good.results[0],result,'retain the actual successful public DTO');
+    privateBodiesStayPrivate(good);
+    // Negative controls clone the actual successful DTO, not a synthetic replacement.
+    for(const body of [good.bytes,Buffer.from('WRONG_ARTIFACT_BODY_CANARY_1117')]){
+      for(const encoding of ['utf8','base64']){
+        const leaked=structuredClone(good.results[0]);
+        leaked.artifactCanary=body.toString(encoding);
+        assert.throws(()=>privateBodiesStayPrivate(good,[leaked]),assert.AssertionError);
+      }
+    }
     privateBodiesStayPrivate(good);
   } finally {try{await bad?.close();}finally{await good?.close();}}
 });
