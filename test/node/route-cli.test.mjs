@@ -18,13 +18,16 @@ before(async () => { world = await journeyRoot(); });
 after(() => rm(world.root, { recursive: true, force: true }));
 
 /** Runs the real binary once. Resolves with exit code, stdout and stderr; never leaves the child behind. */
-function gozar(env, args, { input } = {}) {
+function gozar(env, args, { input, timeoutMs = 0 } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--import', network, cli, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, ['--import', network, cli, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'], timeout: timeoutMs, killSignal: 'SIGKILL' });
     let stdout = '', stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
     child.once('error', reject);
-    child.once('close', code => resolve({ code, stdout, stderr }));
+    child.once('close', (code, signal) => {
+      if (signal) reject(new Error(`gozar terminated by ${signal}: ${stderr}`));
+      else resolve({ code, stdout, stderr });
+    });
     child.stdin.end(input ?? '');
   });
 }
@@ -254,6 +257,20 @@ test('--provider-id sets query.providerId for catalog, and a query file value is
   await run([]);
   assert.deepEqual(seen, ['example-provider', 'from-file']);
   assert.equal(await routeMain(['setup', 'x', '--provider-id', 'a', '--json'], { api, stdout: { write() {} }, stderr: { write() {} } }), 3, 'a provider selection still needs an explicit current setup approval');
+});
+
+test('advertised routes command reaches the real binary dispatcher on an isolated home', async t => {
+  const w = await durableWorld(world, t);
+  const home = join(w.home, 'advertised routes smoke home');
+  await mkdir(home, { mode: 0o700 });
+  await chmod(home, 0o700);
+  // Use the product entry, not an injected routeMain API. Removing routes
+  // from ROUTE_COMMANDS must fail this test even if parser controls still pass.
+  const result = await gozar(w.env, ['routes', '--home', home, '--owner', 'help-smoke-owner', '--json'], { timeoutMs: 10_000 });
+  assert.equal(result.code, 0, result.stderr + result.stdout);
+  assert.deepEqual(envelope(result), { routes: [] });
+  assert.deepEqual(await w.cliCalls(), [], 'listing an empty home makes no provider CLI call');
+  assert.deepEqual(w.state.writes, [], 'listing does not mutate the provider');
 });
 
 test('routes help advertises syntax accepted by the real route parser', async () => {
