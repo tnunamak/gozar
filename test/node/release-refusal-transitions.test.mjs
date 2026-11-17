@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, open, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { fakeRegistry } from '@tnunamak/gozar/testing';
 import { createRouteApi } from '../../packages/gozar-node/route-api.mjs';
 import { createEmbeddingServices } from '../../packages/gozar-node/embedding-services.mjs';
@@ -13,10 +16,13 @@ const fact = id => ({
   id, label: id, value: null, known: false, reason: 'not-observed',
   group: 'fixture', affectsConsent: true, source: `local-observation:/${id}`, asOf: null,
 });
-async function fixture(t, id) {
-  const home = await scratch(t), owner = 'transition-owner';
+async function fixture(t, id, options = {}) {
+  const home = options.home ?? await scratch(t), owner = 'transition-owner';
   const registry = await fakeRegistry({
     dir: join(home, 'registry'), id, kinds: ['attached'], reach: 'this-device',
+    // The real fixture forwarder emits http://loopback, not HTTPS.
+    // Keep declared transport consistent with its allocation in both controls.
+    transport: 'http',
     protocols: [], facts: [fact('base')],
   });
   const registryOptions = { manifest: registry.manifest, root: registry.root };
@@ -43,6 +49,7 @@ async function fixture(t, id) {
     requirements: { reach: 'this-device', transport: 'any', payloadAccess: 'allow-provider',
       address: 'any', setup: 'allow', protocols: [] },
   });
+  if (options.target) q.target = options.target;
   const factory = expose => createRouteApi({
     ...registryOptions, embeddingServices: services, ...(expose ? { expose } : {}),
   });
@@ -78,12 +85,102 @@ async function fixture(t, id) {
   return { home, owner, services, change, restore, counts, factory, request, draft, commit, onlyRoute, close };
 }
 
+test('unchanged registry proves the counts observer sees real attached allocation and removal', async t => {
+  // Separate registry/home: positive events cannot satisfy either refusal baseline.
+  // This foreign app belongs to the fixture, not to the route being removed.
+  const home = await mkdtemp(join(tmpdir(), 'refusal-observer-positive-'));
+  const app = createServer((_request, response) => response.end('fixture app'));
+  let f, api, bodyError, confirmed = true;
+  const handles = new Map(), cleanupErrors = [];
+  const remember = handle => { if (handle) handles.set(JSON.stringify(handle), handle); };
+  try {
+    await new Promise((resolve, reject) => { app.once('error', reject); app.listen(0, '127.0.0.1', resolve); });
+    f = await fixture(t, 'observer-positive', { home, target: `127.0.0.1:${app.address().port}` });
+    api = f.factory();
+    assert.deepEqual(await f.counts(), { starts: 0, removals: 0 });
+    let route;
+    try { route = await api.expose(await f.request(api)); }
+    catch (error) { remember(error.route?.handle); throw error; }
+    remember(route.handle);
+    assert.equal(route.handle.kind, 'attached');
+    assert.equal(route.state, 'usable');
+    assert.equal(route.verification.status, 'verified');
+    assert.deepEqual(await f.counts(), { starts: 1, removals: 0 },
+      'a missing or disabled event logger must fail the positive');
+    assert.deepEqual((await f.onlyRoute(api)).handle, route.handle);
+    for (const current of [api, f.factory()]) {
+      // A fresh factory shares services; this is not a process-restart test.
+      for (let retry = 0; retry < 2; retry++) {
+        const closed = await f.close(current, route.handle);
+        assert.deepEqual(closed.handle, route.handle);
+        assert.equal(closed.state, 'released');
+        assert.equal(closed.cleanup.state, 'confirmed');
+        const listed = await f.onlyRoute(current);
+        assert.deepEqual(listed.handle, route.handle);
+        assert.equal(listed.state, 'released');
+        assert.equal(listed.cleanup.state, 'confirmed');
+        assert.deepEqual(await f.counts(), { starts: 1, removals: 1 });
+      }
+    }
+    assert.equal(app.listening, true, 'route removal must not close the foreign app');
+  } catch (error) { bodyError = error; }
+  finally {
+    if (api) {
+      try { for (const route of (await api.listRoutes({ home, owner: f.owner })).routes) remember(route.handle); }
+      catch (error) { confirmed = false; cleanupErrors.push(error); }
+      for (const handle of handles.values()) {
+        try {
+          const closed = await f.close(api, handle);
+          assert.deepEqual(closed.handle, handle);
+          assert.equal(closed.cleanup.state, 'confirmed');
+        } catch (error) { confirmed = false; cleanupErrors.push(error); }
+      }
+    }
+    try {
+      app.closeAllConnections();
+      if (app.listening) {
+        let timer;
+        try { await Promise.race([
+          new Promise((resolve, reject) => app.close(error => error ? reject(error) : resolve())),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('fixture app close unconfirmed')), 2000); }),
+        ]); } finally { clearTimeout(timer); }
+      }
+    } catch (error) { confirmed = false; cleanupErrors.push(error); }
+    // Keep recovery records and event evidence if route/app cleanup is uncertain.
+    if (confirmed) {
+      try { await rm(home, { recursive: true, force: true }); }
+      catch (error) { cleanupErrors.push(error); }
+    }
+  }
+  const errors = [...(bodyError ? [bodyError] : []), ...cleanupErrors];
+  if (errors.length) throw new AggregateError(errors, `positive observer fixture failed; recovery home: ${home}`);
+});
+
 test('canonical redemption after reservation sees a changed registry and releases one resource-free handle', async t => {
   const f = await fixture(t, 'redeem-boundary');
-  let redeemed = 0, handle;
+  let redeemed = 0, handle, reservedHandle;
   const api = f.factory({
     redeem: async input => {
-      // withRouteOperation reserves before invoking this actual redemption seam.
+      // route-api wraps openAttachedRoute in withRouteOperation, whose atomic
+      // starting record is written before run; openAttachedRoute then redeems.
+      // Read that exact owned record, never manufacture recovery state.
+      const operationId = 'operation-redeem-boundary';
+      const filename = createHash('sha256').update(JSON.stringify([f.owner, operationId])).digest('hex') + '.json';
+      const file = await open(join(f.home, 'operations', filename), 'r');
+      let reservation;
+      try {
+        const buffer = Buffer.alloc(64 * 1024 + 1);
+        const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+        assert.ok(bytesRead < buffer.length, 'bounded fixture reservation evidence');
+        reservation = JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
+      } finally { await file.close(); }
+      assert.equal(reservation.owner, f.owner);
+      assert.equal(reservation.operationId, operationId);
+      assert.equal(reservation.phase, 'starting');
+      assert.equal(reservation.view.state, 'creating');
+      assert.equal(reservation.view.handle.kind, 'attached');
+      reservedHandle = structuredClone(reservation.view.handle);
+      assert.deepEqual(await f.counts(), { starts: 0, removals: 0 });
       redeemed++;
       await f.change();
       return redeemConsentToken(input);
@@ -97,6 +194,7 @@ test('canonical redemption after reservation sees a changed registry and release
     assert.equal(redeemed, 1);
     const route = await f.onlyRoute(api);
     handle = route.handle;
+    assert.deepEqual(handle, reservedHandle, 'refusal retains the pre-mutation reserved identity');
     assert.equal(route.state, 'released');
     assert.equal(route.cleanup.state, 'confirmed');
     assert.equal(route.operationId, request.operationId);
