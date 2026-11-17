@@ -410,8 +410,10 @@ export async function attachedCleanupReference(request,runtime,operationReferenc
       throw gozarError('route_conflict','Cleanup operation does not match its bootstrap');
   }else if(operationReference)throw gozarError('route_conflict','Cleanup bootstrap has no matching operation');
   const bound=handle.kind==='attached'?{kind:'attached',id:bootstrap.id,generation:1}:bootstrap.handle??bootstrap.embedding?.handle;
-  // A session started before 0.4 recorded no handle, owner or embedding: nothing to capture; stopping it is by its exact session id.
-  if(handle.kind==='session'&&!bound&&bootstrap.owner===undefined&&!bootstrap.embedding)return null;
+  // Only an unmarked native bootstrap predates managed custody. Missing or
+  // null modern identity must not downgrade generic execution to legacy cleanup.
+  // A proofSubject identifies a controller, not configuration ownership.
+  if(handle.kind==='session'&&['execution','handle','owner','embedding'].every(key=>!Object.hasOwn(bootstrap,key)))return null;
   if(bound?.kind!==handle.kind||bound.id!==handle.id||bound.generation!==handle.generation)
     throw gozarError('route_conflict','Cleanup handle does not match its bootstrap');
   const registryId=bootstrap.registryId??bootstrap.embedding?.registryId;
