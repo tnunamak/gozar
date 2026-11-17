@@ -17,20 +17,20 @@
         "metadataVisibleTo": [
           "ngrok edge"
         ],
-        "evidenceRef": "https://ngrok.com/pricing (accessed 2026-11-12) ; https://ngrok.com/tos (accessed 2026-11-12) ; https://ngrok.com/privacy (accessed 2026-11-12)"
+        "evidenceRef": "adapter architecture: the ngrok HTTPS edge terminates TLS and forwards HTTP to the host gate (adapters/providers/ngrok-https-edge/index.mjs)"
       },
       "address": {
         "stability": "stable",
         "scope": "assigned development or reserved domain of your ngrok account",
         "conditions": [
-          "the assigned development domain is valid on Free; custom/reserved domains depend on account entitlement",
+          "the assigned development domain is valid on Free; reserved ngrok-branded domains and bring-your-own domains have separate account entitlements",
           "the listener lives only while the host process runs"
         ],
         "ports": null
       },
       "cost": {
         "kind": "unknown",
-        "summary": "ngrok has a $0 Free plan with one development domain, but its pricing page says custom domains need Pay-as-you-go ($20 base).",
+        "summary": "The Free plan accepts the assigned development domain. Reserved ngrok-branded domains and bring-your-own domains have separate account entitlements; current prices and account-specific charges are not verified.",
         "currency": null,
         "amount": null,
         "period": null
@@ -103,7 +103,7 @@
       },
       {
         "id": "domain",
-        "label": "Reserved domain",
+        "label": "Assigned development or reserved domain",
         "observation": "domainSet",
         "actionId": "reserved-domain"
       }
@@ -112,7 +112,7 @@
       {
         "id": "cost-detail",
         "label": "Cost details",
-        "value": "ngrok has a $0 Free plan with one development domain, but its pricing page says custom domains need Pay-as-you-go ($20 base).",
+        "value": "The Free plan accepts the assigned development domain. Reserved ngrok-branded domains and bring-your-own domains have separate account entitlements; current prices and account-specific charges are not verified.",
         "known": true,
         "group": "cost",
         "affectsConsent": false,
@@ -175,7 +175,7 @@
       {
         "id": "address-condition-0",
         "label": "Address condition",
-        "value": "the assigned development domain is valid on Free; custom/reserved domains depend on account entitlement",
+        "value": "the assigned development domain is valid on Free; reserved ngrok-branded domains and bring-your-own domains have separate account entitlements",
         "known": true,
         "group": "address",
         "affectsConsent": false,
@@ -231,7 +231,7 @@
         "known": true,
         "group": "privacy",
         "affectsConsent": true,
-        "source": "https://ngrok.com/pricing (accessed 2026-11-12) ; https://ngrok.com/tos (accessed 2026-11-12) ; https://ngrok.com/privacy (accessed 2026-11-12)",
+        "source": "adapter architecture: the ngrok HTTPS edge terminates TLS and forwards HTTP to the host gate (adapters/providers/ngrok-https-edge/index.mjs)",
         "asOf": "2026-11-12"
       },
       {
@@ -635,7 +635,7 @@
     ],
     "protocols": {
       "sse/streamableHttp": "true. the attached controller (packages/gozar-node/attached-route.mjs, runAttachedController) forwards the SDK listener to a gate it runs in front of the app. Before it reports a published origin it runs the same timed-SSE validation as recipe routes (gate.verify with sse) through the public origin. Frames must arrive unbuffered and in order, or the listener is closed and the route fails with verification_failed. Red test: test/adapters/ngrok-attached-validation.test.mjs",
-      "oauthDcr": "oauthDcr: the reserved domain is a stable HTTPS origin and the configured authority is preserved."
+      "oauthDcr": "oauthDcr: transport support is conditional on the configured app implementing client registration and authorization. A stable HTTPS origin preserves the configured authority but does not prove live OAuth DCR or application authorization."
     }
   }
 }
