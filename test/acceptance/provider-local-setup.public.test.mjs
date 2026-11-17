@@ -5,7 +5,7 @@ import { readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createTestingGozar } from '@tnunamak/gozar/testing';
-import { scratch } from '../node/route-schema-check.mjs';
+import { query, scratch } from '../node/route-schema-check.mjs';
 
 const owner = 'provider-setup-fixture';
 const approval = action => ({ kind: 'setup', digest: action.digest, disclosureRevision: action.disclosure.revision,
@@ -218,7 +218,7 @@ for (const draft of [false, true]) test(`public ngrok disconnect after ${draft ?
 
 test('LAN operation discovery preserves observed choices and refuses a legacy bypass of the entry', async t => {
   const home = await scratch(t), address = '192.0.2.15';
-  const { api, ref, view, advance } = await setup(t, 'lan', [
+  const { api, ref, harness, view, advance } = await setup(t, 'lan', [
     { kind: 'recipe', operation: 'probe', handle: async () => ({ exitCode: 0, stderr: '',
       stdout: JSON.stringify({ interfaces: { eth0: [{ address, family: 'IPv4', internal: false }] } }) }) },
   ], home);
@@ -230,17 +230,29 @@ test('LAN operation discovery preserves observed choices and refuses a legacy by
   await assert.rejects(advance(pick, { value: '192.0.2.99' }), { code: 'invalid_input' });
   const allow = await advance(pick, { value: address });
   assert.equal(allow.nextAction.id, 'firewall');
-  assert.equal((await advance(allow, { value: address })).state, 'complete');
+  const ready = await advance(allow, { value: address });
+  assert.equal(ready.state, 'complete');
+  assert.equal(ready.nextAction, null);
+  assert.match(ready.evidence.value.summary, /client reach are still unverified/);
+  assert.ok(!harness.events.some(event => event.kind === 'process-runtime' && event.operation === 'open'));
 });
 
-test('own-address operation discovery preserves exact adoption instructions', async t => {
+test('own-address setup completes before route creation and retains descriptive mapping guidance', async t => {
   const home = await scratch(t);
-  const { view, advance } = await setup(t, 'own-address', [], home);
+  const { api, ref, view, advance } = await setup(t, 'own-address', [], home);
   const pick = await advance(view);
   assert.equal(pick.nextAction.id, 'origin');
   await assert.rejects(advance(pick, { value: 'http://owner.example.test' }), { code: 'invalid_input' });
   const mapping = await advance(pick, { value: 'https://owner.example.test' });
+  assert.equal(mapping.state, 'complete');
+  assert.equal(mapping.evidence.known, true);
+  assert.equal(mapping.evidence.value.source, 'host');
   assert.equal(mapping.nextAction.id, 'map-adopted-origin');
+  assert.equal(mapping.nextAction.kind, 'instructions');
   assert.match(mapping.nextAction.instructions, /https:\/\/owner\.example\.test/);
+  assert.match(mapping.nextAction.instructions, /Start the Gozar route and wait for its exact loopback gate target/);
   assert.deepEqual(mapping.resources, []);
+  assert.equal((await advance(mapping)).state, 'complete', 'acknowledgement does not create or prove a route');
+  const routeRequest = query({ home, owner: ref.owner, providerId: ref.providerId });
+  await assert.rejects(api.expose({ ...routeRequest, wait: 'verified' }), { code: 'consent_required' });
 });

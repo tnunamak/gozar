@@ -120,7 +120,13 @@ export default recipeAdapter({
           state: ctx.origin == null ? 'authorization-required' : 'blocked',
           nextAction: structuredClone(originAction), evidence: unknown('owner-https-origin-required'),
         };
-        if (route?.origin && route.origin !== origin) return {
+        if (!route) return {
+          state: 'complete', nextAction: mapping(origin),
+          evidence: { operationId: operation.id, stepId: originAction.id, source: 'host',
+            observedAt: new Date(ctx.now()).toISOString(),
+            summary: 'The HTTPS address is configured. The route still needs its own approval, mapping and client proof.' },
+        };
+        if (route.origin && route.origin !== origin) return {
           state: 'blocked', evidence: unknown('owner-route-origin-changed'),
           nextAction: action('review-adopted-origin', 'instructions', 'Review the changed HTTPS origin', 'owner', 'host', 'reconcile',
             { instructions: 'The live route uses another hostname or port. Stop its Gozar tracking and approve the exact current origin before checking it again. ' + retained }),
