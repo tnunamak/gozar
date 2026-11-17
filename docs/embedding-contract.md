@@ -73,13 +73,26 @@ open strings. An undeclared required capability is unknown with reason
 `host-capability-undeclared` and cannot authorize execution. An explicit false
 capability is denied, which is distinct from missing software.
 
-For the default file backend only, the first ownerless configuration read imports
-legacy private setup references and text without copying credential bytes. Legacy
-records have no owner field: assigning them to a named owner requires explicit
-migration and returns `configuration_migration_required`. Custom backends never
-import or fall back to legacy files. After import, use the configured factory for
-subsequent edits; mixing legacy setup writers with the new revision API is not a
-supported synchronization mechanism.
+For the default file backend only, the first configuration read with owner omitted
+imports checked ownerless 0.3 setup references and text without copying bytes.
+A named owner returns `configuration_migration_required`; no migration API or
+import command assigns the legacy bindings to that owner. Custom backends never
+import or fall back to legacy files.
+
+The supported named-owner transition is re-intake: retain the old home and bytes,
+close/reconcile the old exact runtimes through their recorded original owner and
+installation, and require confirmed owned resource removal. If cleanup is
+unconfirmed, retain the handles and refuse the transition. Create a NEW private
+home, use the same named owner in its query/setup/drafts, and configure/re-enter
+credentials through current public input requirements. For descriptor prompts,
+run `gozar configure --query-file new-query.json --provider-id PROVIDER --json`
+using the installed executable; the query selects the new home and named owner.
+Obtain fresh route approval before starting the replacement. Keep old state/bytes
+until cleanup and deletion authority are established. Do not copy/edit private
+bindings or imply automatic provider credential revocation. See
+[migration steps](migration-0.4.md#move-an-ownerless-installation-to-a-named-app-by-re-intake).
+After ownerless import, use the configured factory for edits; mixing legacy
+setup writers with the revision API is not a synchronization mechanism.
 
 The broker optionally accepts a host `dispatchEffect` callback and exposes
 `proxy.dispatchEffect({kind,operation,input})` for the public testing factory's
