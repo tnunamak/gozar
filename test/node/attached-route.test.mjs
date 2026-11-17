@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { attachedStatus, closeAttachedRoute, openAttachedRoute, openSessionRoute } from '../../packages/gozar-node/attached-route.mjs';
 import { routeStatus, closeRoute } from '../../packages/gozar-node/route-view.mjs';
 import { processIdentity } from '../../packages/gozar-node/process-identity.mjs';
-import { assertShape, codeOf, query, scratch, stubAdapter, tokenStubs } from './route-schema-check.mjs';
+import { assertShape, codeOf, query, scratch, attachedScratch, stubAdapter, tokenStubs } from './route-schema-check.mjs';
 
 const helperUrl = pathToFileURL(new URL('./route-schema-check.mjs', import.meta.url).pathname).href;
 const attachedUrl = pathToFileURL(new URL('../../packages/gozar-node/attached-route.mjs', import.meta.url).pathname).href;
@@ -37,16 +37,6 @@ export default async function () {
 `);
   const read = async () => { try { return (await readFile(marks, 'utf8')).split('\n').filter(Boolean); } catch { return []; } };
   return { module, read };
-}
-/** Always kill controller processes a test started, by the pid each wrote. */
-function reapControllers(t, home) {
-  t.after(async () => {
-    const root = join(home, 'attached');
-    for (const id of (await readdir(root).catch(() => [])).filter(name => name.startsWith('att_'))) {
-      const identity = JSON.parse(await readFile(join(root, id, 'control.json'), 'utf8').catch(() => 'null') ?? 'null');
-      if (identity?.pid && alive(identity.pid)) { try { process.kill(identity.pid, 'SIGKILL'); } catch { /* gone */ } }
-    }
-  });
 }
 const grantFor = (adapterId, q) => ({ adapterId, planDigest: `plan-${adapterId}-${q.target}`, observedResource: `res-${adapterId}` });
 const attachedQuery = home => query({ home, usage: { kind: 'attached' } });
@@ -83,8 +73,7 @@ ${exitAfterOpen ? 'process.exit(0);' : 'setInterval(() => {}, 1000);'}
 }
 
 test('red: a dropped control channel (owner process killed with SIGKILL) removes the route within the lease expiry', async t => {
-  const home = await scratch(t), controller = await controllerFixture(t);
-  reapControllers(t, home);
+  const home = await attachedScratch(t), controller = await controllerFixture(t);
   const owner = await ownerScript(t, home, controller.module);
   assertShape('RouteView', owner.view);
   assert.equal(owner.view.state, 'usable');
@@ -111,8 +100,7 @@ test('red: a dropped control channel (owner process killed with SIGKILL) removes
 });
 
 test('an owner that exits normally also loses the lease (unref\'d heartbeat: it never keeps the owner alive)', async t => {
-  const home = await scratch(t), controller = await controllerFixture(t);
-  reapControllers(t, home);
+  const home = await attachedScratch(t), controller = await controllerFixture(t);
   const owner = await ownerScript(t, home, controller.module, { exitAfterOpen: true });
   assert.equal(owner.view.state, 'usable');
   assert.equal((await owner.exited).code, 0);
@@ -126,8 +114,7 @@ test('an owner that exits normally also loses the lease (unref\'d heartbeat: it 
 });
 
 test('open, status, close: the lease holds beyond the expiry, close removes at once and the handle is then released', async t => {
-  const home = await scratch(t), controller = await controllerFixture(t), tokens = tokenStubs();
-  reapControllers(t, home);
+  const home = await attachedScratch(t), controller = await controllerFixture(t), tokens = tokenStubs();
   const view = await openAttachedRoute(await approvedRequest(tokens, home), depsFor(tokens, controller.module));
   assertShape('RouteView', view);
   assert.deepEqual([view.handle.kind, view.state], ['attached', 'usable']);
@@ -146,8 +133,7 @@ test('open, status, close: the lease holds beyond the expiry, close removes at o
 });
 
 test('a stale generation on status is route_conflict and an unknown attached id is route_not_found', async t => {
-  const home = await scratch(t), controller = await controllerFixture(t), tokens = tokenStubs();
-  reapControllers(t, home);
+  const home = await attachedScratch(t), controller = await controllerFixture(t), tokens = tokenStubs();
   const view = await openAttachedRoute(await approvedRequest(tokens, home), depsFor(tokens, controller.module));
   assert.equal(await codeOf(attachedStatus({ home, handle: { ...view.handle, generation: view.handle.generation + 1 } })), 'route_conflict');
   assert.equal(await codeOf(attachedStatus({ home, handle: { kind: 'attached', id: 'att_0000000000000000', generation: 1 } })), 'route_not_found');
@@ -156,8 +142,7 @@ test('a stale generation on status is route_conflict and an unknown attached id 
 });
 
 test('red: a token is single use, and a provider that moved after approval is candidate_stale and starts nothing', async t => {
-  const home = await scratch(t), controller = await controllerFixture(t), tokens = tokenStubs();
-  reapControllers(t, home);
+  const home = await attachedScratch(t), controller = await controllerFixture(t), tokens = tokenStubs();
   const request = await approvedRequest(tokens, home);
   const moved = stubAdapter('stub-a'); moved.plan = async (ctx, ask) => ({ digest: 'plan-changed', origin: null, resourceKey: 'res-stub-a', effects: [], readback: null, cleanup: null, precondition: null });
   assert.equal(await codeOf(openAttachedRoute(request, depsFor(tokens, controller.module, { adapters: [moved] }))), 'candidate_stale');
@@ -166,7 +151,7 @@ test('red: a token is single use, and a provider that moved after approval is ca
 });
 
 test('missing approval is consent_required, a wrong usage kind is invalid_input, and macOS is unsupported', async t => {
-  const home = await scratch(t), controller = await controllerFixture(t), tokens = tokenStubs();
+  const home = await attachedScratch(t), controller = await controllerFixture(t), tokens = tokenStubs();
   const request = await approvedRequest(tokens, home);
   const { approval, ...withoutApproval } = request;
   assert.equal(await codeOf(openAttachedRoute(withoutApproval, depsFor(tokens, controller.module))), 'consent_required');
@@ -175,22 +160,31 @@ test('missing approval is consent_required, a wrong usage kind is invalid_input,
   assert.deepEqual(await controller.read(), []);
 });
 
-test('a controller that cannot create reports the typed failure and leaves nothing running', async t => {
-  const home = await scratch(t), tokens = tokenStubs(), dir = await scratch(t), module = join(dir, 'failing.mjs');
-  reapControllers(t, home);
+test('a failed create reports setup_required and retains unconfirmed recovery authority until fixture teardown', async t => {
+  const home = await attachedScratch(t), tokens = tokenStubs(), dir = await scratch(t), module = join(dir, 'failing.mjs');
   await writeFile(module, `import { stubAdapter } from ${JSON.stringify(helperUrl)};
 export default async function () { const adapter = stubAdapter('stub-a'); adapter.create = async () => { throw Object.assign(new Error('no auth'), { code: 'setup_required' }); };
   return { adapters: [adapter], effectContext: () => ({}), validation: 'none', readContext: { now: () => Date.now(), configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified' }) } }; }
 `);
-  assert.equal(await codeOf(openAttachedRoute(await approvedRequest(tokens, home), depsFor(tokens, module))), 'setup_required');
+  const failure = await openAttachedRoute(await approvedRequest(tokens, home), depsFor(tokens, module)).then(() => null, error => error);
+  assert.equal(failure?.code, 'setup_required');
+  assert.equal(failure.route.cleanup.state, 'unconfirmed');
+  assert.equal(failure.route.published, null);
+  const root = join(home, 'attached');
+  const ids = (await readdir(root)).filter(id => /^att_[0-9a-f]{16}$/.test(id));
+  assert.equal(ids.length, 1);
+  const control = JSON.parse(await readFile(join(root, ids[0], 'control.json'), 'utf8'));
+  assert.ok(Number.isSafeInteger(control.pid) && control.pid > 0);
+  assert.equal(typeof control.startIdentity, 'string');
+  assert.ok(control.startIdentity);
+  assert.equal(await processIdentity(control.pid), control.startIdentity,
+    'unconfirmed creation retains the authenticated controller, not confirmed provider absence');
 });
 
 test('red: a controller that never starts is stopped when the open times out, so no controller outlives a failed start', async t => {
-  const home = await scratch(t), tokens = tokenStubs(), dir = await scratch(t), module = join(dir, 'hanging.mjs');
-  reapControllers(t, home);
+  const home = await attachedScratch(t), tokens = tokenStubs(), dir = await scratch(t), module = join(dir, 'hanging.mjs');
   await writeFile(module, `export default () => new Promise(() => { setInterval(() => {}, 1000); });\n`);
   const failure = await openAttachedRoute(await approvedRequest(tokens, home), depsFor(tokens, module, { startTimeoutMs: 1500 })).then(() => null, error => error);
-  t.after(() => { if (failure?.controllerCleanup?.pid && alive(failure.controllerCleanup.pid)) process.kill(failure.controllerCleanup.pid, 'SIGKILL'); });
   assert.equal(failure?.code, 'provider_unavailable');
   assert.ok(['stopped', 'killed'].includes(failure.controllerCleanup?.state), JSON.stringify(failure.controllerCleanup && { state: failure.controllerCleanup.state }));
   // A killed child of this test process can stay a zombie until Node reaps it, so ask the identity function, not kill(0).
@@ -213,8 +207,7 @@ test('openSessionRoute redeems the grant, takes the adapter from it, and project
 });
 
 test('URL targets ending in a port remain accepted for session and attached usage', async t => {
-  const home = await scratch(t), controller = await controllerFixture(t);
-  reapControllers(t, home);
+  const home = await attachedScratch(t), controller = await controllerFixture(t);
   for (const kind of ['session', 'attached']) {
     const tokens = tokenStubs();
     const q = query({ home, target: 'http://127.0.0.1:8799', usage: kind === 'session' ? { kind, lifetimeMs: 60_000 } : { kind } });
