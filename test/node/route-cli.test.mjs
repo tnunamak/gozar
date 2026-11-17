@@ -255,3 +255,35 @@ test('--provider-id sets query.providerId for catalog, and a query file value is
   assert.deepEqual(seen, ['example-provider', 'from-file']);
   assert.equal(await routeMain(['setup', 'x', '--provider-id', 'a', '--json'], { api, stdout: { write() {} }, stderr: { write() {} } }), 3, 'a provider selection still needs an explicit current setup approval');
 });
+
+test('routes help advertises syntax accepted by the real route parser', async () => {
+  const help = await gozar(process.env, ['help']);
+  assert.equal(help.code, 0, help.stderr);
+  const advertised = help.stdout.split('\n').filter(line => /^\s*gozar routes\s/.test(line));
+  assert.equal(advertised.length, 1, 'exactly one routes command is advertised');
+  const syntax = advertised[0].trim().replace(/\s+\(.*$/, '');
+  assert.equal(syntax, 'gozar routes --home DIR [--owner OWNER] --json');
+  const home = join(world.root, 'advertised routes home');
+  const owner = 'help-example-owner';
+  for (const includeOwner of [false, true]) {
+    const command = syntax.replace('[--owner OWNER]', includeOwner ? '--owner OWNER' : '');
+    const argv = command.split(/\s+/).filter(Boolean).slice(1).map(part => part === 'DIR' ? home : part === 'OWNER' ? owner : part);
+    const seen = [], lines = [];
+    const reply = { schemaVersion: 1, routes: [] };
+    const api = { listRoutes: async request => { seen.push(request); return reply; } };
+    const code = await routeMain(argv, { api, stdout: { write: line => lines.push(line) }, stderr: { write() {} } });
+    assert.equal(code, 0);
+    assert.deepEqual(seen, [{ home, ...(includeOwner ? { owner } : {}) }]);
+    assert.equal(lines.length, 1);
+    assert.deepEqual(JSON.parse(lines[0]), reply);
+  }
+  const lines = [];
+  const code = await routeMain(['routes', '--query-file', 'unused.json', '--json'], {
+    api: { listRoutes: async () => assert.fail('rejected syntax must not call listRoutes') },
+    stdout: { write: line => lines.push(line) }, stderr: { write() {} },
+  });
+  assert.equal(code, 1);
+  assert.equal(lines.length, 1);
+  assert.equal(JSON.parse(lines[0]).error.code, 'invalid_input');
+  assert.match(JSON.parse(lines[0]).error.message, /Unknown option --query-file/);
+});
