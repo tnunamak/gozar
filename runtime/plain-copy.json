@@ -1285,6 +1285,21 @@
       "decision": true,
       "kind": "failure"
     },
+    "The fixture transport is not confirmed closed": {
+      "plain": "A test connection may still be open. Cleanup is not confirmed.",
+      "decision": true,
+      "kind": "failure"
+    },
+    "The fixture transport returned no handle": {
+      "plain": "The test connection did not start. Nothing was published.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "The host declared no process-runtime transport for this fixture route": {
+      "plain": "This test setup cannot open the connection this route needs. Nothing was published.",
+      "decision": false,
+      "kind": "failure"
+    },
     "Start an owned foreground HTTPS Funnel on port 8443, or on port 10000 when 8443 is in use, and on no other port. Existing listeners remain untouched. HTTPS, instance identity and timed SSE must pass before publication.": {
       "plain": "Gozar creates its own route and removes only what it created.",
       "decision": false,

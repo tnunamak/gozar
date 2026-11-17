@@ -162,7 +162,10 @@ export async function conform(adapter) {
         assert.ok(observed.present && observed.revision === 'etag-1', `${id} observes its durable listener with the config revision`);
         continue;
       }
-      const plan = await planFor(adapter, adapter.prepareProof ? readContext({configuration:async()=>({auth:STUB,'reserved-domain':reserved,token:STUB,origin:`https://${reserved}`,'gate-port':'18479'})}) : readContext(), kind);
+      // An adapter that hands host choices to the session engine plans only from the owner's persisted choice of an observed interface.
+      const owned = { interface: '192.0.2.10', firewall: '192.0.2.10' };
+      const choiceContext = readContext({ configuration: async () => owned, observeInterfaces: async () => ({ interfaces: { eth0: [{ address: owned.interface, internal: false, family: 'IPv4' }] } }) });
+      const plan = await planFor(adapter, adapter.prepareProof ? readContext({configuration:async()=>({auth:STUB,'reserved-domain':reserved,token:STUB,origin:`https://${reserved}`,'gate-port':'18479'})}) : typeof adapter.hostChoices === 'function' ? choiceContext : readContext(), kind);
       for (const field of ['digest', 'resourceKey']) assert.equal(typeof plan[field], 'string', `${id} plan.${field}`);
       assert.ok(Array.isArray(plan.effects) && 'readback' in plan && 'cleanup' in plan && 'origin' in plan && 'precondition' in plan);
       secretFree(plan, `${id} plan`);

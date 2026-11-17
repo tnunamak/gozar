@@ -112,6 +112,8 @@ const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('
 const servers = new Map();
 const proofProtocol = ${JSON.stringify(proofProtocol)};
 const mark = event => appendFileSync(new URL('./events.jsonl', import.meta.url), JSON.stringify({event}) + '\\n');
+// The one place a receipt is built, so a refusal's empty cleanup receipt and a created route's receipt agree on identity.
+const receiptOf = (ctx, plan, origin) => ({ schemaVersion: 1, adapterId: definition.id, resourceKey: plan.resourceKey, generation: ctx.generation ?? 1, operationId: ctx.operationId ?? null, identity: null, readback: plan.readback, origin });
 // A host that maps process-runtime effects admits a route's transport through them. Only a lower-level fixture that has no
 // effect dispatcher at all (no explicit mapping) gets a forwarder in this process. A host that maps effects but omits this one
 // is refused: an unmapped transport never falls back to a real listener.
@@ -162,7 +164,7 @@ export default {
     const forwarding = ['attached', 'session'].includes(plan.readback.kind);
     // Nothing is opened when the host maps no transport, so the refusal carries an empty receipt: cleanup confirms nothing is held.
     const owned = forwarding && proofProtocol !== 'echo'
-      ? await openOwned(ctx, plan).catch(error => { throw Object.assign(error, { cleanupReceipt: { schemaVersion: 1, adapterId: definition.id, resourceKey: plan.resourceKey, generation: ctx.generation ?? 1, operationId: ctx.operationId ?? null, identity: null, readback: plan.readback, origin: 'https://' + definition.id + '.example.invalid' } }); })
+      ? await openOwned(ctx, plan).catch(error => { throw Object.assign(error, { cleanupReceipt: receiptOf(ctx, plan, 'https://' + definition.id + '.example.invalid') }); })
       : null;
     if (owned) {
       plan = { ...plan, origin: owned.origin, readback: { ...plan.readback, ownedHandle: owned.handle } }; mark('start');
@@ -179,7 +181,7 @@ export default {
       await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
       servers.set(plan.resourceKey,server); plan={...plan,origin:'http://127.0.0.1:'+server.address().port};mark('start');
     }
-    return { schemaVersion: 1, adapterId: definition.id, resourceKey: plan.resourceKey, generation: ctx.generation ?? 1,operationId:ctx.operationId??null, identity: null, readback: plan.readback, origin: plan.origin ?? 'https://' + definition.id + '.example.invalid' };
+    return receiptOf(ctx, plan, plan.origin ?? 'https://' + definition.id + '.example.invalid');
   },
   async observe(ctx, request) { return { present: false, resourceKey: definition.id + ':' + sha({ target: request.target }).slice(0, 16), identity: null, revision: null }; },
   async verify(ctx, receipt) { mark('proof'); return ctx.verifyChallenge(receipt?.readback?.origin ?? receipt?.origin ?? '', receipt?.readback?.target ?? ''); },

@@ -83,6 +83,7 @@ export default recipeAdapter({
 
       async plan(ctx, request) {
         platformOf(ctx);
+        if (!definition.supportedKinds.includes(request?.usage?.kind)) return base.plan(ctx, request); // an undeclared kind is unsupported before any setup is asked for
         const chosen = await choice(ctx), pending = review(chosen, await inventory(ctx));
         if (pending.needs.length) throw effectError('setup_required', `${pending.why} Provide the ${pending.needs[0]} input, then ask the catalog again.`);
         const planned = await base.plan(ctx, request);
