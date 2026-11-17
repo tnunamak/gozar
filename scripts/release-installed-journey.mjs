@@ -98,8 +98,20 @@ export function runProcess(command,args,options,{spawnProcess=spawn}={}){
    settled=true;
    clearTimeout(timer);clearTimeout(drainTimer);clearTimeout(killTimer);clearInterval(pollTimer);
    if(!closed){child.stdout?.destroy?.();child.stderr?.destroy?.();child.unref?.();}
-   resolveResult({status,signal,stdout:Buffer.concat(chunks.stdout).toString('utf8'),
-    stderr:Buffer.concat(chunks.stderr).toString('utf8'),timedOut,overflow,drainTimedOut:!closed,
+   // Replacement characters can expand invalid or cap-split raw UTF-8. Bound
+   // the encoded text too, without splitting a code point or hiding output loss.
+   let textBudget=PROCESS_OUTPUT_BYTES;
+   const decode=key=>{
+    const encoded=Buffer.from(Buffer.concat(chunks[key]).toString('utf8'));
+    let end=Math.min(encoded.length,textBudget);
+    if(end<encoded.length){
+     overflow=true;
+     while(end>0&&(encoded[end]&0xc0)===0x80)end--;
+    }
+    textBudget-=end;return encoded.subarray(0,end).toString('utf8');
+   };
+   const stdout=decode('stdout'),stderr=decode('stderr');
+   resolveResult({status,signal,stdout,stderr,timedOut,overflow,drainTimedOut:!closed,
     outputBytes:retainedBytes,observedBytes,
     cleanup:{scope:group!==null?'process-group':'child-only',pid:child.pid??null,groupId:group,
      state:closed&&gone&&!(stopping&&group===null&&child.pid)?'confirmed':'unconfirmed',

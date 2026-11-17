@@ -253,3 +253,65 @@ test('uncertain cleanup cannot become a successful installed step',async t=>{
  t.after(()=>rm(report.scratch,{recursive:true,force:true}));
  assert.equal(report.status,'failed');assert.deepEqual(report.failure.result,result);
 });
+
+test('group TERM reaches an owned descendant without parent forwarding',
+ {skip:process.platform==='win32'},async()=>{
+ let child,termTimer,output='',rejectMissingTerm;
+ const missingTerm=new Promise((_,reject)=>{rejectMissingTerm=reject;});
+ const spawnOwned=(command,args,options)=>{
+  child=spawn(command,args,{...options,detached:true});
+  child.stdout.on('data',chunk=>{
+   output+=chunk.toString();
+   if(output.includes('DESCENDANT_TERM\n'))clearTimeout(termTimer);
+   else if(output.includes('PARENT_TERM\n')&&!termTimer){
+    // Fail before the runner's KILL grace expires, leaving the non-forwarding
+    // parent alive for independent finally cleanup to reap its descendant.
+    termTimer=setTimeout(()=>rejectMissingTerm(new Error('group TERM did not reach descendant')),100);
+   }
+  });
+  return child;
+ };
+ const descendant="process.on('SIGTERM',()=>{process.stdout.write('DESCENDANT_TERM\\n',()=>process.exit(0));});process.send('ready');setInterval(()=>{},1000);";
+ const source=`
+  const {spawn}=require('node:child_process');
+  const descendant=spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore',process.stdout,process.stderr,'ipc']});
+  process.on('SIGTERM',()=>{process.stdout.write('PARENT_TERM\\n');});
+  descendant.once('message',()=>process.stdout.write('READY\\n'));
+  descendant.once('close',()=>process.exit(0));
+  setInterval(()=>{},1000);
+ `;
+ try{
+  const result=await bounded(Promise.race([runProcess(process.execPath,['-e',source],{timeoutMs:1500},{spawnProcess:spawnOwned}),missingTerm]),5000);
+  assert.ok(result.stdout.includes('READY\n'));
+  assert.ok(result.stdout.includes('PARENT_TERM\n'));
+  assert.ok(result.stdout.includes('DESCENDANT_TERM\n'),'descendant received TERM directly, not just a later KILL');
+  assert.equal(result.timedOut,true);assert.equal(result.overflow,false);
+  assert.equal(result.cleanup.scope,'process-group');assert.equal(result.cleanup.state,'confirmed');
+  assert.equal(result.cleanup.groupId,child.pid);
+  assert.equal(groupExists(child.pid),false);
+ }finally{clearTimeout(termTimer);await retireGroup(child);}
+});
+for(const mode of ['split-euro','invalid-inflation'])test('returned and written UTF-8 respects combined cap: '+mode,async t=>{
+ const cap=16*1024*1024;
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.kill=()=>true;
+ const pending=runProcess('fixture',[],{timeoutMs:1000},{spawnProcess:()=>child});
+ // stderr also consumes the shared budget; raw capture must never exceed it.
+ child.stderr.emit('data',Buffer.from('E'));
+ child.stdout.emit('data',Buffer.alloc(cap-2,97));
+ child.stdout.emit('data',Buffer.from([mode==='split-euro'?0xe2:0xff]));
+ if(mode==='split-euro')child.stdout.emit('data',Buffer.from([0x82,0xac]));
+ child.emit('close',0,null);
+ const result=await pending;
+ assert.equal(result.outputBytes,cap);assert.equal(result.overflow,true);
+ assert.ok(Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr)<=cap);
+ assert.ok(result.stdout.startsWith('a'.repeat(100)));
+ const f=await fixture(t);
+ await assert.rejects(runInstalledJourney(f.input,{run:async()=>result}),/subprocess failed/);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+ assert.equal(report.failure.result.overflow,true);
+ const out=await readFile(join(f.input.outputDirectory,'install.stdout'));
+ const err=await readFile(join(f.input.outputDirectory,'install.stderr'));
+ assert.ok(out.length+err.length<=cap);
+ assert.equal(out.toString('utf8'),result.stdout);assert.equal(err.toString('utf8'),result.stderr);
+});
