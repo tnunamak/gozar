@@ -75,7 +75,7 @@ const check = (schemaName, shape, value) => {
 };
 
 const consumerShapes = ['Reach', 'Usage', 'Requirements', 'Query', 'Disclosure', 'Action', 'Properties', 'Candidate', 'Catalog', 'Handle', 'Ingress', 'RouteView', 'Approval',
-  'GozarError', 'ErrorCode', 'PreferenceRecord', 'SetupActionResult', 'WatchEvent', 'InspectLegacyRouteResult', 'ResolveClientAddressResult'];
+  'GozarError', 'ErrorCode', 'PreferenceRecord', 'SetupActionResult', 'WatchEvent', 'InspectLegacyRouteResult', 'ResolveClientAddressResult', 'Binding', 'Availability', 'Prerequisite', 'Fact'];
 
 test('both schemas parse, use only supported keywords and resolve every $ref', () => {
   for (const [name, schema] of Object.entries(schemas)) {
@@ -215,4 +215,56 @@ test('no fixture holds a real-looking secret or private name', async () => {
   const text = await readFile(join(root, 'test/fixtures/route-contract.json'), 'utf8');
   for (const token of text.matchAll(/"(tok_[A-Za-z0-9_]+)"/g)) assert.match(token[1], /^tok_synthetic_/);
   assert.doesNotMatch(text, /\/home\/|\/Users\//);
+});
+
+test('unknown Catalog and RouteView versions fail only the version invariant', () => {
+  for (const shape of ['Catalog', 'RouteView']) {
+    const current = fixtures.valid.find(item => item.schema === 'route-catalog' && item.shape === shape);
+    const unknown = fixtures.invalid.find(item => item.shape === shape && item.name === 'unknown schemaVersion');
+    assert.ok(current && unknown, shape);
+    assert.equal(current.value.schemaVersion, 2);
+    assert.deepEqual(check('route-catalog', shape, current.value), []);
+    assert.equal(unknown.value.schemaVersion, 999);
+    assert.deepEqual({ ...unknown.value, schemaVersion: 2 }, current.value, 'only version may differ');
+    assert.deepEqual(check('route-catalog', shape, unknown.value), ['$.schemaVersion: expected const 2']);
+    assert.match(unknown.why, /constant 2/);
+  }
+});
+
+test('direct observation fixtures cover detect-only, consent change and known binding authorities', () => {
+  const values = shape => fixtures.valid.filter(item => item.schema === 'route-catalog' && item.shape === shape).map(item => item.value);
+  const detectOnly = values('Candidate').find(value => value.setup.state === 'detect-only');
+  assert.ok(detectOnly);
+  assert.equal(detectOnly.candidateToken, null);
+  assert.equal(detectOnly.eligible, false);
+  assert.ok(Object.values(detectOnly.availability).some(value => value.state === 'detect-only'));
+  const changed = values('WatchEvent').find(value => value.type === 'consent_changed');
+  assert.ok(changed);
+  assert.notEqual(changed.oldDigest, changed.newDigest);
+  assert.deepEqual(check('route-catalog', 'Action', changed.nextAction), []);
+  for (const authority of ['adapter', 'owner']) {
+    const binding = values('Binding').find(value => value.authority === authority);
+    assert.ok(binding, authority);
+    assert.equal(binding.target.known, true);
+    assert.ok(binding.target.value);
+    assert.notEqual(binding.remedy, null);
+    assert.deepEqual(check('route-catalog', 'Action', binding.remedy), []);
+  }
+  for (const state of ['available', 'detect-only', 'unsupported'])
+    assert.ok(values('Availability').some(value => Object.values(value).some(entry => entry.state === state)), state);
+  for (const known of [true, false]) {
+    assert.ok(values('Prerequisite').some(value => value.observation.known === known));
+    assert.ok(values('Fact').some(value => value.known === known));
+  }
+  for (const transport of ['https', 'tcp', 'tls', 'any'])
+    assert.ok(values('Requirements').some(value => value.transport === transport), transport);
+});
+
+test('new direct observation shapes remain closed to unknown fields', () => {
+  for (const shape of ['Binding', 'Availability', 'Prerequisite', 'Fact']) {
+    const item = fixtures.valid.find(item => item.schema === 'route-catalog' && item.shape === shape);
+    assert.ok(item, shape);
+    assert.deepEqual(check('route-catalog', shape, item.value), []);
+    assert.notDeepEqual(check('route-catalog', shape, { ...item.value, unexpectedFixtureField: true }), []);
+  }
 });
