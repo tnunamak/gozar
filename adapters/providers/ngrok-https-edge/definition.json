@@ -90,6 +90,12 @@
     },
     "prerequisites": [
       {
+        "id": "guided-setup",
+        "label": "Guided account and listener setup",
+        "observation": "configured",
+        "actionId": "ngrok-setup"
+      },
+      {
         "id": "runtime",
         "label": "Runtime module",
         "observation": "sdk",

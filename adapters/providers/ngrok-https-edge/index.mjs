@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import {createListenerLifecycle} from '../_shared/sdk-lifecycle.mjs';
 import {listenerSdk} from '../_shared/listener-effects.mjs';
 
-const domainPattern = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
+import { domainPattern, ngrokSetup } from './setup.mjs';
 const decode = bytes => new TextDecoder().decode(bytes).trim();
 const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
@@ -23,7 +23,7 @@ const read = config => {
 };
 const settings = config => { const values = read(config); return values.authToken && values.reservedDomain ? values : null; };
 
-export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = {}) {
+export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok'), fetchManagement = fetch } = {}) {
   const lifecycle=createListenerLifecycle({adapterId:'ngrok-https-edge'});
   const keyFor = domain => `ngrok-https-edge:${domain}`;
 
@@ -46,19 +46,33 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
         return { ...body, digest: sha(body) };
       })();
 
+      const sdkAvailable = ctx => listenerSdk(ctx, loadSdk).then(
+        module => typeof (module?.forward ?? module?.default?.forward) === 'function', () => false);
+      const domainError = message => Object.assign(effectError('setup_required', message), { nextAction: structuredClone(domainAction) });
+      const refusal = code => ({
+        '313': 'Use the assigned development domain or choose an account plan that permits custom subdomains.',
+        '314': 'Use the assigned development domain or choose an account plan that permits custom hostnames.',
+        '316': 'The agent credential policy does not allow this hostname. Choose a permitted hostname or ask the account administrator for a narrowly scoped credential.',
+        '319': 'This hostname needs a domain reservation in the agent credential’s account.',
+        '320': 'This hostname belongs to another ngrok account. Check that the agent credential and hostname are from the same account.',
+        '334': 'Another endpoint already uses this hostname. Choose an unused hostname or ask the endpoint owner to release it.',
+        '6025': 'Another endpoint already uses this hostname. Choose an unused hostname or ask the endpoint owner to release it.',
+      })[code];
+
+      const { entry, ...setup } = ngrokSetup({ definition, authAction, domainAction, sdkAvailable, fetchManagement });
       return {
+        ...setup,
         async detect(ctx) {
           const os = platformOf(ctx);
           if (!supportedPlatform(os)) return { state: 'unsupported', facts: { platform: os, sdk: false, authSet: false, domainSet: false, configured: false, setupNeeded: false } };
-          const sdk = await listenerSdk(ctx,loadSdk).then(module => typeof (module?.forward ?? module?.default?.forward) === 'function', () => false);
+          const sdk = await sdkAvailable(ctx);
           const values = read(await ctx.configuration(null).catch(() => null));
           const configured = values.authToken !== null && values.reservedDomain !== null, ready = sdk && configured;
           return { state: ready ? 'ready' : 'action-required',
             facts: { platform: os, sdk, authSet: values.authToken !== null, domainSet: values.reservedDomain !== null, configured, setupNeeded: !ready } };
         },
 
-        configurationActions: () => [authAction, domainAction],
-        setupActions: facts => (!facts?.setupNeeded ? [] : [...(facts.sdk ? [] : [installAction]), ...(facts.authSet ? [] : [authAction]), ...(facts.domainSet ? [] : [domainAction])]),
+        setupActions: facts => (!facts?.setupNeeded ? [] : [...(facts.sdk ? [] : [installAction]), ...(facts.authSet ? [] : [authAction]), ...(facts.domainSet ? [] : [domainAction]), entry]),
 
         async setup(ctx, actionId, secretHandle) {
           // The reserved domain is a provide-value action: Gozar checks and keeps it, and asks the adapter nothing.
@@ -92,8 +106,36 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
           if (!Number.isSafeInteger(ctx.generation)) throw effectError('provider_unavailable', 'The context carries no generation');
           const config = settings(await ctx.configuration(effect.configurationRef).catch(() => null));
           if (!config || `https://${config.reservedDomain}` !== effect.origin) throw effectError('setup_required', 'Set up the ngrok agent authtoken and assigned development or reserved domain first');
-          const sdk=await listenerSdk(ctx,loadSdk);
-          return lifecycle.open(ctx,plan,{sdk,credentialAction:authAction,options:{addr:effect.target,authtoken:config.authToken,domain:config.reservedDomain}});
+          const sdk = await listenerSdk(ctx, loadSdk);
+          // SDK 1.7.0 exposes this exact lookup for listeners in the current host.
+          if (typeof sdk.getListenerByUrl === 'function') {
+            let existing;
+            try { existing = await sdk.getListenerByUrl(effect.origin); }
+            catch { throw effectError('provider_unavailable', 'Could not check the hostname in the ngrok SDK'); }
+            if (existing) throw domainError(refusal('334'));
+          }
+          let rejected;
+          const scopedSdk = {
+            ...(sdk.getListener ? { getListener: sdk.getListener.bind(sdk) } : {}),
+            async forward(options) {
+              try { return await (sdk.forward ?? sdk.default.forward)(options); }
+              catch (error) {
+                const diagnostic = [error?.code, error?.error_code, error?.message].find(value =>
+                  typeof value === 'string' && /\bERR_NGROK_\d+\b/.test(value));
+                rejected = refusal(diagnostic?.match(/\bERR_NGROK_(\d+)\b/)?.[1]);
+                throw error;
+              }
+            },
+          };
+          try {
+            return await lifecycle.open(ctx, plan, { sdk: scopedSdk, credentialAction: authAction,
+              options: { addr: effect.target, authtoken: config.authToken, domain: config.reservedDomain } });
+          } catch (error) {
+            if (!rejected) throw error;
+            const safe = domainError(rejected);
+            safe.cleanupReceipt = error.cleanupReceipt;
+            throw safe;
+          }
         },
 
         async observe(ctx, request) {

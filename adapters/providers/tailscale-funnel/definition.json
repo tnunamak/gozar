@@ -108,7 +108,14 @@
       {
         "id": "local-setup",
         "label": "Local prerequisites",
-        "observation": "detected"
+        "observation": "detected",
+        "actionId": "tailscale-setup"
+      },
+      {
+        "id": "client-proof",
+        "label": "Independent client proof",
+        "observation": "independentClientProof",
+        "actionId": "tailscale-client-proof"
       }
     ],
     "facts": [
