@@ -395,14 +395,20 @@ export async function finishCleanupController(request){
 }
 
 /** Capture cleanup authority before close can retire the bootstrap. Not allocation identity. */
-export async function attachedCleanupReference(request,runtime) {
+export async function attachedCleanupReference(request,runtime,operationReference=null) {
   const handle=checkRef(request);
   if(!['attached','session'].includes(handle.kind))return null;
   const home=await canonicalHome(request.home,false);
   const directory=handle.kind==='attached'?await routeDirectory(home,handle):join(home,handle.id.split(':')[0]);
   const bootstrap=await readJson(join(directory,'bootstrap.json'));
   if(!bootstrap)throw gozarError('cleanup_debt','Cleanup authority is unavailable');
-  if(typeof bootstrap.operationId==='string')return null;
+  if(typeof bootstrap.operationId==='string'){
+    if(!operationReference)return null; // Standalone cleanup must not adopt operation-bound debt.
+    if(operationReference.operationId!==bootstrap.operationId||operationReference.owner!==bootstrap.owner||
+        operationReference.handle?.kind!==handle.kind||operationReference.handle.id!==handle.id||
+        operationReference.handle.generation!==handle.generation)
+      throw gozarError('route_conflict','Cleanup operation does not match its bootstrap');
+  }else if(operationReference)throw gozarError('route_conflict','Cleanup bootstrap has no matching operation');
   const bound=handle.kind==='attached'?{kind:'attached',id:bootstrap.id,generation:1}:bootstrap.handle??bootstrap.embedding?.handle;
   // A session started before 0.4 recorded no handle, owner or embedding: nothing to capture; stopping it is by its exact session id.
   if(handle.kind==='session'&&!bound&&bootstrap.owner===undefined&&!bootstrap.embedding)return null;
@@ -632,7 +638,17 @@ export async function runAttachedController(directory, runtime = {}) {
     }
   })().finally(()=>{initialSettled=true;});
 
-  async function releaseUse(){if(resolver&&bootstrap.owner&&!resolverLost)await resolver.releaseConfigurationUse({owner:bootstrap.owner,providerId:adapter.id,handle});}
+  async function releaseUse(){
+    // Proof identity alone does not claim custody of a configuration reference.
+    // Any managed-reference claim, even malformed, still requires confirmed release.
+    const managed=['resolver','registryId','owner','consentReview'].some(name=>Object.hasOwn(bootstrap,name));
+    if(!managed)return;
+    if(resolverLost||!resolver||typeof resolver.releaseConfigurationUse!=='function'||
+        typeof bootstrap.owner!=='string'||!bootstrap.owner||
+        typeof bootstrap.registryId!=='string'||!bootstrap.registryId)
+      throw gozarError('cleanup_debt','Resource removed; configuration reference release remains unconfirmed');
+    await resolver.releaseConfigurationUse({owner:bootstrap.owner,providerId:adapter.id,handle});
+  }
 
   function release() {
     proofAbort.abort();
