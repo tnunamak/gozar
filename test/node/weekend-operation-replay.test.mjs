@@ -355,3 +355,99 @@ test('creator failure releases a waiting replay into exact recovery debt',{timeo
   assert.equal(f.allocations.length,1);
  }finally{release.resolve();resume.resolve();await winner;await result;}
 });
+
+test('allocated live winner waits for stronger verified replay without reallocating',{timeout:10000},async t=>{
+ const f=await fixture(t),waiting=deferred(),resume=deferred();let ready,settled=false,calls=0;
+ const first=await f.invoke({wait:'allocated'},{run:async handle=>{
+  ready=await f.allocate(handle);
+  const live={...ready,state:'creating',published:null,verification:{...ready.verification,status:'unverified'}};
+  f.ledger.set(handle.id,live);return live;
+ }});
+ const replay=f.invoke({wait:'verified'},{status:async q=>{calls++;return f.status(q);},
+  replayWait:async()=>{waiting.resolve();await resume.promise;}});
+ const result=replay.then(view=>{settled=true;return {view};},error=>{settled=true;return {error};});
+ try{
+  await Promise.race([waiting.promise,result.then(()=>assert.fail('live unverified replay returned success'))]);
+  assert.equal(settled,false);assert.equal(calls,1);assert.equal(f.allocations.length,1);
+  f.ledger.set(first.handle.id,ready);resume.resolve();
+  const observed=await result;assert.ifError(observed.error);
+  assert.deepEqual(observed.view.handle,first.handle);assert.equal(observed.view.verification.status,'verified');
+  assert.equal(observed.view.published,ready.published);assert.equal(f.allocations.length,1);
+ }finally{resume.resolve();await result;}
+});
+
+test('verified live replay bounds never-settling status and ignores late readiness',{timeout:10000},async t=>{
+ const f=await fixture(t),late=deferred();let ready;
+ const first=await f.invoke({wait:'allocated'},{run:async handle=>{
+  ready=await f.allocate(handle);return {...ready,state:'creating',published:null,verification:{...ready.verification,status:'unverified'}};
+ }});
+ await assert.rejects(f.invoke({wait:'verified'},{startTimeoutMs:30,status:()=>late.promise}),error=>{
+  assert.equal(error.code,'provider_unavailable');assert.deepEqual(error.route,first);return true;
+ });
+ late.resolve(ready);
+ const entry=(await readdir(join(f.home,'operations'))).find(n=>n.endsWith('.json'));
+ assert.deepEqual(JSON.parse(await readFile(join(f.home,'operations',entry),'utf8')).view,first);
+ assert.equal(f.allocations.length,1);
+});
+
+for(const ending of ['stop','debt'])test('deadline status wait observes current '+ending,{timeout:10000},async t=>{
+ const f=await fixture(t),entered=deferred();
+ const first=await f.invoke({wait:'allocated'});
+ const pending=f.invoke({wait:'verified'},{startTimeoutMs:500,
+  status:async()=>{entered.resolve();return new Promise(()=>{});}});
+ const result=pending.then(view=>({view}),error=>({error}));
+ await entered.promise;
+ let expected;
+ if(ending==='stop')expected=await f.stop(first.handle);
+ else{
+  assert.equal(f.ledger.delete(first.handle.id),true);f.removals.push(first.handle.id);
+  expected=await recordPendingReferenceCleanup({home:f.home,
+   view:{...first,state:'released',published:null,ingress:null,cleanup:{state:'confirmed'}},
+   reference:{owner:f.request.owner,operationId:f.request.operationId,handle:first.handle}});
+ }
+ const observed=await result;assert.ifError(observed.error);assert.deepEqual(observed.view,expected);
+ assert.equal(f.allocations.length,1);assert.equal(f.ledger.size,0);
+});
+
+test('verified replay preserves historical unconfirmed status even after allocated success',async t=>{
+ const f=await fixture(t),first=await f.invoke({wait:'allocated'});
+ const history={...first,state:'uncertain',routeState:'cleanup-unconfirmed',published:null,
+  verification:{...first.verification,status:'unverified'},cleanup:{state:'unconfirmed'}};
+ const replay=await f.invoke({wait:'verified'},{status:async()=>history,replayWait:async()=>assert.fail('history must not wait')});
+ assert.deepEqual(replay,history);assert.equal(f.allocations.length,1);
+});
+
+test('live replay delay failure uses typed refusal even for frozen errors',async t=>{
+ const f=await fixture(t);
+ const first=await f.invoke({wait:'allocated'},{run:async handle=>{
+  const ready=await f.allocate(handle);
+  const live={...ready,state:'creating',published:null,verification:{...ready.verification,status:'unverified'}};
+  f.ledger.set(handle.id,live);return live;
+ }});
+ await assert.rejects(f.invoke({wait:'verified'},{replayWait:async()=>{
+  throw Object.freeze(Object.assign(new Error('controlled wait failure'),{code:'provider_unavailable'}));
+ }}),error=>{
+  assert.equal(error.code,'provider_unavailable');assert.deepEqual(error.route,first);return true;
+ });
+ for(const changes of [{},{wait:'allocated'}]){
+  const replay=await f.invoke(changes,{replayWait:async()=>assert.fail('no stronger readiness requested')});
+  assert.deepEqual(replay,first);
+ }
+ assert.equal(f.allocations.length,1);
+});
+
+test('live readiness delay is bounded by the same remaining deadline',{timeout:10000},async t=>{
+ const f=await fixture(t);let calls=0,delays=0;
+ const first=await f.invoke({wait:'allocated'},{run:async handle=>{
+  const ready=await f.allocate(handle);
+  const live={...ready,state:'creating',published:null,verification:{...ready.verification,status:'unverified'}};
+  f.ledger.set(handle.id,live);return live;
+ }});
+ await assert.rejects(f.invoke({wait:'verified'},{startTimeoutMs:100,
+  status:async q=>{calls++;return f.status(q);},
+  replayWait:ms=>{assert.ok(ms>0&&ms<=100);delays++;return new Promise(()=>{});},
+ }),error=>{
+  assert.equal(error.code,'provider_unavailable');assert.deepEqual(error.route,first);return true;
+ });
+ assert.equal(calls,1);assert.equal(delays,1);assert.equal(f.allocations.length,1);
+});
