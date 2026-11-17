@@ -91,9 +91,9 @@ export function ngrokSetup({ definition, authAction, domainAction, sdkAvailable,
     obtainUrl: 'https://dashboard.ngrok.com/api-keys',
     help: 'Ask the administrator of the intended account for a dedicated API key authorized to list reserved domains. An API key can have wider account permissions. Gozar uses this key only for GET requests to the reserved domains inventory. If you cannot obtain suitable authority, clear Domain source in the draft and choose the dashboard.',
   }, 'owner', 'Read reserved domains from api.ngrok.com', 'provider', 'authorize');
-  const entry = action({ id: 'ngrok-setup', kind: 'instructions', label: 'Set up an ngrok HTTPS listener',
-    instructions: 'Open guided setup to check the SDK and choose the account credential and domain for the HTTPS listener.' },
-  'owner', 'Review ngrok HTTPS prerequisites', 'host', 'authorize');
+  const entry = action({ id: 'ngrok-setup', kind: 'gozar-runs', label: 'Set up an ngrok HTTPS listener',
+    help: 'Check the SDK and guide account credential and domain selection for the HTTPS listener.' },
+  'machine', 'Read ngrok HTTPS setup prerequisites', 'host', 'authorize');
   const artifact = (platform, architecture) => action({
     id: 'install-sdk', kind: 'install-artifact', label: 'Install the optional ngrok SDK 1.7.0',
     instructions: 'Approve installation into the application that hosts Gozar. If its installer is unavailable, run npm install @ngrok/ngrok@1.7.0 in that application and restart it.',
@@ -102,9 +102,6 @@ export function ngrokSetup({ definition, authAction, domainAction, sdkAvailable,
     effects: { writes: ['Application dependency files and node_modules'], networkOrigins: ['https://registry.npmjs.org'],
       requiresPrivilege: false, restartRequired: true },
   }, 'owner', 'Install the pinned optional SDK into the host application', 'host', 'configure');
-
-  const outcome = (ctx, state, nextAction, summary, stepId = nextAction?.id ?? 'ngrok-ready', source = nextAction?.step.verification ?? 'host') =>
-    ({ state, nextAction, evidence: { known: true, value: { stepId, source, observedAt: new Date(ctx.now()).toISOString(), summary } } });
 
   // The test harness must never fall through to the real provider network.
   const read = (ctx, bytes) => listDomains(bytes, ctx.dispatchEffect ? async (url, request) => {
@@ -117,34 +114,39 @@ export function ngrokSetup({ definition, authAction, domainAction, sdkAvailable,
   } : fetchManagement);
 
   async function observeSetup(ctx, operation) {
-    if (operation.cancelled) return outcome(ctx, 'cancelled', null, 'Setup paused. The account’s existing credentials and domains are retained.');
-    if (!supportedPlatform(ctx.platform)) return outcome(ctx, 'blocked', null, 'The ngrok runtime is unavailable on this platform.', 'ngrok-platform');
-    if (!await sdkAvailable(ctx)) return outcome(ctx, 'blocked', artifact(ctx.platform, ctx.architecture ?? process.arch),
+    const outcome = (state, nextAction, summary, stepId = nextAction?.id ?? 'ngrok-ready', source = nextAction?.step.verification ?? 'host') =>
+      ({ state, nextAction, evidence: { operationId: operation.id, stepId, source, observedAt: new Date(ctx.now()).toISOString(), summary } });
+    if (operation.cancelled) return outcome('complete', null, 'Setup paused. The account’s existing credentials and domains are retained.', 'ngrok-retained');
+    if (operation.lastActionId === null) return outcome('authorization-required', entry, entry.help);
+    if (!supportedPlatform(ctx.platform)) return outcome('blocked', null, 'The ngrok runtime is unavailable on this platform.', 'ngrok-platform');
+    if (!await sdkAvailable(ctx)) return outcome('blocked', artifact(ctx.platform, ctx.architecture ?? process.arch),
       'The optional ngrok SDK is missing. Confirm installation and refresh after the host can load it.');
-    const values = await ctx.configuration();
-    if (!values?.auth) return outcome(ctx, 'authorization-required', auth, 'Agent credential intake is required. Browser sign-in alone supplies no agent credential.');
+    const configuration = await ctx.configurationPresence();
+    const values = configuration?.values ?? {};
+    const agent = configuration?.credentials?.auth;
+    if (!agent?.known || agent.value !== true) return outcome('authorization-required', auth, 'Agent credential intake is required. Browser sign-in alone supplies no agent credential.');
     const selected = values[domainSource];
-    if (selected !== 'dashboard' && selected !== 'inventory') return outcome(ctx, 'authorization-required', source, source.help);
+    if (selected !== 'dashboard' && selected !== 'inventory') return outcome('authorization-required', source, source.help);
 
     const saved = values['reserved-domain'];
     if (selected === 'inventory') {
       let inventory;
       try { inventory = await ctx.withManagementSecret(inventorySlot, bytes => read(ctx, bytes)); } catch { /* Missing private grant. */ }
-      if (!inventory) return outcome(ctx, 'authorization-required', management, 'The optional domain inventory needs its own management credential.');
-      if (inventory.state !== 'complete') return outcome(ctx, 'blocked', management, inventory.state === 'denied'
+      if (!inventory) return outcome('authorization-required', management, 'The optional domain inventory needs its own management credential.');
+      if (inventory.state !== 'complete') return outcome('blocked', management, inventory.state === 'denied'
         ? 'The management API refused domain inventory. Check the API key’s account and policy.'
         : 'The management API did not return a complete domain inventory. Refresh or select the dashboard source.');
-      if (!inventory.domains.length) return outcome(ctx, 'blocked', action({
+      if (!inventory.domains.length) return outcome('blocked', action({
         id: 'ngrok-no-domain', kind: 'instructions', label: 'Obtain an HTTPS hostname in the intended account',
         instructions: 'Open https://dashboard.ngrok.com/domains. Ask the account owner to check the assigned development domain, reserved domains and plan entitlements. To use an assigned hostname absent from the management inventory, choose the dashboard source in a new setup.',
       }, 'administrator', 'Manage domains and plan entitlements', 'provider', 'configure'), 'The management inventory returned no exact hostnames.');
-      if (!inventory.domains.includes(saved)) return outcome(ctx, 'authorization-required',
+      if (!inventory.domains.includes(saved)) return outcome('authorization-required',
         domain(inventory.domains.map(value => ({ value, label: value }))),
         'Choose a hostname returned by this management account. Existing agent credentials are checked separately.');
     } else if (!domainPattern.test(saved ?? '')) {
-      return outcome(ctx, 'authorization-required', domain(), 'Enter the account hostname shown in the dashboard.');
+      return outcome('authorization-required', domain(), 'Enter the account hostname shown in the dashboard.');
     }
-    return outcome(ctx, 'complete', null, 'Setup inputs are ready. An approved listener start must verify the credential and domain pairing, and route proof must succeed before publication.');
+    return outcome('complete', null, 'Setup inputs are ready. An approved listener start must verify the credential and domain pairing, and route proof must succeed before publication.');
   }
 
   return {
@@ -153,15 +155,15 @@ export function ngrokSetup({ definition, authAction, domainAction, sdkAvailable,
     observeSetup,
     async executeSetup(ctx, { action: approved }) {
       if (approved.id === auth.id) {
-        await ctx.withInputSecret(async bytes => {
-          if (!credential(bytes)) throw effectError('setup_required', 'Enter a single ngrok agent authtoken.');
-          await ctx.bindConnectorSecret('auth', bytes);
-        });
+        if (!await ctx.withInputSecret(async bytes => Boolean(credential(bytes))))
+          throw effectError('setup_required', 'Enter a single ngrok agent authtoken.');
+        return { state: 'complete', bindInputSecret: true };
       } else if (approved.id === management.id) {
         const inventory = await ctx.withInputSecret(bytes => read(ctx, bytes));
         if (inventory?.state !== 'complete') throw effectError('setup_required', 'The management API did not verify read access to reserved domains.');
         await ctx.retainManagementSecret(inventorySlot);
       }
+      return { state: 'complete' };
     },
   };
 }

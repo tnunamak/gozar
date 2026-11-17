@@ -38,7 +38,7 @@ const args = process.argv.slice(2);
 state.calls.push(args);
 const write = () => fs.writeFileSync(path, JSON.stringify(state));
 if (args[0] === 'up') {
-  if (state.commandError) { write(); console.error(state.commandError); process.exit(1); }
+  if (state.commandError) { state.statusError = state.commandError; write(); console.error(state.commandError); process.exit(1); }
   const count = state.calls.filter(args => args[0] === 'up').length;
   state.status.AuthURL = state.status.AuthURL ? state.handoff + '-' + count : state.handoff;
   if (state.failReadAfterLogin) state.statusError = "Interrupted readback";
@@ -64,11 +64,15 @@ if (args[0] === 'status') {
   return { read, edit: async fn => { const state = await read(); fn(state); await save(state); } };
 }
 
-const operation = { id: 'operation-1', cancelled: false, resources: [] };
+const operation = { id: 'operation-1', cancelled: false, resources: [], connectorInputs: [], lastActionId: 'check-prerequisites' };
 const setupContext = (config, extras = {}) => ({
   now: () => Date.parse('2026-11-17T00:00:00Z'),
   platform: 'linux',
   configuration: async () => ({ ...config }),
+  configurationPresence: async () => {
+    const { auth, ...values } = config;
+    return { scopeId: 'fixture-scope', values, credentials: { auth: { known: true, value: !!auth } } };
+  },
   ...extras,
 });
 const intended = () => ({ 'tailscale-account': account, 'tailscale-tailnet': tailnet });
@@ -106,7 +110,8 @@ test('Tailscale CLI login offers transient AuthURL, then independently verifies 
   config['tailscale-node'] = confirm.nextAction.step.options[0].value;
   const ready = await observe(privateServe, ctx);
   assert.equal(ready.state, 'complete');
-  assert.match(ready.evidence.value.summary, /independent tailnet client/i);
+  assert.equal(ready.evidence.operationId, operation.id);
+  assert.match(ready.evidence.summary, /independent tailnet client/i);
   await cli.edit(value => { value.status.Self.ID = 'replacement-node'; });
   assert.equal((await observe(privateServe, ctx)).nextAction.id, 'tailscale-node');
 });
@@ -120,8 +125,8 @@ test('Tailscale re-reads privilege, browser expiry, admin approval, HTTPS and pe
   await cli.edit(value => { value.commandError = 'Access denied: check operator permissions'; });
   const refused = await execute(funnel, ctx, login);
   assert.equal(refused.state, 'blocked');
-  assert.equal(refused.nextAction.id, 'tailscale-operator');
-  await cli.edit(value => { delete value.commandError; });
+  assert.equal((await observe(funnel, ctx)).nextAction.id, 'tailscale-operator');
+  await cli.edit(value => { delete value.commandError; delete value.statusError; });
   await execute(funnel, ctx, await observe(funnel, ctx));
   const browser = await observe(funnel, ctx);
   now = Date.parse(browser.nextAction.step.browser.expiresAt) + 1;
@@ -141,7 +146,9 @@ test('Tailscale re-reads privilege, browser expiry, admin approval, HTTPS and pe
   await cli.edit(value => { value.status = status; value.config = { TCP: { 8443: { HTTPS: true } }, Web: { 'foreign.ts.net:8443': { Handlers: { '/': { Proxy: 'http://127.0.0.1:9191' } } } } }; });
   assert.equal((await observe(funnel, ctx)).nextAction.id, 'tailscale-allowed-port');
   const before = (await cli.read()).config;
-  assert.equal((await funnel.observeSetup(ctx, { ...operation, cancelled: true })).state, 'cancelled');
+  const cancelled = await funnel.observeSetup(ctx, { ...operation, cancelled: true });
+  assert.equal(cancelled.state, 'complete');
+  assert.equal(cancelled.nextAction, null);
   assert.deepEqual((await cli.read()).config, before);
   assert.ok((await cli.read()).calls.every(args => ['up', 'status', 'serve'].includes(args[0])));
 });
@@ -156,7 +163,7 @@ test('ngrok reports the optional SDK and assisted agent credential intake with n
   let credential = 'synthetic-agent-canary';
   const ctx = setupContext(config, {
     withInputSecret: async use => use(Buffer.from(credential)),
-    bindConnectorSecret: async (id, bytes) => { config[id] = Buffer.from(bytes).toString(); },
+    bindConnectorSecret: async () => { assert.fail('Imported authtoken should bind the existing intake handle'); },
   });
   const install = await observe(adapter, ctx);
   assert.equal(install.nextAction.id, 'install-sdk');
@@ -167,8 +174,8 @@ test('ngrok reports the optional SDK and assisted agent credential intake with n
   assert.equal(auth.nextAction.id, 'auth');
   assert.equal(auth.nextAction.kind, 'provide-secret');
   assert.match(auth.nextAction.help, /sign up|create an account/i);
-  await execute(adapter, ctx, auth);
-  assert.equal(config.auth, credential);
+  assert.deepEqual(await execute(adapter, ctx, auth), { state: 'complete', bindInputSecret: true });
+  config.auth = credential;
   const source = await observe(adapter, ctx);
   assert.equal(source.nextAction.id, 'ngrok-domain-source');
   assert.doesNotMatch(JSON.stringify(source), /synthetic-agent-canary/);
@@ -177,7 +184,7 @@ test('ngrok reports the optional SDK and assisted agent credential intake with n
   assert.equal(domain.nextAction.id, 'reserved-domain');
   assert.equal(domain.nextAction.step.options, undefined);
   config['reserved-domain'] = 'demo.ngrok.app';
-  assert.match((await observe(adapter, ctx)).evidence.value.summary, /route proof/i);
+  assert.match((await observe(adapter, ctx)).evidence.summary, /route proof/i);
   credential = 'bad\ncredential';
   delete config.auth;
   await assert.rejects(execute(adapter, ctx, await observe(adapter, ctx)), { code: 'setup_required' });
@@ -266,12 +273,16 @@ test('Tailscale keeps the browser handoff within the approved operation and rech
   assert.equal(foreignOperation.state, 'pending');
   assert.equal(foreignOperation.nextAction.step.browser, undefined);
   assert.doesNotMatch(JSON.stringify(foreignOperation), /synthetic-handoff-canary/);
+  const otherScope = setupContext(config, {
+    configurationPresence: async () => ({ scopeId: 'other-scope', values: config }),
+  });
+  assert.equal((await observe(privateServe, otherScope)).nextAction.href, undefined);
   const moduleUrl = new URL('../../adapters/providers/tailscale-private/index.mjs', import.meta.url);
   const restarted = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import adapter from ${JSON.stringify(moduleUrl.href)};
     const [values, operation] = JSON.parse(process.argv[1]);
     console.log(JSON.stringify(await adapter.observeSetup({
-      platform: 'linux', now: Date.now, configuration: async () => values
+      platform: 'linux', now: Date.now, configurationPresence: async () => ({ scopeId: 'fixture-scope', values, credentials: {} })
     }, operation)));
   `, JSON.stringify([config, operation])], { encoding: 'utf8' }));
   assert.equal(restarted.nextAction.id, 'tailscale-existing-sign-in');
@@ -285,7 +296,8 @@ test('Tailscale interrupted readback does not advance past provider observation'
   const ctx = setupContext(intended());
   const approved = await observe(privateServe, ctx);
   await cli.edit(value => { value.failReadAfterLogin = true; });
-  assert.equal((await execute(privateServe, ctx, approved)).nextAction.id, 'tailscale-status');
+  assert.equal((await execute(privateServe, ctx, approved)).state, 'blocked');
+  assert.equal((await observe(privateServe, ctx)).nextAction.id, 'tailscale-status');
   await cli.edit(value => { delete value.statusError; });
   assert.equal((await observe(privateServe, ctx)).nextAction.href, handoff);
   assert.equal((await cli.read()).calls.filter(args => args[0] === 'up').length, 1);
@@ -343,4 +355,20 @@ test('Tailscale reports signed installation, missing daemon and a trusted client
     assert.match(client.instructions, /exact HTTPS origin against the app challenge/);
   }
   assert.equal((await cli.read()).calls.some(args => args[0] === 'up'), false);
+});
+
+test('provider setup discovery actions reserve and admit the prerequisite check', async () => {
+  const ctx = setupContext({}, {
+    configurationPresence: () => assert.fail('reservation reads no secret presence'),
+    dispatchEffect: () => assert.fail('reservation runs no provider CLI or SDK'),
+  });
+  for (const adapter of [privateServe, funnel, createNgrokAdapter()]) {
+    const entry = adapter.configurationActions().find(action => action.id.endsWith('-setup'));
+    const reserved = await adapter.observeSetup(ctx, { ...operation, lastActionId: null });
+    assert.equal(reserved.state, 'authorization-required');
+    assert.equal(reserved.nextAction.id, entry.id);
+    assert.equal(reserved.nextAction.kind, 'gozar-runs');
+    assert.equal(reserved.evidence.operationId, operation.id);
+    assert.deepEqual(await execute(adapter, ctx, reserved), { state: 'complete' });
+  }
 });
