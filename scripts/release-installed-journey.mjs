@@ -58,15 +58,21 @@ function archiveFiles(bytes){
 export function runProcess(command,args,options){
  return new Promise((resolveResult,reject)=>{
   const child=spawn(command,args,{cwd:options.cwd,env:options.env,stdio:['ignore','pipe','pipe']});
-  let stdout='',stderr='',overflow=false,timedOut=false;
+  const stdoutChunks=[],stderrChunks=[],maxBytes=16*1024*1024;
+  let outputBytes=0,overflow=false,timedOut=false;
   const timer=setTimeout(()=>{timedOut=true;child.kill('SIGKILL');},options.timeoutMs);
   const collect=key=>chunk=>{
-   if(key==='stdout')stdout+=chunk;else stderr+=chunk;
-   if(Buffer.byteLength(stdout)+Buffer.byteLength(stderr)>16*1024*1024){overflow=true;child.kill('SIGKILL');}
+   if(overflow)return;
+   const remaining=maxBytes-outputBytes;
+   // Keep bytes, not independently decoded fragments; cap both streams together.
+   if(remaining>0)(key==='stdout'?stdoutChunks:stderrChunks).push(Buffer.from(chunk.subarray(0,remaining)));
+   outputBytes+=chunk.length;
+   if(outputBytes>maxBytes){overflow=true;child.kill('SIGKILL');}
   };
   child.stdout.on('data',collect('stdout'));child.stderr.on('data',collect('stderr'));
   child.once('error',error=>{clearTimeout(timer);reject(error);});
-  child.once('close',(status,signal)=>{clearTimeout(timer);resolveResult({status,signal,stdout,stderr,timedOut,overflow});});
+  child.once('close',(status,signal)=>{clearTimeout(timer);resolveResult({status,signal,
+   stdout:Buffer.concat(stdoutChunks).toString('utf8'),stderr:Buffer.concat(stderrChunks).toString('utf8'),timedOut,overflow});});
  });
 }
 async function regularFiles(root){

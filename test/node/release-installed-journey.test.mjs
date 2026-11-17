@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join,dirname} from 'node:path';
 import {gzipSync} from 'node:zlib';
 import {createHash} from 'node:crypto';
-import {runInstalledJourney} from '../../scripts/release-installed-journey.mjs';
+import {runInstalledJourney,runProcess} from '../../scripts/release-installed-journey.mjs';
 
 function tar(files){
  const chunks=[];
@@ -99,4 +99,42 @@ test('optional SDK presence refuses before examples',async t=>{
  assert.equal(stub.calls.length,1);
  const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
  t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+});
+
+test('runProcess preserves split UTF-8 JSON on stdout and stderr',async()=>{
+ const value=JSON.stringify({message:'price € and emoji 🦊'})+'\n';
+ const script=`
+  const bytes=Buffer.from(${JSON.stringify(value)});
+  (async()=>{
+   for(const byte of bytes){
+    await new Promise(resolve=>process.stdout.write(Buffer.from([byte]),resolve));
+    await new Promise(resolve=>process.stderr.write(Buffer.from([byte]),resolve));
+    await new Promise(resolve=>setTimeout(resolve,10));
+   }
+  })().catch(error=>{console.error(error);process.exitCode=1;});
+ `;
+ const result=await runProcess(process.execPath,['-e',script],{cwd:process.cwd(),env:process.env,timeoutMs:10000});
+ assert.equal(result.status,0);assert.equal(result.signal,null);
+ assert.equal(result.timedOut,false);assert.equal(result.overflow,false);
+ assert.equal(result.stdout,value);assert.equal(result.stderr,value);
+ assert.deepEqual(JSON.parse(result.stdout),{message:'price € and emoji 🦊'});
+});
+for(const extra of [0,1])test('runProcess aggregate byte budget at cap plus '+extra,async()=>{
+ const cap=16*1024*1024;
+ // Two-byte characters: string length must not substitute for byte length.
+ const half='é'.repeat(cap/4);
+ const script=`
+  const half='é'.repeat(${cap/4});
+  (async()=>{
+   await new Promise(resolve=>process.stdout.write(half,resolve));
+   await new Promise(resolve=>process.stderr.write(half,resolve));
+   ${extra ? "process.stderr.write('x');setInterval(()=>{},1000);" : ''}
+  })().catch(error=>{console.error(error);process.exitCode=1;});
+ `;
+ const result=await runProcess(process.execPath,['-e',script],{cwd:process.cwd(),env:process.env,timeoutMs:10000});
+ assert.equal(result.timedOut,false);
+ assert.equal(result.overflow,extra===1);
+ assert.equal(result.stdout,half);assert.equal(result.stderr,half);
+ assert.equal(Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr),cap);
+ if(extra===0){assert.equal(result.status,0);assert.equal(result.signal,null);}
 });
