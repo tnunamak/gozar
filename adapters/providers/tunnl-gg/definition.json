@@ -59,8 +59,8 @@
       "session"
     ],
     "disclosure": {
-      "revision": "disc-6d909da5b275",
-      "text": "Start a public HTTPS trial through the tunnl.gg relay. The relay terminates TLS and can read payloads. Quiet streams can close after two minutes.",
+      "revision": "disc-d0474a5d1d94",
+      "text": "Start a public HTTPS trial through the tunnl.gg relay. This allows outbound SSH to proxy.tunnl.gg on TCP port 22 using a Gozar installation key and first-use trust in the session's private known-hosts file. OpenSSH refuses a changed key in that file. The relay terminates TLS and can read payloads. Quiet streams can close after two minutes.",
       "links": [
         {
           "rel": "terms",

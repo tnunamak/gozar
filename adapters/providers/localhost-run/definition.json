@@ -59,8 +59,8 @@
       "session"
     ],
     "disclosure": {
-      "revision": "disc-8fd297ce7670",
-      "text": "Start a public HTTPS trial through the localhost.run relay for the requested lifetime (15 minutes by default). The relay terminates TLS and can read payloads.",
+      "revision": "disc-e68dce2053c0",
+      "text": "Start a public HTTPS trial through the localhost.run relay for the requested lifetime (15 minutes by default). This allows outbound SSH to localhost.run on TCP port 22 and first-use trust in the session's private known-hosts file. OpenSSH refuses a changed key in that file. The relay terminates TLS and can read payloads.",
       "links": []
     },
     "ownership": "gozar-owned",

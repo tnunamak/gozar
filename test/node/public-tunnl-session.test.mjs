@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {existsSync,statSync,readFileSync} from 'node:fs';
 import {mkdir,writeFile,readFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -56,6 +57,8 @@ async function world(t,{announce,providerId='tunnl-gg',registry}={}){
 test('tunnl.gg starts, proves, stops and cleans up through the generic operational runtime',async t=>{
  const w=await world(t,{announce:()=>EVENT('https://wild-fox-10bf6aa2.tunnl.gg')});
  const c=await w.candidate();assert.equal(c.eligible,true,JSON.stringify(c.unmet));assert.ok(c.candidateToken);
+ await assert.rejects(w.api.expose({...w.q,wait:'verified'}),{code:'consent_required'});
+ assert.equal(w.runs.length,0,'an unknown host key is never accepted without route approval');
  const route=await w.api.expose({...w.q,wait:'verified',approval:w.approval(c)});
  assert.equal(route.verification.status,'verified');
  assert.equal(route.published,'https://wild-fox-10bf6aa2.tunnl.gg');
@@ -71,11 +74,23 @@ test('tunnl.gg starts, proves, stops and cleans up through the generic operation
  assert.match(run.seen.identityHead,/^-----BEGIN OPENSSH PRIVATE KEY-----$/);
  assert.ok(run.args.includes('StrictHostKeyChecking=accept-new')&&run.args.includes('GlobalKnownHostsFile=/dev/null'));
  assert.ok(w.fetched.every(origin=>origin==='https://wild-fox-10bf6aa2.tunnl.gg'));
+ const foreign = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio:'ignore'});
+ const foreignExit = once(foreign, 'exit');
+ t.after(async()=>{foreign.kill();await foreignExit;});
+ await once(foreign, 'spawn');
+ const foreignKey = join(w.home, 'foreign-known-hosts');
+ await writeFile(foreignKey, 'foreign-key-sentinel', {mode:0o600,flag:'wx'});
+ w.ledger.set('same-origin-after-replacement', {child:foreign, origin:route.origin});
+ const owned = w.ledger.get('fixture-ssh-0').child;
  const closed=await w.api.closeRoute({home:w.home,handle:route.handle,mode:'remove'});
  assert.equal(closed.cleanup.state,'confirmed');
- for(const {child} of w.ledger.values())assert.ok(child.exitCode!==null||child.signalCode!==null,'the owned process is gone');
+ assert.ok(owned.exitCode!==null||owned.signalCode!==null,'the owned process is gone');
+ assert.equal(foreign.exitCode,null);
+ assert.equal(foreign.signalCode,null,'another process with the same advertised origin survives');
+ assert.equal(await readFile(foreignKey,'utf8'),'foreign-key-sentinel');
  assert.equal(existsSync(run.seen.knownHosts),false,'private files are removed with the session');
  assert.equal(existsSync(run.seen.identity),false);
+ assert.equal(readFileSync(join(w.home,'identities','ed25519'),'utf8').split('\n')[0],run.seen.identityHead);
 });
 
 test('the invalid canned hostname of a generic fixture is refused: no route is published and nothing stays owned',async t=>{

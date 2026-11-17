@@ -204,13 +204,21 @@ test('core names no provider for an owner-kept route: service.mjs holds no regis
   for (const { id } of manifest.providers) assert.ok(!new RegExp(`(['"\x60])${id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\1`).test(source), `service.mjs names ${id}`);
 });
 
-test('invalid query origin is named in the unmet setup actual without extending closed enums', async t => {
-  const origin = 'https://a.example.com/path';
-  const { candidates: [own] } = await apiFor().catalogRoutes(await durable(t, { providerId: ownerId, origin }));
-  assertShape('Candidate', own);
-  assert.equal(own.eligible, false);
-  assert.equal(own.candidateToken, null);
-  assert.deepEqual(own.unmet.find(item => item.requirement === 'setup'), {
-    requirement: 'setup', actual: { origin, reason: 'invalid_origin' }, reasonCode: 'not_met',
-  });
+test('the unmet setup result identifies the rejected origin without retaining credentials, paths or queries', async t => {
+  const authority = 'https://a.example.com';
+  const canary = 'private-origin-value';
+  for (const [origin, redacted] of [
+    [`${authority}/${canary}?token=${canary}`, authority],
+    [`https://user:${canary}@a.example.com`, null],
+  ]) {
+    const { candidates: [own] } = await apiFor().catalogRoutes(await durable(t, { providerId: ownerId, origin }));
+    assertShape('Candidate', own);
+    assert.equal(own.eligible, false);
+    assert.equal(own.candidateToken, null);
+    const unmet = own.unmet.find(item => item.requirement === 'setup');
+    assert.deepEqual(unmet, {
+      requirement: 'setup', actual: { origin: redacted, reason: 'invalid_origin' }, reasonCode: 'not_met',
+    });
+    assert.doesNotMatch(JSON.stringify(unmet), new RegExp(canary));
+  }
 });

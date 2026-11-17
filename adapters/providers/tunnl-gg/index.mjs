@@ -1,7 +1,8 @@
-// tunnl-gg: one adapter, wrapped over its existing recipe definition. See ../../../packages/gozar-node/adapter-runtime.mjs.
-import { recipeAdapter } from '../../../packages/gozar-node/adapter-runtime.mjs';
+import { sshTrialAdapter } from '../localhost-run/ssh-setup.mjs';
 
-export default recipeAdapter({
+export default sshTrialAdapter({
   definition: new URL('./definition.json', import.meta.url),
-  excludeActions: ['trial-consent'],
+  relay: 'tunnl.gg',
+  keyBound: true,
+  warning: 'A browser may show a tunnl.gg warning page. Continue only after checking the address, then confirm that the expected app loads.',
 });
