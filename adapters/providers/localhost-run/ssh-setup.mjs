@@ -39,8 +39,8 @@ export function sshTrialAdapter({ definition: location, relay, warning = '', key
         ? ' The shared Gozar installation key is retained for a later approved reconnect. Remote key or hostname revocation is unverified.'
         : ' Remote hostname or DNS retirement remains unverified.';
       const unknown = reason => ({ known: false, reason });
-      const observed = (stepId, summary, observedAt, source = 'host') => ({
-        known: true, value: { stepId, source, observedAt, summary },
+      const observed = (operationId, stepId, summary, observedAt, source = 'host') => ({
+        operationId, stepId, source, observedAt, summary,
       });
 
       return {
@@ -87,7 +87,7 @@ export function sshTrialAdapter({ definition: location, relay, warning = '', key
                 proof.checks.includes('tls') &&
                 Number.isFinite(Date.parse(proof.observedAt))) {
               return { state: 'complete', nextAction: null,
-                evidence: observed('verify-trial', 'The published HTTPS address passed the public application challenge.', proof.observedAt, 'trusted-client') };
+                evidence: observed(operation.id, 'verify-trial', 'The published HTTPS address passed the public application challenge.', proof.observedAt, 'trusted-client') };
             }
             return { state: 'pending', evidence: unknown('public-client-proof-pending'),
               nextAction: action('verify-trial', 'Verify the public HTTPS trial', 'trusted-client', 'trusted-client', 'reconcile',
@@ -104,10 +104,15 @@ export function sshTrialAdapter({ definition: location, relay, warning = '', key
             state: 'blocked', nextAction: structuredClone(install), evidence: unknown('ssh-keygen-not-detected'),
           };
           return { state: 'complete', nextAction: null,
-            evidence: observed(install.id, `The OpenSSH client${keyBound ? ' and key generator were' : ' was'} detected. Approve a route separately to start the trial.`, new Date(ctx.now()).toISOString()) };
+            evidence: observed(operation.id, install.id, `The OpenSSH client${keyBound ? ' and key generator were' : ' was'} detected. Approve a route separately to start the trial.`, new Date(ctx.now()).toISOString()) };
         },
 
-        async executeSetup(ctx, { action: id }) {
+        async routeGuidance(ctx) {
+          return (await this.observeSetup(ctx, { id: ctx.route.operationId,
+            cancelled: ctx.route.state === 'released', resources: [] })).nextAction;
+        },
+
+        async executeSetup(ctx, { action: { id } }) {
           if (id === install.id || id === start.id) return { state: 'pending' };
           throw effectError('invalid_input', 'Use Gozar route controls for this instruction');
         },

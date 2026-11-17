@@ -144,10 +144,10 @@ export default recipeAdapter({
               proof.subject?.origin === route.origin && target?.known === true && proof.subject.target === target.value &&
               proof.subject.handleGeneration === route.handle?.generation && proof.checks?.includes('nonce') &&
               Number.isFinite(Date.parse(proof.observedAt))) {
-            return { state: 'complete', nextAction: null, evidence: { known: true, value: {
+            return { state: 'complete', nextAction: null, evidence: { operationId: operation.id,
               stepId: 'verify-lan', source: 'trusted-client', observedAt: proof.observedAt,
               summary: 'An independent LAN client passed the application challenge for the selected listener.',
-            } } };
+            } };
           }
           if (route.state === 'lost') {
             return { state: 'blocked', evidence: unknown('lan-listener-unavailable'),
@@ -158,13 +158,18 @@ export default recipeAdapter({
             nextAction: guidance('verify-lan', 'Verify from a trusted LAN client', 'trusted-client', 'trusted-client', 'reconcile',
               `From another trusted device on this LAN, use ${endpoint?.origin ?? 'the exact HTTP address Gozar assigns'} to reach the actual app. Use the trusted LAN verifier connected to Gozar to return the route challenge from that device. Without a receipt from that verifier, verification stays pending. If blocked, ask the administrator to review ${scopeText(chosen.interface, port)} for that client.`) };
         }
-        return { state: 'complete', nextAction: null, evidence: { known: true, value: {
+        return { state: 'complete', nextAction: null, evidence: { operationId: operation.id,
           stepId: 'firewall', source: 'host', observedAt: new Date(ctx.now()).toISOString(),
           summary: 'The selected interface is present and its HTTP listener scope is approved. Firewall permission and client reach are still unverified.',
-        } } };
+        } };
       },
 
-      async executeSetup(ctx, { action: id, value }) {
+      async routeGuidance(ctx) {
+        return (await this.observeSetup(ctx, { id: ctx.route.operationId,
+          cancelled: ctx.route.state === 'released', resources: [] })).nextAction;
+      },
+
+      async executeSetup(ctx, { action: { id }, value }) {
         if (id !== 'interface' && id !== 'firewall') throw effectError('invalid_input', 'Unknown LAN choice');
         const seen = await inventory(ctx);
         if (!seen.some(row => row.address === value) ||

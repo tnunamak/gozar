@@ -47,10 +47,10 @@ for (const adapter of [localhost, tunnl]) {
     assert.equal((await adapter.observeSetup(ctx, operation)).state, 'blocked');
     const observed = await adapter.observeSetup(context(), operation);
     assert.equal(observed.state, 'complete');
-    assert.deepEqual(observed.evidence.value, {
-      stepId: 'ssh-install', observedAt: at, source: 'host', summary: observed.evidence.value.summary,
+    assert.deepEqual(observed.evidence, {
+      operationId: operation.id, stepId: 'ssh-install', observedAt: at, source: 'host', summary: observed.evidence.summary,
     });
-    assert.match(observed.evidence.value.summary, /OpenSSH/);
+    assert.match(observed.evidence.summary, /OpenSSH/);
   });
 
   test(`${adapter.id} presents first-use trust, exposure and exact cleanup in route guidance`, async () => {
@@ -109,7 +109,7 @@ test('LAN lists current interfaces and refuses a stale offered option before con
   ]);
   assert.equal(seen.nextAction.step.options[0].value, '192.168.50.8');
   await assert.rejects(lan.executeSetup(context({ interfaces: { en1: inventory.en1 } }), {
-    action: seen.nextAction.id, value: seen.nextAction.step.options[0].value,
+    action: seen.nextAction, value: seen.nextAction.step.options[0].value,
   }), { code: 'candidate_stale' });
   const changed = await lan.observeSetup(context({
     values: { interface: '192.168.50.8', firewall: '192.168.50.8' }, interfaces: { en1: inventory.en1 },
@@ -133,6 +133,9 @@ test('LAN separates exact firewall permission from independent client verificati
   assert.equal(client.nextAction.step.verification, 'trusted-client');
   assert.equal(client.evidence.known, false);
   assert.match(client.nextAction.instructions, /http:\/\/192\.168\.50\.8:45444/);
+  const guidance = await lan.routeGuidance(context({ values: configured, route: { ...route, operationId: operation.id } }));
+  assert.equal(guidance.id, 'verify-lan');
+  assert.match(guidance.instructions, /http:\/\/192\.168\.50\.8:45444/);
   const admin = await lan.observeSetup(context({ values: configured, route: { ...route, state: 'lost' } }), operation);
   assert.equal(admin.state, 'blocked');
   assert.equal(admin.nextAction.step.actor, 'administrator');
@@ -166,7 +169,7 @@ test('own-address refuses unsafe configuration without echoing a credential cana
   assert.doesNotMatch(JSON.stringify(await ownAddress.detect(ctx)), new RegExp(canary));
   assert.doesNotMatch(JSON.stringify(await ownAddress.observeSetup(ctx, operation)), new RegExp(canary));
   await assert.rejects(ownAddress.executeSetup(context(), {
-    action: 'origin', value: `https://example:${canary}@owner.example`,
+    action: { id: 'origin' }, value: `https://example:${canary}@owner.example`,
   }), error => error.code === 'invalid_input' && !String(error).includes(canary));
 });
 
@@ -185,6 +188,7 @@ test('own-address offers verification from the intended network after an exact l
   assert.match(pending.nextAction.instructions, /https:\/\/owner\.example/);
   const done = await observe({ ...active, verification: { ...verification, vantage: 'public' } });
   assert.equal(done.state, 'complete');
-  assert.equal(done.evidence.value.observedAt, at);
+  assert.equal(done.evidence.observedAt, at);
+  assert.equal(done.evidence.operationId, operation.id);
   assert.equal((await observe({ ...active, handle: { ...active.handle, generation: 2 } })).nextAction.step.actor, 'administrator');
 });

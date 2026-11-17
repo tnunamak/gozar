@@ -129,10 +129,10 @@ export default recipeAdapter({
           proof.subject.handleGeneration === route.handle?.generation && proof.checks?.includes('nonce') &&
           proof.checks.includes('tls') && Number.isFinite(Date.parse(proof.observedAt));
         if (matches && proof.vantage === vantage && vantage !== 'unknown') {
-          return { state: 'complete', nextAction: null, evidence: { known: true, value: {
+          return { state: 'complete', nextAction: null, evidence: { operationId: operation.id,
             stepId: 'map-adopted-origin', source: vantage === 'this-device' ? 'host' : 'trusted-client', observedAt: proof.observedAt,
             summary: 'TLS and the exact application challenge passed from the required route vantage. Existing infrastructure remains owner-managed.',
-          } } };
+          } };
         }
         if (matches && proof.vantage === 'this-device') {
           return { state: 'pending', evidence: unknown('independent-client-challenge-pending'),
@@ -145,7 +145,12 @@ export default recipeAdapter({
           evidence: unknown('adopted-mapping-or-client-proof-pending') };
       },
 
-      async executeSetup(ctx, { action: id, value }) {
+      async routeGuidance(ctx) {
+        return (await this.observeSetup(ctx, { id: ctx.route.operationId,
+          cancelled: ctx.route.state === 'released', resources: [] })).nextAction;
+      },
+
+      async executeSetup(ctx, { action: { id }, value }) {
         if (id !== originAction.id || !parseOrigin(value)) throw effectError('invalid_input', 'Provide a credential-free HTTPS origin');
         return { state: 'complete', nextAction: null };
       },
