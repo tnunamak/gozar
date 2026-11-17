@@ -57,7 +57,7 @@ test('queued or wrong-revision receipts do not satisfy completed reviews',()=>{
  input.receipts=REQUIRED_REVIEWS.map(id=>({id,status:'completed',surveyRevision:SURVEY_REVISION}));
  input.clarity={incorporated:true,revision:'d'.repeat(40)};
  const result=assembleEvidence(input);
- assert.deepEqual(result.reviewPrerequisites.missing,[]);
+ assert.deepEqual(result.reviewPrerequisites.missing,['r040-survey-data-parity-1117']);
  assert.equal(result.semanticCoverageClosed,false);
  assert.equal(result.hostAcceptance,'not-established');
  assert.equal(result.consumerAcceptance,'not-established');
@@ -139,4 +139,66 @@ test('collector qualifies exact commit ancestry despite stale local branch prove
  assert.match(result.contentBasis,/Committed HEAD blobs only/);
  assert.equal(result.semanticCoverageClosed,false);
  assert.equal(result.saturationEstablished,false);
+});
+
+const parityReview='r040-survey-data-parity-1117';
+// Independent receipt producer: raw-byte SHA-256 leaves, then compact JSON tuples.
+// Paths use ECMAScript UTF-16 code-unit order, not localeCompare or insertion order.
+function receiptDigest(files){
+ const rows=Object.keys(files).sort().map(path=>{
+  const raw=Buffer.isBuffer(files[path])?files[path]:Buffer.from(files[path],'utf8');
+  return [path,raw.length,createHash('sha256').update(raw).digest('hex')];
+ });
+ return createHash('sha256').update(Buffer.from(JSON.stringify(rows),'utf8')).digest('hex');
+}
+test('parity receipt binds exact candidate revision and raw inventory; primary reviews remain reusable',()=>{
+ const original=fixture();
+ const primary=REQUIRED_REVIEWS.filter(id=>id!==parityReview).map(id=>({id,status:'completed',surveyRevision:SURVEY_REVISION}));
+ const parity={id:parityReview,status:'completed',surveyRevision:SURVEY_REVISION,
+  candidateRevision:original.candidate.revision,candidateInventoryDigest:receiptDigest(original.candidate.files)};
+ for(const mode of ['original','other-candidate','revision-only','same-revision-new-bytes','missing-revision','missing-digest','wrong-digest']){
+  const input=fixture(),receipt={...parity};
+  if(mode==='other-candidate'||mode==='revision-only')input.candidate.revision='d'.repeat(40);
+  if(mode==='other-candidate'||mode==='same-revision-new-bytes')input.candidate.files['adapters/providers/custom/index.mjs']+=' changed';
+  if(mode==='missing-revision')delete receipt.candidateRevision;
+  if(mode==='missing-digest')delete receipt.candidateInventoryDigest;
+  if(mode==='wrong-digest')receipt.candidateInventoryDigest='0'.repeat(64);
+  input.receipts=[...primary,receipt];
+  const result=assembleEvidence(input),qualified=mode==='original';
+  assert.deepEqual(result.reviewPrerequisites.completed,qualified?REQUIRED_REVIEWS:primary.map(r=>r.id),mode);
+  assert.deepEqual(result.reviewPrerequisites.missing,qualified?[]:[parityReview],mode);
+  assert.equal(result.unresolved.some(s=>s.includes(parityReview)),!qualified,mode);
+  assert.deepEqual(result.reviewPrerequisites.receipts.at(-1).receipt,receipt);
+  assert.equal(result.reviewPrerequisites.receipts.at(-1).trust,'caller-supplied-review-receipt');
+  assert.equal(result.semanticCoverageClosed,false);
+  assert.equal(result.saturationEstablished,false);
+  assert.equal(result.hostAcceptance,'not-established');
+  assert.equal(result.consumerAcceptance,'not-established');
+ }
+});
+test('inventory digest specifies canonical tuple bytes and ignores insertion order, not raw content',()=>{
+ const input=fixture();
+ input.candidate.files['z-extra']=Buffer.from([0xff]);
+ input.candidate.files['A-extra']='é';
+ input.candidate.files['😀-extra']='astral';
+ input.candidate.files['\uE000-extra']='private';
+ const result=assembleEvidence(input);
+ assert.equal(result.candidate.inventoryDigest,receiptDigest(input.candidate.files));
+ assert.match(result.candidate.inventoryDigestBasis,/UTF-16/);
+ assert.match(result.candidate.inventoryDigestBasis,/JSON/);
+ assert.match(result.candidate.inventoryDigestBasis,/UTF-8/);
+ // Reconstruct the declared wire basis from independently verified file records.
+ const rows=result.candidate.files.map(({path,bytes,sha256})=>[path,bytes,sha256]);
+ assert.ok(rows.findIndex(r=>r[0]==='😀-extra')<rows.findIndex(r=>r[0]==='\uE000-extra'));
+ assert.deepEqual(rows.find(r=>r[0]==='A-extra'),['A-extra',2,createHash('sha256').update(Buffer.from([0xc3,0xa9])).digest('hex')]);
+ const canonical=Buffer.from(JSON.stringify(rows),'utf8');
+ assert.equal(result.candidate.inventoryDigest,createHash('sha256').update(canonical).digest('hex'));
+ input.candidate.files=Object.fromEntries(Object.entries(input.candidate.files).reverse());
+ assert.equal(assembleEvidence(input).candidate.inventoryDigest,result.candidate.inventoryDigest);
+ // Both byte values decode to the same replacement character: a text hash loses this change.
+ input.candidate.files['z-extra']=Buffer.from([0xfe]);
+ assert.notEqual(assembleEvidence(input).candidate.inventoryDigest,result.candidate.inventoryDigest);
+ delete input.candidate.files['z-extra'];
+ input.candidate.files['renamed-extra']=Buffer.from([0xff]);
+ assert.notEqual(assembleEvidence(input).candidate.inventoryDigest,result.candidate.inventoryDigest);
 });
