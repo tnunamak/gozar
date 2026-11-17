@@ -125,6 +125,8 @@ export async function withRouteOperation(request,{registryId,embeddingServices,a
    }
   }
   record.view=recovered?{...recovered,operationId:request.operationId}:{...record.view,state:'uncertain',routeState:'cleanup-unconfirmed',cleanup:{state:'unconfirmed',nextAction:null},published:null};
+  // A failure whose own view confirms cleanup (a refusal before any resource existed) is settled, not retained as recovery debt.
+  if(recovered&&record.view.cleanup?.state==='confirmed')record.phase='terminal';
   error.route=await persist(record);throw error;
  }
 }

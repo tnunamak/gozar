@@ -67,7 +67,9 @@ export async function offeredConfiguration(request,snapshot,deps){
  const adapter=deps.adapters.find(a=>a.id===request.providerId);if(!adapter)fail('candidate_stale');
  const platform=deps.platform??process.platform;const read=await readContextFor(deps,request.home,platform);
  const inspection=await inspectAdapter(adapter,{...read,providerConfiguration:providerId=>deps.embeddingServices.resolveConfiguration({...request,providerId})},platform);
- const raw=[...new Map([...inspection.actions,...(inspection.missingActions??[]),...clearInputActions(snapshot)].map(a=>[a.id,a])).values()];
+ // A failed observation (a locked secret backend) leaves the inspection without actions, but the draft's declared inputs still exist.
+ let declared=[];if(inspection.failure&&!inspection.actions.length){try{declared=adapter.configurationActions?adapter.configurationActions():adapter.setupActions({setupNeeded:true});}catch{declared=[];}}
+ const raw=[...new Map([...inspection.actions,...(inspection.missingActions??[]),...declared,...clearInputActions(snapshot)].map(a=>[a.id,a])).values()];
  const actions=await Promise.all(raw.map(action=>deps.decorateSetupAction?deps.decorateSetupAction({action,adapter,configuration:snapshot,draftId:request.draftId??null,inspection}):action));
  const configuration={...snapshot,...configurationFor(actions,snapshot,adapter.definition.inputRequirements),actions};
  return configuration;

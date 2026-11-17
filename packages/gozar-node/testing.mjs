@@ -112,6 +112,16 @@ const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('
 const servers = new Map();
 const proofProtocol = ${JSON.stringify(proofProtocol)};
 const mark = event => appendFileSync(new URL('./events.jsonl', import.meta.url), JSON.stringify({event}) + '\\n');
+// A host that maps process-runtime effects admits a route's transport through them; a host that maps none gets a forwarder in this process.
+async function openOwned(ctx, plan) {
+  if (typeof ctx.dispatchEffect !== 'function') return null;
+  const scheme = definition.originSchemes?.[0]?.replace(':', '') ?? (definition.capabilities.transport === 'http' ? 'http' : 'https');
+  const origin = scheme + '://' + sha({ resource: plan.resourceKey, target: plan.effects[0].target }).slice(0, 16) + '.' + definition.id + '.invalid';
+  try {
+    const opened = await ctx.dispatchEffect({ kind: 'process-runtime', operation: 'open', input: { program: 'fake-forwarder', args: [], credential: '', origin, target: plan.effects[0].target, deadlineMs: 5000 } });
+    return typeof opened?.handle === 'string' ? { origin, handle: opened.handle } : null;
+  } catch (error) { if (error?.code === 'unsupported') return null; throw error; }
+}
 export default {
   id: definition.id,
   definition,
@@ -148,7 +158,10 @@ export default {
   }:{}),
   async create(ctx, plan) {
     const forwarding = ['attached', 'session'].includes(plan.readback.kind);
-    if (forwarding && proofProtocol === 'echo') {
+    const owned = forwarding && proofProtocol !== 'echo' ? await openOwned(ctx, plan) : null;
+    if (owned) {
+      plan = { ...plan, origin: owned.origin, readback: { ...plan.readback, ownedHandle: owned.handle } }; mark('start');
+    } else if (forwarding && proofProtocol === 'echo') {
       const [host,port]=plan.effects[0].target.split(':');
       const server=net.createServer({allowHalfOpen:true}, socket=>{const upstream=net.connect(Number(port),host);upstream.on('error',()=>socket.destroy());socket.on('error',()=>upstream.destroy());socket.pipe(upstream).pipe(socket);});
       await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});servers.set(plan.resourceKey,server);plan={...plan,origin:'tcp://127.0.0.1:'+server.address().port};mark('start');
@@ -165,7 +178,15 @@ export default {
   },
   async observe(ctx, request) { return { present: false, resourceKey: definition.id + ':' + sha({ target: request.target }).slice(0, 16), identity: null, revision: null }; },
   async verify(ctx, receipt) { mark('proof'); return ctx.verifyChallenge(receipt?.readback?.origin ?? receipt?.origin ?? '', receipt?.readback?.target ?? ''); },
-  async remove(ctx,receipt) { mark('stop'); const server=servers.get(receipt.resourceKey); if(server){server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve));servers.delete(receipt.resourceKey);} mark('cleanup');return { removed: true, debt: null }; },
+  async remove(ctx,receipt) { mark('stop');
+    const handle = receipt?.readback?.ownedHandle;
+    if (handle) {
+      const closed = await ctx.dispatchEffect({ kind: 'process-runtime', operation: 'close', input: { handle } });
+      const seen = await ctx.dispatchEffect({ kind: 'process-runtime', operation: 'read', input: { handle } });
+      if (closed?.closed !== true || seen?.present !== false) return { removed: false, debt: { message: 'The fake transport is not confirmed closed' } };
+      mark('cleanup'); return { removed: true, debt: null };
+    }
+    const server=servers.get(receipt.resourceKey); if(server){server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve));servers.delete(receipt.resourceKey);} mark('cleanup');return { removed: true, debt: null }; },
   async runtimeFacts() { return { properties: structuredClone(definition.capabilities), ingress: null, limits: { recommendedPollIntervalMs: 5000, idleTimeoutMs: null } }; },
 };
 `;
@@ -257,7 +278,7 @@ export async function fakeRegistry({ id, label, kinds, reach, transport = 'https
       protocols: { sse: protocols.includes('sse'), streamableHttp: protocols.includes('streamable-http'), oauthDcr: protocols.includes('oauth-dcr') },
       proof: { vantage: 'this-device', checks: ['nonce'] },
     },
-    supportedKinds: [...kinds], facts, ...(proofProtocol === 'echo' ? {originSchemes:['tcp:']} : {}),
+    supportedKinds: [...kinds], facts, ...(kinds.some(kind => kind !== 'durable') && proofProtocol !== 'echo' ? { effectOperations: ['open', 'read', 'close'].map(operation => ({ kind: 'process-runtime', operation })) } : {}), ...(proofProtocol === 'echo' ? {originSchemes:['tcp:']} : {}),
     disclosure: { revision: `disc-${id}`, text: 'A fake provider used in tests. Nothing leaves this process.', links: [] },
     ownership: 'gozar-owned',
   };

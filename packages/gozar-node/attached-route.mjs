@@ -18,7 +18,7 @@ import { canonicalHome, trustedDirectory, privateDirectory, withExclusiveLock } 
 import { gozarError, instructionAction, normalizeError } from './error-normalizer.mjs';
 import { cliCommand } from './cli-command.mjs';
 import { createGate } from './gate.mjs';
-import { projectAttached, projectSession, releasedView, recoveryHistory, checkRef, projectControllerObservation } from './route-view.mjs';
+import { projectAttached, projectSession, releasedView, recoveryHistory, checkRef, projectControllerObservation, unknownProperties } from './route-view.mjs';
 import { validateQuery, adapterRequest, readContextFor, loadRuntime, consentDisclosureRevision,inspectAdapter } from './route-catalog.mjs';
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
@@ -209,7 +209,7 @@ export async function openAttachedRoute(request, deps = {}) {
     const handle = session?.handle ?? {kind:'attached',id,generation:1};
     // Redeem, re-observe and start the controller under one reservation, so two opens cannot both win one resource.
     const controller = await withExclusiveLock(join(root, '.open.lock'), async () => {
-      const redeemed = session?.redeemed ?? await redeemApproval(request, { ...deps, adapters });
+      const redeemed = session?.redeemed ?? await redeemApproval(request, { ...deps, adapters }).catch(error => { throw refusedBeforeStart(error, handle, request); });
       await trustedDirectory(directory, true);
       await privateDirectory(directory);
       if (session) {
@@ -453,14 +453,54 @@ const retarget = (plan, from, to) => ({ ...plan, effects: plan.effects.map(effec
 const GATE_LIFETIME_MS = 2_147_483_647;
 
 /**
+ * An approval that is refused is refused before a controller, a configuration reference or a provider resource exists, so the operation
+ * that reserved the handle owes no cleanup. The refusal carries that first-hand fact; an unrecorded refusal stays unconfirmed debt.
+ */
+function refusedBeforeStart(error, handle, request) {
+  if (error && typeof error === 'object' && !error.route) {
+    const lease = { target: request.target, state: 'released', origin: null, properties: unknownProperties(), ingress: null, identity: null,
+      limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, checkedAtMs: null, cleanup: { state: 'confirmed' } };
+    error.route = { ...projectAttached(lease, { handle, now: Date.now() }), operationId: request.operationId ?? null };
+  }
+  return error;
+}
+
+/**
+ * A start refused before any adapter loaded has no provider resource to remove. This controller knows that first-hand, so the record
+ * says so; only the configuration reference the host registered remains, and its release is confirmed or left as retryable debt.
+ */
+async function recordRefusedStart(directory,bootstrap,resolver,lost){
+  const session=bootstrap.execution==='generic-session-v1';
+  const handle=session?bootstrap.handle:{kind:'attached',id:bootstrap.id,generation:1};
+  const managed=['resolver','registryId','owner','consentReview'].some(name=>Object.hasOwn(bootstrap,name));
+  let released=!managed;
+  if(managed){
+    try{
+      if(lost()||!resolver||typeof resolver.releaseConfigurationUse!=='function'||typeof bootstrap.owner!=='string'||!bootstrap.owner||typeof bootstrap.registryId!=='string'||!bootstrap.registryId)throw new Error('reference release unavailable');
+      await resolver.releaseConfigurationUse({owner:bootstrap.owner,providerId:bootstrap.adapterId,handle});released=true;
+    }catch{released=false;}
+  }
+  const lease={...(session?{expiresAtMs:bootstrap.expiresAtMs}:{}),target:bootstrap.request.target,state:released?'released':'uncertain',origin:null,properties:unknownProperties(),ingress:null,identity:bootstrap.identity??null,
+    limits:{recommendedPollIntervalMs:5_000,idleTimeoutMs:null},checkedAtMs:null,
+    cleanup:released?{state:'confirmed'}:{state:'unconfirmed',message:'The start was refused before any provider code ran; configuration reference release remains unconfirmed'}};
+  await atomicWrite(join(directory,'state.json'),{schemaVersion:1,adapterId:bootstrap.adapterId,request:bootstrap.request,plan:bootstrap.plan,receipt:null,handle,phase:lease.state,
+    lastView:{...projectAttached(lease,{handle,now:Date.now()}),operationId:bootstrap.operationId??null,consentFactsDigest:bootstrap.consentReview?.consentFactsDigest??null},
+    resourceRemoval:released?null:{schemaVersion:1,registryId:bootstrap.registryId,owner:bootstrap.owner,providerId:bootstrap.adapterId,handle:structuredClone(handle)}});
+}
+
+/**
  * Runs one attached route to its end and resolves with the last RouteView. `runtime` supplies adapters and the
  * admitted effect context; `lease` is 'heartbeat' (a detached controller) or { kind: 'stdin', stream } (a foreground CLI owner).
  */
 export async function runAttachedController(directory, runtime = {}) {
   const bootstrap = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
-  if(bootstrap.registryId&&await registryIdentity(bootstrap.registry)!==bootstrap.registryId)throw gozarError('artifact_integrity_failed','The controller registry content changed');
   let resolverLost=false,onResolverLoss=()=>{};
   const resolver=bootstrap.resolver?await connectEmbeddingBroker({descriptor:bootstrap.resolver,identity:bootstrap.identity,onLoss:()=>{resolverLost=true;onResolverLoss();}}):null;
+  // Adapter code from a changed registry is never loaded. The refusal is recorded first so the retained directory stays enumerable.
+  if(bootstrap.registryId&&await registryIdentity(bootstrap.registry)!==bootstrap.registryId){
+    await recordRefusedStart(directory,bootstrap,resolver,()=>resolverLost);
+    throw gozarError('artifact_integrity_failed','The controller registry content changed');
+  }
   if(resolver)runtime={...runtime,embeddingServices:resolver,owner:bootstrap.owner,...(bootstrap.fixtureEffects?{dispatchEffect:resolver.dispatchEffect.bind(resolver)}:{})};
   if(bootstrap.fixtureEffects)runtime.fetch=testingFetch(runtime.dispatchEffect);
   const adapters = runtime.adapters ?? await (await loadRuntime())?.loadAdapters?.(bootstrap.registry);
@@ -788,9 +828,9 @@ export async function openSessionRoute(request, deps = {}) {
     const home = await canonicalHome(request.home, true);
     const port = Number(request.target.slice(request.target.lastIndexOf(':') + 1));
     if (!Number.isInteger(port) || port < 1 || port > 65_535) throw gozarError('invalid_input', 'target must end in :PORT');
-    const redeemed = await withExclusiveLock(join(await attachedRoot(home), '.open.lock'), () => redeemApproval(request, { ...deps, adapters }), { waitSeconds: 30 });
-    const directory = join(home, `port-${port}`);
     const stableHandle=deps.reservedHandle??{kind:'session',id:`port-${port}:${randomUUID()}`,generation:1};
+    const redeemed = await withExclusiveLock(join(await attachedRoot(home), '.open.lock'), () => redeemApproval(request, { ...deps, adapters }).catch(error => { throw refusedBeforeStart(error, stableHandle, request); }), { waitSeconds: 30 });
+    const directory = join(home, `port-${port}`);
     if (!deps.startSession && redeemed.adapter.sessionExecution !== 'recipe') {
       if (stableHandle.kind!=='session'||stableHandle.generation!==1||!new RegExp(`^port-${port}:[A-Za-z0-9_-]+$`).test(stableHandle.id)) throw gozarError('invalid_input','Invalid reserved session handle');
       const expiresAtMs=Date.now()+request.usage.lifetimeMs;

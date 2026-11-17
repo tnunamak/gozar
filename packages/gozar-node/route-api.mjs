@@ -82,7 +82,7 @@ export function createRouteApi(deps = {}) {
     try { grant = await peekConsentGrant({ home: request.home, token: request.approval.candidateToken }); } catch { return undefined; }
     const adapter = grant && (await adapters()).find(item => item.id === grant.adapterId);
     if (adapter?.definition.ownership !== 'external-owned') return undefined;
-    if (request.usage?.kind !== 'durable' || (request.intent !== undefined && request.intent !== 'create')) throw gozarError('invalid_input', 'An owner-run route is created with usage durable and intent create');
+    if (!['durable', 'session'].includes(request.usage?.kind) || (request.intent !== undefined && request.intent !== 'create')) throw gozarError('invalid_input', 'An owner-run route is created with usage durable or session and intent create');
     const redeemed = await redeemApproval(request, await shared(request));
     const service = deps.service?.addService ?? (await import('./service.mjs')).addService;
     const context=await shared(request),handle={kind:'external',id:redeemed.plan.origin,generation:1};
@@ -107,7 +107,7 @@ export function createRouteApi(deps = {}) {
       const options = { ...await shared(request), ...deps.expose };
       await preflightExpose(request, options);
       if (request?.usage?.kind === 'attached') return withRouteOperation(request,{...options,status:api.routeStatus,run:reservedHandle=>openAttachedRoute(request,{...options,reservedHandle})});
-      if (request?.usage?.kind === 'session') return withRouteOperation(request,{...options,status:api.routeStatus,run:reservedHandle=>openSessionRoute(request,{...options,reservedHandle})});
+      if (request?.usage?.kind === 'session') return withRouteOperation(request,{...options,status:api.routeStatus,run:async reservedHandle=>(await verified(()=>ownerKept(request),request))??openSessionRoute(request,{...options,reservedHandle})});
       throw gozarError('invalid_input', "expose needs usage 'session' or 'attached'");
     }),
 
@@ -141,7 +141,13 @@ export function createRouteApi(deps = {}) {
       if(privateRetry)return privateRetry;
       let cleanupScope=retainedCleanup?.scope;
       if(request.mode==='remove'&&['attached','session'].includes(request.handle?.kind)&&!cleanupScope){
-        cleanupScope=await attachedCleanupReference(request,context);
+        try{cleanupScope=await attachedCleanupReference(request,context);}
+        catch(error){
+          // A start refused before any controller existed journaled its own confirmed, resource-free view; no bootstrap is expected for it.
+          const journaled=error.code==='cleanup_debt'?await retainedOperationView(request):null;
+          if(journaled?.cleanup.state==='confirmed')return journaled;
+          throw error;
+        }
         if(cleanupScope)await prepareCleanupReference(cleanupScope);
       }
       // This path consumes only an exact private resource-removal milestone.

@@ -53,3 +53,11 @@ requests cancellation. Source output still passes through the shipped parser.
 No fixture executable replaces a vendor program on PATH. The fixture proof reads
 the current owned gate challenge through `network/fetch`; fixture observations do
 not establish reachability through a real provider.
+
+A `fakeRegistry` session or attached fake opens its transport through the
+`process-runtime` operations `open`, `read` and `close` when the host maps them.
+`open` receives the fake's own origin and the gate target, so `network/fetch`
+proof reaches only an origin that an effect opened. `close` and a following
+`read` must both report absence before the fake reports its route removed. A
+host that maps no `process-runtime` effects keeps the in-process forwarder of
+earlier releases; the fake does not guess an origin the host never admitted.
