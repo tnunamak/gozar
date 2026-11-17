@@ -25,6 +25,10 @@ type NotAny = [
  AssertFalse<IsAny<Catalog['candidates'][number]>>,
  AssertFalse<IsAny<Draft>>, AssertFalse<IsAny<DraftRead>>,
  AssertFalse<IsAny<Setup>>, AssertFalse<IsAny<Setup['configuration']>>,
+ AssertFalse<IsAny<Setup['configuration']['values']>>,
+ AssertFalse<IsAny<Setup['configuration']['values'][string]>>,
+ AssertFalse<IsAny<Setup['configurationRevision']>>,
+ AssertFalse<IsAny<Awaited<ReturnType<Api['closeRoute']>>['cleanup']['state']>>,
  AssertFalse<IsAny<Inventory>>, AssertFalse<IsAny<Listed['routes'][number]>>,
  AssertFalse<IsAny<TestingHarness['gozar']>>, AssertFalse<IsAny<SecretBackend>>,
  AssertFalse<IsAny<HostIdentity>>, AssertFalse<IsAny<GozarThrownError['route']>>,
@@ -124,6 +128,12 @@ async function consume(){
  const revision:string=result.configurationRevision;
  const scope:string=result.scopeId;
  const values:Record<string,string>=result.configuration.values;
+ // @ts-expect-error Configuration values are text records, not numbers.
+ const badValues:number=result.configuration.values;
+ // @ts-expect-error Each configuration value is text, not a number.
+ const badValue:number=result.configuration.values['fixture-input'];
+ // @ts-expect-error Configuration revisions are text, not numbers.
+ const badRevision:number=result.configurationRevision;
  const route:RouteView=await api.expose(expose);
  consumeRouteMetadata(route);
  const inventory=await api.listProviders({home:query.home,owner:query.owner});
@@ -135,6 +145,8 @@ async function consume(){
  const exact:RouteView[]=listed.routes;
  const closed=await api.closeRoute({home:query.home,handle:route.handle,mode:'remove'});
  const cleanup:'none'|'unconfirmed'|'confirmed'=closed.cleanup.state;
+ // @ts-expect-error A setup-progress state is not a cleanup result.
+ const badCleanup:'pending'=closed.cleanup.state;
  const review=await api.reviewRouteConsent({home:query.home,handle:route.handle});
  const snapshot:RouteConsentSnapshot=review;
  return {consent,draft,current,configured,revision,scope,values,replay,exact,cleanup,snapshot};
