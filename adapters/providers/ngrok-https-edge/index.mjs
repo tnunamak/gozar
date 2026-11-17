@@ -37,7 +37,7 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok') } = 
       const authAction = action('auth', 'Provide your ngrok agent authtoken', 'ngrok agent authtoken');
       const domainAction = (() => {
         const body = { id: 'reserved-domain', kind: 'provide-value', label: 'Provide your assigned development or reserved domain', valueLabel: 'Assigned development or reserved domain',
-          help:'Copy the assigned development domain from your account. It is valid on the free plan; use a reserved/custom domain only if your account already permits it.',obtainUrl: 'https://dashboard.ngrok.com/domains', valuePlaceholder: 'example.ngrok.app', valueFormat: 'domain', required: true, disclosure: definition.disclosure };
+          help:'Copy the assigned development domain from your account; it is valid on Free. The reserved ngrok-branded domains are distinct from bring-your-own domains; use either only if your account already permits it.',obtainUrl: 'https://dashboard.ngrok.com/domains', valuePlaceholder: 'example.ngrok.app', valueFormat: 'domain', required: true, disclosure: definition.disclosure };
         return { ...body, digest: sha(body) };
       })();
       const installAction = (() => {
