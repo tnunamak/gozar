@@ -55,18 +55,19 @@ function archiveFiles(bytes){
  if(!ended||pax||raw.subarray(offset).some(b=>b!==0))throw new Error('Invalid archive terminator');
  return files;
 }
-export function runProcess(command,args,options){
- return new Promise((resolveResult,reject)=>{
-  const child=spawn(command,args,{cwd:options.cwd,env:options.env,stdio:['ignore','pipe','pipe']});
-  let stdout='',stderr='',overflow=false,timedOut=false;
+export function runProcess(command,args,options,{spawnProcess=spawn}={}){
+ return new Promise(resolveResult=>{
+  const child=spawnProcess(command,args,{cwd:options.cwd,env:options.env,stdio:['ignore','pipe','pipe']});
+  let stdout='',stderr='',overflow=false,timedOut=false,processError=null;
   const timer=setTimeout(()=>{timedOut=true;child.kill('SIGKILL');},options.timeoutMs);
   const collect=key=>chunk=>{
    if(key==='stdout')stdout+=chunk;else stderr+=chunk;
    if(Buffer.byteLength(stdout)+Buffer.byteLength(stderr)>16*1024*1024){overflow=true;child.kill('SIGKILL');}
   };
   child.stdout.on('data',collect('stdout'));child.stderr.on('data',collect('stderr'));
-  child.once('error',error=>{clearTimeout(timer);reject(error);});
-  child.once('close',(status,signal)=>{clearTimeout(timer);resolveResult({status,signal,stdout,stderr,timedOut,overflow});});
+  // An error can precede trailing pipe data; close is the completion boundary.
+  child.once('error',error=>{processError={name:error.name,message:error.message,code:error.code??null};});
+  child.once('close',(status,signal)=>{clearTimeout(timer);resolveResult({status,signal,stdout,stderr,timedOut,overflow,...(processError?{error:processError}:{})});});
  });
 }
 async function regularFiles(root){
@@ -107,6 +108,8 @@ export async function runInstalledJourney(input,{run=runProcess}={}){
  if(pkg?.name!=='@tnunamak/gozar'||Object.keys(pkg.dependencies??{}).length)throw new Error('Archive must be standalone @tnunamak/gozar');
  for(const name of ['examples/remote-access-screen.mjs','examples/provider-lifecycle-fixture.mjs'])
   if(!members.has(name))throw new Error('Missing installed example '+name);
+ const optionalNames=[...new Set([...Object.keys(pkg.optionalDependencies??{}),
+  ...Object.keys(pkg.peerDependencies??{}).filter(name=>pkg.peerDependenciesMeta?.[name]?.optional===true)])];
  const output=resolve(outputDirectory);await mkdir(output,{mode:0o700});
  const scratch=await mkdtemp(join(tmpdir(),'gzj-'));
  const report={status:'failed',tarball:source,sha256,sourceSha,sourceShaProvenance:'caller-supplied, not authenticated by archive',scratch,steps:[]};
@@ -126,7 +129,7 @@ export async function runInstalledJourney(input,{run=runProcess}={}){
    report.steps.push({name,command,args,result});await save();
    await writeFile(join(output,name+'.stdout'),result.stdout??'',{mode:0o600});
    await writeFile(join(output,name+'.stderr'),result.stderr??'',{mode:0o600});
-   if(result.status!==0||result.signal||result.timedOut||result.overflow){
+   if(result.error||result.status!==0||result.signal||result.timedOut||result.overflow){
     const error=new Error('Installed journey subprocess failed: '+name);error.result=result;throw error;
    }
    return result.stdout;
@@ -135,9 +138,9 @@ export async function runInstalledJourney(input,{run=runProcess}={}){
   const installed=join(scratch,'node_modules','@tnunamak','gozar');
   const actual=await regularFiles(installed);
   if(actual.size!==members.size||[...members].some(([name,body])=>!actual.get(name)?.equals(body)))throw new Error('Archive and installed bytes differ');
-  await assertOptionalAbsent(join(scratch,'node_modules'),Object.keys(pkg.optionalDependencies??{}));
+  await assertOptionalAbsent(join(scratch,'node_modules'),optionalNames);
   report.members=[...members].map(([path,body])=>({path,sha256:digest(body),bytes:body.length}));
-  report.optionalDependenciesAbsent=Object.keys(pkg.optionalDependencies??{});
+  report.optionalDependenciesAbsent=optionalNames;
   const screen=await step('screen',process.execPath,[join(installed,'examples/remote-access-screen.mjs'),'--fakes']);
   if(!screen.startsWith('Remote access\n')||!screen.includes('Host inputs:')||!screen.includes('Choice:'))throw new Error('Unknown screen outcome');
   const raw=await step('lifecycle',process.execPath,[join(installed,'examples/provider-lifecycle-fixture.mjs')]);
@@ -146,7 +149,8 @@ export async function runInstalledJourney(input,{run=runProcess}={}){
      lifecycle.proof?.status!=='verified'||lifecycle.cleanup?.state!=='confirmed'||
      lifecycle.resourceLedger?.foreignPreserved!==true||!Array.isArray(lifecycle.resourceLedger?.ownedAfter)||
      lifecycle.resourceLedger.ownedAfter.length!==0||lifecycle.statusPreservedProofTime!==true||
-     !Array.isArray(lifecycle.events)||!lifecycle.events.includes('start')||!lifecycle.events.includes('proof'))
+     !Array.isArray(lifecycle.events)||lifecycle.events.some(event=>!['setup','start','proof','stop','cleanup'].includes(event))||
+     !/^setup,start,proof(?:,proof)*,stop,cleanup$/.test(lifecycle.events.join(',')))
    throw new Error('Unknown or incomplete lifecycle outcome; cleanup debt retained');
   report.status='passed';await save();return report;
  }catch(error){
