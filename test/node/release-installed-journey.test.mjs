@@ -5,6 +5,8 @@ import {tmpdir} from 'node:os';
 import {join,dirname} from 'node:path';
 import {gzipSync} from 'node:zlib';
 import {createHash} from 'node:crypto';
+import {EventEmitter} from 'node:events';
+import {PassThrough} from 'node:stream';
 import {runInstalledJourney,runProcess} from '../../scripts/release-installed-journey.mjs';
 
 function tar(files){
@@ -19,15 +21,15 @@ function tar(files){
  }
  return gzipSync(Buffer.concat([...chunks,Buffer.alloc(1024)]));
 }
-async function fixture(t){
+async function fixture(t,metadata={}){
  const root=await mkdtemp(join(tmpdir(),'journey-test-'));t.after(()=>rm(root,{recursive:true,force:true}));
- const files={'package.json':JSON.stringify({name:'@tnunamak/gozar',optionalDependencies:{'optional-test-sdk':'1'}}),
+ const files={'package.json':JSON.stringify({name:'@tnunamak/gozar',optionalDependencies:{'optional-test-sdk':'1'},...metadata}),
   'examples/remote-access-screen.mjs':'// screen','examples/provider-lifecycle-fixture.mjs':'// lifecycle'};
  const bytes=tar(files),archive=join(root,'input.tgz');await writeFile(archive,bytes);
  return {root,files,input:{tarball:archive,sha256:createHash('sha256').update(bytes).digest('hex'),
   sourceSha:'a'.repeat(40),outputDirectory:join(root,'out')}};
 }
-const evidence={fixtureOnly:true,providerId:'fixture-generated',events:['start','proof','stop'],
+const evidence={fixtureOnly:true,providerId:'fixture-generated',events:['setup','start','proof','stop','cleanup'],
  proof:{status:'verified'},cleanup:{state:'confirmed'},resourceLedger:{ownedAfter:[],foreignPreserved:true},statusPreservedProofTime:true};
 function processStub(f,{fault,mutate=false,outcome=evidence}={}){
  const calls=[];
@@ -155,6 +157,177 @@ test('runProcess overflow remains bounded and fails closed',{timeout:8000},async
  const result=await runProcess(process.execPath,['-e',"const b=Buffer.alloc(1024*1024,120);function emit(){if(process.stdout.write(b))setImmediate(emit);else process.stdout.once('drain',emit);}emit();"],{timeoutMs:4000});
  assert.equal(result.overflow,true);
  assert.ok(result.status!==0||result.signal||result.overflow);
- assert.ok(Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr)<=17*1024*1024);
+ assert.ok(Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr)<=16*1024*1024);
  assert.ok(['confirmed','unconfirmed'].includes(result.cleanup.state));
+});
+
+test('runProcess preserves split UTF-8 JSON on stdout and stderr',async()=>{
+ const value=JSON.stringify({message:'price € and emoji 🦊'})+'\n';
+ const script=`
+  const bytes=Buffer.from(${JSON.stringify(value)});
+  (async()=>{
+   for(const byte of bytes){
+    await new Promise(resolve=>process.stdout.write(Buffer.from([byte]),resolve));
+    await new Promise(resolve=>process.stderr.write(Buffer.from([byte]),resolve));
+    await new Promise(resolve=>setTimeout(resolve,10));
+   }
+  })().catch(error=>{console.error(error);process.exitCode=1;});
+ `;
+ const result=await runProcess(process.execPath,['-e',script],{cwd:process.cwd(),env:process.env,timeoutMs:10000});
+ assert.equal(result.status,0);assert.equal(result.signal,null);
+ assert.equal(result.timedOut,false);assert.equal(result.overflow,false);
+ assert.equal(result.stdout,value);assert.equal(result.stderr,value);
+ assert.deepEqual(JSON.parse(result.stdout),{message:'price € and emoji 🦊'});
+});
+for(const extra of [0,1])test('runProcess aggregate byte budget at cap plus '+extra,async()=>{
+ const cap=16*1024*1024;
+ // Two-byte characters: string length must not substitute for byte length.
+ const half='é'.repeat(cap/4);
+ const script=`
+  const half='é'.repeat(${cap/4});
+  (async()=>{
+   await new Promise(resolve=>process.stdout.write(half,resolve));
+   await new Promise(resolve=>process.stderr.write(half,resolve));
+   ${extra ? "process.stderr.write('x');setInterval(()=>{},1000);" : ''}
+  })().catch(error=>{console.error(error);process.exitCode=1;});
+ `;
+ const result=await runProcess(process.execPath,['-e',script],{cwd:process.cwd(),env:process.env,timeoutMs:10000});
+ assert.equal(result.timedOut,false);
+ assert.equal(result.overflow,extra===1);
+ assert.equal(result.stdout,half);assert.equal(result.stderr,half);
+ assert.equal(Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr),cap);
+ if(extra===0){assert.equal(result.status,0);assert.equal(result.signal,null);}
+});
+
+test('records optional dependencies and only declared optional peers, including actual ngrok SDK',async t=>{
+ const manifest=JSON.parse(await readFile(new URL('../../package.json',import.meta.url),'utf8'));
+ const f=await fixture(t,{peerDependencies:{...manifest.peerDependencies,'required-peer':'1'},peerDependenciesMeta:{...manifest.peerDependenciesMeta,'required-peer':{optional:false},'undeclared-peer':{optional:true}}});
+ const result=await runInstalledJourney(f.input,{run:processStub(f).run});
+ t.after(()=>rm(result.scratch,{recursive:true,force:true}));
+ assert.deepEqual(result.optionalDependenciesAbsent,['optional-test-sdk','@ngrok/ngrok']);
+ assert.equal(result.sourceShaProvenance,'caller-supplied, not authenticated by archive');
+});
+for(const nested of [false,true])test('refuses optional ngrok peer at '+(nested?'nested':'root')+' dependency depth',async t=>{
+ const f=await fixture(t,{peerDependencies:{'@ngrok/ngrok':'1.7.0'},peerDependenciesMeta:{'@ngrok/ngrok':{optional:true}}}),stub=processStub(f);
+ await assert.rejects(runInstalledJourney(f.input,{run:async(...args)=>{
+  const result=await stub.run(...args);
+  if(args[0]==='npm')await mkdir(join(args[2].cwd,'node_modules',...(nested?['other','node_modules']:[]),'@ngrok','ngrok'),{recursive:true});
+  return result;
+ }}),/Optional SDK installed/);
+ assert.equal(stub.calls.length,1);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+ assert.equal(report.status,'failed');
+});
+test('process error waits for close and retains both pre-error and trailing output',async()=>{
+ const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};child.unref=()=>{};
+ let settled=false;
+ const pending=runProcess('fixture',[],{timeoutMs:1000},{spawnProcess:()=>child}).then(value=>{settled=true;return value;});
+ child.stdout.emit('data','before');child.emit('error',Object.assign(new Error('spawn failed'),{code:'ENOENT'}));
+ await Promise.resolve();assert.equal(settled,false);
+ child.stdout.emit('data',' after');child.stderr.emit('data','diagnostic');child.emit('close',0,null);
+ const result=await pending;
+ assert.equal(result.stdout,'before after');assert.equal(result.stderr,'diagnostic');
+ assert.deepEqual(result.error,{name:'Error',message:'spawn failed',code:'ENOENT'});
+});
+test('process error with even zero exit retains a failed step receipt and output files',async t=>{
+ const f=await fixture(t);const result={status:0,signal:null,stdout:'partial stdout',stderr:'partial stderr',error:{name:'Error',message:'spawn failed',code:'ENOENT'}};
+ await assert.rejects(runInstalledJourney(f.input,{run:async()=>result}),/subprocess failed/);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+ assert.deepEqual(report.steps[0].result,result);assert.deepEqual(report.failure.result,result);
+ assert.equal(await readFile(join(f.input.outputDirectory,'install.stdout'),'utf8'),result.stdout);
+ assert.equal(await readFile(join(f.input.outputDirectory,'install.stderr'),'utf8'),result.stderr);
+});
+for(const events of [
+ ['start','proof','stop','cleanup'],['setup','start','proof','stop'],['setup','proof','start','stop','cleanup'],
+ ['setup','start','stop','proof','cleanup'],['setup','start','proof','cleanup','stop'],
+ ['setup','start','proof','stop','cleanup','unknown'],['setup','setup','start','proof','stop','cleanup'],
+ ['setup,start','proof','stop','cleanup'],
+])test('rejects incomplete or unordered phases '+events.join(','),async t=>{
+ const f=await fixture(t);
+ await assert.rejects(runInstalledJourney(f.input,{run:processStub(f,{outcome:{...evidence,events}}).run}),/outcome/);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+ assert.equal(report.status,'failed');
+});
+test('permits repeated genuine proof phase before stop',async t=>{
+ const f=await fixture(t),outcome={...evidence,events:['setup','start','proof','proof','stop','cleanup']};
+ const result=await runInstalledJourney(f.input,{run:processStub(f,{outcome}).run});
+ t.after(()=>rm(result.scratch,{recursive:true,force:true}));assert.equal(result.status,'passed');
+});
+for(const change of [{resourceLedger:{ownedAfter:['owned'],foreignPreserved:true}},{resourceLedger:{ownedAfter:[],foreignPreserved:false}},{statusPreservedProofTime:false}])
+test('complete phase labels cannot replace independent ledger and proof-time checks '+JSON.stringify(change),async t=>{
+ const f=await fixture(t);
+ await assert.rejects(runInstalledJourney(f.input,{run:processStub(f,{outcome:{...evidence,...change}}).run}),/outcome/);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));assert.equal(report.status,'failed');
+});
+
+test('optional names are deduped and strict optional true excludes required and undeclared peers',async t=>{
+ const f=await fixture(t,{optionalDependencies:{'@ngrok/ngrok':'1'},peerDependencies:{'@ngrok/ngrok':'1','required-peer':'1','truthy-peer':'1'},peerDependenciesMeta:{'@ngrok/ngrok':{optional:true},'truthy-peer':{optional:'true'},'undeclared-peer':{optional:true}}});
+ const result=await runInstalledJourney(f.input,{run:processStub(f).run});
+ t.after(()=>rm(result.scratch,{recursive:true,force:true}));
+ assert.deepEqual(result.optionalDependenciesAbsent,['@ngrok/ngrok']);
+});
+for(const failure of [{timedOut:true},{overflow:true},{signal:'SIGTERM'},{cleanup:{state:'unconfirmed',scope:'owned-process-group'}}])
+test('zero exit cannot hide process failure '+JSON.stringify(failure),async t=>{
+ const f=await fixture(t),result={status:0,signal:null,stdout:'retained out',stderr:'retained err',...failure};
+ await assert.rejects(runInstalledJourney(f.input,{run:async()=>result}),/subprocess failed/);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+ assert.equal(report.status,'failed');assert.deepEqual(report.failure.result,result);
+ assert.deepEqual(report.steps[0].result,result);
+ assert.equal(await readFile(join(f.input.outputDirectory,'install.stdout'),'utf8'),result.stdout);
+ assert.equal(await readFile(join(f.input.outputDirectory,'install.stderr'),'utf8'),result.stderr);
+});
+test('spawn error without close settles after bounded drain with diagnostics',{timeout:5000},async()=>{
+ const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};child.unref=()=>{};
+ const pending=runProcess('fixture',[],{timeoutMs:10000},{spawnProcess:()=>child});
+ child.emit('error',Object.assign(new Error('spawn failed'),{code:'ENOENT'}));
+ child.stdout.write('late out');child.stderr.write('late err');
+ const result=await pending;
+ assert.equal(result.error.code,'ENOENT');assert.equal(result.stdout,'late out');assert.equal(result.stderr,'late err');
+ assert.equal(result.cleanup.state,'unconfirmed');assert.equal(child.stdout.destroyed,true);assert.equal(child.stderr.destroyed,true);
+});
+test('observed group absence latches before escalation even while inherited pipes stay open',{skip:!posixGroups,timeout:5000},async()=>{
+ const child=new EventEmitter();child.pid=123456789;child.stdout=new PassThrough();child.stderr=new PassThrough();child.unref=()=>{};
+ child.kill=()=>assert.fail('must not signal a retired process');
+ const original=process.kill,calls=[];
+ process.kill=(pid,signal)=>{
+  calls.push({pid,signal});
+  assert.equal(pid,-child.pid);assert.equal(signal,0,'absence observation must precede all escalation');
+  if(calls.length===1)throw Object.assign(new Error('absent'),{code:'ESRCH'});
+  return true; // A reused number must not be observed or signalled again.
+ };
+ try{
+  const result=await runProcess('fixture',[],{timeoutMs:10},{spawnProcess:()=>child});
+  assert.equal(calls.length,1);assert.equal(result.timedOut,true);
+  assert.equal(result.cleanup.state,'unconfirmed','open inherited pipes are not proof of escaped descendant absence');
+ }finally{process.kill=original;}
+});
+
+test('injected spawn error and late pipes reach the failed journey receipt even after close zero',async t=>{
+ const f=await fixture(t);
+ const run=(command,args,options)=>runProcess(command,args,options,{spawnProcess:()=>{
+  const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};child.unref=()=>{};
+  queueMicrotask(()=>{
+   child.stdout.write('before ');
+   child.emit('error',Object.assign(new Error('synthetic spawn error'),{code:'ENOENT'}));
+   child.stdout.write('after');child.stderr.write('trailing diagnostic');
+   child.emit('close',0,null);
+  });
+  return child;
+ }});
+ await assert.rejects(runInstalledJourney(f.input,{run}),/subprocess failed/);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+ assert.equal(report.steps.length,1);assert.equal(report.status,'failed');
+ assert.equal(report.steps[0].result.status,0);
+ assert.equal(report.steps[0].result.error.code,'ENOENT');
+ assert.equal(report.steps[0].result.stdout,'before after');assert.equal(report.steps[0].result.stderr,'trailing diagnostic');
+ assert.deepEqual(report.failure.result,report.steps[0].result);
+ assert.equal(await readFile(join(f.input.outputDirectory,'install.stdout'),'utf8'),'before after');
+ assert.equal(await readFile(join(f.input.outputDirectory,'install.stderr'),'utf8'),'trailing diagnostic');
+ assert.ok((await readFile(join(report.scratch,'artifact.tgz'))).length>0,'failure keeps original archive evidence');
 });

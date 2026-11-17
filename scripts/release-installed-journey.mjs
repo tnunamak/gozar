@@ -55,27 +55,37 @@ function archiveFiles(bytes){
  if(!ended||pax||raw.subarray(offset).some(b=>b!==0))throw new Error('Invalid archive terminator');
  return files;
 }
-export function runProcess(command,args,options){
- return new Promise((resolveResult,reject)=>{
+export function runProcess(command,args,options,{spawnProcess=spawn}={}){
+ return new Promise(resolveResult=>{
   // A separate POSIX group owns descendants that inherit our pipes. Never
   // signal the caller's process group. Other platforms cannot confirm a tree.
   const grouped=process.platform==='linux'||process.platform==='darwin';
-  const child=spawn(command,args,{cwd:options.cwd,env:options.env,stdio:['ignore','pipe','pipe'],detached:grouped});
-  let stdout='',stderr='',overflow=false,timedOut=false,settled=false,stopping=false,closed=false;
+  const child=spawnProcess(command,args,{cwd:options.cwd,env:options.env,stdio:['ignore','pipe','pipe'],detached:grouped});
+  const ownedPid=child.pid,stdoutChunks=[],stderrChunks=[],maxBytes=16*1024*1024;
+  let outputBytes=0,overflow=false,timedOut=false,settled=false,stopping=false,closed=false,processError=null,retired=false;
   let status=null,signal=null,killTimer,drainTimer,pollTimer;
   const clear=()=>{clearTimeout(timer);clearTimeout(killTimer);clearTimeout(drainTimer);clearInterval(pollTimer);};
   const groupAbsent=()=>{
-   if(!grouped||!child.pid)return false;
-   try{process.kill(-child.pid,0);return false;}catch(error){return error.code==='ESRCH';}
+   if(retired)return true;
+   if(!grouped||!ownedPid)return false;
+   try{process.kill(-ownedPid,0);return false;}catch(error){
+    if(error.code==='ESRCH'){retired=true;return true;}
+    return false;
+   }
   };
   const finish=cleanup=>{
    if(settled)return;settled=true;clear();
    child.stdout.destroy();child.stderr.destroy();child.unref();
-   resolveResult({status,signal,stdout,stderr,timedOut,overflow,...(cleanup?{cleanup}: {})});
+   resolveResult({status,signal,stdout:Buffer.concat(stdoutChunks).toString('utf8'),
+    stderr:Buffer.concat(stderrChunks).toString('utf8'),timedOut,overflow,
+    ...(processError?{error:processError}:{}),...(cleanup?{cleanup}: {})});
   };
   const send=signal=>{
-   try{if(grouped&&child.pid)process.kill(-child.pid,signal);else child.kill(signal);}
-   catch{/* Failure is reflected by an unconfirmed cleanup, never success. */}
+   // Once absence is observed, the group number is retired forever. Check
+   // before TERM and KILL, not only after close, so reused IDs are never chased.
+   if(groupAbsent())return;
+   try{if(grouped&&ownedPid)process.kill(-ownedPid,signal);else if(ownedPid)child.kill(signal);}
+   catch(error){if(grouped&&error.code==='ESRCH')retired=true;}
   };
   const check=()=>{
    if(closed&&groupAbsent())finish({state:'confirmed',scope:'owned-process-group'});
@@ -86,29 +96,34 @@ export function runProcess(command,args,options){
    send('SIGTERM');
    killTimer=setTimeout(()=>{send('SIGKILL');check();},250);
    pollTimer=setInterval(check,25);
-   // Inherited/escaped pipes must not keep the promise or event loop alive.
-   // Group absence is the only positive cleanup evidence; zombies, permission
-   // errors and unsupported platforms remain explicitly unconfirmed.
+   // Group absence proves only the owned group, never arbitrary escaped
+   // descendants. Open inherited pipes remain explicitly unconfirmed.
+   clearTimeout(drainTimer);
    drainTimer=setTimeout(()=>finish({state:closed&&groupAbsent()?'confirmed':'unconfirmed',scope:'owned-process-group'}),1500);
    check();
   };
   const timer=setTimeout(()=>{timedOut=true;stop();},options.timeoutMs);
   const collect=key=>chunk=>{
    if(settled||overflow)return;
-   if(key==='stdout')stdout+=chunk;else stderr+=chunk;
-   if(Buffer.byteLength(stdout)+Buffer.byteLength(stderr)>16*1024*1024){overflow=true;stop();}
+   const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk),remaining=maxBytes-outputBytes;
+   // Retain raw bytes within one shared budget; decode each stream once.
+   const kept=Math.min(remaining,bytes.length);
+   if(kept>0)(key==='stdout'?stdoutChunks:stderrChunks).push(Buffer.from(bytes.subarray(0,kept)));
+   outputBytes+=kept;
+   if(bytes.length>remaining){overflow=true;stop();}
   };
   child.stdout.on('data',collect('stdout'));child.stderr.on('data',collect('stderr'));
   child.once('error',error=>{
    if(settled)return;
-   // A spawn failure owns no process; signaling failures cannot bypass drain.
-   if(child.pid){stop();return;}
-   settled=true;clear();child.stdout.destroy();child.stderr.destroy();reject(error);
+   processError={name:error.name,message:error.message,code:error.code??null};
+   // Errors may precede trailing pipe data. Keep a failed result until close
+   // or bounded drain; do not reject early and lose the step receipt.
+   if(ownedPid)stop();
+   else drainTimer=setTimeout(()=>finish({state:'unconfirmed',scope:'owned-process-group'}),1500);
   });
   child.once('exit',(code,reason)=>{status=code;signal=reason;});
   child.once('close',(code,reason)=>{
-   closed=true;
-   status=code;signal=reason;
+   closed=true;status=code;signal=reason;
    if(stopping)check();else finish();
   });
  });
@@ -151,6 +166,8 @@ export async function runInstalledJourney(input,{run=runProcess}={}){
  if(pkg?.name!=='@tnunamak/gozar'||Object.keys(pkg.dependencies??{}).length)throw new Error('Archive must be standalone @tnunamak/gozar');
  for(const name of ['examples/remote-access-screen.mjs','examples/provider-lifecycle-fixture.mjs'])
   if(!members.has(name))throw new Error('Missing installed example '+name);
+ const optionalNames=[...new Set([...Object.keys(pkg.optionalDependencies??{}),
+  ...Object.keys(pkg.peerDependencies??{}).filter(name=>pkg.peerDependenciesMeta?.[name]?.optional===true)])];
  const output=resolve(outputDirectory);await mkdir(output,{mode:0o700});
  const scratch=await mkdtemp(join(tmpdir(),'gzj-'));
  const report={status:'failed',tarball:source,sha256,sourceSha,sourceShaProvenance:'caller-supplied, not authenticated by archive',scratch,steps:[]};
@@ -170,7 +187,7 @@ export async function runInstalledJourney(input,{run=runProcess}={}){
    report.steps.push({name,command,args,result});await save();
    await writeFile(join(output,name+'.stdout'),result.stdout??'',{mode:0o600});
    await writeFile(join(output,name+'.stderr'),result.stderr??'',{mode:0o600});
-   if(result.status!==0||result.signal||result.timedOut||result.overflow){
+   if(result.error||result.status!==0||result.signal!=null||result.timedOut||result.overflow||result.cleanup?.state==='unconfirmed'){
     const error=new Error('Installed journey subprocess failed: '+name);error.result=result;throw error;
    }
    return result.stdout;
@@ -179,9 +196,9 @@ export async function runInstalledJourney(input,{run=runProcess}={}){
   const installed=join(scratch,'node_modules','@tnunamak','gozar');
   const actual=await regularFiles(installed);
   if(actual.size!==members.size||[...members].some(([name,body])=>!actual.get(name)?.equals(body)))throw new Error('Archive and installed bytes differ');
-  await assertOptionalAbsent(join(scratch,'node_modules'),Object.keys(pkg.optionalDependencies??{}));
+  await assertOptionalAbsent(join(scratch,'node_modules'),optionalNames);
   report.members=[...members].map(([path,body])=>({path,sha256:digest(body),bytes:body.length}));
-  report.optionalDependenciesAbsent=Object.keys(pkg.optionalDependencies??{});
+  report.optionalDependenciesAbsent=optionalNames;
   const screen=await step('screen',process.execPath,[join(installed,'examples/remote-access-screen.mjs'),'--fakes']);
   if(!screen.startsWith('Remote access\n')||!screen.includes('Host inputs:')||!screen.includes('Choice:'))throw new Error('Unknown screen outcome');
   const raw=await step('lifecycle',process.execPath,[join(installed,'examples/provider-lifecycle-fixture.mjs')]);
@@ -190,7 +207,8 @@ export async function runInstalledJourney(input,{run=runProcess}={}){
      lifecycle.proof?.status!=='verified'||lifecycle.cleanup?.state!=='confirmed'||
      lifecycle.resourceLedger?.foreignPreserved!==true||!Array.isArray(lifecycle.resourceLedger?.ownedAfter)||
      lifecycle.resourceLedger.ownedAfter.length!==0||lifecycle.statusPreservedProofTime!==true||
-     !Array.isArray(lifecycle.events)||!lifecycle.events.includes('start')||!lifecycle.events.includes('proof'))
+     !Array.isArray(lifecycle.events)||lifecycle.events.some(event=>!['setup','start','proof','stop','cleanup'].includes(event))||
+     !/^setup,start,proof(?:,proof)*,stop,cleanup$/.test(lifecycle.events.join(',')))
    throw new Error('Unknown or incomplete lifecycle outcome; cleanup debt retained');
   report.status='passed';await save();return report;
  }catch(error){
