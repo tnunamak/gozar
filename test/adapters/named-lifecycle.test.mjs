@@ -56,8 +56,12 @@ test('named advertised transport matches the attached proof boundary and generat
   assert.match(row, /\| yes \/ yes \/ no \|/);
 });
 
+for (const protocols of [['sse'], ['streamable-http'], ['sse', 'streamable-http']]) {
 for (const buffered of [false, true]) {
-  test('named attached proof uses real timed SSE and '+(buffered?'rejects buffered delivery':'accepts incremental delivery'), async t => {
+  test('named initial proof for '+protocols.join('+')+' with '+(buffered?'buffered':'incremental')+' delivery', async t => {
+    // This adapter supplies prepareProof: unlike the generic controller fallback,
+    // its initial verifier requests SSE only when that requirement is explicit.
+    const checksSse = protocols.includes('sse');
     // Redirect transport only; use the real gate nonce and timed-stream verifier.
     const app = createServer((_request, response) => response.end('fixture app'));
     await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
@@ -69,9 +73,16 @@ for (const buffered of [false, true]) {
     const adapter = createNamedAdapter({detectBinary:async()=>true,startConnector:async()=>{throw new Error('proof must not start a connector');}});
     const origin = 'https://named.example.invalid';
     const context = {platform:'linux',now:Date.now,configuration:async()=>({token:'fixture-only',origin,'gate-port':String(gatePort)})};
-    const request = {target:'127.0.0.1:'+app.address().port,usage:{kind:'attached'},requirements:{protocols:['sse','streamable-http']}};
+    const supported = adapter.properties().protocols;
+    for (const protocol of protocols) {
+      const capability = protocol === 'streamable-http' ? 'streamableHttp' : 'sse';
+      assert.equal(supported[capability], true, protocol+' must independently remain declared supported');
+    }
+    const request = {target:'127.0.0.1:'+app.address().port,usage:{kind:'attached'},requirements:{protocols}};
     const proof = await adapter.prepareProof(context, request);
-    t.after(() => proof.close());
+    let closingProof;
+    const closeProof = () => closingProof ??= proof.close();
+    t.after(closeProof);
     const realFetch = globalThis.fetch;
     let streamResponses = 0;
     globalThis.fetch = async (input, init) => {
@@ -91,12 +102,21 @@ for (const buffered of [false, true]) {
     t.after(() => { clearTimeout(timeout); stop.abort(); });
     const attempt = {id:'named-stream-proof',signal:stop.signal,deadlineMs:Date.now()+10_000};
     const result = await proof.verify({origin,attempt});
-    assert.ok(streamResponses > 0, 'SSE requirement must reach the real timed stream request');
+    if (checksSse) assert.ok(streamResponses > 0, 'explicit SSE must reach the real timed stream request');
+    else assert.equal(streamResponses, 0, 'Streamable HTTP alone does not request a timed SSE proof in this adapter');
     assert.equal(result.attemptId, attempt.id);
     assert.equal(result.endpoint, origin);
     assert.equal(result.vantage, 'this-device');
-    assert.equal(result.status, buffered ? 'unverified' : 'verified');
-    assert.deepEqual(result.checks, buffered ? [] : ['tls','nonce','sse']);
-    if (buffered) assert.notEqual(result.status, 'verified', 'no successful proof may authorize publication');
+    const rejected = buffered && checksSse;
+    assert.equal(result.status, rejected ? 'unverified' : 'verified');
+    assert.deepEqual(result.checks, rejected ? [] : ['tls','nonce', ...(checksSse ? ['sse'] : [])]);
+    if (rejected) assert.notEqual(result.status, 'verified', 'failed timed proof must not authorize publication');
+    // Exercise exact local gate teardown, without stopping the independent app.
+    await closeProof();
+    await assert.rejects(realFetch('http://127.0.0.1:'+gatePort, {signal:AbortSignal.timeout(1000)}));
+    assert.equal(await (await realFetch('http://127.0.0.1:'+app.address().port)).text(), 'fixture app');
+    // No connector is allocated here. This is proof/gate coverage, not a
+    // controller publication/withdrawal or remote Cloudflare TLS/client receipt.
   });
+}
 }
