@@ -59,9 +59,9 @@ test('direct validator is awaited and its asynchronous rejection is preserved', 
  const services=createEmbeddingServices({registryId:'async-validator'});
  const config=await services.readConfiguration({home,providerId:adapter.id});
  const request={home,providerId:adapter.id,actionId:a.id,expectedConfigurationRevision:config.revision,approval:{kind:'setup',digest:a.digest,disclosureRevision:a.disclosure.revision}};
- const rejection=new Error('validator rejected');let release;const gate=new Promise(resolve=>{release=resolve;});let entered=false;
- const pending=runEmbeddingSetup(request,{embeddingServices:services,adapters:[adapter],platform:'linux',readContext:{configuration:async()=>null},validateSetupApproval:async()=>{entered=true;await gate;throw rejection;}});
- while(!entered) await new Promise(resolve=>setImmediate(resolve));
+ const rejection=new Error('validator rejected');let release, enter;const gate=new Promise(resolve=>{release=resolve;});const entered=new Promise(resolve=>{enter=resolve;});
+ const pending=runEmbeddingSetup(request,{embeddingServices:services,adapters:[adapter],platform:'linux',readContext:{configuration:async()=>null},validateSetupApproval:async()=>{enter();await gate;throw rejection;}});
+ await Promise.race([entered,pending.then(()=>assert.fail('setup completed before entering approval validation'))]);
  assert.equal(adapter.calls.setup,0);release();await assert.rejects(pending,error=>error===rejection);assert.equal(adapter.calls.setup,0);
 });
 
