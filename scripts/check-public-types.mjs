@@ -44,7 +44,12 @@ async function assertNoOwnedLinks(directory,pkg){
   if(entry.isDirectory())await assertNoOwnedLinks(path,pkg);
  }
 }
-export async function checkPublicTypes({installedRoot,tsc,timeoutMs=30000,outputCapBytes=OUTPUT_CAP_BYTES}){
+// Owned scheduler seam for deadline tests; the drain timer and CLI stay real.
+function scheduleDeadline(fire,ms){
+ const timer=setTimeout(fire,ms);
+ return ()=>clearTimeout(timer);
+}
+export async function checkPublicTypes({installedRoot,tsc,timeoutMs=30000,outputCapBytes=OUTPUT_CAP_BYTES,scheduleCompilerDeadline=scheduleDeadline}){
  if(!isAbsolute(installedRoot)||!isAbsolute(tsc))throw new Error('Both paths must be absolute');
  if(!Number.isFinite(timeoutMs)||timeoutMs<=0||timeoutMs>30000)throw new Error('Invalid compiler timeout');
  if(!Number.isInteger(outputCapBytes)||outputCapBytes<=0)throw new Error('Invalid compiler output cap');
@@ -73,7 +78,7 @@ export async function checkPublicTypes({installedRoot,tsc,timeoutMs=30000,output
   },files:['consumer.ts']},null,2));
   return await new Promise((resolveResult,reject)=>{
    const chunks={stdout:[],stderr:[]};
-   let kept=0,timedOut=false,overflow=false,spawnError,settled=false,exited=false,exitCode=null,exitSignal=null,timer,drainTimer;
+   let kept=0,timedOut=false,overflow=false,spawnError,settled=false,exited=false,exitCode=null,exitSignal=null,cancelDeadline,drainTimer;
    const terminationErrors=[];
    const grouped=process.platform!=='win32';
    const child=spawn(compiler,['--project',join(project,'tsconfig.json'),'--pretty','false'],{cwd:project,detached:grouped,stdio:['ignore','pipe','pipe']});
@@ -94,7 +99,7 @@ export async function checkPublicTypes({installedRoot,tsc,timeoutMs=30000,output
    const startDrain=()=>{if(!drainTimer)drainTimer=setTimeout(()=>finish(true),DRAIN_MS);};
    const finish=(truncated=false)=>{
     if(settled)return;
-    settled=true;clearTimeout(timer);clearTimeout(drainTimer);
+    settled=true;cancelDeadline?.();clearTimeout(drainTimer);
     if(truncated){
      child.stdout.destroy();child.stderr.destroy();
      // This reader no longer owns the gate's lifetime. It does not assert the process or any descendant is gone.
@@ -120,7 +125,7 @@ export async function checkPublicTypes({installedRoot,tsc,timeoutMs=30000,output
     }else{chunks[name].push(data);kept+=data.length;}
    };
    child.stdout.on('data',keep('stdout'));child.stderr.on('data',keep('stderr'));
-   timer=setTimeout(()=>{timedOut=true;kill();startDrain();},timeoutMs);
+   cancelDeadline=scheduleCompilerDeadline(()=>{if(settled)return;timedOut=true;kill();startDrain();},timeoutMs,child);
    child.on('error',error=>{spawnError=error;if(!child.pid)finish();});
    // exit records compiler status; only close proves its pipes drained.
    child.on('exit',(code,signal)=>{exited=true;exitCode=code;exitSignal=signal;});

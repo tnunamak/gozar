@@ -5,11 +5,12 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,readdir,rm,chmod,rename,symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {processIdentity} from '../../packages/gozar-node/process-identity.mjs';
 import {checkPublicTypes,parseArgs} from '../../scripts/check-public-types.mjs';
 
-async function fixture(t,body){
+async function fixture(t,body,{retain=()=>false}={}){
  const root=await mkdtemp(join(tmpdir(),'public-types-unit-'));
- t.after(()=>rm(root,{recursive:true,force:true}));
+ t.after(()=>retain()?undefined:rm(root,{recursive:true,force:true}));
  const pkg=join(root,'node_modules','@tnunamak','gozar');await mkdir(pkg,{recursive:true});
  await writeFile(join(pkg,'package.json'),JSON.stringify({name:'@tnunamak/gozar',type:'module',exports:{'.':{types:'./index.d.ts'},'./testing':{types:'./testing.d.ts'}}}));
  await writeFile(join(pkg,'index.d.ts'),'export {};');await writeFile(join(pkg,'testing.d.ts'),'export {};');
@@ -93,64 +94,128 @@ test('a link at any depth inside the installed package cannot qualify, dependenc
  assert.equal(ok.code,0);assert.equal(ok.overflow,false);
 });
 
-test('deadline settles even after compiler exit when a detached descendant holds its pipes',{skip:process.platform==='win32'},async t=>{
+// This watchdog bounds the harness, not the compiler behavior being exercised.
+async function bounded(promise,label){
+ let timer;
+ try{return await Promise.race([promise,new Promise((_,reject)=>{
+  timer=setTimeout(()=>reject(new Error(label)),30000);
+ })]);}finally{clearTimeout(timer);}
+}
+async function openPipeScenario(t,preconnectionError=null){
  const server=createServer();
- let ownedSocket;
- const connected=new Promise(resolve=>server.once('connection',socket=>{ownedSocket=socket;resolve(socket);}));
- await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
- t.after(()=>{ownedSocket?.destroy();return new Promise(resolve=>server.close(resolve));});
- const descendant="const socket=require('node:net').connect("+server.address().port+",'127.0.0.1',()=>process.send({pid:process.pid}));setInterval(()=>{},1000)";
- const f=await fixture(t,`const fs=require('node:fs');const p=require('node:path');const {spawn}=require('node:child_process');
- const child=spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{detached:true,stdio:['ignore',1,2,'ipc']});
- if(child.pid)fs.writeFileSync(p.join(process.cwd(),'..','escaped.json'),JSON.stringify({pid:child.pid}));
- child.once('message',()=>{
-  process.stdout.write('compiler exited with inherited pipes');
-  child.disconnect();
-  process.exit(0);
- });`);
+ let ownedSocket,socketClosed,retain=true,compilerChild,fireDeadline,cancelled=false;
+ let observeExit;
+ const exited=new Promise(resolve=>{observeExit=resolve;});
+ const connected=new Promise(resolve=>server.once('connection',socket=>{
+  ownedSocket=socket;socketClosed=new Promise(resolve=>socket.once('close',resolve));
+  socket.resume();resolve(socket);
+ }));
+ await bounded(new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);}),
+  'Owned server did not start');
+ t.after(async()=>{
+  ownedSocket?.destroy();
+  await bounded(new Promise(resolve=>server.close(resolve)),'Owned server did not close');
+ });
+ // Record a lifetime identity before releasing the child. The negative case never
+ // connects, but holds the same real inherited pipes.
+ const descendant="process.once('message',()=>{"+
+  (preconnectionError?"process.send({ready:true});":
+   "require('node:net').connect("+server.address().port+",'127.0.0.1',()=>process.send({ready:true}));")+
+  "});setInterval(()=>{},1000)";
+ const identityUrl=new URL('../../packages/gozar-node/process-identity.mjs',import.meta.url).href;
+ const body=[
+  "const fs=require('node:fs');const p=require('node:path');const {spawn}=require('node:child_process');",
+  "(async()=>{",
+  "const {processIdentity}=await import("+JSON.stringify(identityUrl)+");",
+  "const child=spawn(process.execPath,['-e',"+JSON.stringify(descendant)+"],{detached:true,stdio:['ignore',1,2,'ipc']});",
+  "child.once('message',()=>{process.stdout.write('compiler exited with inherited pipes');child.disconnect();process.exit(0);});",
+  "const identity=await processIdentity(child.pid);",
+  "if(!identity)throw new Error('Owned descendant has no readable lifetime identity');",
+  "fs.writeFileSync(p.join(process.cwd(),'..','escaped.json'),JSON.stringify({pid:child.pid,identity}));",
+  "child.send('start');",
+  "})().catch(error=>{console.error(error);process.exit(1);});",
+ ].join('\n');
+ const f=await fixture(t,body,{retain:()=>retain});
  const sentinel=join(f.root,'keep');await writeFile(sentinel,'untouched');
- let pid,deadline;
- let socketClosed;
- connected.then(socket=>{socketClosed=new Promise(resolve=>socket.once('close',resolve));socket.resume();});
- const pending=checkPublicTypes({installedRoot:f.root,tsc:f.compiler,timeoutMs:1000});
- // Attach rejection handling immediately; the finally block still joins it.
+ const before=await Promise.all([readFile(sentinel),readFile(f.compiler),readFile(join(f.pkg,'package.json')),
+  readFile(join(f.pkg,'index.d.ts')),readFile(join(f.pkg,'testing.d.ts'))]);
+ const pending=checkPublicTypes({installedRoot:f.root,tsc:f.compiler,
+  scheduleCompilerDeadline:(fire,ms,child)=>{
+   assert.equal(ms,30000,'the production timeout value is unchanged');
+   compilerChild=child;
+   child.once('exit',(code,signal)=>observeExit({code,signal}));
+   fireDeadline=()=>{if(!cancelled)fire();};
+   return ()=>{cancelled=true;};
+  }});
  const settled=pending.then(result=>({result}),error=>({error}));
+ let failure,cleanupExpired=false;
  try{
-  const answer=await Promise.race([
-   settled,
-   new Promise((_,reject)=>{deadline=setTimeout(()=>reject(new Error('checkPublicTypes did not settle within its outer deadline')),3000);}),
-  ]);
+  const exit=await bounded(exited,'Compiler did not exit during setup');
+  assert.deepEqual(exit,{code:0,signal:null});
+  if(preconnectionError)throw preconnectionError;
+  await bounded(connected,'Owned descendant did not connect');
+  assert.equal(ownedSocket.destroyed,false,'the inherited-pipe holder is still connected');
+  // Only now fire the compiler deadline: no startup-speed race.
+  fireDeadline();
+  const answer=await bounded(settled,'Compiler check did not settle after the controlled deadline');
   if(answer.error)throw answer.error;
   const result=answer.result;
   assert.equal(result.timedOut,true);
-  assert.equal(result.code,0); // exit succeeded; pipe close is a different event.
+  assert.equal(result.code,0);
   assert.equal(result.signal,null);
   assert.equal(result.outputTruncated,true);
   assert.equal(result.descendantCleanup,'unverified');
   assert.match(result.stdout,/compiler exited with inherited pipes/);
   assert.equal((await readdir(f.root)).some(x=>x.startsWith('.gozar-public-types-')),false);
-  assert.equal(await readFile(sentinel,'utf8'),'untouched');
-  assert.ok(await readFile(f.compiler,'utf8'));
-  assert.ok(await readFile(join(f.pkg,'index.d.ts'),'utf8'));
- }finally{
-  clearTimeout(deadline);
-  // The compiler records only its own child's group leader immediately on spawn.
-  // Never enumerate or signal unrelated processes/groups.
-  try{({pid}=JSON.parse(await readFile(join(f.root,'escaped.json'),'utf8')));}
-  catch(error){if(error.code!=='ENOENT')throw error;}
-  if(pid!==undefined){
-   assert.ok(Number.isSafeInteger(pid)&&pid>1&&pid!==process.pid);
-   try{process.kill(-pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}
-  }
-  // Killing the exact inherited-pipe holder lets even the unfixed check close.
-  // Bound cleanup too: never leave the test runner waiting on this regression.
-  let cleanupTimer;
+  assert.deepEqual(await Promise.all([readFile(sentinel),readFile(f.compiler),readFile(join(f.pkg,'package.json')),
+   readFile(join(f.pkg,'index.d.ts')),readFile(join(f.pkg,'testing.d.ts'))]),before);
+ }catch(error){failure=error;}
+ finally{
   try{
-   await Promise.race([Promise.all([settled,...(pid!==undefined?[connected.then(()=>socketClosed)]:[])]),new Promise((_,reject)=>{
-    cleanupTimer=setTimeout(()=>reject(new Error('Owned compiler/pipe cleanup could not be confirmed')),2000);
-   })]);
-  }finally{clearTimeout(cleanupTimer);}
+   await bounded((async()=>{
+    // Stop the owned compiler independently even when descendant evidence is missing.
+    if(compilerChild&&compilerChild.exitCode===null&&compilerChild.signalCode===null)compilerChild.kill('SIGKILL');
+    fireDeadline?.();
+    // Retire the exact owned lifetime even if it never connected. Never wait
+    // on connected after killing it, and never signal an identity mismatch.
+    const {pid,identity}=JSON.parse(await readFile(join(f.root,'escaped.json'),'utf8'));
+    assert.ok(Number.isSafeInteger(pid)&&pid>1&&pid!==process.pid);
+    assert.equal(typeof identity,'string');assert.ok(identity);
+    const actual=await processIdentity(pid);
+    if(actual!==null){
+     assert.equal(actual,identity,'owned descendant identity changed; retain evidence');
+     try{process.kill(pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}
+     const retirementEnds=Date.now()+20000;
+     while(true){
+      if(cleanupExpired||Date.now()>=retirementEnds)throw new Error('Owned descendant retirement remains uncertain');
+      const current=await processIdentity(pid);
+      if(current===null)break;
+      assert.equal(current,identity,'descendant identity changed during retirement');
+      await new Promise(resolve=>setTimeout(resolve,25));
+     }
+    }
+    await settled;
+    if(socketClosed)await socketClosed;
+    if(cleanupExpired)throw new Error('Cleanup deadline expired; retain evidence');
+    retain=false;
+   })(),'Owned compiler/pipe cleanup could not be confirmed');
+  }catch(error){
+   cleanupExpired=true;
+   if(failure)failure.cleanupError=error;else failure=error;
+  }
  }
+ if(failure)throw failure;
+}
+const identityPlatform=process.platform==='linux'||process.platform==='darwin';
+test('deadline settles even after compiler exit when a detached descendant holds its pipes',{skip:!identityPlatform},
+ t=>openPipeScenario(t));
+test('preconnection failure retires the owned pipe holder without waiting for a connection',{skip:!identityPlatform},async t=>{
+ const original=new Error('injected failure before descendant connection');
+ await assert.rejects(openPipeScenario(t,original),error=>{
+  assert.equal(error,original,'cleanup must preserve the original failure');
+  assert.equal(error.cleanupError,undefined,'preconnection cleanup must complete independently');
+  return true;
+ });
 });
 
 test('output budget is shared across stdout and stderr and never splits a UTF-8 character',{skip:process.platform==='win32'},async t=>{
