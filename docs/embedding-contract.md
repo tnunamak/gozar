@@ -138,3 +138,72 @@ These are new open fact data, not a new schema or setup consent requirement.
 Refresh current offers before approval; old authority does not grandfather
 changed pricing. Catalog, redemption and runtime review share the route encoder.
 Pure canonical tests do not establish public zero-effect refusal or proof/cleanup.
+
+## Public draft workflow (same owner and revision)
+
+Use the current configuration returned by inventory or catalog. This example is
+an integration fragment: `api` is your configured factory, `home` and `owner`
+are your unchanged scope, and `providerId` is selected catalog data. It binds a
+non-secret value only after your UI has reviewed the offered setup snapshot and
+the user has approved that exact action. Do not substitute a route approval.
+
+```js
+const scope = { home, owner, providerId };
+const draft = await api.beginConfigurationDraft({
+  ...scope, expectedConfigurationRevision: configuration.revision,
+});
+// Persist draft.draftId; after restart, reload rather than reconstructing actions.
+const restored = await api.readConfigurationDraft({ ...scope, draftId: draft.draftId });
+const action = restored.configuration.actions.find(a => a.kind === 'provide-value');
+if (!action) throw new Error('No value action is currently offered');
+// Display action.consent.facts and action.consent.disclosures; obtain approval.
+const result = await api.runSetupAction({
+  ...scope, draftId: draft.draftId,
+  expectedConfigurationRevision: restored.configuration.revision,
+  actionId: action.id, value: approvedValue,
+  approval: { kind: 'setup', digest: action.digest,
+    disclosureRevision: action.disclosure.revision,
+    consentFactsDigest: action.consent.consentFactsDigest },
+});
+configuration = result.configuration; // use this scope's fresh revision/actions
+```
+
+The public draft regression in `test/node/public-draft-configuration.test.mjs`
+checks fresh consent after reload, result/revision agreement, an approved
+`clear-input` action and rejection of a foreign provider's draft. It does not
+certify a real provider account or the installed host integration. Keep the same
+optional owner on every call. Treat revisions as opaque equality/CAS values;
+a conflict requires a fresh read and review, not a forced retry with old consent.
+For secret descriptors, intake stays in the trusted host: bind the returned opaque
+handle to that same draft and revision, never expose bytes to the renderer.
+
+## Display, recovery and qualification boundaries
+
+Render all open fact rows and every consent-affecting row, including unknown
+reasons. Compute eligibility and policy from typed properties, availability,
+prerequisites and proof. Do not parse labels/messages, branch on provider IDs,
+or turn fact IDs into a second provider-specific form schema. Descriptor IDs and
+action IDs are distinct; the host chooses controls for the generic descriptors.
+
+Persist an operation ID before start. Same-intent replay recovers the original
+handle; a changed intent conflicts and a stopped operation stays terminal.
+`listRoutes({home,owner})` is recovery enumeration, not proof renewal. Retain
+partial allocations and cleanup debt. Use `routeStatus` for current proof and
+advertise only `published`, never a historical origin. Proof binds origin,
+target, instance, handle generation and controller boot, not just a factory.
+
+Rotation is not complete at stop acknowledgement: wait for confirmed owned
+cleanup before committing a replacement draft. Follow an unconfirmed cleanup's
+next action and retry the retained handle. Do not discard credentials still
+referenced by applied configuration or another draft. Local discard/close never
+promises remote credential revocation, nor deletion of owner-managed DNS/tunnels.
+
+The library, CLI, public types and installed host must be qualified together for
+0.4. Linux/macOS support is not proof that every provider/account, architecture,
+GUI environment or installed artifact passed a live journey. Offline fixtures,
+read-only detection, presence checks and secret-prompt checks each establish only
+their stated boundary. Keep installed host acceptance and real-provider checks
+separate. Shipped execution is HTTP(S); ngrok TLS/TCP profiles remain detect-only.
+Ngrok HTTPS needs its optional SDK and account/domain prerequisites; Cloudflare
+named uses an existing owner-managed tunnel/DNS route. Neither is implied ready
+by saved inputs. No future release or provider expansion is promised here.

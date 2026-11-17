@@ -1,4 +1,4 @@
-# Migrating from 0.3 to 0.4
+# Migrating from 0.3.4 to 0.4
 
 Depend on `^0.4.0`. Query/request schemaVersion stays 1. Catalog and RouteView
 responses use 2, including routes nested in watch events. Update checks/mocks.
@@ -104,3 +104,46 @@ detection and creates no route. Both remove a private home under ~/.tmp.
 Use the explicit @tnunamak/gozar/testing effects factory for real-adapter fixtures:
 no ambient flag or real-provider fallback. See [embedding API](embedding-contract.md)
 and [effect contracts](testing-effects.md).
+
+## Upgrade and qualification checklist
+
+Ship the library, CLI, types and host integration as one qualified 0.4 boundary;
+do not pair a 0.3.4 approval producer with a 0.4 consumer. Update request mocks
+and catalog/RouteView response mocks together. Keep the existing public draft
+journey as a regression oracle for reload, same-scope consent and fresh revision
+results; it is not evidence of live account acceptance.
+
+The host capability vocabulary starts with `installer.execute`,
+`privilege.elevate`, `secrets.backend`, `runtime.attached` and
+`runtime.durable`. Preserve additional IDs as open data. A denied capability is
+not an absent executable; an undeclared capability cannot grant authority.
+Never branch UI behavior on a literal provider ID. Use typed properties for
+computation and open facts for display, not a second provider-specific schema.
+
+For a project-local installation, invoke the owned local executable rather than
+assuming a global command. Here FILE, ID and HANDLE are your existing request,
+selected catalog ID and retained handle file; these commands are examples, not
+an instruction to start a route:
+
+```sh
+./node_modules/.bin/gozar catalog --query-file FILE --provider-id ID --json
+./node_modules/.bin/gozar configure --query-file FILE --provider-id ID --json
+./node_modules/.bin/gozar routes --home DIR --owner OWNER --json
+./node_modules/.bin/gozar route-status --handle-file HANDLE --json
+./node_modules/.bin/gozar close --handle-file HANDLE --json
+```
+
+Configure collects descriptor inputs; it does not expose a route. Explicit setup
+uses the current setup approval, while expose/ensure use route approval. Keep
+provider credentials out of argv/env/logs; private approval files contain issued
+authority, not provider credential values. Library callers keep custom backend
+custody in their configured factory rather than assuming CLI file-store custody.
+
+Linux and macOS require Node.js 22.13 or newer. Support is not a blanket live
+qualification for all providers, architectures or accounts. Offline Node/Rust
+gates, installed host integration, secret-terminal behavior and live provider
+journeys are separate evidence. Detection cannot establish account entitlement,
+DNS correctness, client reachability or cleanup. Ngrok HTTPS is attached-only;
+Cloudflare named retains the owner's remote tunnel/DNS/token on stop. Raw ngrok
+TLS/TCP execution remains detect-only in this release. Do not promote it to
+executable based on a successful detect or fixture run.

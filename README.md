@@ -122,12 +122,15 @@ if (!candidate) throw new Error(catalog.noMatch?.code ?? 'setup needed');   // c
 
 const ask = createInterface({ input: process.stdin, output: process.stdout });
 console.log(candidate.disclosure.text);
-for (const fact of candidate.facts.filter(row => row.affectsConsent)) {
+console.log(candidate.consent.disclosures); // render the typed consent disclosures in your UI
+for (const fact of candidate.consent.facts.filter(row => row.affectsConsent)) {
   console.log(fact.label, fact.known ? fact.value : `unknown (${fact.reason})`);
 }
 if ((await ask.question('Create this route? [y/N] ')).trim().toLowerCase() !== 'y') { ask.close(); process.exit(0); }
 const route = await expose({ ...query, wait: 'verified',
-  approval: { candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision } });
+  approval: { ...Object.fromEntries(Object.entries(candidate).filter(([key]) =>
+    ['candidateToken', 'consentFactsDigest'].includes(key))),
+    kind: 'route', disclosureRevision: candidate.disclosure.revision } });
 console.log('Published at', route.published);
 
 const controller = new AbortController();
@@ -140,7 +143,10 @@ const watching = (async () => {
 // When the app no longer needs the route. The watch ends with a terminal event; controller.abort() ends it sooner.
 await ask.question('Press Enter to close the route ');
 ask.close();
-await closeRoute({ home: stateDirectory, handle: route.handle, mode: 'remove' });
+const closed = await closeRoute({ home: stateDirectory, handle: route.handle, mode: 'remove' });
+if (closed.cleanup.state !== 'confirmed') {
+  throw new Error('Cleanup is unconfirmed; retain the handle and retry closeRoute');
+}
 await watching;
 ```
 
@@ -149,7 +155,7 @@ await watching;
 - `ensureRoute` (durable), `adoptRoute` (takes over an existing rule and removes it when released or stopped) and `expose` (session or attached) all return a `RouteView`. Its `origin` is the route's address as soon as the provider has allocated it, also while the route is `unverified`: configure your server for it, so it can answer the challenge. `published` is the address you may advertise; it is `null` until the route is `usable`. With attached usage the calling process holds the route: the library sends a heartbeat every 5 seconds, the route ends within 20 seconds of the process exiting, and `closeRoute` ends it early.
 - A candidate's unmet `requirement` and `reasonCode` use closed lists. Its `actual` value can name input that prevented the route: an invalid owner-run origin appears as `{ origin, reason: 'invalid_origin' }` on the `setup` entry; a durable create origin outside the provider's creatable addresses appears as `{ origin }` on an `address` entry. Neither candidate receives a token.
 - Every failure has a code from a closed list, `GozarErrorCode` in `packages/gozar-node/route-contract.d.ts`, and an optional `nextAction`. Provider diagnostics never reach the app.
-- Requirements `transport` is `'https'` or `'any'`. `'any'` allows plain HTTP, and only with reach `lan` or `this-device`; any other reach is `invalid_input`. A `provide-value` setup action asks the user for one plain value (`valueFormat` is `https-origin`, `domain` or `text`). Send it as `runSetupAction({ ..., value })`; a value that does not match the format is `invalid_input`. It is stored as configuration, not as a secret. A route its owner keeps (an address the user already runs) has `ownership: 'external-owned'`; `ensureRoute` records it without creating anything, and the origin is the one the user gave.
+- Requirements `transport` is `'https'`, `'tcp'`, `'tls'` or `'any'`. Shipped 0.4 execution is HTTP(S); raw TCP/TLS profiles remain detect-only. `'any'` allows plain HTTP, and only with reach `lan` or `this-device`; any other reach is `invalid_input`. A `provide-value` setup action asks the user for one plain value (`valueFormat` is `https-origin`, `domain` or `text`). Send it as `runSetupAction({ ..., value })`; a value that does not match the format is `invalid_input`. It is stored as configuration, not as a secret. A route its owner keeps (an address the user already runs) has `ownership: 'external-owned'`; `ensureRoute` records it without creating anything, and the origin is the one the user gave.
 - `getRoutePreferences` and `setRoutePreferences` keep the user's provider order as `preferenceRef` values or `providerId` values. `runSetupAction` runs one setup action the user approved. `resolveClientAddress` turns a proven connection into a client address, or says why it cannot.
 - The route functions behave the same on Linux and macOS. On any other platform every candidate is `unsupported`.
 
@@ -201,7 +207,7 @@ Use CLI `health` to recheck a route and `stop` for cleanup. A passing route chec
 
 ### Which versions to accept
 
-Depend on `^0.4.0`. Within one 0.N line, Gozar keeps the route contract an app codes against: the public error codes, the query fields an app must send, and every field a candidate or route already has. New providers and new optional fields ship as 0.4.x releases, so an app with `^0.4.0` offers a new provider without a code change, because it reads every choice from the catalog. A change that breaks the contract starts a new line (for example 0.5.0), which an app adopts on purpose. A wider range such as `<1.0.0` would also accept those breaking lines. Gozar 1.0 will follow standard semantic versioning.
+Depend on `^0.4.0`. Within one 0.N line, Gozar keeps the route contract an app codes against: the public error codes, the query fields an app must send, and every field a candidate or route already has. New providers and new optional fields ship as 0.4.x releases, so an app with `^0.4.0` offers a new provider without a code change, because it reads every choice from the catalog. A change that breaks the contract requires a separately adopted release line. A wider range such as `<1.0.0` would also accept those breaking lines. The 0.4 line is an early integration boundary, not a promise of future providers or releases. Qualify the library, CLI and installed host together; Linux/macOS support and offline fixtures do not establish live acceptance for every provider, account or architecture.
 
 ## JavaScript API
 
@@ -449,10 +455,11 @@ unknown. A detected address is not a verified route. See the
 Configure one choice with descriptor prompts before opening it:
 
 ```sh
-gozar configure --query-file query.json --provider-id ID --json
+./node_modules/.bin/gozar configure --query-file query.json --provider-id ID --json
 ```
 
-Secret terminal input is hidden and stored by Gozar. No token belongs in argv,
+This project-local command requires an installed package; no global executable is assumed.
+Secret terminal input is hidden and stored by Gozar. No provider credential belongs in argv,
 an environment variable, an approval file or a support transcript. `configure`
 collects inputs and does not open a route. The explicit-action alternative is
 `gozar setup ACTION_ID --prompt --query-file query.json --provider-id ID --approval-file approval.json`.
