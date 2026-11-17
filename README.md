@@ -455,7 +455,7 @@ Inspect cleanup failures and retry when indicated. Start a fresh `expose` only a
 
 ## Contributing
 
-**npm users do not need Rust or a source build.** Only contributors building the WASM core need Rust and wasm-bindgen 0.2.105:
+**Source-checkout-only instructions. npm users do not need Rust or a source build.** The npm archive includes the compiled core and these guides, not the Rust sources, build scripts or test suites. To contribute, first get a source checkout below. Building the WASM core there needs Rust and wasm-bindgen 0.2.105; `scripts/build-wasm.sh` is a source-checkout-only command:
 
 ```sh
 git clone https://github.com/tnunamak/gozar.git
@@ -468,6 +468,8 @@ bash scripts/build-wasm.sh
 Run `npm link` in a source checkout if you want a bare `gozar` command.
 
 ### Develop
+
+Run the following test and build commands only from the `gozar` source checkout obtained above, after building its WASM core. They do not run from an npm installation.
 
 Gozar uses a Rust planning core compiled to WASM, a Node.js process to perform effects, and provider adapters defined in data. Consult the [architecture](docs/architecture.md), [protocol contract](runtime/core-protocol.json), and [adapter guide](adapters/INTEGRATION.md).
 

@@ -56,6 +56,7 @@ async function checkPackage() {
   const required = ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'third-party/manifest.json', 'examples/provider-lifecycle-fixture.mjs', 'examples/remote-access-screen.mjs', 'adapters/manifest.json', 'packages/gozar-node/route-contract.d.ts', 'packages/gozar-node/adapter-contract.d.ts',
     'packages/gozar-node/testing.mjs', 'runtime/route-catalog.schema.json', 'runtime/adapter.schema.json', 'runtime/error-normalization.json', 'runtime/plain-copy.json', 'runtime/plain-copy.schema.json',
     'packages/gozar-node/plain-copy.mjs', 'packages/gozar-node/expose-copy.mjs',
+    'docs/design/durable-routes.md', 'docs/architecture.md', 'adapters/INTEGRATION.md', 'harness/README.md',
     ...manifest.providers.flatMap(provider => [`adapters/${provider.module}`, `adapters/${provider.definition}`, `adapters/${provider.id}.definition.json`])];
   const missing = required.filter(path => !files.has(path));
   if (missing.length) throw new Error(`The package archive is missing: ${missing.join(', ')}`);
