@@ -57,16 +57,60 @@ function archiveFiles(bytes){
 }
 export function runProcess(command,args,options){
  return new Promise((resolveResult,reject)=>{
-  const child=spawn(command,args,{cwd:options.cwd,env:options.env,stdio:['ignore','pipe','pipe']});
-  let stdout='',stderr='',overflow=false,timedOut=false;
-  const timer=setTimeout(()=>{timedOut=true;child.kill('SIGKILL');},options.timeoutMs);
+  // A separate POSIX group owns descendants that inherit our pipes. Never
+  // signal the caller's process group. Other platforms cannot confirm a tree.
+  const grouped=process.platform==='linux'||process.platform==='darwin';
+  const child=spawn(command,args,{cwd:options.cwd,env:options.env,stdio:['ignore','pipe','pipe'],detached:grouped});
+  let stdout='',stderr='',overflow=false,timedOut=false,settled=false,stopping=false,closed=false;
+  let status=null,signal=null,killTimer,drainTimer,pollTimer;
+  const clear=()=>{clearTimeout(timer);clearTimeout(killTimer);clearTimeout(drainTimer);clearInterval(pollTimer);};
+  const groupAbsent=()=>{
+   if(!grouped||!child.pid)return false;
+   try{process.kill(-child.pid,0);return false;}catch(error){return error.code==='ESRCH';}
+  };
+  const finish=cleanup=>{
+   if(settled)return;settled=true;clear();
+   child.stdout.destroy();child.stderr.destroy();child.unref();
+   resolveResult({status,signal,stdout,stderr,timedOut,overflow,...(cleanup?{cleanup}: {})});
+  };
+  const send=signal=>{
+   try{if(grouped&&child.pid)process.kill(-child.pid,signal);else child.kill(signal);}
+   catch{/* Failure is reflected by an unconfirmed cleanup, never success. */}
+  };
+  const check=()=>{
+   if(closed&&groupAbsent())finish({state:'confirmed',scope:'owned-process-group'});
+  };
+  const stop=()=>{
+   if(stopping||settled)return;stopping=true;
+   // TERM allows an owned parent to reap children; KILL bounds cooperation.
+   send('SIGTERM');
+   killTimer=setTimeout(()=>{send('SIGKILL');check();},250);
+   pollTimer=setInterval(check,25);
+   // Inherited/escaped pipes must not keep the promise or event loop alive.
+   // Group absence is the only positive cleanup evidence; zombies, permission
+   // errors and unsupported platforms remain explicitly unconfirmed.
+   drainTimer=setTimeout(()=>finish({state:closed&&groupAbsent()?'confirmed':'unconfirmed',scope:'owned-process-group'}),1500);
+   check();
+  };
+  const timer=setTimeout(()=>{timedOut=true;stop();},options.timeoutMs);
   const collect=key=>chunk=>{
+   if(settled||overflow)return;
    if(key==='stdout')stdout+=chunk;else stderr+=chunk;
-   if(Buffer.byteLength(stdout)+Buffer.byteLength(stderr)>16*1024*1024){overflow=true;child.kill('SIGKILL');}
+   if(Buffer.byteLength(stdout)+Buffer.byteLength(stderr)>16*1024*1024){overflow=true;stop();}
   };
   child.stdout.on('data',collect('stdout'));child.stderr.on('data',collect('stderr'));
-  child.once('error',error=>{clearTimeout(timer);reject(error);});
-  child.once('close',(status,signal)=>{clearTimeout(timer);resolveResult({status,signal,stdout,stderr,timedOut,overflow});});
+  child.once('error',error=>{
+   if(settled)return;
+   // A spawn failure owns no process; signaling failures cannot bypass drain.
+   if(child.pid){stop();return;}
+   settled=true;clear();child.stdout.destroy();child.stderr.destroy();reject(error);
+  });
+  child.once('exit',(code,reason)=>{status=code;signal=reason;});
+  child.once('close',(code,reason)=>{
+   closed=true;
+   status=code;signal=reason;
+   if(stopping)check();else finish();
+  });
  });
 }
 async function regularFiles(root){
