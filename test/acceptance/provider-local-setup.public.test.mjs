@@ -112,9 +112,12 @@ for (const [providerId, vantage] of [
   assert.doesNotMatch(JSON.stringify(harness.events), /public-handoff-canary/);
 });
 
-for (const draft of [false, true]) test(`public ngrok disconnect after ${draft ? 'discarded draft and factory restart' : 'cancellation'} removes only local inventory custody`, async t => {
+for (const scenario of ['cancellation', 'discarded draft and factory restart', 'switch to dashboard']) test(
+  `public ngrok disconnect after ${scenario} removes only local inventory custody`, async t => {
+  const draft = scenario === 'discarded draft and factory restart';
+  const switching = scenario === 'switch to dashboard';
   const home = await scratch(t);
-  let sdk = false, reads = 0;
+  let sdk = false, reads = 0, refuseDeletion = false;
   const agent = 'public-agent-canary', key = 'public-management-canary', name = 'agent.ngrok.app';
   const byteStore = await scratch(t);
   const handles = new Map(), secretReads = [], deletes = [];
@@ -135,6 +138,7 @@ for (const draft of [false, true]) test(`public ngrok disconnect after ${draft ?
     },
     async delete({ handle }) {
       deletes.push(handle);
+      if (refuseDeletion) return { deleted: false };
       await unlink(join(byteStore, handle));
       return { deleted: true };
     },
@@ -178,36 +182,59 @@ for (const draft of [false, true]) test(`public ngrok disconnect after ${draft ?
   assert.equal(await readFile(join(byteStore, inventoryHandle), 'utf8'), key);
   const journalPath = join(home, 'embedding-state.json');
   assert.ok((await readFile(journalPath, 'utf8')).includes(inventoryHandle));
-  const networkCount = reads, secretReadCount = secretReads.filter(handle => handle === inventoryHandle).length;
-
   let resumed = api, recovered;
+  if (switching) {
+    assert.equal(complete.nextAction?.id, 'ngrok-domain-source');
+    assert.equal(complete.nextAction.required, false);
+    assert.deepEqual(complete.nextAction.step.options, [{ value: 'dashboard', label: 'Copy from the ngrok dashboard' }]);
+    recovered = await advance(complete, { value: 'dashboard' });
+    assert.equal(recovered.state, 'pending');
+  }
+  const networkCount = reads, secretReadCount = secretReads.filter(handle => handle === inventoryHandle).length;
   if (draft) {
     await api.discardConfigurationDraft({ ...ref, draftId });
     await harness.close();
     resumed = (await startFactory()).gozar;
     recovered = await resumed.readSetupOperation(ref);
-  } else {
+  } else if (!switching) {
     recovered = await api.cancelSetupOperation(ref);
     assert.equal(recovered.state, 'cancelled');
   }
   assert.equal(recovered.nextAction?.id, 'ngrok-disconnect-inventory');
   assert.equal(recovered.nextAction.kind, 'gozar-runs');
   assert.equal(recovered.nextAction.step.purpose, 'disconnect');
-  const request = command(recovered);
+  let request = command(recovered);
   await assert.rejects(resumed.runSetupAction({ ...request, owner: 'foreign-owner' }), { code: 'configuration_stale' });
   await assert.rejects(resumed.runSetupAction({ ...request, approval: approval(domain.nextAction) }), { code: 'consent_mismatch' });
   assert.deepEqual(deletes, []);
   assert.equal(await readFile(join(byteStore, inventoryHandle), 'utf8'), key);
 
+  if (!draft) {
+    refuseDeletion = true;
+    const refused = await resumed.runSetupAction(request);
+    assert.equal(refused.state, switching ? 'blocked' : 'cancelled');
+    assert.equal(refused.nextAction?.id, 'ngrok-disconnect-inventory');
+    assert.equal(await readFile(join(byteStore, inventoryHandle), 'utf8'), key);
+    assert.ok((await readFile(journalPath, 'utf8')).includes(inventoryHandle));
+    assert.deepEqual(deletes, [inventoryHandle]);
+    await resumed.runSetupAction(request);
+    assert.deepEqual(deletes, [inventoryHandle], 'replay does not retry a failed backend delete');
+    recovered = await resumed.readSetupOperation(ref);
+    assert.notEqual(recovered.state, 'complete');
+    assert.ok(recovered.revision > request.expectedSetupRevision);
+    request = command(recovered);
+    refuseDeletion = false;
+  }
   const disconnected = await resumed.runSetupAction(request);
   const readback = await resumed.readSetupOperation(ref);
   for (const result of [disconnected, readback]) {
+    if (switching) assert.equal(result.state, 'complete');
     assert.equal(result.nextAction, null);
     assert.equal(result.evidence.known, true);
     assert.match(result.evidence.value.summary, /No local domain inventory key/);
     assert.doesNotMatch(JSON.stringify(result), /public-(agent|management)-canary/);
   }
-  assert.deepEqual(deletes, [inventoryHandle]);
+  assert.deepEqual(deletes, draft ? [inventoryHandle] : [inventoryHandle, inventoryHandle]);
   await assert.rejects(readFile(join(byteStore, inventoryHandle)), { code: 'ENOENT' });
   assert.ok(!(await readFile(journalPath, 'utf8')).includes(inventoryHandle));
   assert.equal(await readFile(join(byteStore, agentHandle), 'utf8'), agent);

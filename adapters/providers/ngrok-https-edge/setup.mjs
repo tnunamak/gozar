@@ -81,11 +81,15 @@ export function ngrokSetup({ definition, authAction, domainAction, sdkAvailable,
       ? 'Choose a domain observed in the inventory key’s account. The SDK still checks the agent credential and domain pairing when an approved route starts.'
       : 'Open Domains in the intended account. Copy the assigned development domain or a reserved hostname the plan already permits. If the account has no domain, ask its owner to acquire or assign one and review any cost there. Return and enter the hostname without a scheme, port or path.',
   }, 'owner', 'Select an existing ngrok HTTPS domain', options ? 'provider' : 'host', 'configure', options);
+  const dashboard = { value: 'dashboard', label: 'Copy from the ngrok dashboard' };
   const source = action({ id: domainSource, kind: 'provide-value', label: 'Choose where to get your ngrok domain',
     valueLabel: 'Domain source', valueFormat: 'text', required: true,
     help: 'Use the dashboard to copy a hostname. If an administrator has supplied a suitably scoped API key, Gozar can read the account’s reserved domains.' },
   'owner', 'Select the source of domain inventory', 'host', 'configure',
-  [{ value: 'dashboard', label: 'Copy from the ngrok dashboard' }, { value: 'inventory', label: 'Read the account inventory with an API key' }]);
+  [dashboard, { value: 'inventory', label: 'Read the account inventory with an API key' }]);
+  const useDashboard = action({ ...source, label: 'Switch to the ngrok dashboard', required: false,
+    help: 'Use the dashboard to choose an existing hostname and approve forgetting the local inventory key.',
+  }, 'owner', 'Switch away from domain inventory', 'host', 'configure', [dashboard]);
   const management = action({ id: 'ngrok-management-key', inputId: 'ngrok-management-key', kind: 'provide-secret',
     label: 'Provide an ngrok API key for domain inventory', secretLabel: 'ngrok management API key',
     obtainUrl: 'https://dashboard.ngrok.com/api-keys',
@@ -119,19 +123,26 @@ export function ngrokSetup({ definition, authAction, domainAction, sdkAvailable,
   async function observeSetup(ctx, operation) {
     const outcome = (state, nextAction, summary, stepId = nextAction?.id ?? 'ngrok-ready', source = nextAction?.step.verification ?? 'host') =>
       ({ state, nextAction, evidence: { operationId: operation.id, stepId, source, observedAt: new Date(ctx.now()).toISOString(), summary } });
+    const disconnectIfRetained = () => ctx.hasManagementSecret(inventorySlot)
+      ? outcome('pending', disconnect, 'This setup retains a local domain inventory key.') : null;
     if (operation.cancelled) {
-      if (ctx.hasManagementSecret(inventorySlot)) return outcome('pending', disconnect, 'This setup retains a local domain inventory key.');
+      const recovery = disconnectIfRetained();
+      if (recovery) return recovery;
       return outcome('complete', null, 'No local domain inventory key is retained by this setup. The account’s existing credentials and domains are retained.', disconnect.id);
     }
     if (operation.lastActionId === null) return outcome('authorization-required', entry, entry.help);
+    const configuration = await ctx.configurationPresence();
+    const values = configuration?.values ?? {};
+    const selected = values[domainSource];
+    if (selected !== 'inventory') {
+      const recovery = disconnectIfRetained();
+      if (recovery) return recovery;
+    }
     if (!supportedPlatform(ctx.platform)) return outcome('blocked', null, 'The ngrok runtime is unavailable on this platform.', 'ngrok-platform');
     if (!await sdkAvailable(ctx)) return outcome('blocked', artifact(ctx.platform, ctx.architecture ?? process.arch),
       'The optional ngrok SDK is missing. Confirm installation and refresh after the host can load it.');
-    const configuration = await ctx.configurationPresence();
-    const values = configuration?.values ?? {};
     const agent = configuration?.credentials?.auth;
     if (!agent?.known || agent.value !== true) return outcome('authorization-required', auth, 'Agent credential intake is required. Browser sign-in alone supplies no agent credential.');
-    const selected = values[domainSource];
     if (selected !== 'dashboard' && selected !== 'inventory') return outcome('authorization-required', source, source.help);
 
     const saved = values['reserved-domain'];
@@ -152,7 +163,9 @@ export function ngrokSetup({ definition, authAction, domainAction, sdkAvailable,
     } else if (!domainPattern.test(saved ?? '')) {
       return outcome('authorization-required', domain(), 'Enter the account hostname shown in the dashboard.');
     }
-    return outcome('complete', null, 'Setup inputs are ready. An approved listener start must verify the credential and domain pairing, and route proof must succeed before publication.');
+    const readiness = 'Setup inputs are ready. An approved listener start must verify the credential and domain pairing, and route proof must succeed before publication.';
+    const summary = operation.lastActionId === disconnect.id ? 'No local domain inventory key is retained by this setup. ' + readiness : readiness;
+    return outcome('complete', selected === 'inventory' ? useDashboard : null, summary, 'ngrok-ready');
   }
 
   return {

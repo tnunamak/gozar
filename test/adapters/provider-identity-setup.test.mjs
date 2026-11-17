@@ -69,6 +69,7 @@ const setupContext = (config, extras = {}) => ({
   now: () => Date.parse('2026-11-17T00:00:00Z'),
   platform: 'linux',
   configuration: async () => ({ ...config }),
+  hasManagementSecret: () => false,
   configurationPresence: async () => {
     const { auth, ...values } = config;
     return { scopeId: 'fixture-scope', values, credentials: { auth: { known: true, value: !!auth } } };
@@ -221,6 +222,7 @@ test('ngrok inventory choices come from a bounded read and management stays outs
   const config = { auth: agent, 'ngrok-domain-source': 'inventory' };
   let retained = false;
   const ctx = setupContext(config, {
+    hasManagementSecret: slot => { assert.equal(slot, 'domain-inventory'); return retained; },
     withManagementSecret: async (slot, use) => {
       assert.equal(slot, 'domain-inventory');
       return retained ? use(Buffer.from(management)) : null;
