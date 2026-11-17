@@ -583,6 +583,27 @@
         "affectsConsent": false,
         "source": "gozar:release-0.4-scope",
         "asOf": "2026-11-13T00:00:00.000Z"
+      },
+      {
+        "id": "payload-readers",
+        "label": "Payload readers",
+        "value": "Architecture classification: the application endpoint receives opaque TCP; TLS termination and intermediary reader access have not been observed. Raw TCP remains detect-only in this release and is not an executable route. This is not a live deployment observation.",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "adapter architecture: adapters/providers/ngrok-tcp-passthrough/definition.json#adapter.capabilities.traffic",
+        "asOf": null
+      },
+      {
+        "id": "payload-readers-deployment",
+        "label": "Actual deployment payload readers",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "gozar:catalog:no-deployment-observation",
+        "asOf": null
       }
     ],
     "originSchemes": [

@@ -593,6 +593,27 @@
         "affectsConsent": false,
         "source": "adapter-configuration",
         "asOf": "2026-11-13"
+      },
+      {
+        "id": "payload-readers",
+        "label": "Payload readers",
+        "value": "Architecture classification: HTTPS terminates on this device in local tailscaled, which can read the payload. Tailnet-only reach does not hide publicly logged certificate names. The upstream/application TLS boundary is not established by tailnet reach. This is not a live deployment observation.",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "adapter architecture: adapters/providers/tailscale-private/definition.json#adapter.capabilities.traffic",
+        "asOf": null
+      },
+      {
+        "id": "payload-readers-deployment",
+        "label": "Actual deployment payload readers",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "gozar:catalog:no-deployment-observation",
+        "asOf": null
       }
     ],
     "effectOperations": [
