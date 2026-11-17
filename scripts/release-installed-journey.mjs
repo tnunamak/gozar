@@ -55,19 +55,87 @@ function archiveFiles(bytes){
  if(!ended||pax||raw.subarray(offset).some(b=>b!==0))throw new Error('Invalid archive terminator');
  return files;
 }
+// These bounds apply after termination begins, even when inherited pipes never close.
+const PROCESS_DRAIN_MS=1000,PROCESS_KILL_GRACE_MS=200,PROCESS_OUTPUT_BYTES=16*1024*1024;
 export function runProcess(command,args,options,{spawnProcess=spawn}={}){
  return new Promise(resolveResult=>{
-  const child=spawnProcess(command,args,{cwd:options.cwd,env:options.env,stdio:['ignore','pipe','pipe']});
-  let stdout='',stderr='',overflow=false,timedOut=false,processError=null;
-  const timer=setTimeout(()=>{timedOut=true;child.kill('SIGKILL');},options.timeoutMs);
+  let child;
+  try{
+   child=spawnProcess(command,args,{cwd:options.cwd,env:options.env,stdio:['ignore','pipe','pipe'],
+    detached:process.platform!=='win32'});
+  }catch(error){
+   resolveResult({status:null,signal:null,stdout:'',stderr:'',timedOut:false,overflow:false,
+    error:{name:error.name,message:error.message,code:error.code??null},
+    cleanup:{scope:'not-started',state:'confirmed'}});return;
+  }
+  const group=process.platform!=='win32'&&Number.isInteger(child.pid)&&child.pid>0?child.pid:null;
+  const chunks={stdout:[],stderr:[]},cleanupErrors=[];
+  let retainedBytes=0,observedBytes=0,overflow=false,timedOut=false,processError=null;
+  let status=null,signal=null,closed=false,settled=false,stopping=false,observedGroupGone=false;
+  let timer,drainTimer,killTimer,pollTimer;
+  const errorRecord=error=>({name:error.name,message:error.message,code:error.code??null});
+  function groupGone(){
+   if(group===null)return closed;
+   if(observedGroupGone)return true;
+   try{process.kill(-group,0);return false;}
+   catch(error){
+    if(error.code==='ESRCH'){observedGroupGone=true;return true;}
+    if(!cleanupErrors.some(item=>item.code===error.code))cleanupErrors.push(errorRecord(error));
+    return false;
+   }
+  }
+  function sendSignal(name){
+   try{
+    // The negative id is only the isolated group created for this exact spawn.
+    if(group!==null){if(!groupGone())process.kill(-group,name);}
+    else if(!closed)child.kill(name);
+   }catch(error){if(error.code!=='ESRCH')cleanupErrors.push(errorRecord(error));}
+  }
+  function finish(forced=false){
+   if(settled)return;
+   const gone=groupGone();
+   if(!forced&&(!closed||!gone))return;
+   settled=true;
+   clearTimeout(timer);clearTimeout(drainTimer);clearTimeout(killTimer);clearInterval(pollTimer);
+   if(!closed){child.stdout?.destroy?.();child.stderr?.destroy?.();child.unref?.();}
+   resolveResult({status,signal,stdout:Buffer.concat(chunks.stdout).toString('utf8'),
+    stderr:Buffer.concat(chunks.stderr).toString('utf8'),timedOut,overflow,drainTimedOut:!closed,
+    outputBytes:retainedBytes,observedBytes,
+    cleanup:{scope:group!==null?'process-group':'child-only',pid:child.pid??null,groupId:group,
+     state:closed&&gone&&!(stopping&&group===null&&child.pid)?'confirmed':'unconfirmed',
+     // A process group cannot prove anything about descendants that detach themselves.
+     boundary:group!==null?'owned group only; escaped descendants not verified':'direct child only; descendants not verified',
+     errors:cleanupErrors},
+    ...(processError?{error:processError}:{})});
+  }
+  function stop(){
+   if(stopping||settled)return;
+   stopping=true;sendSignal('SIGTERM');
+   killTimer=setTimeout(()=>{sendSignal('SIGKILL');finish();},PROCESS_KILL_GRACE_MS);
+   drainTimer=setTimeout(()=>finish(true),PROCESS_DRAIN_MS);
+   pollTimer=setInterval(()=>finish(),25);
+  }
   const collect=key=>chunk=>{
-   if(key==='stdout')stdout+=chunk;else stderr+=chunk;
-   if(Buffer.byteLength(stdout)+Buffer.byteLength(stderr)>16*1024*1024){overflow=true;child.kill('SIGKILL');}
+   if(settled)return;
+   const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);
+   observedBytes=Math.min(Number.MAX_SAFE_INTEGER,observedBytes+bytes.length);
+   const take=Math.min(bytes.length,PROCESS_OUTPUT_BYTES-retainedBytes);
+   if(take){chunks[key].push(Buffer.from(bytes.subarray(0,take)));retainedBytes+=take;}
+   // Decode each stream only once after capture, so multibyte code points may span chunks.
+   if(bytes.length>take){overflow=true;stop();}
   };
   child.stdout.on('data',collect('stdout'));child.stderr.on('data',collect('stderr'));
-  // An error can precede trailing pipe data; close is the completion boundary.
-  child.once('error',error=>{processError={name:error.name,message:error.message,code:error.code??null};});
-  child.once('close',(status,signal)=>{clearTimeout(timer);resolveResult({status,signal,stdout,stderr,timedOut,overflow,...(processError?{error:processError}:{})});});
+  // Error still permits trailing data up to close, but cannot leave settlement unbounded.
+  child.once('error',error=>{processError=errorRecord(error);stop();});
+  child.once('close',(code,why)=>{
+   closed=true;status=code;signal=why;
+   if(groupGone())finish();
+   else{
+    processError??={name:'Error',message:'Owned process group remains after child close',code:'PROCESS_DESCENDANTS_REMAIN'};
+    stop();
+   }
+  });
+  timer=setTimeout(()=>{timedOut=true;stop();},options.timeoutMs);
  });
 }
 async function regularFiles(root){
@@ -129,7 +197,7 @@ export async function runInstalledJourney(input,{run=runProcess}={}){
    report.steps.push({name,command,args,result});await save();
    await writeFile(join(output,name+'.stdout'),result.stdout??'',{mode:0o600});
    await writeFile(join(output,name+'.stderr'),result.stderr??'',{mode:0o600});
-   if(result.error||result.status!==0||result.signal||result.timedOut||result.overflow){
+   if(result.error||result.status!==0||result.signal||result.timedOut||result.overflow||result.drainTimedOut||result.cleanup?.state==='unconfirmed'){
     const error=new Error('Installed journey subprocess failed: '+name);error.result=result;throw error;
    }
    return result.stdout;

@@ -6,6 +6,7 @@ import {join,dirname} from 'node:path';
 import {gzipSync} from 'node:zlib';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
+import {spawn} from 'node:child_process';
 import {runInstalledJourney,runProcess} from '../../scripts/release-installed-journey.mjs';
 
 function tar(files){
@@ -165,4 +166,90 @@ test('complete phase labels cannot replace independent ledger and proof-time che
  await assert.rejects(runInstalledJourney(f.input,{run:processStub(f,{outcome:{...evidence,...change}}).run}),/outcome/);
  const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
  t.after(()=>rm(report.scratch,{recursive:true,force:true}));assert.equal(report.status,'failed');
+});
+
+// Host command: node --test test/node/release-installed-journey.test.mjs
+const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function bounded(promise,ms){
+ let timer;
+ try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('runner did not settle')),ms);})]);}
+ finally{clearTimeout(timer);}
+}
+function groupExists(pid){
+ try{process.kill(-pid,0);return true;}
+ catch(error){if(error.code==='ESRCH')return false;throw error;}
+}
+async function retireGroup(child){
+ if(!child?.pid)return;
+ const signal=name=>{try{process.kill(-child.pid,name);}catch(error){if(error.code!=='ESRCH')throw error;}};
+ if(groupExists(child.pid))signal('SIGTERM');
+ for(let i=0;i<20&&groupExists(child.pid);i++)await delay(25);
+ if(groupExists(child.pid))signal('SIGKILL');
+ for(let i=0;i<120&&groupExists(child.pid);i++)await delay(25);
+ assert.equal(groupExists(child.pid),false,'owned fixture group was not observed gone');
+}
+for(const mode of ['timeout','overflow'])test('real inherited-pipe descendant is retired on '+mode,
+ {skip:process.platform==='win32'},async()=>{
+ let child,requestedDetached;
+ // The wrapper starts a real subprocess, not a simulated child. Force fixture
+ // isolation even against the pre-fix runner so failed assertions can retire it.
+ const spawnOwned=(command,args,options)=>{
+  requestedDetached=options.detached;return child=spawn(command,args,{...options,detached:true});
+ };
+ const descendant="process.stdout.write('OWNED_READY\\n');process.send('ready');setInterval(()=>{},1000);";
+ const source=`
+  const {spawn}=require('node:child_process');
+  const descendant=spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore',process.stdout,process.stderr,'ipc']});
+  process.on('SIGTERM',()=>{descendant.kill('SIGTERM');descendant.once('close',()=>process.exit(0));});
+  descendant.once('message',()=>{${mode==='overflow'?"process.stdout.write(Buffer.alloc(20*1024*1024,120));":""}});
+  setInterval(()=>{},1000);
+ `;
+ try{
+  const result=await bounded(runProcess(process.execPath,['-e',source],{timeoutMs:1500},{spawnProcess:spawnOwned}),5000);
+  assert.equal(requestedDetached,true);
+  assert.ok(result.stdout.startsWith('OWNED_READY\n'));
+  assert.equal(result[mode==='timeout'?'timedOut':'overflow'],true);
+  assert.ok(Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr)<=16*1024*1024);
+  assert.equal(result.cleanup.scope,'process-group');
+  assert.equal(result.cleanup.state,'confirmed');
+  assert.equal(groupExists(child.pid),false);
+ }finally{await retireGroup(child);}
+});
+test('real subprocess preserves UTF-8 split across separate stdout and stderr writes',async()=>{
+ const source=`
+  const out=Buffer.from('A€😀Z'),err=Buffer.from('é界');
+  let i=0;
+  const timer=setInterval(()=>{
+   if(i<out.length)process.stdout.write(out.subarray(i,i+1));
+   if(i<err.length)process.stderr.write(err.subarray(i,i+1));
+   if(++i>=out.length)clearInterval(timer);
+  },30);
+ `;
+ let child;
+ const spawnOwned=(command,args,options)=>(child=spawn(command,args,{...options,detached:process.platform!=='win32'}));
+ try{
+  const result=await bounded(runProcess(process.execPath,['-e',source],{timeoutMs:3000},{spawnProcess:spawnOwned}),5000);
+  assert.equal(result.status,0);assert.equal(result.stdout,'A€😀Z');assert.equal(result.stderr,'é界');
+  assert.equal(result.timedOut,false);assert.equal(result.overflow,false);
+ }finally{
+  if(process.platform!=='win32')await retireGroup(child);
+  else if(child&&child.exitCode===null&&child.signalCode===null){
+   const closed=new Promise(resolve=>child.once('close',resolve));
+   child.kill('SIGKILL');await bounded(closed,3000);
+  }
+ }
+});
+test('missing close is bounded and explicitly retains uncertain cleanup',async()=>{
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.kill=()=>true;
+ const result=await bounded(runProcess('fixture',[],{timeoutMs:10},{spawnProcess:()=>child}),3000);
+ assert.equal(result.timedOut,true);assert.equal(result.drainTimedOut,true);
+ assert.equal(result.cleanup.state,'unconfirmed');assert.equal(result.status,null);
+});
+test('uncertain cleanup cannot become a successful installed step',async t=>{
+ const f=await fixture(t);
+ const result={status:0,signal:null,stdout:'partial',stderr:'',cleanup:{state:'unconfirmed',scope:'process-group'}};
+ await assert.rejects(runInstalledJourney(f.input,{run:async()=>result}),/subprocess failed/);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+ assert.equal(report.status,'failed');assert.deepEqual(report.failure.result,result);
 });
