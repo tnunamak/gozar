@@ -31,12 +31,21 @@ test("red: transport 'any' is valid only with reach lan or this-device, and a pl
     assert.equal(await codeOf(api.catalogRoutes(await durable(t, { usage: { kind: 'session', lifetimeMs: 60_000 }, requirements: requirements({ reach, transport: 'any' }) }))), 'invalid_input', reach);
   }
   const session = { usage: { kind: 'session', lifetimeMs: 60_000 } };
-  const lan = (await api.catalogRoutes(await durable(t, { ...session, providerId: 'lan', requirements: requirements({ reach: 'lan', transport: 'any', address: 'any' }) }))).candidates[0];
+  // The LAN adapter offers a candidate only once the owner has chosen an observed interface and confirmed that exact listener scope.
+  const chosen = '192.0.2.10', home = await scratch(t);
+  const configured = createRouteApi({ adapters, platform: 'linux', service: { addService: input => addService({ ...input, verifyCmd: 'exit 0' }) },
+    readContext: { ...readContext, observeInterfaces: async () => ({ interfaces: { eth0: [{ address: chosen, internal: false, family: 'IPv4' }] } }) } });
+  const lanQuery = over => query({ home, ...session, providerId: 'lan', requirements: requirements({ reach: 'lan', transport: 'any', address: 'any', ...over }) });
+  for (const inputId of ['interface', 'firewall']) {
+    const pending = (await configured.catalogRoutes(lanQuery())).candidates[0];
+    await configured.runSetupAction(setupRequest(home, pending, pending.setup.actions.find(action => action.id === inputId), { value: chosen }));
+  }
+  const lan = (await configured.catalogRoutes(lanQuery())).candidates[0];
   assertShape('Candidate', lan);
   assert.equal(lan.properties.transport, 'http');
   assert.equal(lan.eligible, true);
   assert.ok(lan.candidateToken);
-  const strict = (await api.catalogRoutes(await durable(t, { ...session, providerId: 'lan', requirements: requirements({ reach: 'lan', address: 'any' }) }))).candidates[0];
+  const strict = (await configured.catalogRoutes(lanQuery({ transport: 'https' }))).candidates[0];
   assert.equal(strict.eligible, false);
   assert.ok(strict.unmet.some(item => item.requirement === 'transport'));
   assert.match(lan.disclosure.text, /read the traffic/, 'the disclosure says plain HTTP is not private');
