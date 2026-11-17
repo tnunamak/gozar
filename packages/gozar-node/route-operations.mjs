@@ -202,6 +202,24 @@ export async function operationReferenceForRoute({home,handle}={}){
  else if(handle.kind==='external'){record=await optionalRead(join(home,'services',hash(handle.id)+'.json'));owner=record?.embedding?.request.owner;operationId=record?.embedding?.operationId;}
  return typeof owner==='string'&&typeof operationId==='string'?{owner,operationId,handle:currentHandle}:null;
 }
+/** Find the already scoped route demand without copying a view or creating an association. */
+export async function routeGuidanceScope({ home, owner, handle }, view, registryId, beforeClose = null) {
+  if (!view.operationId || !sameHandle(view.handle, handle)) return null;
+  const reference = await operationReferenceForRoute({ home, handle }) ??
+    (view.cleanup.state === 'confirmed' ? beforeClose : null);
+  if (!reference || reference.operationId !== view.operationId || !sameHandle(reference.handle, handle)) return null;
+  if (owner !== undefined && owner !== reference.owner) return null;
+  let dir;
+  try { dir = await directory(home, false); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  const record = await optionalRead(join(dir, hash(JSON.stringify([reference.owner, reference.operationId])) + '.json'));
+  if (!record || record.owner !== reference.owner || record.operationId !== reference.operationId ||
+      !sameHandle(record.view.handle, handle) || record.intent?.registryId !== registryId ||
+      record.intent.owner !== reference.owner || canonicalDigest(record.intent) !== record.intentDigest) return null;
+  if (record.view.cleanup.state === 'confirmed' && view.cleanup.state !== 'confirmed') return null;
+  return record.intent;
+}
+
 export async function recordOperationView({home,view,reference}){
  if(!reference)return view;
  let dir;try{dir=await directory(home,false);}catch(error){if(error.code==='ENOENT')return view;throw error;}

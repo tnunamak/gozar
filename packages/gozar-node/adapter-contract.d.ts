@@ -28,6 +28,8 @@ export interface Adapter {
   /** Prepares this attempt's protocol-specific challenge before provider creation. */
   prepareProof?(ctx: ReadContext, request: AdapterRequest, attempt: ProofAttempt): Promise<AdapterProofSession>;
   setup(ctx: SetupContext, actionId: string, secretHandle?: string): Promise<SetupResult>;
+  /** Read-only guidance for the current scoped route. The binding remedy is descriptive and carries no setup approval. */
+  routeGuidance?(ctx: ReadContext & { route: RouteView; origin: string | null; localPort?: number }): Promise<Action | null>;
   /** Observe an exact operation and its admitted resource intents without provider writes. */
   observeSetup?(ctx: SetupObservationContext, operation: AdapterSetupOperation): Promise<AdapterSetupObservation>;
   /** Execute the admitted action once. Reconcile uncertain responses through observeSetup. */
@@ -167,7 +169,7 @@ export type AdapterSetupOperation = {
   lastActionId: string | null;
 };
 export type AdapterSetupObservation = {
-  state: Exclude<import('./provider-setup-contract.js').SetupOperation['state'], 'cancelled'>;
+  state: import('./provider-setup-contract.js').SetupOperation['state'];
   nextAction: (Action & { step: import('./provider-setup-contract.js').SetupStep }) | null;
   evidence?: Extract<import('./provider-setup-contract.js').SetupEvidence, { known: true }>['value'] & { operationId: string };
   intent?: SetupIntent;

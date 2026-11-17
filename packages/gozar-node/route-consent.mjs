@@ -1,5 +1,5 @@
 // One current redacted review for every route lifecycle. No token is minted here.
-import {readContextFor,inspectAdapter} from './route-catalog.mjs';
+import {readContextFor,inspectAdapter,reviewedOrigin} from './route-catalog.mjs';
 import {completeProperties,checksFor} from './route-view.mjs';
 import {routeConsentReview} from './consent-facts.mjs';
 import {consentDisclosureRevision} from './adopt-disclosure.mjs';
@@ -14,6 +14,6 @@ export async function currentRouteReview(request,adapter,deps,{runtimeFacts}={})
  const facts=[...new Map([...catalogFactsFor(inspection),...(runtimeFacts?.facts??[])].map(fact=>[fact.id,fact])).values()];
  const disclosure={...adapter.definition.disclosure,revision:consentDisclosureRevision(adapter.definition,request.intent)};
  if(request.intent==='adopt')disclosure.text+=' Gozar takes over the existing rule and removes it when the route is released or stopped.';
- const review=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:request.usage,configuration,target:request.target,origin:request.origin,properties,disclosure,facts});
+ const review=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:request.usage,configuration,target:request.target,origin:reviewedOrigin(request.origin,inspection),properties,disclosure,facts});
  return {review,configuration,context,facts,properties};
 }

@@ -93,7 +93,9 @@ async function refresh(request, deps, storage, adapter, context, record, { inclu
   } catch {
     observed = { state: 'blocked', nextAction: null };
   }
-  if (!stateValues.includes(observed?.state)) fail('internal_error');
+  if (!(stateValues.includes(observed?.state) || ((record.cancelled || stale) && observed?.state === 'cancelled'))) {
+    fail('internal_error');
+  }
   observeResources(record, observed.observations, Date.now());
 
   let raw = observed.nextAction;

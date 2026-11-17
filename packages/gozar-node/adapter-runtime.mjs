@@ -134,7 +134,7 @@ export function fixtureInterfaceObserver(recipe,dispatch){
 }
 function scopedAdapter(adapter){
   const wrapped={...adapter};
-  for(const name of ['detect','setup','plan','create','observe','verify','remove','runtimeFacts','prepareProof','hostChoices','observeSetup','executeSetup'])if(typeof adapter[name]==='function')wrapped[name]=(...args)=>adapter[name](bindConfiguration(declaredContext(args[0],adapter.definition,adapter.interfaceRecipe),adapter.id),...args.slice(1));
+  for(const name of ['detect','setup','plan','create','observe','verify','remove','runtimeFacts','prepareProof','hostChoices','observeSetup','executeSetup','routeGuidance'])if(typeof adapter[name]==='function')wrapped[name]=(...args)=>adapter[name](bindConfiguration(declaredContext(args[0],adapter.definition,adapter.interfaceRecipe),adapter.id),...args.slice(1));
   if(adapter.durable){wrapped.durable={...adapter.durable};for(const name of ['observe','put','delete'])wrapped.durable[name]=(...args)=>adapter.durable[name](bindConfiguration(declaredContext(args[0],adapter.definition,adapter.interfaceRecipe),adapter.id),...args.slice(1));}
   return wrapped;
 }

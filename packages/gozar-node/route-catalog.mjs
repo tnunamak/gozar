@@ -49,6 +49,18 @@ export function validateQuery(query) {
   return query;
 }
 
+// Inputs can include credentials or signed paths. Only the authority is safe diagnostic data.
+function displayAuthority(value) {
+  const url = typeof value === 'string' ? URL.parse(value) : null;
+  return url?.hostname && !url.username && !url.password ? url : null;
+}
+
+export function reviewedOrigin(value, inspection) {
+  if (inspection.facts?.invalidOrigin !== undefined) return null;
+  const url = displayAuthority(value);
+  return url && ['', '/'].includes(url.pathname) && !url.search && !url.hash ? value : null;
+}
+
 // --- Runtime pieces that other modules own, loaded lazily so this module stands alone ------------
 
 export async function loadRuntime() {
@@ -203,9 +215,14 @@ async function collect(query, deps) {
     const unmet = [];
     if (supportedPlatform(platform)) {
       unmet.push(...unmetRequirements({ requirements: query.requirements, usage: query.usage, definition, properties, setupState }));
-      if (inspection.facts?.invalidOrigin !== undefined) {
+      const origin = reviewedOrigin(query.origin, inspection);
+      if (inspection.facts?.invalidOrigin !== undefined || (query.origin !== undefined && origin === null)) {
+        const authority = displayAuthority(query.origin);
+        const actual = { origin: authority?.origin === 'null' ? null : authority?.origin ?? null, reason: 'invalid_origin' };
         const setup = unmet.find(item => item.requirement === 'setup');
-        if (setup) setup.actual = { origin: inspection.facts.invalidOrigin, reason: 'invalid_origin' };
+        if (setup) setup.actual = actual;
+        else unmet.push({ requirement: 'setup', actual, reasonCode: 'not_met' });
+        setupState = 'unsupported';
       }
       // A plan exists only for a candidate that could be used now; its digest and resource go into the token.
       if (!unmet.length && setupState === 'ready' && definition.supportedKinds.includes(query.usage.kind)) {
@@ -214,7 +231,7 @@ async function collect(query, deps) {
           if (query.usage.kind === 'durable' && definition.ownership !== 'external-owned') {
             const plan = await durablePlanFacts({ home, adapterId: adapter.id, target: query.target, origin: query.origin ?? null, adapters });
             if (query.intent !== 'adopt' && plan.creatableOrigin === false)
-              unmet.push({ requirement: 'address', actual: { origin: query.origin }, reasonCode: 'not_met' });
+              unmet.push({ requirement: 'address', actual: { origin }, reasonCode: 'not_met' });
             else grant = { adapterId: adapter.id, planDigest: plan.planDigest, observedResource: plan.observedResource };
           } else {
             const request = adapterRequest(query);
@@ -266,7 +283,7 @@ async function collect(query, deps) {
         text: `${definition.disclosure.text} ${takeover}` };
     }
     if (deps.registryId && saved.revision) {
-      const review=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration:saved,target:query.target,origin:query.origin,properties,disclosure:candidate.disclosure,facts:candidate.facts});
+      const review=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration:saved,target:query.target,origin:reviewedOrigin(query.origin,inspection),properties,disclosure:candidate.disclosure,facts:candidate.facts});
       candidate.consentFactsDigest=review.consentFactsDigest;
       candidate.consent=consentSnapshot(review);
       candidate.review={canonicalInput:review.canonicalInput};
