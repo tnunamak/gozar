@@ -6,15 +6,17 @@ import {resolve,posix} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 export const SURVEY_REVISION='ae83f3d71954d4220da77b80e62ddb0f859ef323';
+export const CLARITY_REVISION='e27b326a7e29e08bba65bff9bcba02c7124f8845';
 export const REQUIRED_REVIEWS=['r040-survey-primary-counts-1117','r040-survey-primary-profiles-1117','r040-survey-data-parity-1117'];
 const CLARITY_BRANCH='dot/r040-manifest-coverage-clarity-1117';
 const exec=promisify(execFile);
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const inventory=files=>Object.keys(files).sort().map(path=>({path,bytes:Buffer.byteLength(files[path]),sha256:hash(files[path])}));
-const text=(snapshot,path)=>{
+const bytes=(snapshot,path)=>{
  if(!Object.hasOwn(snapshot.files,path))throw new Error('Unreadable required source: '+path);
- return Buffer.isBuffer(snapshot.files[path])?snapshot.files[path].toString('utf8'):snapshot.files[path];
+ return Buffer.isBuffer(snapshot.files[path])?snapshot.files[path]:Buffer.from(snapshot.files[path],'utf8');
 };
+const text=(snapshot,path)=>bytes(snapshot,path).toString('utf8');
 const data=(snapshot,path)=>JSON.parse(text(snapshot,path));
 function providerPath(base,path){
  if(typeof path!=='string'||!path||posix.isAbsolute(path)||path.includes('\\'))throw new Error('Invalid provider path');
@@ -30,7 +32,7 @@ export function assembleEvidence({surveyRevision,survey,candidate,clarity,receip
  data(candidate,'runtime/adapter.schema.json');
  if(!Array.isArray(manifest.providers)||!manifest.providers.length)throw new Error('Provider inventory is missing');
  const seen=new Set();
- const entry=path=>({path,sha256:hash(text(candidate,path)),bytes:Buffer.byteLength(text(candidate,path))});
+ const entry=path=>({path,sha256:hash(bytes(candidate,path)),bytes:bytes(candidate,path).length});
  const providers=manifest.providers.map(provider=>{
   if(typeof provider.id!=='string'||!provider.id||seen.has(provider.id))throw new Error('Invalid/duplicate provider id');
   seen.add(provider.id);
@@ -58,7 +60,7 @@ export function assembleEvidence({surveyRevision,survey,candidate,clarity,receip
  return {
   schemaVersion:1,purpose:'one-shot-source-reconciliation',survey:{revision:survey.revision,files:inventory(survey.files)},
   candidate:{revision:candidate.revision,files:inventory(candidate.files)},providers,normalizedDefinitions:normalized,
-  coverage:{path:'docs/release-0.4-interface-coverage.md',sha256:hash(coverageText),text:coverageText,
+  coverage:{path:'docs/release-0.4-interface-coverage.md',sha256:hash(bytes(candidate,'docs/release-0.4-interface-coverage.md')),text:coverageText,
    gapRows:coverageText.split('\n').filter(line=>/^\|/.test(line)&&!/^[| :\-]+$/.test(line)),
    missingBounds:['329','306','441','319','six','descriptor','posture'].filter(term=>!coverageText.toLowerCase().includes(term)),
    limitations:'Full document retained verbatim; table rows are evidence to review, not inferred semantic verdicts.'},
@@ -81,7 +83,7 @@ async function git(root,args){
  });
  return stdout;
 }
-async function snapshot(root){
+async function snapshot(root,{git,realpath}){
  root=await realpath(root);
  const revision=(await git(root,['rev-parse','--verify','HEAD^{commit}'])).toString().trim();
  const tree=(await git(root,['ls-tree','-rz','--full-tree',revision])).toString().split('\0').filter(Boolean);
@@ -96,22 +98,30 @@ async function snapshot(root){
  const workingTree=(await git(root,['status','--porcelain=v1','--untracked-files=no'])).toString();
  return {root,revision,files,workingTree};
 }
-export async function collectEvidence({surveyRoot,candidateRoot,surveyRevision,reviewFiles=[]}){
+// Optional transport is for hermetic source-observation tests; production uses real local Git and reads.
+export async function collectEvidence({surveyRoot,candidateRoot,surveyRevision,reviewFiles=[]},{git:readGit=git,realpath:resolveRoot=realpath,readFile:readReceipt=readFile}={}){
  if(surveyRevision!==SURVEY_REVISION)throw new Error('Exact survey revision '+SURVEY_REVISION+' is required');
  if(!surveyRoot||!candidateRoot)throw new Error('Both local survey and candidate roots are required');
- const survey=await snapshot(surveyRoot);
+ const survey=await snapshot(surveyRoot,{git:readGit,realpath:resolveRoot});
  if(survey.revision!==surveyRevision)throw new Error('Local survey revision does not match requested survey revision');
- const candidate=await snapshot(candidateRoot);
- let clarity={incorporated:false,reason:'Local qualified branch ref unavailable or not incorporated'};
+ const candidate=await snapshot(candidateRoot,{git:readGit,realpath:resolveRoot});
+ const clarity={incorporated:false,revision:CLARITY_REVISION,branchResolutions:[],
+  reason:'Exact qualified commit unavailable or not incorporated'};
+ // Mutable branch names are provenance only, never a qualification substitute.
  for(const ref of ['refs/heads/'+CLARITY_BRANCH,'refs/remotes/origin/'+CLARITY_BRANCH]){
   try{
-   const revision=(await git(candidate.root,['rev-parse','--verify',ref+'^{commit}'])).toString().trim();
-   await git(candidate.root,['merge-base','--is-ancestor',revision,candidate.revision]);
-   clarity={incorporated:true,revision,ref};break;
-  }catch{/* No fetch or branch-name assumption; record unresolved incorporation. */}
+   const revision=(await readGit(candidate.root,['rev-parse','--verify',ref+'^{commit}'])).toString().trim();
+   clarity.branchResolutions.push({ref,revision});
+  }catch{clarity.branchResolutions.push({ref,unavailable:true});}
  }
+ try{
+  const revision=(await readGit(candidate.root,['rev-parse','--verify',CLARITY_REVISION+'^{commit}'])).toString().trim();
+  if(revision!==CLARITY_REVISION)throw new Error('Qualified commit resolution differs');
+  await readGit(candidate.root,['merge-base','--is-ancestor',CLARITY_REVISION,candidate.revision]);
+  clarity.incorporated=true;delete clarity.reason;
+ }catch{/* Missing exact object or non-ancestry stays unresolved; never fetch. */}
  const receipts=[];
- for(const file of reviewFiles)receipts.push(JSON.parse(await readFile(file,'utf8')));
+ for(const file of reviewFiles)receipts.push(JSON.parse(await readReceipt(file,'utf8')));
  const result=assembleEvidence({surveyRevision,survey,candidate,clarity,receipts});
  result.survey.localRoot=survey.root;result.survey.trackedWorkingTreeStatus=survey.workingTree;
  result.candidate.localRoot=candidate.root;result.candidate.trackedWorkingTreeStatus=candidate.workingTree;

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {assembleEvidence,SURVEY_REVISION,REQUIRED_REVIEWS} from '../../scripts/release-survey-evidence.mjs';
+import {createHash} from 'node:crypto';
+import {assembleEvidence,collectEvidence,CLARITY_REVISION,SURVEY_REVISION,REQUIRED_REVIEWS} from '../../scripts/release-survey-evidence.mjs';
 
 // Tiny owned in-memory source snapshots. They are not real survey/release attestations.
 function fixture(){
@@ -67,4 +68,75 @@ test('missing bounded denominator language remains an explicit documentation gap
  assert.ok(result.coverage.missingBounds.includes('441'));
  assert.ok(result.coverage.missingBounds.includes('319'));
  assert.equal(result.semanticCoverageClosed,false);
+});
+
+test('binary module entry and inventory hash the identical original bytes',()=>{
+ const input=fixture(),path='adapters/providers/custom/index.mjs',bytes=Buffer.from([0x65,0xff,0x0a]);
+ input.candidate.files[path]=bytes;
+ const result=assembleEvidence(input),entry=result.providers[0].module;
+ assert.deepEqual(entry,result.candidate.files.find(item=>item.path===path));
+ assert.equal(entry.bytes,bytes.length);
+ assert.equal(entry.sha256,createHash('sha256').update(bytes).digest('hex'));
+});
+
+// Hermetic transport observations only: these do not attest to any real Git repository.
+function collectorTransport({exactPresent=true,exactAncestor=false,local='a'.repeat(40),remote='b'.repeat(40)}={}){
+ const input=fixture(),calls=[],blobs=new Map(),trees=new Map();
+ for(const [root,source] of [['/survey',input.survey],['/candidate',input.candidate]]){
+  trees.set(root,Object.entries(source.files).map(([path,body])=>{
+   const oid=(blobs.size+1).toString(16).padStart(40,'0');
+   blobs.set(oid,Buffer.from(body));return '100644 blob '+oid+'\t'+path+'\0';
+  }).join(''));
+ }
+ const transport={
+  realpath:async root=>root,
+  readFile:async()=>{throw new Error('Unexpected receipt read');},
+  git:async(root,args)=>{
+   calls.push({root,args});
+   if(args[0]==='rev-parse'){
+    const ref=args[2];
+    if(ref==='HEAD^{commit}')return Buffer.from(root==='/survey'?SURVEY_REVISION:input.candidate.revision);
+    if(ref===CLARITY_REVISION+'^{commit}'){
+     if(!exactPresent)throw new Error('missing exact object');
+     return Buffer.from(CLARITY_REVISION);
+    }
+    if(ref.startsWith('refs/heads/'))return Buffer.from(local);
+    if(ref.startsWith('refs/remotes/origin/'))return Buffer.from(remote);
+   }
+   if(args[0]==='ls-tree')return Buffer.from(trees.get(root));
+   if(args[0]==='cat-file')return blobs.get(args[2]);
+   if(args[0]==='status')return Buffer.from(' M tracked-file\n');
+   if(args[0]==='merge-base'){
+    // Both mutable refs are ancestors, even when the qualified commit is not.
+    if(args[2]!==CLARITY_REVISION||exactAncestor)return Buffer.alloc(0);
+    throw new Error('exact commit is not an ancestor');
+   }
+   throw new Error('Unexpected Git invocation '+JSON.stringify(args));
+  },
+ };
+ return {transport,calls};
+}
+test('collector rejects wrong/stale same-name ancestor refs as qualification',async()=>{
+ assert.equal(CLARITY_REVISION,'e27b326a7e29e08bba65bff9bcba02c7124f8845');
+ for(const exactPresent of [true,false]){
+  const {transport,calls}=collectorTransport({exactPresent});
+  const result=await collectEvidence({surveyRoot:'/survey',candidateRoot:'/candidate',surveyRevision:SURVEY_REVISION},transport);
+  assert.equal(result.clarity.incorporated,false);
+  assert.ok(result.unresolved.some(item=>item.includes('incorporation')));
+  assert.equal(result.semanticCoverageClosed,false);
+  assert.equal(result.saturationEstablished,false);
+  assert.ok(calls.filter(c=>c.args[0]==='merge-base').every(c=>c.args[2]===CLARITY_REVISION));
+ }
+});
+test('collector qualifies exact commit ancestry despite stale local branch provenance',async()=>{
+ const {transport,calls}=collectorTransport({exactAncestor:true,remote:CLARITY_REVISION});
+ const result=await collectEvidence({surveyRoot:'/survey',candidateRoot:'/candidate',surveyRevision:SURVEY_REVISION},transport);
+ assert.equal(result.clarity.incorporated,true);
+ assert.equal(result.clarity.revision,CLARITY_REVISION);
+ assert.ok(calls.some(c=>c.args[0]==='merge-base'&&c.args[2]===CLARITY_REVISION&&c.args[3]==='c'.repeat(40)));
+ assert.deepEqual(result.clarity.branchResolutions.map(item=>item.revision),['a'.repeat(40),CLARITY_REVISION]);
+ assert.equal(result.candidate.trackedWorkingTreeStatus,' M tracked-file\n');
+ assert.match(result.contentBasis,/Committed HEAD blobs only/);
+ assert.equal(result.semanticCoverageClosed,false);
+ assert.equal(result.saturationEstablished,false);
 });
