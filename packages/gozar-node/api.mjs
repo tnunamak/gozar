@@ -6,8 +6,11 @@ import { createRouteApi } from './route-api.mjs';
 
 // The route API: by requirement, never by provider. See route-contract.d.ts.
 const routes = createRouteApi();
+/** Load a trusted provider registry. Modules execute with the host process authority. */
+export function createGozar({ manifest, root, secretBackend, hostCapabilities, identity } = {}) { return createRouteApi({ manifest, root, secretBackend, hostCapabilities, identity }); }
 export const { catalogRoutes, inspectLegacyRoute, ensureRoute, adoptRoute, routeStatus, closeRoute, suspendRoute, watchRoutes,
-  getRoutePreferences, setRoutePreferences, runSetupAction, resolveClientAddress } = routes;
+  getRoutePreferences, setRoutePreferences, runSetupAction, resolveClientAddress, listProviders, storeSecret, discardSecret,
+  beginConfigurationDraft,commitConfigurationDraft,discardConfigurationDraft,readConfigurationDraft,clearConfigurationInput,reviewRouteConsent,approveRouteConsent,listRoutes } = routes;
 /** Alias of catalogRoutes. */
 export const detect = catalogRoutes;
 

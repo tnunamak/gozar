@@ -85,6 +85,9 @@ test('provider_unavailable keeps the watch alive as state unknown; busy is retri
   const events = [];
   for await (const event of watchRoutes(request(controller.signal), deps(s))) { events.push(event); if (events.length === 3) controller.abort(); }
   assert.deepEqual(events.map(e => [e.type, e.route.state]), [['snapshot', 'usable'], ['changed', 'unknown'], ['changed', 'usable']]);
+  assert.equal(events[1].route.routeState, 'unknown');
+  assert.equal(events[1].route.published, null);
+  assert.equal(events[1].route.verification.status, 'unverified');
   for (const event of events) assertShape('WatchEvent', event);
   const failing = script(Object.assign(new Error('x'), { code: 'weird_legacy_code' }));
   await assert.rejects(collect(watchRoutes(request(ctl().signal), deps(failing))), error => error.code === 'internal_error');

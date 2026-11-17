@@ -37,6 +37,7 @@ const refuseApproval = approval => {
  * action is gone or its digest or disclosure moved since the user approved it.
  */
 export async function runSetupAction(request, deps = {}) {
+  if (deps.embeddingServices) return (await import('./embedding-setup.mjs')).runEmbeddingSetup(request, deps);
   // A handle the app provides is Gozar's to clean up: it stays only when this call binds it to the adapter.
   const provided = typeof request?.home === 'string' && request.home && handlePattern.test(request?.secretHandle) ? request.secretHandle : null;
   let bound = false;

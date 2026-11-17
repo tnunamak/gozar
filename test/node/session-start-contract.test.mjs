@@ -47,7 +47,9 @@ const server = net.createServer(socket => {
     input += chunk; if (!input.includes('\\n')) return;
     const { command } = JSON.parse(input.split('\\n')[0]);
     if (command.type === 'stop') { socket.end(JSON.stringify({ snapshot: { sessionId: 's1', phase: 'stopped' } }) + '\\n', () => process.exit(0)); return; }
-    socket.end(JSON.stringify({ snapshot: snapshot() }) + '\\n');
+    // 0.4 verifies a session only against the subject its controller proved: this origin, this target, this controller instance.
+    const current = snapshot();
+    socket.end(JSON.stringify({ snapshot: current, ...(current.published ? { proofSubject: { origin: current.published, target: '127.0.0.1:' + config.targetPort, instanceId: 'fixture-instance', bootId: 'fixture-boot', handleGeneration: 1 } } : {}) }) + '\\n');
   });
 });
 process.on('SIGTERM', () => process.exit(0));
@@ -76,7 +78,7 @@ async function sessionWorld(t, { port = 8799 } = {}) {
       return { ...q, approval: { candidateToken: token, disclosureRevision: 'disc-stub-b' }, wait };
     };
     const run = async () => openSessionRoute(await approve(), { adapters: [stubAdapter('stub-b')], redeem: tokens.redeem, consentBinding: tokens.consentBinding, platform: 'linux', readContext,
-      startSession: options => launch(options.directory, { targetPort: options.port, ...daemon }, script), pollMs: 20, ...deps });
+      startSession: options => launch(options.directory, { targetPort: options.port, adapterId: 'stub-b', adapters: [{ id: 'stub-b', planVersion: 1 }], ...daemon }, script), pollMs: 20, ...deps });
     return { request: await approve(), run };
   };
   const daemonGone = async () => {

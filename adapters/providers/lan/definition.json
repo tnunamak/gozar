@@ -21,7 +21,7 @@
         "stability": "unknown",
         "scope": "selected interface address with an OS-assigned port",
         "conditions": [
-          "firewall and routing are the owner’s prerequisites",
+          "firewall and routing are the owner\u2019s prerequisites",
           "no TLS: HTTPS-required clients cannot use it"
         ],
         "ports": null
@@ -59,7 +59,488 @@
       "text": "Expose this service on a selected local network interface over plain HTTP through an owned forwarder. Anyone on that network path can read the traffic.",
       "links": []
     },
-    "ownership": "gozar-owned"
+    "ownership": "gozar-owned",
+    "availability": {
+      "session": {
+        "state": "available",
+        "reason": "admitted"
+      },
+      "attached": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      },
+      "durable": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      }
+    },
+    "prerequisites": [
+      {
+        "id": "local-setup",
+        "label": "Local prerequisites",
+        "observation": "detected"
+      }
+    ],
+    "facts": [
+      {
+        "id": "cost-detail",
+        "label": "Cost details",
+        "value": "Gozar charges nothing and there is no provider; the owned local forwarder uses your own network.",
+        "known": true,
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "entitlement",
+        "label": "Account entitlement",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "quota",
+        "label": "Remaining quota",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "mapping",
+        "label": "Effective provider mapping",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-0",
+        "label": "Address condition",
+        "value": "firewall and routing are the owner\u2019s prerequisites",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-1",
+        "label": "Address condition",
+        "value": "no TLS: HTTPS-required clients cannot use it",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "public-names",
+        "label": "Public names",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-logs",
+        "label": "Certificate logs",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "browser-warning",
+        "label": "Browser warning",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "payload-readers",
+        "label": "Payload readers",
+        "value": "Traffic is unencrypted; the local network path (unencrypted HTTP) can read it.",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "adapters/lan.definition.json",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "provider-clocks",
+        "label": "Actual provider expiry and quota window",
+        "value": "not-applicable",
+        "known": true,
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "provider-retry",
+        "label": "Current provider retry-after or refusal",
+        "value": "not-applicable",
+        "known": true,
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "diagnostics-access",
+        "label": "Current account diagnostic access",
+        "value": "not-applicable",
+        "known": true,
+        "group": "account",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "credential-validity",
+        "label": "Current credential validity",
+        "value": "not-applicable",
+        "known": true,
+        "group": "account",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "traffic-policy",
+        "label": "Effective remote traffic policy",
+        "value": "not-applicable",
+        "known": true,
+        "group": "access",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-renewal",
+        "label": "Current CA issuance or renewal outcome",
+        "value": "not-applicable",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "dns-authority",
+        "label": "Current DNS configuration and token grants",
+        "value": "not-applicable",
+        "known": true,
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "authoritative-address",
+        "label": "Current authoritative provider domain",
+        "value": "not-applicable",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "account-authorization",
+        "label": "Current organization approval and ACL entitlement",
+        "value": "not-applicable",
+        "known": true,
+        "group": "access",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "remote-residue",
+        "label": "Remote DNS, certificate and token residue",
+        "value": "not-applicable",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "alternative-cost",
+        "label": "Account-specific alternative cost and quota",
+        "value": "not-applicable",
+        "known": true,
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "proof-scope",
+        "label": "Proof scope",
+        "value": "Route transport and current Gozar boundary only; application login, authorization and downstream journeys are host-owned.",
+        "known": true,
+        "group": "proof",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "storage-policy",
+        "label": "Credential storage",
+        "value": "The configured host credential backend owns custody; the default uses private local files. Read-back returns presence and non-secret values only.",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "change-policy",
+        "label": "Configuration changes",
+        "value": "Saved inputs do not silently reconfigure a running route; stop and obtain fresh consent before replacing it.",
+        "known": true,
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "fallback-policy",
+        "label": "Fallback policy",
+        "value": "Never substitute a different provider without consent.",
+        "known": true,
+        "group": "access",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "remote-termination",
+        "label": "Effective remote TLS termination",
+        "value": "not-applicable",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-logging",
+        "label": "Account-selected logging and retention",
+        "value": "not-applicable",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-name-ownership",
+        "label": "Current reserved name ownership",
+        "value": "not-applicable",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-setup-completion",
+        "label": "Provider consent or remote setup completion",
+        "value": "not-applicable",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "provider-status",
+        "label": "Current provider dashboard status",
+        "value": "not-applicable",
+        "known": true,
+        "group": "runtime",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "browser-warning-applicability",
+        "label": "Account-specific browser warning applicability",
+        "value": "not-applicable",
+        "known": true,
+        "group": "access",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-collision",
+        "label": "Current remote endpoint collision",
+        "value": "not-applicable",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "revocation-state",
+        "label": "Actual credential revocation and remaining connectors",
+        "value": "not-applicable",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-control-authority",
+        "label": "Current remote binding and controller authority",
+        "value": "not-applicable",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "provider-depletion",
+        "label": "Current provider depletion or license expiry",
+        "value": "not-applicable",
+        "known": true,
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-domain-options",
+        "label": "Account reserved-domain choices",
+        "value": "not-applicable",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "account-domain-suggestion",
+        "label": "Current account-assigned suggested domain",
+        "value": "not-applicable",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-issuance",
+        "label": "Provider credential issuance or refresh outcome",
+        "value": "not-applicable",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-job-completion",
+        "label": "Provider provisioning job completion",
+        "value": "not-applicable",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-identity",
+        "label": "Authenticated remote account or tunnel identity",
+        "value": "not-applicable",
+        "known": true,
+        "group": "account",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-rotation",
+        "label": "Remote credential rotation outcome",
+        "value": "not-applicable",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-deletion-proof",
+        "label": "Remote revocation and deletion proof",
+        "value": "not-applicable",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "retained-configuration",
+        "label": "Retained configuration",
+        "value": "Stopping a route keeps saved input values and credentials. Local rotation does not revoke a credential at the provider.",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "adapter-configuration",
+        "asOf": "2026-11-13"
+      }
+    ],
+    "effectOperations": [
+      {
+        "kind": "recipe",
+        "operation": "probe"
+      },
+      {
+        "kind": "process-runtime",
+        "operation": "open"
+      },
+      {
+        "kind": "process-runtime",
+        "operation": "read"
+      },
+      {
+        "kind": "process-runtime",
+        "operation": "close"
+      },
+      {
+        "kind": "network",
+        "operation": "fetch"
+      }
+    ]
   },
   "evidence": {
     "accessed": "2026-11-12",

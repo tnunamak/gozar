@@ -7,7 +7,8 @@ const MIN_INTERVAL_MS = 250;
 
 // Everything a person would act on. Proof timestamps move on every poll and are not a change.
 const fingerprint = view => JSON.stringify([view.handle, view.origin, view.published, view.state, view.ownership, view.properties,
-  view.ingress && { ...view.ingress, verifiedAt: undefined, validUntil: undefined }, view.verification.status, view.limits, view.cleanup]);
+  view.ingress && { ...view.ingress, verifiedAt: undefined, validUntil: undefined }, view.verification.status, view.limits, view.cleanup,
+  view.routeState, view.hostConfiguration, view.facts, view.actions]);
 
 function abortable(promise, signal) {
   if (signal.aborted) return Promise.resolve({ aborted: true });
@@ -35,7 +36,7 @@ export function watchRoutes(request, deps = {}) {
   const status = deps.routeStatus ?? defaultStatus;
   const floor = deps.minIntervalMs ?? MIN_INTERVAL_MS;
   return (async function* watch() {
-    let sequence = 0, last = null, key = null, intervalMs = null;
+    let sequence = 0, last = null, key = null, intervalMs = null,consentDigest=null;
     while (!signal.aborted) {
       let view, terminal = false;
       try {
@@ -45,7 +46,8 @@ export function watchRoutes(request, deps = {}) {
       } catch (cause) {
         const error = normalizeError(cause);
         if (error.code === 'route_not_found') { view = releasedView(last, handle); terminal = true; }
-        else if (error.code === 'provider_unavailable' && last) view = { ...last, state: 'unknown' };
+        else if (error.code === 'provider_unavailable' && last) view = { ...last, state: 'unknown', routeState: 'unknown', published: null,
+          verification: { ...last.verification, status: 'unverified', checks: [], results: [] } };
         else if (error.code !== 'busy') throw error;
       }
       if (view) {
@@ -54,6 +56,7 @@ export function watchRoutes(request, deps = {}) {
         if (terminal) { yield { schemaVersion: 1, sequence: sequence++, type: 'terminal', route: view }; return; }
         if (last === null) yield { schemaVersion: 1, sequence: sequence++, type: 'snapshot', route: view };
         else if (next !== key) yield { schemaVersion: 1, sequence: sequence++, type: 'changed', route: view };
+        if(view.consentChange&&view.consentChange.newDigest!==consentDigest){consentDigest=view.consentChange.newDigest;yield {schemaVersion:1,sequence:sequence++,type:'consent_changed',route:view,...view.consentChange};}
         last = view; key = next;
         intervalMs ??= request.intervalMs ?? view.limits.recommendedPollIntervalMs ?? 1000;
       }

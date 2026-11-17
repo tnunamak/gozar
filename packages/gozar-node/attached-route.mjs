@@ -11,20 +11,35 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { readFile, chmod, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { atomicWrite, processIdentity } from './journal.mjs';
 import { canonicalHome, trustedDirectory, privateDirectory, withExclusiveLock } from './service-state.mjs';
 import { gozarError, instructionAction, normalizeError } from './error-normalizer.mjs';
 import { cliCommand } from './cli-command.mjs';
 import { createGate } from './gate.mjs';
-import { projectAttached, projectSession, releasedView, checkRef } from './route-view.mjs';
-import { validateQuery, adapterRequest, readContextFor, loadRuntime } from './route-catalog.mjs';
+import { projectAttached, projectSession, releasedView, recoveryHistory, checkRef, projectControllerObservation, unknownProperties } from './route-view.mjs';
+import { validateQuery, adapterRequest, readContextFor, loadRuntime, consentDisclosureRevision,inspectAdapter } from './route-catalog.mjs';
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { recordController, controllerAlive, stopController, withCleanupOutcome } from './controller-start.mjs';
+import { routeConsentReview,consentSnapshot } from './consent-facts.mjs';
+import { completeProperties, checksFor } from './route-view.mjs';
+import { registryIdentity } from './registry-identity.mjs';
+import { startEmbeddingBroker, connectEmbeddingBroker } from './embedding-broker.mjs';
+import {testingFetch} from './testing-network.mjs';
+import {catalogFactsFor} from './catalog-facts.mjs';
+import {currentRouteReview} from './route-consent.mjs';
+import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
+import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
 
 export const HEARTBEAT_MS = 5_000;
+// Shared by initial verification and custom proof refresh; a previous or future
+// observation cannot establish readiness for the current verification attempt.
+export function proofObservedDuring(checked, started, ended) {
+  const observed = Date.parse(checked?.checkedAt);
+  return Number.isFinite(observed) && observed >= started && observed <= ended;
+}
 export const LEASE_EXPIRY_MS = 20_000;
 const idPattern = /^att_[0-9a-f]{16}$/;
 const here = fileURLToPath(import.meta.url);
@@ -37,6 +52,23 @@ function checkExpose(request, kind) {
   if (typeof request.approval?.candidateToken !== 'string' || !request.approval.candidateToken || typeof request.approval.disclosureRevision !== 'string' ||
       !request.approval.disclosureRevision) throw gozarError('consent_required', 'Approval is required: pass the candidate token and the disclosure revision the user saw');
   if (!['allocated', 'verified'].includes(request.wait)) throw gozarError('invalid_input', "wait must be 'allocated' or 'verified'");
+}
+
+// Static availability is an execution boundary, not an approval. Never redeem or
+// inspect provider state to reject a named detect-only choice.
+export async function preflightExpose(request, deps = {}) {
+  validateQuery(request);
+  if (!['attached', 'session'].includes(request.usage.kind) ||
+      !['allocated', 'verified'].includes(request.wait))
+    throw gozarError('invalid_input', 'expose needs attached/session usage and allocated/verified wait');
+  if (request.providerId !== undefined) {
+    const adapter = (await adaptersOf(deps)).find(item => item.id === request.providerId);
+    const availability = adapter?.definition.availability?.[request.usage.kind]?.state;
+    if (adapter && (!adapter.definition.supportedKinds.includes(request.usage.kind) ||
+        availability === 'detect-only' || availability === 'unsupported'))
+      throw gozarError('unsupported', 'This usage is not admitted for execution in this release');
+  }
+  checkExpose(request, request.usage.kind);
 }
 
 async function adaptersOf(deps) {
@@ -54,18 +86,32 @@ export async function redeemApproval(request, deps) {
   const home = await canonicalHome(request.home, true);
   const tokens = deps.redeem && deps.consentBinding ? null : await import('./consent-token.mjs');
   const { approval, wait, ...query } = request;
-  const binding = (deps.consentBinding ?? tokens.consentBinding)(query, home, approval.disclosureRevision);
+  const binding = (deps.consentBinding ?? tokens.consentBinding)(query, home, approval.disclosureRevision,approval.consentFactsDigest);
   const grant = await (deps.redeem ?? tokens.redeemConsentToken)({ home, token: approval.candidateToken, binding, providerId: query.providerId });
   const adapter = (await adaptersOf(deps)).find(item => item.id === grant.adapterId);
   if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available; ask the catalog again');
+  if (approval.disclosureRevision !== consentDisclosureRevision(adapter.definition, query.intent)) throw gozarError('candidate_stale', 'Consent-relevant facts changed after approval; ask the catalog again');
   if (!adapter.definition.supportedKinds.includes(request.usage.kind)) throw gozarError('unsupported', 'This route does not support that usage');
-  const context = bindConfiguration(await readContextFor(deps, home, deps.platform ?? process.platform), adapter.id);
+  if(adapter.definition.availability?.[request.usage.kind]?.state==='detect-only'||adapter.definition.availability?.[request.usage.kind]?.state==='unsupported')throw gozarError('unsupported','This usage is not admitted for execution in this release');
+  const denied=capabilityPrerequisites(adapter.definition,deps.hostCapabilities??{}).find(p=>p.state!=='present');
+  if(denied)throw gozarError(denied.state==='denied'?'host_policy_denied':'unsupported','The host has not authorized a required capability');
+  const context = bindConfiguration({...await readContextFor(deps, home, deps.platform ?? process.platform,query.owner),origin:query.origin??null}, adapter.id);
+  let consentReview;
+  if(deps.embeddingServices){
+    const configuration=await deps.embeddingServices.readConfiguration({home,owner:query.owner,providerId:adapter.id});
+    const detected=await adapter.detect(context);
+    const declared=completeProperties(adapter.properties(detected.facts),adapter.definition,query.usage.kind);
+    const properties={...declared,proof:{...declared.proof,checks:checksFor(declared.proof.checks,{sse:query.requirements.protocols.includes('sse')})}};
+    consentReview=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration,target:query.target,origin:query.origin,properties,
+      disclosure:{...adapter.definition.disclosure,revision:approval.disclosureRevision},facts:catalogFactsFor({adapter,facts:detected.facts})});
+    if(approval.kind!=='route'||approval.consentFactsDigest!==consentReview.consentFactsDigest||grant.consentFactsDigest!==consentReview.consentFactsDigest)throw gozarError('consent_mismatch','Route consent changed; review the current candidate again');
+  }
   const adapterAsk = adapterRequest(query);
   const plan = await adapter.plan(context, adapterAsk);
   const observed = await adapter.observe(context, adapterAsk);
   if (plan.digest !== grant.planDigest || observed.resourceKey !== grant.observedResource)
     throw gozarError('candidate_stale', 'The provider changed after the user approved; nothing was changed, ask the catalog again');
-  return { home, adapter, grant, plan, request: adapterAsk, context };
+  return { home, adapter, grant, plan, request: adapterAsk, context, consentReview };
 }
 
 // --- The control channel (owner <-> controller): one JSON line each way, authenticated by a private nonce ---
@@ -77,9 +123,17 @@ export function controlAttached(directory, command, timeoutMs = 15_000) {
     const deadline = setTimeout(() => finish(gozarError('provider_unavailable', 'The route controller did not answer in time')), timeoutMs);
     readFile(join(directory, 'control.json'), 'utf8').then(async text => {
       const identity = JSON.parse(text);
-      if (!identity.startIdentity || await processIdentity(identity.pid) !== identity.startIdentity) throw Object.assign(new Error('The route controller is not running'), { gone: true });
+      if(command.type==='observe'){
+        if(!Number.isInteger(identity.pid)||!identity.startIdentity)
+          throw gozarError('route_conflict','Incomplete controller process identity');
+        const actual=await processIdentity(identity.pid);
+        if(!actual)throw Object.assign(new Error('The route controller is not running'),{gone:true});
+        if(actual!==identity.startIdentity)throw gozarError('route_conflict','Controller process identity changed');
+      } else if (!identity.startIdentity || await processIdentity(identity.pid) !== identity.startIdentity) {
+        throw Object.assign(new Error('The route controller is not running'), { gone: true });
+      }
       socket = net.createConnection(join(directory, 'control.sock'));
-      socket.once('connect', () => socket.write(`${JSON.stringify({ nonce: identity.nonce, command })}\n`));
+      socket.once('connect', () => socket.write(`${JSON.stringify({ nonce: identity.nonce, command, ...(command.type==='observe'?{controllerIdentity:{pid:identity.pid,startIdentity:identity.startIdentity}}:{}) })}\n`));
       socket.on('data', chunk => {
         output += chunk;
         if (output.length > 1_048_576) return finish(gozarError('internal_error', 'The controller reply is too large'));
@@ -98,6 +152,7 @@ export function controlAttached(directory, command, timeoutMs = 15_000) {
 // --- The owner's side ---------------------------------------------------------------------------
 
 const leases = new Map();
+const brokers = new Map();
 function holdLease(directory, id, heartbeatMs) {
   const beat = () => controlAttached(directory, { type: 'heartbeat' }, 5_000).catch(() => {});
   // Unref'd: the lease never keeps the owner alive. When the owner exits the beats stop and the expiry ends the route.
@@ -105,6 +160,7 @@ function holdLease(directory, id, heartbeatMs) {
   leases.set(id, timer); beat();
 }
 function dropLease(id) { clearInterval(leases.get(id)); leases.delete(id); }
+async function dropBroker(id){const broker=brokers.get(id);brokers.delete(id);await broker?.close();}
 
 async function attachedRoot(home, create = true) {
   const directory = join(home, 'attached');
@@ -113,63 +169,116 @@ async function attachedRoot(home, create = true) {
   return directory;
 }
 // A status or close never creates state: a missing home or directory is simply no such route.
-const routeDirectory = async (home, id) => {
+const routeDirectory = async (home, handle) => {
+  if(typeof handle==='string')handle={kind:handle.startsWith('port-')?'session':'attached',id:handle,generation:1};
+  const id=handle.id;
+  if (handle.kind==='session') {
+    const record=await genericSessionRecord({home,handle});
+    if (!record) throw gozarError('route_conflict','This session is not owned by the generic controller');
+    return record.directory;
+  }
   if (!idPattern.test(id)) throw gozarError('route_not_found', 'Not an attached route id');
   try { return join(await attachedRoot(await canonicalHome(home), false), id); }
   catch (error) { throw error.code === 'ENOENT' ? gozarError('route_not_found', 'No such attached route') : error; }
 };
 const readJson = async path => { try { return JSON.parse(await readFile(path, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
 
-async function startFailure(directory) {
+async function startFailure(directory,deps,request) {
   const failure = await readJson(join(directory, 'failure.json'));
-  return failure ? gozarError(failure.code, failure.message) : null;
+  if(failure?.nextAction?.kind==='provide-secret'&&deps?.decorateSetupAction&&deps.embeddingServices){
+    const bootstrap=await readJson(join(directory,'bootstrap.json')),adapter=(await adaptersOf(deps)).find(a=>a.id===bootstrap.adapterId);
+    const configuration=await deps.embeddingServices.readConfiguration({home:request.home,owner:request.owner,providerId:adapter.id});
+    const inspection=await inspectAdapter(adapter,await readContextFor(deps,request.home,deps.platform??process.platform,request.owner),deps.platform??process.platform);
+    const action=inspection.actions.find(a=>a.id===failure.nextAction.id&&a.digest===failure.nextAction.digest);
+    if(action)failure.nextAction=deps.decorateSetupAction({action,adapter,configuration,inspection});
+  }
+  return failure ? gozarError(failure.code, failure.message,failure.nextAction??null) : null;
 }
 
 /** Opens one attached route and returns its RouteView. The calling process holds the lease from here on. */
 export async function openAttachedRoute(request, deps = {}) {
+  await preflightExpose(request, deps);
   try {
-    checkExpose(request, 'attached');
+    const session = deps.sessionExecution;
+    checkExpose(request, session ? 'session' : 'attached');
     if (!supportedPlatform(deps.platform ?? process.platform)) throw gozarError('unsupported', 'Gozar 0.2 does not support routes on this platform');
     const adapters = await adaptersOf(deps);
     const root = await attachedRoot(await canonicalHome(request.home, true));
-    const id = `att_${randomBytes(8).toString('hex')}`, directory = join(root, id);
+    const id = session?.handle.id ?? deps.reservedHandle?.id??`att_${randomBytes(8).toString('hex')}`;
+    const directory = session?.directory ?? join(root, id);
+    const handle = session?.handle ?? {kind:'attached',id,generation:1};
     // Redeem, re-observe and start the controller under one reservation, so two opens cannot both win one resource.
     const controller = await withExclusiveLock(join(root, '.open.lock'), async () => {
-      const redeemed = await redeemApproval(request, { ...deps, adapters });
+      const redeemed = session?.redeemed ?? await redeemApproval(request, { ...deps, adapters }).catch(error => { throw refusedBeforeStart(error, handle, request); });
       await trustedDirectory(directory, true);
       await privateDirectory(directory);
+      if (session) {
+        const prior=await readJson(join(directory,'bootstrap.json'));
+        if(prior) {
+          const state=await readJson(join(directory,'state.json')),control=await readJson(join(directory,'control.json'));
+          const live=control?.startIdentity&&await processIdentity(control.pid)===control.startIdentity;
+          if(prior.execution!=='generic-session-v1'||state?.handle?.id!==prior.handle?.id||state?.handle?.generation!==prior.handle?.generation||state?.lastView?.cleanup?.state!=='confirmed'||live)throw gozarError('route_conflict','A retained session already owns this directory');
+          for(const name of ['state.json','failure.json','control.json'])await unlink(join(directory,name)).catch(error=>{if(error.code!=='ENOENT')throw error;});
+        }
+      }
+      let broker,identity;
+      if(deps.embeddingServices){
+        const hostIdentity=await deps.embeddingServices.resolveIdentity({home:redeemed.home});
+        broker=await startEmbeddingBroker({services:deps.embeddingServices,home:redeemed.home,identity:hostIdentity,
+          dispatchEffect:deps.dispatchEffect,onLoss:()=>{if(brokers.has(id))void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
+        const descriptor=await broker.registerController({identity:hostIdentity});
+        identity={instanceId:descriptor.instanceId,bootId:descriptor.bootId};
+        brokers.set(id,broker);
+        try{await deps.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle});}
+        catch(error){await dropBroker(id);throw error;}
+      }
       await atomicWrite(join(directory, 'bootstrap.json'), { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
-        leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) });
+        operationId:request.operationId??null,
+        ...(session ? {execution:'generic-session-v1',handle,expiresAtMs:session.expiresAtMs} : {}),
+        ...(broker?{resolver:broker.descriptor,identity,registryId:deps.registryId,owner:request.owner,consentReview:redeemed.consentReview,fixtureEffects:!!deps.dispatchEffect}:{}),
+        ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) });
       const child = spawn(process.execPath, [here, '--controller', directory], { detached: true, stdio: 'ignore',
         env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
       child.unref();
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       return await recordController(child);
     }, { waitSeconds: 30 });
-    holdLease(directory, id, deps.heartbeatMs ?? HEARTBEAT_MS);
+    if (!session) holdLease(directory, id, deps.heartbeatMs ?? HEARTBEAT_MS);
     const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
     try {
       for (;;) {
         let reply;
-        try { reply = await controlAttached(directory, { type: 'status', fresh: request.wait === 'verified' }, 30_000); }
+        try { reply = await controlAttached(directory, { type: 'status', fresh: request.wait === 'verified', generation:handle.generation, handleId:handle.id }, 30_000); }
         catch (error) {
           if (!error.gone && error.code !== 'provider_unavailable') throw error;
-          const failure = await startFailure(directory);
+          const failure = await startFailure(directory,deps,request);
           if (failure) throw failure;
           if (!await controllerAlive(controller)) throw gozarError('provider_unavailable', 'The route controller exited before it started the route');
         }
         const view = reply?.view;
-        if (view && ['lost', 'released', 'uncertain'].includes(view.state)) throw (await startFailure(directory)) ?? gozarError('provider_unavailable', 'The route could not be started');
-        if (view && (request.wait === 'verified' ? view.state === 'usable' : view.state !== 'creating')) return view;
+        if (view && reply.startupComplete!==false && ['lost', 'released', 'uncertain'].includes(view.state)) throw (await startFailure(directory,deps,request)) ?? gozarError('provider_unavailable', 'The route could not be started');
+        if (view?.routeState === 'expired') throw gozarError('verification_failed', 'The route proof expired before publication');
+        if (view && reply.startupComplete!==false && (request.wait === 'verified' ? view.state === 'usable' && view.verification.status === 'verified' && view.published !== null : view.state !== 'creating')) return view;
         if (Date.now() >= deadline) throw gozarError(view?.state === 'unverified' ? 'verification_failed' : 'provider_unavailable',
           view?.state === 'unverified' ? 'The route did not pass verification in time' : 'The route did not start in time');
         await new Promise(resolve => setTimeout(resolve, 150));
       }
     } catch (error) {
       dropLease(id);
-      await controlAttached(directory, { type: 'close' }, 60_000).catch(() => {});
-      // A failed start must not leave the detached controller running (it would hold the provider resource).
-      throw withCleanupOutcome(error, await stopController(controller));
+      const cleanup=await controlAttached(directory, { type: 'close', generation:handle.generation, handleId:handle.id }, 60_000).catch(() => null);
+      if (cleanup?.view) error.route=cleanup.view;
+      if(cleanup?.view?.cleanup.state==='unconfirmed'){
+        error.route=cleanup.view;
+        throw error;
+      }
+      const recorded=await readJson(join(directory,'state.json'));
+      if (!cleanup && recorded?.handle?.id===handle.id && recorded.handle.generation===handle.generation) error.route=recorded.lastView;
+      if(!cleanup&&recorded?.lastView?.cleanup.state==='unconfirmed'){
+        error.route=recorded.lastView;
+        throw error;
+      }
+      const stopped=await stopController(controller);await dropBroker(id);
+      throw withCleanupOutcome(error, stopped);
     }
   } catch (error) { throw normalizeError(error); }
 }
@@ -177,51 +286,197 @@ export async function openAttachedRoute(request, deps = {}) {
 async function viewFromRecord(directory, handle) {
   const state = await readJson(join(directory, 'state.json'));
   if (!state) throw gozarError('route_not_found', `No attached route ${handle.id}`);
-  if (state.handle.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
+  if (state.handle.id !== handle.id || state.handle.kind !== handle.kind || state.handle.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
   return state;
+}
+
+/** Private authenticated controller observation; never asks for fresh proof or cleanup. */
+export async function observeAttachedRoute(request) {
+  const handle=checkRef(request);
+  if(!['attached','session'].includes(handle.kind))throw gozarError('unsupported','Not a generic controller handle');
+  const home=await canonicalHome(request.home,false),directory=await routeDirectory(home,handle);
+  const bootstrap=await readJson(join(directory,'bootstrap.json'));
+  const bound=handle.kind==='attached'?{kind:'attached',id:bootstrap?.id,generation:1}:bootstrap?.handle;
+  if(!bootstrap||bootstrap.home!==home||typeof request.owner!=='string'||request.owner!==bootstrap.owner||
+      bound?.kind!==handle.kind||bound.id!==handle.id||bound.generation!==handle.generation)
+    throw gozarError('route_conflict','Observation scope does not match the current controller');
+  try {
+    return (await controlAttached(directory,{type:'observe',handleKind:handle.kind,handleId:handle.id,generation:handle.generation})).view;
+  } catch(error) {
+    if(!error.gone&&error.code!=='provider_unavailable')throw error;
+    const state=await viewFromRecord(directory,handle);
+    return recoveryHistory(state.lastView,'Current controller observation unavailable; historical evidence only');
+  }
+}
+
+/**
+ * Whether this route's own controller can still move an unverified route to verified. Authenticated like an observation;
+ * it never refreshes proof. A lost host resolver can never authorize another proof, and an initial-only proof cannot repeat
+ * once settled. `undefined` means the route has no such authority (durable, owner-kept) or it could not be asked.
+ */
+export async function attachedReplayProgress(request) {
+  const handle=checkRef(request);
+  if(!['attached','session'].includes(handle.kind))return undefined;
+  if(handle.kind==='session'&&!await genericSessionRecord(request))return undefined;
+  try {
+    const home=await canonicalHome(request.home,false),directory=await routeDirectory(home,handle);
+    const reply=await controlAttached(directory,{type:'observe',handleKind:handle.kind,handleId:handle.id,generation:handle.generation});
+    const progress=reply.progress;
+    if(!progress)return undefined;
+    return {viable:progress.resolverLost!==true&&(progress.initialSettled!==true||progress.refreshable===true)};
+  } catch(error) {
+    if(error.gone)return {viable:false};
+    return undefined;
+  }
 }
 
 /** Fresh proof from the controller. Without a controller the last record is all there is, and it says so. */
 export async function attachedStatus(request, deps = {}) {
   const handle = checkRef(request);
-  const directory = await routeDirectory(request.home, handle.id);
-  try { return (await controlAttached(directory, { type: 'status', fresh: true, generation: handle.generation }, 60_000)).view; }
+  const directory = await routeDirectory(request.home, handle);
+  try { return (await controlAttached(directory, { type: 'status', fresh: true, generation: handle.generation, handleId:handle.id }, 60_000)).view; }
   catch (error) {
     if (!error.gone) throw error;
     const state = await viewFromRecord(directory, handle);
-    if (state.phase === 'released') return releasedView(state.lastView, handle);
-    return { ...state.lastView, state: 'uncertain', published: null, ingress: null,
-      cleanup: { state: 'debt', message: 'The route controller stopped before it removed the route' } };
+    if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') return releasedView(state.lastView, handle);
+    return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
   }
 }
 
 /** Ends the lease now: the controller removes the route and answers with the released view. */
 export async function closeAttachedRoute(request, deps = {}) {
   const handle = checkRef(request);
-  const directory = await routeDirectory(request.home, handle.id);
+  const directory = await routeDirectory(request.home, handle);
   dropLease(handle.id);
-  try { return (await controlAttached(directory, { type: 'close', generation: handle.generation }, 120_000)).view; }
+  try { const result=(await controlAttached(directory, { type: 'close', generation: handle.generation, handleId:handle.id }, 120_000)).view;if(result.cleanup.state==='confirmed')await dropBroker(handle.id);return result; }
   catch (error) {
     if (!error.gone) throw error;
     const state = await viewFromRecord(directory, handle);
-    if (state.phase === 'released') return releasedView(state.lastView, handle);
+    if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') return releasedView(state.lastView, handle);
+    if (state.resourceRemoval) return recoveryHistory(state.lastView, 'Resource removed; exact configuration reference release remains unconfirmed');
+    // Without an owned receipt or recovery effects, retain debt without loading transient runtime.
+    if (!state.receipt || !deps.effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
     // The controller died with the route up: remove it from the saved receipt, in this process.
     const adapters = await adaptersOf(deps);
     const adapter = adapters.find(item => item.id === state.adapterId);
-    if (!adapter || !state.receipt || !deps.effectContext) return { ...state.lastView, state: 'uncertain', published: null, ingress: null,
-      cleanup: { state: 'debt', message: 'The route controller stopped before it removed the route' } };
+    if (!adapter || !state.receipt || !deps.effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
     const read = bindConfiguration(await readContextFor(deps, await canonicalHome(request.home), deps.platform ?? process.platform), adapter.id);
     const observed = await adapter.observe(read, state.request);
     const removal = await adapter.remove(bindConfiguration({ ...read, generation: state.handle.generation, ...deps.effectContext({ adapter, readContext: read, request: state.request, plan: state.plan, generation: state.handle.generation }) }, adapter.id), state.receipt, observed);
     return removal.removed && !removal.debt ? releasedView(state.lastView, handle)
-      : { ...releasedView(state.lastView, handle), state: 'uncertain', cleanup: { state: 'debt', message: removal.debt?.message ?? 'The route could not be removed' } };
+      : { ...releasedView(state.lastView, handle), state: 'uncertain', cleanup: { state: 'unconfirmed', message: removal.debt?.message ?? 'The route could not be removed' } };
   }
 }
 
+export async function reviewAttachedConsent(request){const handle=checkRef(request);return (await controlAttached(await routeDirectory(request.home,handle.id),{type:'review-consent',generation:handle.generation})).review;}
+export async function approveAttachedConsent(request){const handle=checkRef(request);return (await controlAttached(await routeDirectory(request.home,handle.id),{type:'approve-consent',generation:handle.generation,approvalToken:request.approvalToken,consentFactsDigest:request.consentFactsDigest},60000)).view;}
+export async function releaseAttachedConfiguration(request,{embeddingServices,registryId}){
+  const handle=checkRef(request),directory=await routeDirectory(request.home,handle);
+  const bootstrap=await readJson(join(directory,'bootstrap.json'));
+  await releaseRecordedConfigurationUse({registryId:bootstrap?.registryId,home:request.home,owner:bootstrap.owner,providerId:bootstrap.adapterId,handle:{...handle,generation:1}},{embeddingServices,registryId});
+  await dropBroker(handle.id);
+}
+export async function releaseSessionConfiguration(request,runtime){
+  const generic=await genericSessionRecord(request);
+  if(generic){await releaseRecordedConfigurationUse({registryId:generic.bootstrap.registryId,home:request.home,owner:generic.bootstrap.owner,providerId:generic.bootstrap.adapterId,handle:request.handle},runtime);await dropBroker(request.handle.id);return;}
+  const handle=checkRef(request),directory=join(request.home,handle.id.split(':')[0]);
+  const bootstrap=await readJson(join(directory,'bootstrap.json'));
+  if(bootstrap?.embedding?.handle.id!==handle.id)return;
+  await releaseRecordedConfigurationUse({registryId:bootstrap.embedding.registryId,home:request.home,owner:bootstrap.owner,providerId:bootstrap.adapterId,handle},runtime);
+  await dropBroker(handle.id);
+}
+export async function sessionConsent(request,{approve=false,adapters}={}){
+ const handle=checkRef(request);if(handle.kind!=='session')throw gozarError('unsupported','This handle is not a session');
+ const generic=await genericSessionRecord(request);
+ if(generic)return approve?approveAttachedConsent(request):reviewAttachedConsent(request);
+ const directory=join(request.home,handle.id.split(':')[0]),bootstrap=await readJson(join(directory,'bootstrap.json'));
+ if(bootstrap?.embedding?.handle.id!==handle.id)throw gozarError('route_conflict','This session handle is stale or has no current consent authority');
+ const {control}=await import('./daemon.mjs');
+ const result=await control(directory,{type:approve?'approve-consent':'review-consent',approvalToken:request.approvalToken,consentFactsDigest:request.consentFactsDigest},60000);
+ if(!approve)return result.review;
+ const adapter=adapters.find(a=>a.id===bootstrap.adapterId);return projectSession(result,{handle,properties:adapter.definition.capabilities,facts:adapter.definition.facts});
+}
+
+/** Persisted dispatch, never provider-name inference or lookup-failure fallback. */
+export async function genericSessionRecord(request) {
+  const handle=checkRef(request);
+  if(handle.kind!=='session')return null;
+  if(!/^port-[0-9]+:[A-Za-z0-9_-]+$/.test(handle.id))throw gozarError('invalid_input','Invalid session handle');
+  const directory=join(await canonicalHome(request.home),handle.id.split(':')[0]);
+  const bootstrap=await readJson(join(directory,'bootstrap.json'));
+  if(bootstrap?.execution!=='generic-session-v1')return null;
+  if(bootstrap.handle?.kind!=='session'||bootstrap.handle.id!==handle.id||bootstrap.handle.generation!==handle.generation)throw gozarError('route_conflict','This session handle is stale');
+  return {directory,bootstrap};
+}
+
+
+/** Dispose controller ownership after exact recorded reference release. */
+export async function finishCleanupController(request){
+  const handle=checkRef(request);dropLease(handle.id);await dropBroker(handle.id);
+  if(!['attached','session'].includes(handle.kind))return;
+  if(handle.kind==='session'&&!await genericSessionRecord(request))return; // A legacy session daemon has its own control protocol.
+  const home=await canonicalHome(request.home,false);
+  const directory=handle.kind==='attached'?await routeDirectory(home,handle):join(home,handle.id.split(':')[0]);
+  // The reference release is confirmed, so the controller may end. Its own persisted removal milestone, the handle, the generation
+  // and its private nonce fence the order; a controller that is already gone has nothing left to end.
+  try{await controlAttached(directory,{type:'finalize-removal',handleKind:handle.kind,handleId:handle.id,generation:handle.generation,
+    ...(typeof request.owner==='string'?{owner:request.owner}:{})},30_000);}
+  catch(error){if(!error.gone)throw error;}
+}
+
+/** Capture cleanup authority before close can retire the bootstrap. Not allocation identity. */
+export async function attachedCleanupReference(request,runtime,operationReference=null) {
+  const handle=checkRef(request);
+  if(!['attached','session'].includes(handle.kind))return null;
+  const home=await canonicalHome(request.home,false);
+  const directory=handle.kind==='attached'?await routeDirectory(home,handle):join(home,handle.id.split(':')[0]);
+  const bootstrap=await readJson(join(directory,'bootstrap.json'));
+  if(!bootstrap)throw gozarError('cleanup_debt','Cleanup authority is unavailable');
+  if(typeof bootstrap.operationId==='string'){
+    if(!operationReference)return null; // Standalone cleanup must not adopt operation-bound debt.
+    if(operationReference.operationId!==bootstrap.operationId||operationReference.owner!==bootstrap.owner||
+        operationReference.handle?.kind!==handle.kind||operationReference.handle.id!==handle.id||
+        operationReference.handle.generation!==handle.generation)
+      throw gozarError('route_conflict','Cleanup operation does not match its bootstrap');
+  }else if(operationReference)throw gozarError('route_conflict','Cleanup bootstrap has no matching operation');
+  const bound=handle.kind==='attached'?{kind:'attached',id:bootstrap.id,generation:1}:bootstrap.handle??bootstrap.embedding?.handle;
+  // Only an unmarked native bootstrap predates managed custody. Missing or
+  // null modern identity must not downgrade generic execution to legacy cleanup.
+  // A proofSubject identifies a controller, not configuration ownership.
+  if(handle.kind==='session'&&['execution','handle','owner','embedding'].every(key=>!Object.hasOwn(bootstrap,key)))return null;
+  if(bound?.kind!==handle.kind||bound.id!==handle.id||bound.generation!==handle.generation)
+    throw gozarError('route_conflict','Cleanup handle does not match its bootstrap');
+  const registryId=bootstrap.registryId??bootstrap.embedding?.registryId;
+  const owner=bootstrap.owner,providerId=bootstrap.adapterId;
+  if(typeof owner!=='string'||!owner||typeof providerId!=='string'||!providerId||registryId!==runtime.registryId||
+      (bootstrap.home??bootstrap.embedding?.request?.home)!==home)
+    throw gozarError('cleanup_debt','Cleanup scope cannot be verified');
+  if(request.owner!==undefined&&request.owner!==owner)throw gozarError('route_conflict','Cleanup owner does not match');
+  return {home,owner,providerId,registryId,handle:structuredClone(handle)};
+}
+
+/** Only the controller's persisted post-removal receipt can advance metadata-only recovery. */
+export async function attachedRemovalEvidence(request,scope) {
+  const handle=checkRef(request);
+  const directory=handle.kind==='attached'?await routeDirectory(scope.home,handle):join(scope.home,handle.id.split(':')[0]);
+  const state=await readJson(join(directory,'state.json'));
+  if(!state?.resourceRemoval)return null;
+  const evidence=state.resourceRemoval;
+  if(evidence.schemaVersion!==1||evidence.registryId!==scope.registryId||evidence.owner!==scope.owner||
+      evidence.providerId!==scope.providerId||evidence.handle?.kind!==handle.kind||evidence.handle.id!==handle.id||
+      evidence.handle.generation!==handle.generation||state.handle?.kind!==handle.kind||state.handle.id!==handle.id||state.handle.generation!==handle.generation||
+      state.adapterId!==scope.providerId||state.lastView?.handle?.kind!==handle.kind||
+      state.lastView.handle.id!==handle.id||state.lastView.handle.generation!==handle.generation)
+    throw gozarError('cleanup_debt','Resource-removal evidence does not match cleanup scope');
+  return {...state.lastView,handle:structuredClone(handle),state:'released',routeState:'released',
+    published:null,ingress:null,verification:{...state.lastView.verification,status:'unverified'},cleanup:{state:'confirmed'}};
+}
 // --- The controller -----------------------------------------------------------------------------
 
-const credentialFreeOrigin = value => {
-  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash ? url.origin : null; }
+const credentialFreeOrigin = (value, properties, schemes) => {
+  try { const url = new URL(value); const allowed = schemes ?? (properties?.transport === 'http' && ['lan', 'this-device'].includes(properties?.reach) ? ['http:'] : ['https:']);
+    return allowed.includes(url.protocol) && !url.username && !url.password && ['', '/'].includes(url.pathname) && !url.search && !url.hash && url.hostname
+      ? (url.origin === 'null' ? `${url.protocol}//${url.host}` : url.origin) : null; }
   catch { return null; }
 };
 // The origin the provider allocated at create is Receipt.origin (amendment 2); nothing else names a published address.
@@ -230,25 +485,80 @@ const retarget = (plan, from, to) => ({ ...plan, effects: plan.effects.map(effec
 const GATE_LIFETIME_MS = 2_147_483_647;
 
 /**
+ * An approval that is refused is refused before a controller, a configuration reference or a provider resource exists, so the operation
+ * that reserved the handle owes no cleanup. The refusal carries that first-hand fact; an unrecorded refusal stays unconfirmed debt.
+ */
+function refusedBeforeStart(error, handle, request) {
+  if (error && typeof error === 'object' && !error.route) {
+    const lease = { target: request.target, state: 'released', origin: null, properties: unknownProperties(), ingress: null, identity: null,
+      limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, checkedAtMs: null, cleanup: { state: 'confirmed' } };
+    error.route = { ...projectAttached(lease, { handle, now: Date.now() }), operationId: request.operationId ?? null };
+  }
+  return error;
+}
+
+/**
+ * A start refused before any adapter loaded has no provider resource to remove. This controller knows that first-hand, so the record
+ * says so; only the configuration reference the host registered remains, and its release is confirmed or left as retryable debt.
+ */
+async function recordRefusedStart(directory,bootstrap,resolver,lost){
+  const session=bootstrap.execution==='generic-session-v1';
+  const handle=session?bootstrap.handle:{kind:'attached',id:bootstrap.id,generation:1};
+  const managed=['resolver','registryId','owner','consentReview'].some(name=>Object.hasOwn(bootstrap,name));
+  let released=!managed;
+  if(managed){
+    try{
+      if(lost()||!resolver||typeof resolver.releaseConfigurationUse!=='function'||typeof bootstrap.owner!=='string'||!bootstrap.owner||typeof bootstrap.registryId!=='string'||!bootstrap.registryId)throw new Error('reference release unavailable');
+      await resolver.releaseConfigurationUse({owner:bootstrap.owner,providerId:bootstrap.adapterId,handle});released=true;
+    }catch{released=false;}
+  }
+  const lease={...(session?{expiresAtMs:bootstrap.expiresAtMs}:{}),target:bootstrap.request.target,state:released?'released':'uncertain',origin:null,properties:unknownProperties(),ingress:null,identity:bootstrap.identity??null,
+    limits:{recommendedPollIntervalMs:5_000,idleTimeoutMs:null},checkedAtMs:null,
+    cleanup:released?{state:'confirmed'}:{state:'unconfirmed',message:'The start was refused before any provider code ran; configuration reference release remains unconfirmed'}};
+  await atomicWrite(join(directory,'state.json'),{schemaVersion:1,adapterId:bootstrap.adapterId,request:bootstrap.request,plan:bootstrap.plan,receipt:null,handle,phase:lease.state,
+    lastView:{...projectAttached(lease,{handle,now:Date.now()}),operationId:bootstrap.operationId??null,consentFactsDigest:bootstrap.consentReview?.consentFactsDigest??null},
+    resourceRemoval:released?null:{schemaVersion:1,registryId:bootstrap.registryId,owner:bootstrap.owner,providerId:bootstrap.adapterId,handle:structuredClone(handle)}});
+}
+
+/**
  * Runs one attached route to its end and resolves with the last RouteView. `runtime` supplies adapters and the
  * admitted effect context; `lease` is 'heartbeat' (a detached controller) or { kind: 'stdin', stream } (a foreground CLI owner).
  */
 export async function runAttachedController(directory, runtime = {}) {
   const bootstrap = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
-  const adapters = runtime.adapters ?? await (await loadRuntime())?.loadAdapters?.();
+  let resolverLost=false,onResolverLoss=()=>{};
+  const resolver=bootstrap.resolver?await connectEmbeddingBroker({descriptor:bootstrap.resolver,identity:bootstrap.identity,onLoss:()=>{resolverLost=true;onResolverLoss();}}):null;
+  // Adapter code from a changed registry is never loaded. The refusal is recorded first so the retained directory stays enumerable.
+  if(bootstrap.registryId&&await registryIdentity(bootstrap.registry)!==bootstrap.registryId){
+    await recordRefusedStart(directory,bootstrap,resolver,()=>resolverLost);
+    throw gozarError('artifact_integrity_failed','The controller registry content changed');
+  }
+  if(resolver)runtime={...runtime,embeddingServices:resolver,owner:bootstrap.owner,...(bootstrap.fixtureEffects?{dispatchEffect:resolver.dispatchEffect.bind(resolver)}:{})};
+  if(bootstrap.fixtureEffects)runtime.fetch=testingFetch(runtime.dispatchEffect);
+  const adapters = runtime.adapters ?? await (await loadRuntime())?.loadAdapters?.(bootstrap.registry);
   const adapter = adapters?.find(item => item.id === bootstrap.adapterId);
   if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available');
   const read = bindConfiguration(await readContextFor(runtime, bootstrap.home, bootstrap.platform), adapter.id);
   const now = runtime.now ?? Date.now;
   const expiryMs = bootstrap.leaseExpiryMs ?? LEASE_EXPIRY_MS;
-  const handle = { kind: 'attached', id: bootstrap.id, generation: 0 };
-  const lease = { state: 'creating', origin: null, properties: adapter.definition.capabilities, ingress: null,
+  const session = bootstrap.execution==='generic-session-v1';
+  const handle = session ? bootstrap.handle : { kind: 'attached', id: bootstrap.id, generation: 1 };
+  if(session && (handle?.kind!=='session'||handle.id!==bootstrap.id||handle.generation!==1||!Number.isFinite(bootstrap.expiresAtMs)))throw gozarError('artifact_integrity_failed','Invalid persisted session identity or expiry');
+  if(session && await readJson(join(directory,'state.json')))throw gozarError('route_conflict','This session has already attempted creation');
+  const expired=()=>session&&now()>=bootstrap.expiresAtMs;
+  const lease = { ...(session?{expiresAtMs:bootstrap.expiresAtMs}:{}), target: bootstrap.request.target, state: 'creating', origin: null, properties: adapter.definition.capabilities, ingress: null, identity:bootstrap.identity??null,
     limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
-  let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null;
+  let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null, proofSession = null,initialSettled=false;
   const nonce = randomBytes(32).toString('hex');
-  const lastView = () => projectAttached(lease, { handle, now: now() });
+  const lastView = () => ({...projectAttached(expired()&&lease.state==='usable'?{...lease,state:'unverified'}:lease, { handle, now: now() }),operationId:bootstrap.operationId??null,...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
+  let resourceRemoval=null;
   const save = () => atomicWrite(join(directory, 'state.json'), { schemaVersion: 1, adapterId: adapter.id, request: bootstrap.request, plan: bootstrap.plan,
-    receipt, handle, phase: lease.state, lastView: lastView() });
+    receipt, handle, phase: lease.state, lastView: lastView(), resourceRemoval });
+  async function recordRemoval(){
+    resourceRemoval={schemaVersion:1,registryId:bootstrap.registryId,owner:bootstrap.owner,providerId:adapter.id,handle:structuredClone(handle)};
+    lease.state='uncertain';lease.cleanup={state:'unconfirmed',message:'Resource removed; configuration reference release remains unconfirmed'};
+    await save();
+  }
 
   const admitted = (runtime.effectContext ?? (await loadRuntime())?.createAttachedEffectContext)?.({ adapter, readContext: read, request: bootstrap.request, plan: bootstrap.plan, generation: 1 });
   // The effect is admitted for generation 1: a new route. Receipts carry the generation create returns.
@@ -266,70 +576,179 @@ export async function runAttachedController(directory, runtime = {}) {
     finally { clearTimeout(timer); }
   };
   const gated = runtime.validation !== 'none';
+  const proofAbort = new AbortController();
+  let attempt = { id: bootstrap.id, nonce: randomBytes(32).toString('hex'), deadlineMs: session?Math.min(bootstrap.expiresAtMs,now()+120000):now()+120000, signal: proofAbort.signal };
+  onResolverLoss=()=>{if(lease.cleanup.state!=='confirmed'){lease.state='unverified';proofAbort.abort();void save().catch(()=>{});}};
+  Object.assign(context,{signal:attempt.signal,deadlineMs:attempt.deadlineMs,attemptId:attempt.id,operationId:bootstrap.operationId??null});
+  lease.approvedReview=bootstrap.consentReview??null;
+  const reviewTokens=new Map();
+  const safeRefresh=()=>!proofSession||typeof proofSession.refresh==='function';
+  async function currentConsent(){
+    if(!lease.approvedReview)return null;
+    const original=lease.approvedReview.canonicalInput;
+    const current=await currentRouteReview({...bootstrap.request,home:bootstrap.home,owner:bootstrap.owner,origin:original.scope.query.expectedOrigin},adapter,
+      {...runtime,embeddingServices:resolver,registryId:bootstrap.registryId,platform:bootstrap.platform},
+      {runtimeFacts:{properties:lease.properties,facts:[...(lease.runtimeFacts??[]),...(lease.proof?.facts??[])]}});
+    lease.facts=current.facts;return current.review;
+  }
+  async function enforceConsent(){
+    if(resolverLost){lease.state='unverified';return false;}
+    const current=await currentConsent();
+    if(current&&current.consentFactsDigest!==lease.approvedReview.consentFactsDigest){
+      lease.state='unverified';lease.consentChange={oldDigest:lease.approvedReview.consentFactsDigest,newDigest:current.consentFactsDigest,
+        nextAction:safeRefresh()?instructionAction('review-route-consent','Review changed route consent','Call reviewRouteConsent with this route handle, show the returned review and approveRouteConsent after approval.'):null,
+        reason:safeRefresh()?'consent-changed':'proof-refresh-unsupported'};
+      await save();return false;
+    }
+    if(lease.consentChange){lease.state='unverified';return false;}
+    return true;
+  }
 
-  async function verify() {
-    if (!receipt || releasing) return;
+  async function checkProof(sse) {
+    const endpoint = lease.origin ?? receipt.origin;
+    const started=now(),activeAttempt=attempt;
+    const checked = proofSession ? await proofSession.verify({ origin: endpoint, receipt, attempt })
+      : await adapter.verify(gated ? { ...read, verifyChallenge: gateChecked(sse) } : read, receipt);
+    if (proofSession) {
+      if (checked.attemptId !== attempt.id || checked.endpoint !== endpoint || attempt.signal.aborted || now() >= attempt.deadlineMs || releasing) {
+        return { ...checked, status: 'unverified' };
+      }
+      lease.proof = checked;
+      lease.facts = [...new Map([...(adapter.definition.facts ?? []), ...(lease.runtimeFacts ?? []), ...(checked.facts ?? [])].map(fact => [fact.id, fact])).values()];
+    }
+    const observed=Date.parse(checked.checkedAt);
+    if(resolverLost||activeAttempt!==attempt||attempt.signal.aborted||releasing||now()>=attempt.deadlineMs||!proofObservedDuring(checked,started,now()))return {...checked,status:'unverified'};
+    if(!proofSession)lease.proof={...checked,vantage:'this-device',checks:checked.status==='verified'?[...(endpoint.startsWith('https:')?['tls']:[]),'nonce',...(sse?['sse']:[])]:[],validUntil:new Date(observed+15000).toISOString()};
+    lease.proofSubject=bootstrap.identity?{origin:endpoint,target:bootstrap.request.target,...bootstrap.identity,handleGeneration:handle.generation}:null;
+    return checked;
+  }
+
+  // What the provider reports now: a consent review shows this, not what the last proof saw.
+  async function refreshRuntimeFacts(){
+    const facts=await adapter.runtimeFacts(read,receipt);
+    Object.assign(lease,{properties:facts.properties,binding:facts.binding,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
+  }
+  let verification;
+  function verify(){if(verification)return verification;verification=refreshProof().finally(()=>{verification=null;});return verification;}
+  async function refreshProof() {
+    if (expired()) { await release(); return; }
+    if (!receipt || resourceRemoval || releasing || !initialSettled || failure || lease.cleanup.state==='confirmed') return;
+    await refreshRuntimeFacts();
+    if(!await enforceConsent())return;
+    if (proofSession && !proofSession.refresh) return;
     try {
-      const verification = await adapter.verify(gated ? { ...read, verifyChallenge: gateChecked(false) } : read, receipt);
-      if (!releasing) { lease.state = verification.status === 'verified' ? 'usable' : 'unverified'; lease.checkedAtMs = now(); lease.sseChecked = false; await save(); }
+      attempt={id:randomUUID(),nonce:randomBytes(32).toString('hex'),deadlineMs:session?Math.min(bootstrap.expiresAtMs,now()+120000):now()+120000,signal:proofAbort.signal};
+      if(!proofSession)gate?.rotate();
+      const started = now();
+      const verification = proofSession
+        ? await proofSession.refresh({ origin: lease.origin, receipt, attempt })
+        : await checkProof(false);
+      if (proofSession) {
+        if (verification.attemptId !== attempt.id || verification.endpoint !== lease.origin || attempt.signal.aborted || now() >= attempt.deadlineMs || releasing) return;
+        if (!proofObservedDuring(verification, started, now())) {
+          // Retain the original evidence, but withdraw readiness on invalid time.
+          lease.state = 'unverified';
+          await save();
+          return;
+        }
+        lease.proof = verification;
+        lease.facts = [...(adapter.definition.facts ?? []), ...(verification.facts ?? [])];
+      }
+      if (!releasing&&await enforceConsent()) { lease.state = verification.status === 'verified' ? 'usable' : 'unverified'; lease.checkedAtMs = Date.parse(verification.checkedAt); lease.sseChecked = false; await save(); }
     } catch { if (!releasing) { lease.state = 'unverified'; await save(); } }
   }
   async function removeRoute() {
-    const observed = await adapter.observe(read, bootstrap.request);
+    let observed;
+    try{observed=await adapter.observe(read,bootstrap.request);}catch{observed={known:false,reason:'provider-observation-unavailable'};}
     return adapter.remove(context, receipt, observed);
   }
-  const debtOf = removal => ({ state: 'debt', message: removal.debt?.message ?? 'The route could not be removed' });
+  const debtOf = removal => ({ state: 'unconfirmed', message: removal.debt?.message ?? 'The route could not be removed' });
   const creation = (async () => {
     try {
+      if(session)await save();
+      if(expired())throw gozarError('verification_failed','The session lifetime has expired');
       if (!admitted) throw gozarError('unsupported', 'No admitted effect context is wired for this route');
+      if(!await enforceConsent())throw gozarError('consent_mismatch','Consent changed before route creation');
       let plan = bootstrap.plan;
-      if (gated) {
+      if (gated && adapter.prepareProof) {
+        proofSession = await adapter.prepareProof(read, bootstrap.request, attempt);
+        lease.bindTarget = proofSession.target;
+        plan = retarget(plan, bootstrap.request.target, proofSession.target);
+      } else if (gated) {
         gate = await createGate(portOf(bootstrap.request.target), { lifetimeMs: GATE_LIFETIME_MS, onExpire: () => release().then(finish) });
-        plan = retarget(plan, bootstrap.request.target, `127.0.0.1:${gate.port}`);
+        lease.bindTarget = `127.0.0.1:${gate.port}`;
+        plan = retarget(plan, bootstrap.request.target, lease.bindTarget);
       }
+      if(expired())throw gozarError('verification_failed','The session lifetime has expired');
       receipt = await adapter.create(context, plan);
-      handle.generation = receipt.generation;
+      if(receipt?.adapterId!==adapter.id||receipt.resourceKey!==plan.resourceKey||receipt.generation!==context.generation||
+        receipt.operationId!==undefined&&receipt.operationId!==(bootstrap.operationId??null))throw gozarError('provider_unavailable','The adapter returned a receipt for another allocation');
+      if(expired())throw gozarError('verification_failed','The session lifetime has expired');
       const facts = await adapter.runtimeFacts(read, receipt);
-      const origin = credentialFreeOrigin(receipt.origin);
+      const origin = credentialFreeOrigin(receipt.origin, facts.properties, adapter.definition.originSchemes);
       if (!origin) throw gozarError('provider_unavailable', 'The provider returned no usable origin');
-      Object.assign(lease, { properties: facts.properties, ingress: facts.ingress ?? null, limits: facts.limits, origin, state: 'unverified' });
+      Object.assign(lease, { properties: facts.properties,binding:facts.binding, ingress: facts.ingress ?? null, limits: facts.limits,runtimeFacts:facts.facts??[], facts: [...new Map([...(adapter.definition.facts ?? []), ...(facts.facts ?? [])].map(f=>[f.id,f])).values()], origin, state: 'unverified' });
       await save();
+      if(!await enforceConsent())return;
       // Nothing is reported published until the validation passes; a failed check withdraws the route.
-      const checked = await adapter.verify(gated ? { ...read, verifyChallenge: gateChecked(claimsSse) } : read, receipt);
+      const checked = await checkProof(claimsSse);
       if (checked.status !== 'verified') throw gozarError('verification_failed', 'The route did not pass publication validation and was withdrawn');
-      lease.state = 'usable'; lease.checkedAtMs = now(); lease.sseChecked = gated && claimsSse;
+      if(!await enforceConsent())return;
+      lease.state = 'usable'; lease.checkedAtMs = Date.parse(checked.checkedAt); lease.sseChecked = gated && claimsSse;
       await save();
     } catch (cause) {
+      if(!receipt&&cause.cleanupReceipt){receipt=cause.cleanupReceipt;handle.generation=receipt.generation;}
       const error = normalizeError(cause);
-      failure = { code: error.code, message: error.message };
+      failure = { code: error.code, message: error.message,nextAction:error.nextAction??null };
       lease.state = 'lost';
       if (receipt) {
-        try { const removal = await removeRoute(); if (!removal.removed || removal.debt) Object.assign(lease, { state: 'uncertain', cleanup: debtOf(removal) }); }
-        catch { Object.assign(lease, { state: 'uncertain', cleanup: { state: 'debt', message: 'The route could not be withdrawn; close it again' } }); }
-      }
+        try { const removal = await removeRoute(); if (!removal.removed || removal.debt) Object.assign(lease, { state: 'uncertain', cleanup: debtOf(removal) }); else {lease.cleanup = {state:'confirmed'};await recordRemoval();await releaseUse();lease.cleanup={state:'confirmed'};} }
+        catch { Object.assign(lease, { state: 'uncertain', cleanup: { state: 'unconfirmed', message: 'The route could not be withdrawn; close it again' } }); }
+      } else { lease.state = 'uncertain'; lease.cleanup = {state:'unconfirmed',message:'Startup failed before an owned runtime receipt was returned'}; }
       await atomicWrite(join(directory, 'failure.json'), failure);
       await save().catch(() => {});
     }
-  })();
+  })().finally(()=>{initialSettled=true;});
+
+  async function releaseUse(){
+    // Proof identity alone does not claim custody of a configuration reference.
+    // Any managed-reference claim, even malformed, still requires confirmed release.
+    const managed=['resolver','registryId','owner','consentReview'].some(name=>Object.hasOwn(bootstrap,name));
+    if(!managed)return;
+    if(resolverLost||!resolver||typeof resolver.releaseConfigurationUse!=='function'||
+        typeof bootstrap.owner!=='string'||!bootstrap.owner||
+        typeof bootstrap.registryId!=='string'||!bootstrap.registryId)
+      throw gozarError('cleanup_debt','Resource removed; configuration reference release remains unconfirmed');
+    await resolver.releaseConfigurationUse({owner:bootstrap.owner,providerId:adapter.id,handle});
+  }
 
   function release() {
+    proofAbort.abort();
     releasing ??= (async () => {
       await creation;
-      if (lease.state === 'lost') return;
+      if (resourceRemoval) {
+        // The route is already removed; only the configuration reference remains. A failed release keeps that debt recorded and retryable.
+        try {await releaseUse();lease.state='released';lease.cleanup={state:'confirmed'};}
+        catch (cause) {lease.state='uncertain';lease.cleanup={state:'unconfirmed',message:'Resource removed; configuration reference release remains unconfirmed'};}
+        await save();return;
+      }
+      if (lease.cleanup.state === 'confirmed') {lease.state='released';await save();return;}
       lease.state = 'releasing'; await save().catch(() => {});
       try {
+        if(!receipt)throw gozarError('cleanup_debt','Startup outcome remains unknown; retain this recovery handle');
         const removal = await removeRoute();
-        if (removal.removed && !removal.debt) lease.state = 'released';
+        if (removal.removed && !removal.debt) { lease.state = 'released'; lease.cleanup = { state: 'confirmed' };await recordRemoval();await releaseUse();lease.state='released';lease.cleanup={state:'confirmed'}; }
         else { lease.state = 'uncertain'; lease.cleanup = debtOf(removal); }
-      } catch (cause) { lease.state = 'uncertain'; lease.cleanup = { state: 'debt', message: `Removal failed (${normalizeError(cause).code})` }; }
+      } catch (cause) { lease.state = 'uncertain'; lease.cleanup = { state: 'unconfirmed', message: `Removal failed (${normalizeError(cause).code})` }; }
       await save();
-    })();
+    })().finally(()=>{if(lease.cleanup.state==='unconfirmed')releasing=null;});
     return releasing;
   }
 
   let finish;
   const finished = new Promise(resolve => { finish = resolve; });
   const sockets = new Set();
+  const controllerStartIdentity = await processIdentity(process.pid);
   const server = net.createServer(socket => {
     sockets.add(socket); socket.once('close', () => sockets.delete(socket));
     let input = '', dispatched = false;
@@ -345,10 +764,55 @@ export async function runAttachedController(directory, runtime = {}) {
         const message = JSON.parse(input.split('\n')[0]);
         if (message.nonce !== nonce) throw gozarError('internal_error', 'Controller identity mismatch');
         const command = message.command ?? {};
-        if (command.type === 'heartbeat') { lastBeat = now(); return reply({ ok: true }); }
+        if(command.type==='observe'){
+          if(message.controllerIdentity?.pid!==process.pid||!controllerStartIdentity||message.controllerIdentity?.startIdentity!==controllerStartIdentity)
+            throw gozarError('route_conflict','Controller process identity changed');
+          if(command.handleKind!==handle.kind||command.handleId!==handle.id||command.generation!==handle.generation)
+            throw gozarError('route_conflict','Observation handle does not match the controller');
+          return reply({view:projectControllerObservation(lastView(),{now:now(),lastBeat,expiryMs,
+            heartbeat:!session&&runtime.lease?.kind!=='stdin',expiresAtMs:session?bootstrap.expiresAtMs:null,
+            initialSettled,failure,releasing,resourceRemoval,resolverLost,identity:lease.identity}),startupComplete:initialSettled,
+            // Authority evidence for a replay: can this controller still produce a fresh proof?
+            progress:{initialSettled,resolverLost,refreshable:safeRefresh()}});
+        }
+        if(session&&command.handleId!==undefined&&command.handleId!==handle.id)throw gozarError('route_conflict','The session was replaced');
+        if(expired()&&command.type!=='close'&&command.type!=='finalize-removal'){await release();if(command.type==='status')return reply({view:lastView(),startupComplete:initialSettled});throw gozarError('verification_failed','The session lifetime has expired');}
+        if (command.type === 'heartbeat') { if(!session)lastBeat = now(); return reply({ ok: true }); }
+        if(command.type==='resolver-lost'){resolverLost=true;lease.state='unverified';proofAbort.abort();await save();return reply({ok:true});}
         if (command.generation !== undefined && command.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
-        if (command.type === 'status') { if (command.fresh) await verify(); return reply({ view: lastView() }); }
-        if (command.type === 'close') { await release(); reply({ view: lastView() }); return finish(); }
+        if (command.type === 'status') { if (command.fresh) await verify(); return reply({ view: lastView(),startupComplete:initialSettled }); }
+        if(command.type==='review-consent'){
+          lease.state='unverified';lease.consentChange={reason:safeRefresh()?'review-requested':'proof-refresh-unsupported',nextAction:safeRefresh()?instructionAction('review-route-consent','Review route consent','Approve the current review before publication can resume.'):null};await save();
+          if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
+          if(receipt&&!resourceRemoval&&!releasing&&initialSettled&&!failure)await refreshRuntimeFacts();
+          const current=await currentConsent();if(!current)throw gozarError('unsupported','This route has no current consent snapshot');
+          const scope={...current.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation};
+          const {consentReview}=await import('./consent-facts.mjs');
+          const review=consentReview({...current.canonicalInput,scope,typedDisclosures:current.canonicalInput.typedDisclosures,facts:current.canonicalInput.facts});
+          const token=randomBytes(32).toString('base64url'),expiresAt=new Date(now()+600000).toISOString();
+          const snapshot={...consentSnapshot(review),subject:lease.proofSubject??null,approvalToken:token,expiresAt};
+          reviewTokens.set(token,{snapshot,current});return reply({review:snapshot});
+        }
+        if(command.type==='approve-consent'){
+          lease.state='unverified';await save();
+          if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
+          const stored=reviewTokens.get(command.approvalToken);reviewTokens.delete(command.approvalToken);
+          if(receipt&&!resourceRemoval&&!releasing&&initialSettled&&!failure)await refreshRuntimeFacts();
+          const current=await currentConsent();
+          if(!stored||Date.parse(stored.snapshot.expiresAt)<=now()||stored.snapshot.consentFactsDigest!==command.consentFactsDigest||stored.current.consentFactsDigest!==current?.consentFactsDigest||JSON.stringify(stored.snapshot.subject)!==JSON.stringify(lease.proofSubject??null))throw gozarError('consent_mismatch','The runtime review changed; request a new review');
+          lease.approvedReview=current;delete lease.consentChange;await verify();return reply({view:lastView()});
+        }
+        if(command.type==='finalize-removal'){
+          // Only after the owner released the exact configuration reference, and only from this controller's own removal milestone.
+          if(command.handleKind!==handle.kind||command.handleId!==handle.id||command.generation!==handle.generation)throw gozarError('route_conflict','Finalization handle does not match the controller');
+          if(command.owner!==undefined&&command.owner!==bootstrap.owner)throw gozarError('route_conflict','Finalization owner does not match the controller');
+          await creation;await releasing?.catch(()=>{});
+          if(!resourceRemoval||resourceRemoval.handle?.id!==handle.id||resourceRemoval.handle.generation!==handle.generation||resourceRemoval.providerId!==adapter.id)
+            throw gozarError('cleanup_debt','This controller has not recorded a resource removal');
+          proofAbort.abort();lease.state='released';lease.cleanup={state:'confirmed'};await save();
+          reply({view:lastView()});finish();return;
+        }
+        if (command.type === 'close') { await release(); reply({ view: lastView() }); if(lease.cleanup.state==='confirmed')finish();return; }
         throw gozarError('invalid_input', 'Unsupported controller command');
       } catch (error) { const normalized = normalizeError(error); reply({ error: { code: normalized.code, message: normalized.message } }); }
     });
@@ -357,22 +821,24 @@ export async function runAttachedController(directory, runtime = {}) {
   await unlink(socketPath).catch(() => {});
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
   await chmod(socketPath, 0o600);
-  await atomicWrite(join(directory, 'control.json'), { pid: process.pid, startIdentity: await processIdentity(process.pid), nonce });
+  await atomicWrite(join(directory, 'control.json'), { pid: process.pid, startIdentity: controllerStartIdentity, nonce });
 
   let monitor;
-  const stdin = runtime.lease?.kind === 'stdin' ? runtime.lease.stream : null;
+  const stdin = !session && runtime.lease?.kind === 'stdin' ? runtime.lease.stream : null;
   if (stdin) {
-    const gone = () => release().then(finish);
+    const gone = () => release().then(()=>{if(lease.cleanup.state==='confirmed')finish();});
     stdin.once('end', gone); stdin.once('close', gone); stdin.resume();
   } else {
-    monitor = setInterval(() => { if (!releasing && now() - lastBeat > expiryMs) release().then(finish); }, Math.max(20, Math.min(1_000, Math.floor(expiryMs / 4))));
+    monitor = setInterval(() => { if (!releasing && (session?expired():now() - lastBeat > expiryMs)) {lastBeat=now();release().then(()=>{if(lease.cleanup.state==='confirmed')finish();});} }, Math.max(20, Math.min(1_000, Math.floor(expiryMs / 4))));
   }
-  creation.then(() => { if (failure) finish(); });
+  creation.then(() => { if (failure&&lease.cleanup.state==='confirmed') finish(); });
   await finished;
   clearInterval(monitor);
   // Let the reply to the last command leave before the socket goes away.
   await new Promise(resolve => setTimeout(resolve, 50));
   await gate?.close().catch(() => {});
+  await proofSession?.close().catch(() => {});
+  resolver?.close();
   for (const socket of sockets) socket.destroy();
   await new Promise(resolve => server.close(resolve));
   return lastView();
@@ -380,16 +846,18 @@ export async function runAttachedController(directory, runtime = {}) {
 
 // --- Session usage ------------------------------------------------------------------------------
 
-async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs, origin, requirements }) {
+async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs, origin, requirements,owner,operationId,sessionId,embedding,hostChoices,operationalDefinition }) {
   const root = fileURLToPath(new URL('../../', import.meta.url));
   const { loadCatalog, loadDefinition } = await import('./catalog.mjs');
   const { launch } = await import('./daemon.mjs');
   const catalog = await loadCatalog(root, { operational: true });
-  const definition = await loadDefinition(root, adapterId);
+  // The approved adapter carries its own plan, so a registry that is not the shipped catalog runs on the same generic runtime.
+  const definition = operationalDefinition ?? await loadDefinition(root, adapterId);
+  if (definition.id !== adapterId) throw gozarError('artifact_integrity_failed', 'The approved adapter carries another adapter plan');
   return launch(directory, { adapters: [...catalog.filter(item => item.id !== definition.id), definition],
     requirements: { clientReach: requirements.reach, httpsRequired: requirements.transport === 'https', sse: requirements.protocols.includes('sse'),
       streamableHttp: requirements.protocols.includes('streamable-http'), oauthDcr: requirements.protocols.includes('oauth-dcr') },
-    targetPort: port, adapterId, lifetimeMs, origin: origin ?? undefined, operational: definition.planVersion === 1, consent: true, approveOrigin: true },
+    targetPort: port, adapterId, lifetimeMs,owner,operationId:operationId??null,...(hostChoices??{}),...(sessionId?{sessionId}:{}),...(embedding?{embedding}:{}),origin: origin ?? undefined, operational: definition.planVersion === 1, consent: true, approveOrigin: true },
   join(root, 'bin', 'gozar.mjs'));
 }
 
@@ -398,6 +866,7 @@ async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs
  * request; the legacy controller (startSession) enforces the lifetime.
  */
 export async function openSessionRoute(request, deps = {}) {
+  await preflightExpose(request, deps);
   try {
     checkExpose(request, 'session');
     if (!supportedPlatform(deps.platform ?? process.platform)) throw gozarError('unsupported', 'Gozar 0.2 does not support routes on this platform');
@@ -405,9 +874,30 @@ export async function openSessionRoute(request, deps = {}) {
     const home = await canonicalHome(request.home, true);
     const port = Number(request.target.slice(request.target.lastIndexOf(':') + 1));
     if (!Number.isInteger(port) || port < 1 || port > 65_535) throw gozarError('invalid_input', 'target must end in :PORT');
-    const redeemed = await withExclusiveLock(join(await attachedRoot(home), '.open.lock'), () => redeemApproval(request, { ...deps, adapters }), { waitSeconds: 30 });
+    const stableHandle=deps.reservedHandle??{kind:'session',id:`port-${port}:${randomUUID()}`,generation:1};
+    const redeemed = await withExclusiveLock(join(await attachedRoot(home), '.open.lock'), () => redeemApproval(request, { ...deps, adapters }).catch(error => { throw refusedBeforeStart(error, stableHandle, request); }), { waitSeconds: 30 });
     const directory = join(home, `port-${port}`);
+    if (!deps.startSession && redeemed.adapter.sessionExecution !== 'recipe') {
+      if (stableHandle.kind!=='session'||stableHandle.generation!==1||!new RegExp(`^port-${port}:[A-Za-z0-9_-]+$`).test(stableHandle.id)) throw gozarError('invalid_input','Invalid reserved session handle');
+      const expiresAtMs=Date.now()+request.usage.lifetimeMs;
+      if (!Number.isFinite(expiresAtMs)||request.usage.lifetimeMs<=0) throw gozarError('invalid_input','A session needs a finite positive lifetime');
+      return await openAttachedRoute(request,{...deps,sessionExecution:{redeemed,handle:stableHandle,directory,expiresAtMs}});
+    }
+    // The adapter turns what its owner chose into the exact session-engine inputs, from live observation, before anything starts.
+    const hostChoices = typeof redeemed.adapter.hostChoices === 'function'
+      ? await redeemed.adapter.hostChoices(await readContextFor(deps, home, deps.platform ?? process.platform, request.owner)).catch(error => { throw refusedBeforeStart(error, stableHandle, request); })
+      : undefined;
+    let embedding;
+    if(deps.embeddingServices){
+      const broker=await startEmbeddingBroker({services:deps.embeddingServices,home,identity:await deps.embeddingServices.resolveIdentity({home}),dispatchEffect:deps.dispatchEffect,
+        onLoss:()=>{void import('./daemon.mjs').then(module=>module.control(directory,{type:'resolver-lost'})).catch(()=>{});}});
+      const descriptor=await broker.registerController();brokers.set(stableHandle.id,broker);
+      try{await deps.embeddingServices.registerConfigurationUse({home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle:stableHandle});}
+      catch(error){await dropBroker(stableHandle.id);throw error;}
+      embedding={resolver:descriptor,identity:{instanceId:descriptor.instanceId,bootId:descriptor.bootId},...(deps.registry?{registry:deps.registry}:{}),registryId:deps.registryId,request:{...redeemed.request,home,owner:request.owner,...(request.intent?{intent:request.intent}:{})},consentReview:redeemed.consentReview,handle:stableHandle,fixtureEffects:!!deps.dispatchEffect};
+    }
     let reply = await (deps.startSession ?? legacyStartSession)({ home, directory, adapterId: redeemed.adapter.id, port, lifetimeMs: request.usage.lifetimeMs,
+      owner:request.owner,operationId:request.operationId,sessionId:stableHandle.id.split(':').slice(1).join(':'),embedding,hostChoices,operationalDefinition:redeemed.adapter.operationalDefinition,
       origin: request.origin ?? redeemed.plan.origin ?? null, requirements: request.requirements, wait: request.wait });
     const sessionId = reply.snapshot?.sessionId;
     const handle = { kind: 'session', id: sessionId ? `port-${port}:${sessionId}` : `port-${port}`, generation: 1 };

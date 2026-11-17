@@ -10,7 +10,7 @@ import { addService, statusServices, removeService } from '../../packages/gozar-
 const origin = 'https://filesystem.example';
 const name = createHash('sha256').update(origin).digest('hex') + '.json';
 const route = { schemaVersion: 1, origin, target: 'localhost:1', adapterId: 'own-address',
-  ownership: 'external-owned', verifyCmd: 'exit 0' };
+  ownership: 'external-owned', verifyCmd: 'exit 0', generation: 1 };
 async function fixture(t) {
   const root = await fs.mkdtemp(join(homedir(), '.tmp', 'gozar-fs-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

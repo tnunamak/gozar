@@ -1,6 +1,7 @@
 {
   "name": "@tnunamak/gozar",
-  "version": "0.3.4",
+  "version": "0.4.0",
+  "license": "Apache-2.0",
   "description": "Give a local MCP server an address its client can reach",
   "type": "module",
   "exports": {
@@ -9,7 +10,10 @@
       "default": "./packages/gozar-node/api.mjs"
     },
     "./service": "./packages/gozar-node/service.mjs",
-    "./testing": "./packages/gozar-node/testing.mjs",
+    "./testing": {
+      "types": "./packages/gozar-node/testing-contract.d.ts",
+      "default": "./packages/gozar-node/testing.mjs"
+    },
     "./bin/gozar.mjs": "./bin/gozar.mjs",
     "./package.json": "./package.json"
   },
@@ -23,7 +27,24 @@
     "runtime/*.json",
     "harness/dummy-server.mjs",
     "docs/service-routes.md",
-    "docs/providers.md"
+    "docs/providers.md",
+    "docs/design/durable-routes.md",
+    "docs/architecture.md",
+    "adapters/INTEGRATION.md",
+    "harness/README.md",
+    "LICENSE",
+    "examples/",
+    "docs/migration-0.4.md",
+    "THIRD-PARTY-NOTICES.md",
+    "third-party/",
+    "docs/release-0.4-license-audit.md",
+    "docs/live-provider-walk.md",
+    "docs/ngrok-stream-protocols.md",
+    "docs/design/0.4.0-state-contract.md",
+    "docs/testing-effects.md",
+    "docs/embedding-contract.md",
+    "docs/proof-and-cleanup-0.4.md",
+    "docs/release-0.4-interface-coverage.md"
   ],
   "repository": {
     "type": "git",
@@ -43,7 +64,12 @@
     "node": ">=22.13"
   },
   "types": "./packages/gozar-node/route-contract.d.ts",
-  "optionalDependencies": {
+  "peerDependencies": {
     "@ngrok/ngrok": "1.7.0"
+  },
+  "peerDependenciesMeta": {
+    "@ngrok/ngrok": {
+      "optional": true
+    }
   }
 }

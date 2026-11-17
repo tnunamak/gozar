@@ -1,0 +1,25 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {readFile,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {createTestingGozar,fakeRegistry} from '@tnunamak/gozar/testing';
+import {scratch,query,assertShape} from './route-schema-check.mjs';
+test('public host capabilities fail closed and approved artifact bytes must match before the declared executor runs',async t=>{
+ const home=await scratch(t),bytes=Buffer.from('isolated fixture artifact'),id='artifact-fixture';let wrong=true,executions=0;
+ const action={id:'install',kind:'install-artifact',label:'Install fixture artifact',digest:'artifact-1',required:false,artifact:{url:'https://fixture.invalid/artifact',sha256:createHash('sha256').update(bytes).digest('hex'),platform:process.platform,architecture:process.arch},effects:{writes:['fixture-installation'],networkOrigins:['https://fixture.invalid'],requiresPrivilege:false,restartRequired:false},disclosure:{revision:'artifact-1',text:'Fixture artifact effects',links:[]}};
+ const registry=await fakeRegistry({dir:join(home,'registry'),id,kinds:['attached'],reach:'this-device',transport:'http',protocols:[],setupActions:[action]});
+ const path=join(registry.root,'providers',id,'definition.json'),data=JSON.parse(await readFile(path,'utf8'));data.adapter.requiredCapabilities=['installer.execute'];data.adapter.effectOperations=[{kind:'artifact',operation:'fetch'},{kind:'artifact',operation:'execute'}];await writeFile(path,JSON.stringify(data));
+ const effects=[{kind:'artifact',operation:'fetch',handle:async()=>({bytes:(wrong?Buffer.from('wrong'):bytes).toString('base64')})},{kind:'artifact',operation:'execute',handle:async input=>{assert.deepEqual(Buffer.from(input.bytes,'base64'),bytes);executions++;return {executed:true,exitCode:0};}}];
+ const refused=await createTestingGozar({...registry,effects});t.after(refused.close);
+ const inventory=await refused.gozar.listProviders({home}),provider=inventory.providers[0],prerequisite=provider.prerequisites.find(p=>p.id==='installer.execute');
+ assert.equal(prerequisite.state,'unknown');assert.equal(prerequisite.observation.reason,'host-capability-undeclared');assert.equal(provider.availability.attached.state,'unsupported');
+ const q=query({home,usage:{kind:'attached'},requirements:{reach:'this-device',transport:'any',payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}});
+ const catalog=await refused.gozar.catalogRoutes(q);assert.equal(catalog.candidates[0].candidateToken,null);assertShape('Catalog',catalog);
+ const harness=await createTestingGozar({...registry,effects,hostCapabilities:{'installer.execute':{known:true,value:true}}});t.after(harness.close);
+ const current=(await harness.gozar.listProviders({home})).providers[0],offered=current.prerequisites.find(p=>p.remedy?.id===action.id).remedy;
+ assert.deepEqual(offered.consent.disclosures.action.artifact,action.artifact);
+ const request={home,providerId:id,actionId:offered.id,expectedConfigurationRevision:current.configuration.revision,approval:{kind:'setup',digest:offered.digest,disclosureRevision:offered.disclosure.revision,consentFactsDigest:offered.consent.consentFactsDigest}};
+ await assert.rejects(harness.gozar.runSetupAction(request),{code:'artifact_integrity_failed'});assert.equal(executions,0);
+ wrong=false;const result=await harness.gozar.runSetupAction(request);assert.equal(result.state,'complete');assert.equal(result.configurationRevision,current.configuration.revision);assert.equal(executions,1);
+});

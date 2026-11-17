@@ -25,11 +25,10 @@
         }
       },
       {
-        "when": "separate timed stream and client probes",
+        "when": "attached connector transport proof, including timed incremental delivery when SSE is requested; application protocol behavior remains unverified",
         "capabilities": {
           "sse": true,
-          "streamableHttp": true,
-          "oauthDcr": true
+          "streamableHttp": true
         }
       }
     ],
@@ -160,7 +159,7 @@
       "tls": "client-trusted certificate and exact hostname when HTTPS",
       "instanceNonce": "must equal private instance challenge",
       "sse": "timed incremental event delivery when required",
-      "vantage": "public",
+      "vantage": "this-device",
       "publish": "exact-origin approval only after all required probes"
     },
     "lifecycle": {

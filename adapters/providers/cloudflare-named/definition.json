@@ -4,7 +4,7 @@
     "schemaVersion": 1,
     "id": "cloudflare-named",
     "label": "Cloudflare named tunnel",
-    "needs": "Needs a Cloudflare account and an existing named tunnel. This route is not available in this release.",
+    "needs": "Needs a saved run token for an existing remotely managed named tunnel, its published HTTPS origin, the dashboard service mapping to the configured local gate port, and the connector executable with Bash.",
     "capabilities": {
       "reach": "internet",
       "transport": "https",
@@ -21,9 +21,9 @@
       },
       "address": {
         "stability": "stable",
-        "scope": "hostname route in the owner’s Cloudflare account",
+        "scope": "hostname route in the owner\u2019s Cloudflare account",
         "conditions": [
-          "no admitted create recipe",
+          "the existing tunnel service mapping must point to the configured local gate port",
           "DNS and the tunnel are owner-managed prerequisites"
         ],
         "ports": null
@@ -36,15 +36,17 @@
         "period": null
       },
       "needsAccount": true,
-      "lifetimes": [],
-      "supervision": "controller",
+      "lifetimes": [
+        "attached"
+      ],
+      "supervision": "host-supervised",
       "protocols": {
-        "sse": false,
-        "streamableHttp": false,
+        "sse": true,
+        "streamableHttp": true,
         "oauthDcr": false
       },
       "proof": {
-        "vantage": "public",
+        "vantage": "this-device",
         "checks": [
           "tls",
           "nonce",
@@ -52,10 +54,12 @@
         ]
       }
     },
-    "supportedKinds": [],
+    "supportedKinds": [
+      "attached"
+    ],
     "disclosure": {
-      "revision": "disc-dcd687fdcadb",
-      "text": "Cloudflare named tunnel is detected only. Gozar cannot create a route with it yet. The Cloudflare edge terminates TLS and can read payloads.",
+      "revision": "disc-8dcc5142aae6",
+      "text": "The Cloudflare edge terminates TLS and can read payloads. Gozar starts and stops its connector and local gate. The owner keeps the tunnel registration, DNS route, Access policy and token revocation.",
       "links": [
         {
           "rel": "terms",
@@ -69,7 +73,621 @@
         }
       ]
     },
-    "ownership": "gozar-owned"
+    "ownership": "gozar-owned",
+    "availability": {
+      "session": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      },
+      "attached": {
+        "state": "available",
+        "reason": "admitted"
+      },
+      "durable": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      }
+    },
+    "prerequisites": [
+      {
+        "id": "connector-binary",
+        "label": "Connector binary",
+        "observation": "detected",
+        "actionId": "install-connector"
+      },
+      {
+        "id": "credential",
+        "label": "Saved tunnel credential",
+        "observation": "authSet",
+        "actionId": "token"
+      },
+      {
+        "id": "origin",
+        "label": "Published origin",
+        "observation": "originSet",
+        "actionId": "origin"
+      },
+      {
+        "id": "gate-port",
+        "label": "Local connector port",
+        "observation": "portSet",
+        "actionId": "gate-port"
+      },
+      {
+        "id": "process-supervisor",
+        "label": "Process supervisor",
+        "observation": "supervisor",
+        "actionId": "install-supervisor"
+      }
+    ],
+    "facts": [
+      {
+        "id": "cost-detail",
+        "label": "Cost details",
+        "value": "Cloudflare documents no bandwidth charge for Tunnel; optional products and account-specific services can have separate charges.",
+        "known": true,
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "https://developers.cloudflare.com/billing/understand/how-charges-accrue/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "entitlement",
+        "label": "Account entitlement",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "quota",
+        "label": "Remaining quota",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "mapping",
+        "label": "Effective provider mapping",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "terms-terms",
+        "label": "Terms",
+        "value": "https://www.cloudflare.com/terms/",
+        "known": true,
+        "group": "terms",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "terms-privacy",
+        "label": "Privacy",
+        "value": "https://www.cloudflare.com/privacypolicy/",
+        "known": true,
+        "group": "terms",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-0",
+        "label": "Address condition",
+        "value": "the existing tunnel service mapping must point to the configured local gate port",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-1",
+        "label": "Address condition",
+        "value": "DNS and the tunnel are owner-managed prerequisites",
+        "known": true,
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "public-names",
+        "label": "Public names",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-logs",
+        "label": "Certificate logs",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "browser-warning",
+        "label": "Browser warning",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md, https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "payload-readers",
+        "label": "Payload readers",
+        "value": "The Cloudflare edge can read the traffic.",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md (accessed 2026-11-12) ; https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/ (accessed 2026-11-12)",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "cleanup-ownership",
+        "label": "Cleanup ownership",
+        "value": "Stopping removes the Gozar connector and gate only. The owner keeps tunnel registration, DNS and token revocation.",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": true,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "provider-clocks",
+        "label": "Actual provider expiry and quota window",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "provider-retry",
+        "label": "Current provider retry-after or refusal",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "diagnostics-access",
+        "label": "Current account diagnostic access",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "credential-validity",
+        "label": "Current credential validity",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "traffic-policy",
+        "label": "Effective remote traffic policy",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-renewal",
+        "label": "Current CA issuance or renewal outcome",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "dns-authority",
+        "label": "Current DNS configuration and token grants",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "authoritative-address",
+        "label": "Current authoritative provider domain",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "account-authorization",
+        "label": "Current organization approval and ACL entitlement",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "remote-residue",
+        "label": "Remote DNS, certificate and token residue",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "alternative-cost",
+        "label": "Account-specific alternative cost and quota",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "https://www.cloudflare.com/plans/sase-zero-trust.md",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "proof-scope",
+        "label": "Proof scope",
+        "value": "Route transport and current Gozar boundary only; application login, authorization and downstream journeys are host-owned.",
+        "known": true,
+        "group": "proof",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "storage-policy",
+        "label": "Credential storage",
+        "value": "The configured host credential backend owns custody; the default uses private local files. Read-back returns presence and non-secret values only.",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "change-policy",
+        "label": "Configuration changes",
+        "value": "Saved inputs do not silently reconfigure a running route; stop and obtain fresh consent before replacing it.",
+        "known": true,
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "fallback-policy",
+        "label": "Fallback policy",
+        "value": "Never substitute a different provider without consent.",
+        "known": true,
+        "group": "access",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "remote-termination",
+        "label": "Effective remote TLS termination",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-logging",
+        "label": "Account-selected logging and retention",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-name-ownership",
+        "label": "Current reserved name ownership",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "address",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-setup-completion",
+        "label": "Provider consent or remote setup completion",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "provider-status",
+        "label": "Current provider dashboard status",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "runtime",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "browser-warning-applicability",
+        "label": "Account-specific browser warning applicability",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-collision",
+        "label": "Current remote endpoint collision",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "address",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "revocation-state",
+        "label": "Actual credential revocation and remaining connectors",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-control-authority",
+        "label": "Current remote binding and controller authority",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "provider-depletion",
+        "label": "Current provider depletion or license expiry",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-domain-options",
+        "label": "Account reserved-domain choices",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "account-domain-suggestion",
+        "label": "Current account-assigned suggested domain",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-issuance",
+        "label": "Provider credential issuance or refresh outcome",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-job-completion",
+        "label": "Provider provisioning job completion",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-identity",
+        "label": "Authenticated remote account or tunnel identity",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-rotation",
+        "label": "Remote credential rotation outcome",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-deletion-proof",
+        "label": "Remote revocation and deletion proof",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "retained-configuration",
+        "label": "Retained configuration",
+        "value": "Stopping a route keeps saved input values and credentials. Local rotation does not revoke a credential at the provider.",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "adapter-configuration",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "credential-process-boundary",
+        "label": "Credential process boundary",
+        "value": "The owned connector receives the token through anonymous pipes. Gozar does not place token bytes in process arguments, environment variables or a credential mirror.",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": true,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "connector-redundancy",
+        "label": "Documented connector redundancy",
+        "value": "One connector normally maintains four persistent edge links across two data centers; this is not a visitor capacity guarantee.",
+        "known": true,
+        "group": "constraints",
+        "affectsConsent": false,
+        "source": "https://developers.cloudflare.com/tunnel/",
+        "asOf": "2026-11-13T00:00:00.000Z"
+      },
+      {
+        "id": "connector-pq-policy",
+        "label": "Connector cryptographic policy",
+        "value": "QUIC supports requiring post-quantum encryption; HTTP2 does not. Gozar does not assert the deployed transport or downgrade policy.",
+        "known": true,
+        "group": "constraints",
+        "affectsConsent": false,
+        "source": "https://developers.cloudflare.com/tunnel/reference/run-parameters/",
+        "asOf": "2026-11-13T00:00:00.000Z"
+      },
+      {
+        "id": "access-policy-boundary",
+        "label": "Application access policy",
+        "value": "Tunnel transport proof does not establish a deployed Access policy or application authorization.",
+        "known": true,
+        "group": "constraints",
+        "affectsConsent": false,
+        "source": "https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/",
+        "asOf": "2026-11-13T00:00:00.000Z"
+      },
+      {
+        "id": "quick-tunnel-limits",
+        "label": "Product boundary",
+        "value": "Quick Tunnel limits are not named-tunnel limits.",
+        "known": true,
+        "group": "constraints",
+        "affectsConsent": false,
+        "source": "https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/",
+        "asOf": "2026-11-13T00:00:00.000Z"
+      }
+    ],
+    "effectOperations": [
+      {
+        "kind": "process-runtime",
+        "operation": "detect"
+      },
+      {
+        "kind": "process-runtime",
+        "operation": "open"
+      },
+      {
+        "kind": "process-runtime",
+        "operation": "read"
+      },
+      {
+        "kind": "process-runtime",
+        "operation": "close"
+      },
+      {
+        "kind": "network",
+        "operation": "fetch"
+      }
+    ]
   },
   "evidence": {
     "accessed": "2026-11-12",
@@ -78,8 +696,8 @@
       "https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/"
     ],
     "protocols": {
-      "sse/streamableHttp": "false. no admitted recipe: this adapter creates no route, so no timed stream probe gates a publication",
-      "oauthDcr": "Detected only: no kind, nothing is published."
+      "sse/streamableHttp": "Supported by the attached connector and local gate. Requested SSE is checked by the real timed stream verifier before a verified proof is returned; buffered delivery remains unverified. This is transport support, not proof of an application protocol or remote client journey.",
+      "oauthDcr": "Not verified: a stable HTTPS origin and transport proof do not establish OAuth dynamic client registration, deployed Access policy or application authorization."
     }
   }
 }

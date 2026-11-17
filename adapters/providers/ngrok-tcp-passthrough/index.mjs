@@ -1,6 +1,3 @@
-// ngrok-tcp-passthrough: one adapter, wrapped over its existing recipe definition. See ../../../packages/gozar-node/adapter-runtime.mjs.
-import { recipeAdapter } from '../../../packages/gozar-node/adapter-runtime.mjs';
-
-export default recipeAdapter({
-  definition: new URL('./definition.json', import.meta.url),
-});
+import { createNgrokStreamAdapter } from '../_shared/ngrok-stream.mjs';
+export const createNgrokTcpAdapter = options => createNgrokStreamAdapter(new URL('./definition.json', import.meta.url), options);
+export default createNgrokTcpAdapter();

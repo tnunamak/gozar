@@ -43,6 +43,20 @@ async function readRecord(directory, adapterId) {
 }
 const readBindings = async (directory, adapterId) => (await readRecord(directory, adapterId)).bindings;
 
+/** Public read-back: plain values and credential presence, never secret bytes or handles. */
+export async function readConfiguration({ home, adapterId }) {
+  let directory;
+  try { directory = await setupDirectory(home, false); }
+  catch (error) { if (missing(error)) return { values: {}, credentials: {} }; throw error; }
+  const { bindings, plain } = await readRecord(directory, adapterId);
+  const credentials = {};
+  for (const [id, handle] of Object.entries(bindings)) {
+    try { await withSecret(home, handle, async () => {}); credentials[id] = { known: true, value: true }; }
+    catch (error) { if (error.code !== 'setup_required') throw error; credentials[id] = { known: true, value: false }; }
+  }
+  return { values: { ...plain }, credentials };
+}
+
 const locked = async (directory, action) => withExclusiveLock(join(directory, LOCK), action, { waitSeconds: 30 });
 
 /**
@@ -112,5 +126,5 @@ async function boundValues(home, adapterId) {
  */
 export function bindConfiguration(context, adapterId) {
   const named = context.configuration;
-  return { ...context, configuration: ref => (ref === null || ref === undefined ? boundValues(context.home, adapterId) : named(ref)) };
+  return { ...context, configuration: ref => (ref === null || ref === undefined ? (context.providerConfiguration ? context.providerConfiguration(adapterId) : boundValues(context.home, adapterId)) : named(ref)) };
 }

@@ -59,6 +59,8 @@ test('packed local recovery action executes without global gozar, including quot
   const installedCli = join(install, 'node_modules/@tnunamak/gozar/bin/gozar.mjs');
   const port = 18765, dir = join(home, `port-${port}`); await mkdir(dir);
   const nonce = randomUUID();
+  // 0.4 reports publication only from a controller that bootstrapped an admitted operational plan.
+  await writeFile(join(dir, 'bootstrap.json'), JSON.stringify({ adapterId:'tunnl-gg', adapters:[{ id:'tunnl-gg', planVersion:1 }] }));
   await writeFile(join(dir, 'control.json'), JSON.stringify({ pid:process.pid, startIdentity:await processIdentity(process.pid), nonce }));
   const commands = [];
   let healthy = false;

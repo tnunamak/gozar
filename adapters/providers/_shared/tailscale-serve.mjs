@@ -35,9 +35,9 @@ export function tailscaleDurable(definition, { transport = localapi } = {}) {
     family: 'tailscale',
     definition,
 
-    async observe() {
-      const node = await transport.getNode();
-      const { config, etag } = await transport.getServeConfig();
+    async observe(ctx) {
+      const node = await transport.getNode(ctx);
+      const { config, etag } = await transport.getServeConfig(ctx);
       return { identity: node.dnsName, snapshot: { dnsName: node.dnsName, funnelPorts: node.funnelPorts, config }, version: etag };
     },
     // The recipe's candidate ports, then any adopt-only legacy ports: an existing exact rule there can be adopted,
@@ -55,16 +55,16 @@ export function tailscaleDurable(definition, { transport = localapi } = {}) {
     expand: target => expandRule(recipe, target),
     async put(ctx, { snapshot, slot, rule, version }) {
       checkName(snapshot.dnsName);
-      return await transport.setServeConfig(withListener(snapshot.config, snapshot.dnsName, slot, rule), version) ? 'written' : 'conflict';
+      return await transport.setServeConfig(withListener(snapshot.config, snapshot.dnsName, slot, rule), version,ctx) ? 'written' : 'conflict';
     },
     async delete(ctx, { snapshot, slot, identity = snapshot.dnsName, version }) {
-      return await transport.setServeConfig(without(snapshot.config, identity, slot), version) ? 'written' : 'conflict';
+      return await transport.setServeConfig(without(snapshot.config, identity, slot), version,ctx) ? 'written' : 'conflict';
     },
 
     // Read-only state of the listener at `origin`, for the adapter's own plan and observe (one config read).
-    async inspect(request, { transport: override } = {}) {
+    async inspect(request, { transport: override,context } = {}) {
       const { getServeConfig } = override ?? transport;
-      const { config, etag } = await getServeConfig();
+      const { config, etag } = await getServeConfig(context);
       if (!request.origin) return { present: false, resourceKey: definition.providerResource, identity: null, revision: etag };
       const url = new URL(request.origin), port = url.port || '443', hostPort = `${url.hostname}:${port}`;
       const live = { tcp: config.TCP?.[port] ?? null, web: config.Web?.[hostPort] ?? null, funnel: config.AllowFunnel?.[hostPort] ?? null };

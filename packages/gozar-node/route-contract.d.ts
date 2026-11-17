@@ -1,4 +1,4 @@
-// Gozar consumer contract, version 1 (frozen in C0).
+// Gozar consumer contract: query version 1, catalog and route response version 2.
 //
 // Types only: this file declares the consumer boundary and implements nothing. The JSON Schemas in
 // runtime/route-catalog.schema.json and the fixtures in test/fixtures/route-contract.json are the
@@ -22,7 +22,7 @@ export type Requirements = {
    * 'https' (the default use) needs an encrypted route. 'any' also accepts plain HTTP and is valid only with reach
    * 'lan' or 'this-device'; with any other reach the query fails with invalid_input.
    */
-  transport: 'https' | 'any';
+  transport: 'https' | 'tcp' | 'tls' | 'any';
   payloadAccess: 'endpoint-only' | 'allow-provider';
   address: 'stable' | 'any';
   /** 'none' means ready now; 'allow' permits a candidate that still needs a setup action. */
@@ -31,6 +31,8 @@ export type Requirements = {
 };
 
 export type Query = {
+  operationId?:string;
+  hostCapabilities?:import('./embedding-contract.js').HostCapabilities;
   schemaVersion: 1;
   owner: string;
   target: string;
@@ -60,23 +62,30 @@ export type Disclosure = {
 
 export type Action = {
   id: string;
-  kind: 'open-url' | 'instructions' | 'provide-secret' | 'provide-value' | 'gozar-runs';
+  kind: 'open-url' | 'instructions' | 'provide-secret' | 'provide-value' | 'gozar-runs'|'clear-input'|'install-artifact';
+  inputId?:string;
+  consent?:SetupConsentSnapshot;
+  review?:{canonicalInput:unknown};
   label: string;
   digest: string;
   disclosure: Disclosure;
   href?: string;
   instructions?: string;
   secretLabel?: string;
+  obtainUrl?: string;
+  help?: string;
   /** For 'provide-value' only: a plain, non-secret input (a domain, an address). Answer it with runSetupAction `value`. */
   valueLabel?: string;
   valuePlaceholder?: string;
   valueFormat?: 'https-origin' | 'domain' | 'text';
   required?: boolean;
+  artifact?:{url:string;sha256:string;platform:string;architecture:string};
+  effects?:{writes:string[];networkOrigins:string[];requiresPrivilege:boolean;restartRequired:boolean};
 };
 
 export type Properties = {
   reach: Reach;
-  transport: 'http' | 'https';
+  transport: 'http' | 'https' | 'tcp' | 'tls';
   traffic: {
     tlsTermination: 'endpoint' | 'provider' | 'unknown';
     providerCanReadPayload: boolean | null;
@@ -107,7 +116,38 @@ export type ProofCheck = 'tls' | 'nonce' | 'sse';
 export type UnmetRequirement = 'reach' | 'transport' | 'payloadAccess' | 'address' | 'setup' | 'protocols' | 'usage' | 'platform';
 export type UnmetReason = 'not_met' | 'unknown' | 'unsupported_platform';
 
+
+/** An observation, never a guessed default. */
+export type Observation<T> = { known: true; value: T } | { known: false; reason: string };
+/** Open display data. Show every affectsConsent row before approval. Groups and ids are open strings. */
+export type Fact = { id: string; label: string; value: string | number | boolean | null; group: string;
+  affectsConsent: boolean; source: string; asOf: string | null } &
+  ({ known: true; reason?: string|null } | { known: false; reason: string });
+export type SetupConsentScope={kind:'setup';registryId:string;scopeId:string;providerId:string;configurationRevision:string;draftId:string|null;actionId:string;disclosureRevision:string;actionDigest:string};
+export type RouteConsentScope={kind:'route';registryId:string;scopeId:string;providerId:string;configurationRevision:string;query:{usage:Usage;reach:Reach;transport:Properties['transport'];target:string;expectedOrigin:string|null};reviewHandle?:string;handleGeneration?:number};
+/** The actual typed canonical input. Setup includes the full trusted action, including artifact/effect disclosures. */
+export type SetupConsentDisclosures={action:Omit<Action,'consent'|'review'>};
+export type RouteConsentDisclosures={reach:Reach;transport:Properties['transport'];traffic:Properties['traffic'];address:Properties['address'];cost:{kind:Properties['cost']['kind']};lifetimes:Properties['lifetimes'];supervision:Properties['supervision'];protocols:Properties['protocols'];disclosure:Disclosure};
+export type ConsentDisclosures=SetupConsentDisclosures|RouteConsentDisclosures;
+export type SetupConsentSnapshot={scope:SetupConsentScope;consentFactsDigest:string;facts:Fact[];disclosures:SetupConsentDisclosures};
+export type RouteConsentSnapshot={scope:RouteConsentScope;consentFactsDigest:string;facts:Fact[];disclosures:RouteConsentDisclosures};
+export type ConsentSnapshot=SetupConsentSnapshot|RouteConsentSnapshot;
+export type Availability = Record<Usage['kind'], { state: 'available' | 'detect-only' | 'unsupported'; reason: string }>;
+export type Prerequisite = { id: string; label: string; state: 'present' | 'missing' | 'unknown' | 'denied'|'unsupported';
+  observation?:Observation<boolean|string>;observedAt: string|null; version: Observation<string>; remedy: Action | null };
+export type InputRequirement = { id: string; actionId:string; label: string; kind: 'text' | 'domain' | 'https-origin'; secret: boolean; help: string;
+  required: boolean; obtainUrl: string | null; validation: 'syntax-only' };
+export type Configuration = { revision:string;scopeId:string;inputRequirements: InputRequirement[]; values: Record<string,string>;
+  credentials: Record<string,Observation<boolean>>; actions: Action[] };
+
 export type Candidate = {
+  consent:RouteConsentSnapshot;
+  consentFactsDigest:string;
+  review:{canonicalInput:unknown};
+  availability: Availability;
+  prerequisites: Prerequisite[];
+  facts: Fact[];
+  configuration: Configuration;
   /** The adapter's own stable id, the value `Query.providerId` takes. Pass-through data: show it, store it, send it back. */
   providerId: string;
   /** Opaque to apps. */
@@ -128,7 +168,7 @@ export type Candidate = {
    * setup.state 'unsupported', eligible false and the unmet entry
    * `{requirement:'platform', reasonCode:'unsupported_platform'}` (revision 3; amendment 3).
    */
-  setup: { state: 'ready' | 'action-required' | 'unsupported' | 'unknown'; actions: Action[] };
+  setup: { state: 'ready' | 'action-required' | 'unsupported' | 'unknown' | 'detect-only'; actions: Action[] };
   disclosure: Disclosure;
   /**
    * Set only when `eligible` is true AND `setup.state` is 'ready'. An 'action-required' candidate has
@@ -140,7 +180,8 @@ export type Candidate = {
 };
 
 export type Catalog = {
-  schemaVersion: 1;
+  schemaVersion: 2;
+  features: string[];
   catalogRevision: string;
   observedAt: string;
   preferenceRevision: number;
@@ -178,7 +219,16 @@ export type Ingress = {
 };
 
 export type RouteView = {
-  schemaVersion: 1;
+  consentFactsDigest?:string|null;
+  consentChange?:{oldDigest:string;newDigest:string;nextAction:Action|null;reason:string};
+  operationId:string|null;
+  binding:import('./embedding-contract.js').RouteBinding;
+  schemaVersion: 2;
+  routeState: 'detected' | 'verified' | 'expired' | 'cleanup-unconfirmed' | 'inactive' | 'unknown';
+  expiresAt: Observation<string>;
+  hostConfiguration: { target: Observation<string>; localPort: Observation<number>; bindTarget: Observation<string>; origin: Observation<string> };
+  facts: Fact[];
+  actions: ('stop' | 'edit' | 'rotate')[];
   handle: Handle;
   origin: string | null;
   published: string | null;
@@ -187,25 +237,28 @@ export type RouteView = {
   properties: Properties;
   ingress: Ingress | null;
   /** `vantage` is where the last check actually ran from; a check made from this computer is 'this-device'. `checks` lists what that check made. */
-  verification: { status: 'verified' | 'unverified'; checkedAt: string | null; vantage: ProofVantage; checks: ProofCheck[] };
+  verification: { status: 'verified' | 'unverified'; observedAt:string|null;subject:ProofSubject|null;checkedAt: string | null; vantage: ProofVantage; checks: ProofCheck[]; validUntil: Observation<string>; results: {check: ProofCheck; status: 'passed' | 'failed' | 'unknown'}[] };
   limits: { recommendedPollIntervalMs: number; idleTimeoutMs: number | null };
-  cleanup: { state: 'none' | 'debt'; message?: string };
+  cleanup: { state: 'none' | 'unconfirmed' | 'confirmed'; message?: string;nextAction:Action|null };
 };
+export type ProofSubject={origin:string;target:string;instanceId:string;handleGeneration:number;bootId:string};
 
-export type Approval = { candidateToken: string; disclosureRevision: string };
+export type Approval = { kind:'route';consentFactsDigest:string;candidateToken: string; disclosureRevision: string };
 
 /** Frozen. Apps branch only on these codes; provider diagnostics stay inside Gozar. */
 export type GozarErrorCode =
   | 'invalid_input' | 'requirements_unsatisfied' | 'setup_required' | 'consent_required' | 'consent_unknown'
   | 'consent_expired' | 'consent_mismatch' | 'candidate_stale' | 'preference_conflict' | 'route_not_found'
   | 'route_conflict' | 'address_changed' | 'stopped_by_user' | 'handing_back' | 'verification_failed'
-  | 'provider_unavailable' | 'cleanup_debt' | 'unsupported' | 'ambiguous_route' | 'busy' | 'internal_error';
+  | 'provider_unavailable' | 'cleanup_debt' | 'unsupported' | 'ambiguous_route' | 'busy' | 'internal_error'
+  | 'configuration_stale'|'configuration_in_use'|'secret_in_use'|'secret_backend_locked'|'secret_backend_unavailable'
+  | 'host_policy_denied'|'artifact_integrity_failed'|'configuration_migration_required'|'proof_refresh_unsupported'|'operation_conflict';
 // 'busy': a lock is held; retry after a pause. 'internal_error': an unexpected Gozar fault.
 
 export type GozarError = { schemaVersion: 1; error: { code: GozarErrorCode; message: string; nextAction: Action | null } };
 
 /** What JS callers catch: `.code` and `.nextAction` carry the same data as the CLI GozarError envelope. */
-export interface GozarThrownError extends Error { code: GozarErrorCode; nextAction: Action | null }
+export interface GozarThrownError extends Error { code: GozarErrorCode; nextAction: Action | null;route?:RouteView }
 
 // --- Results and records ------------------------------------------------------------------------
 
@@ -219,6 +272,7 @@ export type PreferenceRecord = {
 };
 
 export type SetupActionResult = {
+  configuration:Configuration;configurationRevision:string;scopeId:string;
   schemaVersion: 1;
   state: 'complete' | 'pending' | 'blocked';
   nextAction: Action | null;
@@ -228,7 +282,8 @@ export type SetupActionResult = {
 export type WatchEvent = {
   schemaVersion: 1;
   sequence: number;
-  type: 'snapshot' | 'changed' | 'terminal';
+  type: 'snapshot' | 'changed' | 'terminal'|'consent_changed';
+  oldDigest?:string;newDigest?:string;nextAction?:Action|null;reason?:string;
   route: RouteView;
 };
 
@@ -290,6 +345,12 @@ export type ExposeRequest = Query & {
   intent?: 'create';
   usage: { kind: 'session'; lifetimeMs: number } | { kind: 'attached' };
   approval: Approval;
+  /**
+   * Matching operation replay never reallocates. Verified waits for live readiness;
+   * retained failure/creator-loss evidence and confirmed Stop remain recovery reads.
+   * Internal replay delays and status IO share a deadline; expiry is provider_unavailable
+   * with the exact retained route. Journal locks have an independent acquisition bound.
+   */
   wait: 'allocated' | 'verified';
 };
 
@@ -306,8 +367,9 @@ export type SetRoutePreferencesRequest = {
 };
 export type RunSetupActionRequest = {
   home: string;
+  owner?:string;providerId:string;expectedConfigurationRevision:string;draftId?:string;
   actionId: string;
-  approval: { digest: string; disclosureRevision: string };
+  approval: { kind:'setup';consentFactsDigest:string;digest: string; disclosureRevision: string };
   /** Points into Gozar's private store; never a token value. For 'provide-secret'. */
   secretHandle?: string;
   /** For 'provide-value': checked against the action's valueFormat, then kept as configuration (not in the secret store). */
@@ -386,3 +448,31 @@ export function releaseRoute(request: { routeId: string; mode: 'hand-back'; home
 export function releaseRoute(request: { routeId: string; mode?: 'remove' | 'dismiss'; home?: string }): Promise<ReleaseRouteResult>;
 export function confirmHandBack(request: { routeId: string; transfer: string; home?: string }): Promise<{ schemaVersion: 1; routeId: string; handedBack: true; claim: unknown }>;
 export function cancelHandBack(request: { routeId: string; transfer: string; home?: string }): Promise<{ schemaVersion: 1; route: ServiceRoute }>;
+
+/** Stores secret bytes privately; returns an opaque handle only. */
+export const storeSecret:import('./embedding-contract.js').HostEmbeddingMethods['storeSecret'];
+export const discardSecret:import('./embedding-contract.js').HostEmbeddingMethods['discardSecret'];
+export const beginConfigurationDraft:import('./embedding-contract.js').HostEmbeddingMethods['beginConfigurationDraft'];
+export const commitConfigurationDraft:import('./embedding-contract.js').HostEmbeddingMethods['commitConfigurationDraft'];
+export const discardConfigurationDraft:import('./embedding-contract.js').HostEmbeddingMethods['discardConfigurationDraft'];
+export const listProviders:import('./embedding-contract.js').HostEmbeddingMethods['listProviders'];
+export const readConfigurationDraft:import('./embedding-contract.js').HostEmbeddingMethods['readConfigurationDraft'];
+export const clearConfigurationInput:import('./embedding-contract.js').HostEmbeddingMethods['clearConfigurationInput'];
+export function reviewRouteConsent(request:RouteRef):Promise<RouteConsentSnapshot&{subject:ProofSubject|null;approvalToken:string;expiresAt:string}>;
+export function approveRouteConsent(request:RouteRef&{approvalToken:string;consentFactsDigest:string}):Promise<RouteView>;
+export function listRoutes(request:{home:string;owner?:string}):Promise<{routes:RouteView[]}>;
+export type {SecretBackend,HostCapabilities,HostCapabilityId,HostIdentity,ConfigurationDraft,ProviderInventory} from './embedding-contract.js';
+export type {Adapter,AdapterDefinition,AdapterRequest,AdapterPlan,AdapterProofSession,ProofAttempt,ReadContext,SetupContext,AdmittedEffectContext,Receipt,Removal,Verification,Observation as AdapterObservation} from './adapter-contract.js';
+
+/** Trusted executable extension registry. Relative provider paths resolve under root/providers. */
+export type GozarOptions={manifest?: string | {providers: {id:string; module:string; definition:string}[]}; root?: string;secretBackend?:import('./embedding-contract.js').SecretBackend;hostCapabilities?:import('./embedding-contract.js').HostCapabilities;identity?:import('./embedding-contract.js').HostIdentity};
+export function createGozar(options?: GozarOptions): import('./embedding-contract.js').HostEmbeddingMethods & {
+ catalogRoutes: typeof catalogRoutes; expose: (request:ExposeRequest)=>Promise<RouteView>;
+ ensureRoute: typeof ensureRoute; adoptRoute: typeof adoptRoute; routeStatus: typeof routeStatus;
+ closeRoute: typeof closeRoute; suspendRoute: typeof suspendRoute; watchRoutes: typeof watchRoutes;
+ runSetupAction: typeof runSetupAction; inspectLegacyRoute: typeof inspectLegacyRoute;
+ getRoutePreferences: typeof getRoutePreferences; setRoutePreferences: typeof setRoutePreferences;
+ resolveClientAddress: typeof resolveClientAddress;
+ reviewRouteConsent:typeof reviewRouteConsent;approveRouteConsent:typeof approveRouteConsent;
+ listRoutes:typeof listRoutes;
+};

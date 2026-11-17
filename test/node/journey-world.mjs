@@ -90,7 +90,7 @@ export async function durableWorld({ root, certificate }, t) {
 export const approvalFrom = catalog => {
   const candidate = catalog.candidates.find(item => item.eligible && item.candidateToken);
   assert.ok(candidate, `no eligible candidate: ${JSON.stringify(catalog.candidates.map(c => [c.name, c.eligible, c.unmet]))}`);
-  return { candidate, approval: { candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision } };
+  return { candidate, approval: {kind:'route',consentFactsDigest:candidate.consentFactsDigest, candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision } };
 };
 
 // --- The registry world: a provider that exists only as a test manifest entry --------------------------------------

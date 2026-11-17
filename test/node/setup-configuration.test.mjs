@@ -6,6 +6,8 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { lstat, mkdir, readdir, readFile, writeFile, chmod } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import test from 'node:test';
+import http from 'node:http';
+import {createTestingGozar} from '@tnunamak/gozar/testing';
 import { pathToFileURL } from 'node:url';
 import { createRouteApi } from '../../packages/gozar-node/route-api.mjs';
 import { routeMain } from '../../packages/gozar-node/route-cli.mjs';
@@ -18,8 +20,8 @@ const TOKEN = 'ngrok-stub-token-b7e41d90c3a2';
 const DOMAIN = 'reserved.example.ngrok.app';
 const ORIGIN = `https://${DOMAIN}`;
 const url = path => pathToFileURL(new URL(path, import.meta.url).pathname).href;
-const approvalOf = a => ({ digest: a.digest, disclosureRevision: a.disclosure.revision });
-const attachedQuery = home => query({ home, usage: { kind: 'attached' }, requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'stable', setup: 'allow', protocols: [] } });
+const approvalOf = a => ({ digest: a.digest, disclosureRevision: a.disclosure.revision,...(a.consent?{kind:'setup',consentFactsDigest:a.consent.consentFactsDigest}:{}) });
+const attachedQuery = home => query({ home,providerId:'ngrok-https-edge', usage: { kind: 'attached' }, requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'stable', setup: 'allow', protocols: [] } });
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 /** Every regular file under `root`, skipping the named top-level directories. Sockets and lock anchors are read like any file. */
@@ -42,27 +44,19 @@ const filesOf = async directory => (await readdir(directory).catch(() => [])).fi
 
 /** A public API over the real ngrok adapter and a stub SDK. The controller process gets the same stub through a module. */
 async function ngrokWorld(t) {
-  const home = await scratch(t), side = await scratch(t), marks = join(side, 'marks.log'), module = join(side, 'controller.mjs');
-  const sdk = { forward: async () => { throw new Error('the owner process never opens a listener'); } };
-  await writeFile(module, `import { appendFileSync } from 'node:fs';
-import { createNgrokAdapter } from ${JSON.stringify(url('../../adapters/providers/ngrok-https-edge/index.mjs'))};
-const sdk = { forward: async options => { appendFileSync(${JSON.stringify(marks)}, JSON.stringify({ forward: options }) + '\\n');
-  return { url: () => ${JSON.stringify(ORIGIN)}, close: async () => appendFileSync(${JSON.stringify(marks)}, JSON.stringify({ closed: true }) + '\\n') }; } };
-// The base context knows no configuration at all: only the stored setup values can configure the adapter.
-export default async function () {
-  return { adapters: [createNgrokAdapter({ loadSdk: async () => sdk })], validation: 'none',
-    readContext: { now: () => Date.now(), configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified', checkedAt: new Date().toISOString() }) } };
-}
-`);
-  const api = createRouteApi({ adapters: [createNgrokAdapter({ loadSdk: async () => sdk })], platform: 'linux',
-    expose: { controllerModule: module, leaseExpiryMs: 60_000, heartbeatMs: 1_000, startTimeoutMs: 30_000 } });
-  t.after(async () => {
-    for (const id of (await readdir(join(home, 'attached')).catch(() => [])).filter(name => name.startsWith('att_'))) {
-      const identity = JSON.parse(await readFile(join(home, 'attached', id, 'control.json'), 'utf8').catch(() => 'null') ?? 'null');
-      if (identity?.pid && alive(identity.pid)) { try { process.kill(identity.pid, 'SIGKILL'); } catch { /* gone */ } }
-    }
-  });
-  const forwards = async () => (await readFile(marks, 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line));
+  let harness;t.after(()=>harness?.close());
+  const home = await scratch(t), side = await scratch(t),ledger=new Map(),marks=[];
+  harness=await createTestingGozar({effects:[
+    {kind:'sdk-listener',operation:'detect',handle:async()=>({available:true})},
+    {kind:'sdk-listener',operation:'open',handle:async({options})=>{const handle='fixture-listener';ledger.set(handle,{target:options.addr,url:ORIGIN});marks.push({forward:options});return {handle,url:ORIGIN};}},
+    {kind:'sdk-listener',operation:'read',handle:async({handle})=>ledger.has(handle)?{present:true,url:ORIGIN}:{present:false}},
+    {kind:'sdk-listener',operation:'close',handle:async({handle})=>{ledger.delete(handle);marks.push({closed:true});return {closed:true};}},
+    {kind:'network',operation:'fetch',handle:async request=>{
+      const url=new URL(request.url),resource=[...ledger.values()].find(item=>item.url===url.origin);assert.ok(resource);
+      return new Promise((resolve,reject)=>{const pending=http.get(`http://${resource.target}${url.pathname}`,{headers:request.headers},response=>{const chunks=[];let previous=Date.now();response.on('data',chunk=>{const at=Date.now();chunks.push({data:chunk.toString('base64'),delayMs:at-previous});previous=at;});response.on('error',reject);response.on('end',()=>resolve({status:response.statusCode,headers:response.headers,chunks}));});pending.on('error',reject);});
+    }},
+  ]});const api=harness.gozar;
+  const forwards = async () => structuredClone(marks);
   const candidateOf = async (seen = []) => {
     const catalog = await api.catalogRoutes(attachedQuery(home));
     seen.push(JSON.stringify(catalog));
@@ -72,8 +66,8 @@ export default async function () {
   const provide = async (candidate, actionId, value, seen = []) => {
     const step = candidate.setup.actions.find(item => item.id === actionId);
     assert.ok(step, `the catalog offers ${actionId}`);
-    const { handle } = await storeSecret({ home, value });
-    const result = await api.runSetupAction({ home, actionId, approval: approvalOf(step), secretHandle: handle });
+    const {handle}=await api.storeSecret({home,owner:attachedQuery(home).owner,providerId:candidate.providerId,inputId:actionId,scopeId:candidate.configuration.scopeId,expectedConfigurationRevision:candidate.configuration.revision,bytes:new TextEncoder().encode(value)});
+    const result = await api.runSetupAction({ home,owner:attachedQuery(home).owner,providerId:candidate.providerId,expectedConfigurationRevision:candidate.configuration.revision, actionId, approval: approvalOf(step), secretHandle: handle });
     seen.push(JSON.stringify(result));
     return { result, handle };
   };
@@ -81,7 +75,7 @@ export default async function () {
   const provideValue = async (candidate, actionId, value) => {
     const step = candidate.setup.actions.find(item => item.id === actionId);
     assert.equal(step.kind, 'provide-value');
-    return api.runSetupAction({ home, actionId, approval: approvalOf(step), value });
+    return api.runSetupAction({ home,owner:attachedQuery(home).owner,providerId:candidate.providerId,expectedConfigurationRevision:candidate.configuration.revision, actionId, approval: approvalOf(step), value });
   };
   return { home, side, api, forwards, candidateOf, provide, provideValue };
 }
@@ -103,11 +97,11 @@ test('ngrok setup journey: auth, then reserved domain, then ready; expose opens 
   assert.equal(candidate.setup.state, 'ready');
   assert.equal(typeof candidate.candidateToken, 'string');
 
-  const view = await api.expose({ ...attachedQuery(home), approval: { candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision }, wait: 'verified' });
+  const view = await api.expose({ ...attachedQuery(home), approval: {kind:'route',consentFactsDigest:candidate.consentFactsDigest, candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision }, wait: 'verified' });
   assert.equal(view.state, 'usable');
   assert.equal(view.published, ORIGIN);
   const [opened] = await forwards();
-  assert.deepEqual(opened.forward, { addr: '127.0.0.1:8799', authtoken: TOKEN, domain: DOMAIN });
+  assert.equal(opened.forward.authtoken,TOKEN);assert.equal(opened.forward.domain,DOMAIN);assert.match(opened.forward.addr,/^127\.0\.0\.1:\d+$/);assert.notEqual(opened.forward.addr,'127.0.0.1:8799','the provider forwards through the actual proof gate');
 
   const closed = await api.closeRoute({ home, handle: view.handle, mode: 'remove' });
   assert.equal(closed.state, 'released');
@@ -130,7 +124,7 @@ test('the token bytes never appear outside the secret store: files, catalog, err
   // The auth value arrives through the CLI, the way a user supplies it.
   let candidate = await candidateOf(surfaces);
   await writeFile(approvalFile, JSON.stringify(approvalOf(candidate.setup.actions[0])), { mode: 0o600 }); await chmod(approvalFile, 0o600);
-  const setup = await cli(['setup', 'auth', '--approval-file', approvalFile, '--secret-file', secretFile, '--home', home, '--json']);
+  const setup = await cli(['setup', 'auth', '--approval-file', approvalFile, '--secret-file', secretFile, '--query-file',queryFile,'--provider-id','ngrok-https-edge','--home', home, '--json']);
   assert.equal(setup.code, 0, setup.stderr);
   await cli(['catalog', '--query-file', queryFile, '--home', home, '--json']);
 
@@ -138,7 +132,7 @@ test('the token bytes never appear outside the secret store: files, catalog, err
   candidate = await candidateOf(surfaces);
   const domainAction = candidate.setup.actions[0];
   // The token offered as the domain: Gozar checks the format and refuses, and the value goes nowhere.
-  await api.runSetupAction({ home, actionId: 'reserved-domain', approval: approvalOf(domainAction), value: TOKEN }).then(() => assert.fail('expected a rejection'), error => { assert.equal(error.code, 'invalid_input'); surfaces.push(error.message, JSON.stringify(error), String(error.stack)); });
+  await api.runSetupAction({ home,owner:attachedQuery(home).owner,providerId:candidate.providerId,expectedConfigurationRevision:candidate.configuration.revision, actionId: 'reserved-domain', approval: approvalOf(domainAction), value: TOKEN }).then(() => assert.fail('expected a rejection'), error => { assert.equal(error.code, 'invalid_input'); surfaces.push(error.message, JSON.stringify(error), String(error.stack)); });
   for (const request of [{ approval: { digest: 'sha256:stale', disclosureRevision: 'disc-stale' } }, {}]) {
     const handle = (await storeSecret({ home, value: TOKEN })).handle;
     await api.runSetupAction({ home, actionId: 'reserved-domain', secretHandle: handle, ...request }).then(() => assert.fail('expected a rejection'), error => { surfaces.push(error.message, JSON.stringify(error), String(error.stack)); });
@@ -149,7 +143,7 @@ test('the token bytes never appear outside the secret store: files, catalog, err
   // Receipts and route views come from a route that is really open.
   surfaces.push(JSON.stringify(await provideValue(candidate, 'reserved-domain', DOMAIN)));
   candidate = await candidateOf(surfaces);
-  const view = await api.expose({ ...attachedQuery(home), approval: { candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision }, wait: 'verified' });
+  const view = await api.expose({ ...attachedQuery(home), approval: {kind:'route',consentFactsDigest:candidate.consentFactsDigest, candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision }, wait: 'verified' });
   surfaces.push(JSON.stringify(view), JSON.stringify(await api.routeStatus({ home, handle: view.handle })));
   const state = await readFile(join(home, 'attached', view.handle.id, 'state.json'), 'utf8');
   assert.ok(JSON.parse(state).receipt, 'a receipt was written');
@@ -157,7 +151,7 @@ test('the token bytes never appear outside the secret store: files, catalog, err
 
   for (const surface of surfaces) assert.ok(!surface.includes(TOKEN), `the token appeared in an output: ${surface.slice(0, 120)}`);
   const outside = await walk(home, ['secrets']);
-  assert.ok(outside.some(path => path.endsWith('state.json')) && outside.some(path => path.includes('/setup/')), 'the walk covers receipts and setup records');
+  assert.ok(outside.some(path => path.endsWith('state.json')) && outside.some(path => path.endsWith('embedding-state.json')), 'the walk covers receipts and scoped configuration records');
   for (const path of outside) assert.ok(!(await readFile(path)).includes(TOKEN), `the token is in ${relative(home, path)}`);
   const stored = await Promise.all((await filesOf(join(home, 'secrets'))).map(name => withSecret(home, name, async bytes => Buffer.from(bytes).toString())));
   assert.ok(stored.includes(TOKEN), 'the token is in the secret store');
@@ -276,8 +270,8 @@ test('adapter A cannot read adapter B\'s configuration, in any method, even unde
   const provide = async (catalog, id, value) => {
     const candidate = catalog.candidates.find(item => item.display.label === `Synthetic ${id}`);
     const step = candidate.setup.actions[0];
-    const { handle } = await storeSecret({ home, value });
-    assert.equal((await api.runSetupAction({ home, actionId: step.id, approval: approvalOf(step), secretHandle: handle })).state, 'complete');
+    const {handle}=await api.storeSecret({home,owner:query().owner,providerId:candidate.providerId,inputId:step.id,scopeId:candidate.configuration.scopeId,expectedConfigurationRevision:candidate.configuration.revision,bytes:new TextEncoder().encode(value)});
+    assert.equal((await api.runSetupAction({ home,owner:query().owner,providerId:candidate.providerId,expectedConfigurationRevision:candidate.configuration.revision, actionId: step.id, approval: approvalOf(step), secretHandle: handle })).state, 'complete');
   };
   await provide(await ask(), 'edge-a', 'secret-for-a');
   const mark = (await seen()).length;

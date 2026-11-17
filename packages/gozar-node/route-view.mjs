@@ -1,7 +1,10 @@
 // Consumer-side route views: errors an app may see, projections of every route kind to RouteView,
 // and routeStatus / closeRoute, which dispatch on handle.kind. Apps never learn which provider
-// answered; provider diagnostics stay on error.cause.
+// answered; the public factory strips raw provider diagnostics from thrown errors.
 import { join } from 'node:path';
+import {readRecord} from './service-state.mjs';
+import { enrichRoute, cleanupForSession } from './embedding-state.mjs';
+import {cleanupRecovery} from './embedding-projections.mjs';
 
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 export { gozarError, normalizeError };
@@ -62,22 +65,24 @@ const verificationOf = (state, checkedAtMs, checks = []) => proven(state === 'us
 const challengeChecks = origin => (typeof origin === 'string' && origin.startsWith('https://') ? ['nonce', 'tls'] : ['nonce']);
 const debtMessage = debt => typeof debt === 'string' ? debt : debt?.message ?? debt?.reason ?? 'Cleanup is incomplete';
 
-function view({ handle, origin, published, state, ownership, properties, ingress = null, verification, limits, cleanup = { state: 'none' } }) {
-  return { schemaVersion: 1, handle: { kind: handle.kind, id: handle.id, generation: handle.generation }, origin, published, state, ownership,
-    properties, ingress, verification, limits, cleanup };
+function view({ handle, origin, published, state, ownership, properties, ingress = null, verification, limits, cleanup = { state: 'none' }, target, bindTarget, expiresAt, validUntil, now, facts,consentChange,consentFactsDigest,operationId,binding }) {
+  return enrichRoute({ schemaVersion: 2, handle: { kind: handle.kind, id: handle.id, generation: handle.generation }, origin, published, state, ownership,
+    properties, ingress, verification, limits, cleanup,...(binding?{binding}:{}),...(consentChange?{consentChange}:{}),...(consentFactsDigest?{consentFactsDigest}:{}),operationId:operationId??null }, { target, bindTarget, expiresAt, validUntil, now, facts });
 }
 const limitsOf = (limits, fallbackPollMs, idleTimeoutMs = null) => ({
   recommendedPollIntervalMs: limits?.recommendedPollIntervalMs ?? fallbackPollMs, idleTimeoutMs: limits?.idleTimeoutMs ?? idleTimeoutMs });
 
 /** From the durable engine's reply: a record view that already names its state, origin and verification. */
-export function projectDurable(reply, { handle, properties, ingress = null, limits, now = Date.now() }) {
+export function projectDurable(reply, { handle, properties, ingress = null, limits, facts = [], now = Date.now() }) {
   const state = STATES.has(reply.state) ? reply.state : 'unknown';
   const published = state === 'usable' && typeof reply.origin === 'string' ? reply.origin : null;
   const checkedAt = typeof reply.verification?.checkedAt === 'string' ? Date.parse(reply.verification.checkedAt) : null;
+  const proof=proven(reply.verification?.status==='verified'&&state==='usable'?'verified':'unverified',Number.isFinite(checkedAt)?iso(checkedAt):null,challengeChecks(reply.origin??reply.allocatedOrigin));
+  Object.assign(proof,{observedAt:reply.verification?.observedAt??proof.checkedAt,subject:reply.verification?.subject??null});
   // RouteView.origin is the route's address, also before verification; `published` is what the app may advertise.
-  return view({ handle, origin: reply.allocatedOrigin ?? reply.origin ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
-    verification: proven(reply.verification?.status === 'verified' && state === 'usable' ? 'verified' : 'unverified', Number.isFinite(checkedAt) ? iso(checkedAt) : null, challengeChecks(reply.origin ?? reply.allocatedOrigin)),
-    limits: limitsOf(limits, 60_000, reply.idleTimeoutMs), cleanup: reply.cleanupDebt ? { state: 'debt', message: debtMessage(reply.cleanupDebt) } : { state: 'none' } });
+  return view({binding:reply.binding,operationId:reply.operationId,consentChange:reply.consentChange,consentFactsDigest:reply.consentFactsDigest, target: reply.target, expiresAt: reply.expiresAt, validUntil: reply.verification?.validUntil, facts, now, handle, origin: reply.allocatedOrigin ?? reply.origin ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
+    verification: proof,
+    limits: limitsOf(limits, 60_000, reply.idleTimeoutMs), cleanup: reply.cleanupDebt ? { state: 'unconfirmed', message: debtMessage(reply.cleanupDebt) } : { state: 'none' } });
 }
 
 const PHASES = { idle: 'creating', detecting: 'creating', planned: 'creating', preflight: 'creating', persisting: 'creating', starting: 'creating',
@@ -85,37 +90,78 @@ const PHASES = { idle: 'creating', detecting: 'creating', planned: 'creating', p
   stopping: 'releasing', 'cleanup-pending': 'uncertain', stopped: 'released', failed: 'lost', blocked: 'unknown', unknown: 'unknown' };
 
 /** From a session snapshot (the controller's status reply). Published only while the core says published-ready. */
-export function projectSession(reply, { handle, properties, ingress = null, limits, now = Date.now() }) {
+export function projectSession(reply, { handle, properties, ingress = null, limits, facts = [], now = Date.now() }) {
   const snapshot = reply.snapshot ?? {};
   const state = PHASES[snapshot.phase] ?? 'unknown';
   const published = state === 'usable' && typeof snapshot.published === 'string' ? snapshot.published : null;
-  const debt = state === 'uncertain' || reply.localCleanupFailures?.length;
-  return view({ handle, origin: snapshot.published ?? snapshot.candidate ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
-    verification: verificationOf(state, state === 'usable' ? now : null, checksFor(properties?.proof?.checks, { sse: reply.sseChecked === true, origin: published })), limits: limitsOf(limits, 5_000),
-    cleanup: debt ? { state: 'debt', message: 'Cleanup is incomplete; stop the route again' } : { state: 'none' } });
+  const receipt = reply.validation?.probeReceipt;
+  const verification = verificationOf(state, state === 'usable' ? receipt?.observedAtMs ?? snapshot.checkedAtMs ?? null : null,
+    receipt ? ['tls', 'nonce', 'sse'].filter(check => ({ tls: receipt.tls, nonce: receipt.instanceMatched, sse: receipt.sse })[check] === true)
+      : checksFor(properties?.proof?.checks, { sse: reply.sseChecked === true, origin: published }));
+  if (receipt && ['public', 'tailnet', 'lan', 'this-device'].includes(receipt.vantage)) verification.vantage = receipt.vantage;
+  verification.subject=reply.proofSubject??null;verification.observedAt=verification.checkedAt;
+  if(reply.fixtureEffects&&verification.checkedAt)verification.vantage='this-device';
+  return view({operationId:reply.operationId,consentChange:reply.consentChange,consentFactsDigest:reply.consentFactsDigest, target: reply.target ?? snapshot.target, expiresAt: snapshot.expiresAt ?? (Number.isFinite(reply.expiresAtMs??snapshot.expiresAtMs) ? iso(reply.expiresAtMs??snapshot.expiresAtMs) : undefined), validUntil: Number.isFinite(reply.validation?.probeReceipt?.expiresAtMs) ? iso(reply.validation.probeReceipt.expiresAtMs) : undefined, facts, now, handle, origin: snapshot.published ?? snapshot.candidate ?? null, published, state, ownership: 'gozar-owned', properties, ingress,
+    verification, limits: limitsOf(limits, 5_000),
+    cleanup: cleanupForSession(reply) });
 }
 
 /** From an external service record (owner-managed ingress). Privacy and stability stay unknown. */
 export function projectExternal(record, { handle, now = Date.now() }) {
-  const verified = record.verification?.status === 'verified';
-  const checkedAt = typeof record.verification?.checkedAt === 'string' ? Date.parse(record.verification.checkedAt) : now;
-  return view({ handle, origin: record.origin, published: verified ? record.origin : null, state: verified ? 'usable' : 'unverified',
-    ownership: 'external-owned', properties: unknownProperties(), verification: proven(verified ? 'verified' : 'unverified', iso(Number.isFinite(checkedAt) ? checkedAt : now), challengeChecks(record.origin)),
+  if(handle.generation!==(record.generation??0))throw gozarError('route_conflict','The external tracking generation does not match');
+  const verified = record.generation===1&&record.verification?.status === 'verified'&&record.verification.method!=='host-command'&&!!record.verification.subject;
+  const checkedAt = typeof record.verification?.checkedAt === 'string' ? Date.parse(record.verification.checkedAt) : null;
+  const proof={...proven(verified?'verified':'unverified',Number.isFinite(checkedAt)?iso(checkedAt):null,challengeChecks(record.origin)),subject:record.verification?.subject??null,observedAt:record.verification?.observedAt??null};
+  return view({operationId:record.embedding?.operationId,consentChange:record.consentChange,consentFactsDigest:record.embedding?.consentReview.consentFactsDigest, target: record.target, validUntil: record.verification?.validUntil, now, handle, origin: record.origin, published: verified ? record.origin : null, state: verified ? 'usable' : 'unverified',
+    ownership: 'external-owned', properties: unknownProperties(), verification:proof,
     limits: limitsOf(null, 60_000) });
 }
 
 /** From an attached lease record kept by its controller. */
 export function projectAttached(lease, { handle, now = Date.now() }) {
   const state = STATES.has(lease.state) ? lease.state : 'unknown';
-  return view({ handle, origin: lease.origin ?? null, published: state === 'usable' ? lease.origin ?? null : null, state, ownership: 'gozar-owned',
-    properties: lease.properties ? completeProperties(lease.properties) : lease.properties, ingress: lease.ingress ?? null, verification: verificationOf(state, state === 'usable' ? lease.checkedAtMs ?? now : lease.checkedAtMs ?? null, checksFor(lease.properties?.proof?.checks, { sse: lease.sseChecked === true, origin: lease.origin ?? null })),
-    limits: limitsOf(lease.limits, 5_000), cleanup: lease.cleanup ?? { state: 'none' } });
+  const verification = lease.proof ? { status: state === 'usable' && lease.proof.status === 'verified' ? 'verified' : 'unverified', checkedAt: lease.proof.checkedAt,
+    vantage: lease.proof.vantage, checks: state === 'usable' ? lease.proof.checks : [] }
+    : verificationOf(state, lease.checkedAtMs ?? null, checksFor(lease.properties?.proof?.checks, { sse: lease.sseChecked === true, origin: lease.origin ?? null }));
+  verification.observedAt=verification.checkedAt??null;
+  verification.subject=lease.proofSubject??null;
+  return view({binding:lease.binding, target: lease.target, bindTarget: lease.bindTarget, expiresAt: lease.expiresAt ?? (Number.isFinite(lease.expiresAtMs) ? iso(lease.expiresAtMs) : undefined), validUntil: lease.proof?.validUntil ?? lease.ingress?.validUntil, facts: lease.facts, now, handle, origin: lease.origin ?? null, published: state === 'usable' ? lease.origin ?? null : null, state, ownership: 'gozar-owned',
+    properties: lease.properties ? completeProperties(lease.properties) : lease.properties, ingress: lease.ingress ?? null, verification,
+    limits: limitsOf(lease.limits, 5_000), cleanup: lease.cleanup?.state === 'debt' ? { ...lease.cleanup, state: 'unconfirmed' } : lease.cleanup ?? { state: 'none' } });
+}
+
+
+/** Private controller projection. Reads only supplied in-memory evidence; never refreshes or cleans up. */
+export function projectControllerObservation(view, {
+  now, lastBeat, expiryMs, heartbeat, expiresAtMs, initialSettled,
+  failure, releasing, resourceRemoval, resolverLost, identity,
+}) {
+  const subject=view.verification?.subject,proofUntil=view.verification?.validUntil;
+  const validProof=proofUntil?.known===true&&Number.isFinite(Date.parse(proofUntil.value))&&Date.parse(proofUntil.value)>now;
+  const sameIdentity=identity&&subject&&subject.instanceId===identity.instanceId&&subject.bootId===identity.bootId&&
+    subject.handleGeneration===view.handle.generation&&subject.origin===view.origin&&
+    view.hostConfiguration?.target?.known===true&&subject.target===view.hostConfiguration.target.value;
+  const liveLease=Number.isFinite(now)&&(!heartbeat||(Number.isFinite(lastBeat)&&Number.isFinite(expiryMs)&&expiryMs>0&&now-lastBeat<=expiryMs&&lastBeat<=now))&&
+    (expiresAtMs==null||(Number.isFinite(expiresAtMs)&&now<expiresAtMs));
+  if(initialSettled&&!failure&&!releasing&&!resourceRemoval&&!resolverLost&&!view.consentChange&&
+      liveLease&&validProof&&sameIdentity&&view.state==='usable'&&view.verification.status==='verified'&&view.cleanup.state==='none')return view;
+  return {...view,state:view.state==='usable'?'unverified':view.state,
+    routeState:view.cleanup.state==='unconfirmed'?'cleanup-unconfirmed':'unknown',published:null,ingress:null,
+    verification:{...view.verification,status:'unverified',checks:[],
+      results:(view.verification.results??[]).map(result=>({...result,status:'unknown'}))}};
+}
+
+/** Retain old proof as history; loss is not a fresh observation or proof of absence. */
+export function recoveryHistory(last, message) {
+  return { ...last, state: 'uncertain', routeState: 'cleanup-unconfirmed', published: null, ingress: null,
+    verification: { ...last.verification, status: 'unverified', checks: [] },
+    cleanup: cleanupRecovery({ state: 'unconfirmed', message }, last.handle) };
 }
 
 export function releasedView(last, handle) {
   const base = last ?? view({ handle, origin: null, published: null, state: 'released', ownership: handle.kind === 'external' ? 'external-owned' : 'gozar-owned',
     properties: unknownProperties(), verification: proven('unverified', null, []), limits: { recommendedPollIntervalMs: 60_000, idleTimeoutMs: null } });
-  return { ...base, state: 'released', published: null, ingress: null, verification: proven('unverified', base.verification.checkedAt, []) };
+  return enrichRoute({ ...base, state: 'released', published: null, ingress: null, cleanup: { state: 'confirmed' }, verification: proven('unverified', base.verification.checkedAt, []) });
 }
 
 // --- Dispatch -----------------------------------------------------------------------------------
@@ -124,7 +170,7 @@ export function releasedView(last, handle) {
 export async function propertiesFor(adapterId, deps, kind) {
   const adapters = deps.adapters ?? await (await import('./adapter-runtime.mjs')).loadAdapters();
   const adapter = adapters.find(item => item.id === adapterId);
-  return adapter ? { properties: completeProperties(adapter.definition.capabilities, adapter.definition, kind) } : { properties: unknownProperties() };
+  return adapter ? { properties: completeProperties(adapter.definition.capabilities, adapter.definition, kind), facts: structuredClone(adapter.definition.facts ?? []) } : { properties: unknownProperties() };
 }
 
 const defaults = {
@@ -143,16 +189,18 @@ const defaults = {
   session: {
     async status({ home, handle }) {
       const { control } = await import('./daemon.mjs');
-      const [directory, sessionId] = splitSession(handle.id);
+      const [directory, sessionId] = checkedSession(handle.id);
       let reply;
       try { reply = await control(join(home, directory), { type: 'status' }, 30_000); }
-      catch (cause) { throw gozarError('route_not_found', `No running session ${handle.id}`, null, cause); }
+      catch (cause) { if(cause.code&&cause.code!=='ENOENT'&&cause.code!=='ECONNREFUSED')throw cause;throw gozarError('route_not_found', `No running session ${handle.id}`, null, cause); }
       if (sessionId && reply.snapshot?.sessionId !== sessionId) throw gozarError('route_conflict', 'The session was replaced; this handle is stale');
       return reply;
     },
     async close({ home, handle }) {
       const { stopSession } = await import('./daemon.mjs');
-      return stopSession(join(home, splitSession(handle.id)[0]));
+      const [name,sessionId]=checkedSession(handle.id),directory=join(home,name);
+      if(sessionId){const bootstrap=await readRecord(join(directory,'bootstrap.json'));const recorded=bootstrap.sessionId??(await readRecord(join(directory,'session.json'))).snapshot?.sessionId;if(recorded!==sessionId)throw gozarError('route_conflict','The session was replaced; this handle is stale');}
+      return stopSession(directory);
     },
   },
   async attached() { return import('./attached-route.mjs'); },
@@ -165,11 +213,12 @@ const defaults = {
     },
     async close({ home, handle }) {
       const { removeService } = await import('./service.mjs');
-      return removeService({ origin: handle.id, home });
+      return removeService({ origin: handle.id, home,expectedGeneration:handle.generation });
     },
   },
 };
 export const splitSession = id => { const at = id.indexOf(':'); return at < 0 ? [id, null] : [id.slice(0, at), id.slice(at + 1)]; };
+function checkedSession(id){const parts=splitSession(id);if(!/^port-[0-9]+$/.test(parts[0])||!parts[1]||!/^[A-Za-z0-9_-]+$/.test(parts[1]))throw gozarError('invalid_input','Invalid session handle');return parts;}
 
 /** Fresh proof for one handle. An external service is read with handle {kind:'external', id:<origin>}. */
 export async function routeStatus(request, deps = {}) {
@@ -183,6 +232,8 @@ export async function routeStatus(request, deps = {}) {
         return projectDurable(reply, { handle, now, ...await propertiesFor(reply.adapterId, deps, 'durable') });
       }
       case 'session': {
+        const generic=await defaults.attached();
+        if(await generic.genericSessionRecord(request))return await generic.attachedStatus(request,deps.attachedDeps);
         const reply = await (deps.session ?? defaults.session).status(request);
         return projectSession(reply, { handle, now, ...await propertiesFor(reply.snapshot?.adapterId, deps, 'session') });
       }
@@ -202,23 +253,23 @@ export async function closeRoute(request, deps = {}) {
       case 'durable': {
         let before;
         try { before = await routeStatus({ home: request.home, handle }, deps); }
-        catch (error) {
-          const { isUserStopped } = await import('./durable-route.mjs');
-          if (error.code !== 'route_not_found' || !await isUserStopped({ home: request.home, routeId: handle.id })) throw error;
-        }
+        catch { /* Exact retained ownership is checked again by release; fresh proof is not cleanup authority. */ }
         const reply = await (deps.durable ?? defaults.durable).close(request, { adapters: deps.adapters });
         const debt = reply?.cleanupDebt ?? null;
-        return { ...releasedView(before, handle), state: debt ? 'uncertain' : 'released', cleanup: debt ? { state: 'debt', message: debtMessage(debt) } : { state: 'none' } };
+        return { ...releasedView(before, handle), state: debt ? 'uncertain' : 'released', cleanup: cleanupRecovery(debt ? { state: 'unconfirmed', message: debtMessage(debt) } : { state: 'confirmed' },handle), routeState: debt ? 'cleanup-unconfirmed' : 'inactive' };
       }
       case 'session': {
-        const before = await routeStatus({ home: request.home, handle }, deps);
+        const generic=await defaults.attached();
+        if(await generic.genericSessionRecord(request))return await generic.closeAttachedRoute(request,deps.attachedDeps);
+        let before;try{before=await routeStatus({home:request.home,handle},deps);}catch{}
         const reply = await (deps.session ?? defaults.session).close(request);
-        const stopped = projectSession(reply, { handle, now, properties: before.properties });
+        if(reply.snapshot?.sessionId&&splitSession(handle.id)[1]&&reply.snapshot.sessionId!==splitSession(handle.id)[1])throw gozarError('route_conflict','The session was replaced; this handle is stale');
+        const stopped = projectSession(reply, { handle, now, properties: before?.properties??(await propertiesFor(reply.snapshot?.adapterId,deps,'session')).properties });
         return stopped.state === 'released' ? { ...releasedView(before, handle), cleanup: stopped.cleanup } : { ...stopped, ingress: null };
       }
       case 'attached': return await (deps.attached ?? await defaults.attached()).closeAttachedRoute(request, deps.attachedDeps);
       case 'external': {
-        const before = await routeStatus({ home: request.home, handle }, deps);
+        let before;try{before=await routeStatus({home:request.home,handle},deps);}catch(error){if(error.code==='route_conflict')throw error;}
         await (deps.external ?? defaults.external).close(request);
         return releasedView(before, handle);
       }

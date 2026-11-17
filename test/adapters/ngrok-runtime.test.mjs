@@ -112,6 +112,7 @@ test('setup validates the stored value without keeping it', async () => {
   assert.deepEqual(await adapter.setup(context(), 'auth', 'auth-handle'), { state: 'complete', nextAction: null });
   const blocked = await adapter.setup(context({ withSecret: async (handle, use) => use(new TextEncoder().encode('')) }), 'auth', 'h');
   assert.equal(blocked.state, 'blocked'); assert.equal(blocked.nextAction.id, 'auth');
+  for(const value of [' \t\r\n','x'.repeat(513)])assert.equal((await adapter.setup(context({withSecret:async(handle,use)=>use(new TextEncoder().encode(value))}),'auth','h')).state,'blocked');
   // The reserved domain is a provide-value action: Gozar checks and keeps it, so the adapter's own setup takes none.
   await rejects(adapter.setup(context(), 'reserved-domain', 'domain-handle'), 'unsupported');
   assert.equal((await adapter.setup(context(), 'auth')).state, 'pending', 'no handle yet: the action is still to be done');

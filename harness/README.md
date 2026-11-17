@@ -1,6 +1,6 @@
 # Executable harness
 
-Run these commands from the repository root with Node 22+ and the generated WASM. Build the WASM with `bash scripts/build-wasm.sh` first.
+The harness, build and test commands below are source-checkout-only. First obtain a repository checkout using [Contributing](../README.md#contributing), then run them from that checkout's root with Node 22.13+ and the generated WASM. Build the WASM there with `bash scripts/build-wasm.sh` first. The npm archive ships this guide and the echo server, not the build scripts, test suites or live harness tooling. Installed-package users can run the echo server with `npx --package=@tnunamak/gozar@0.4.0 gozar demo-server --port 18765` instead.
 
 ```sh
 node --test --test-concurrency=2 test/e2e/*.test.mjs

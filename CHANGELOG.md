@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.4.0
+
+### Breaking changes
+
+- The historical `storeSecret({home,value})` intake is replaced by
+  `storeSecret({home,owner?,providerId,inputId,scopeId,expectedConfigurationRevision,draftId?,bytes})`.
+  Keep bytes in the trusted host. Unbound staged handles require explicit
+  `discardSecret`; failed setup does not implicitly delete them.
+- Unbound legacy Rust recipe and service host-command publication are excluded.
+  Stop/reconcile of historical owned resources remains available, without blessing
+  old proof or authorizing a replacement route.
+- `gozar setup ACTION_ID` now requires `--query-file FILE --provider-id PROVIDER`
+  and a private approval file for the current offered setup action. Use
+  `gozar configure --query-file FILE --provider-id PROVIDER --json` for descriptor
+  prompts. The query selects home and the same optional owner used throughout setup.
+- Checked ownerless 0.3 references import only with owner omitted on the default
+  backend. Named-owner migration is re-intake into a new private home after exact
+  old-runtime cleanup, not an import/adoption command; see docs/migration-0.4.md.
+
+### Added and changed
+
+- Add per-kind availability, explicit detect-only choices, observed prerequisites,
+  descriptor-driven configuration and a typed secret intake export.
+- Add extensible fact rows, including consent, sources and explicit unknown reasons.
+- Add route proof/expiry state, recorded host configuration and cleanup confirmation.
+- Return schemaVersion 2 for Catalog and RouteView; setup adds detect-only and
+  cleanup replaces debt with unconfirmed/confirmed. See docs/migration-0.4.md.
+- Execute named HTTPS connectors and SDK HTTPS listeners through the generic attached lifecycle. Shipped raw TCP/TLS choices remain detect-only so the full HTTP(S) embedding contract can ship together; trusted non-HTTP extensions retain adapter-declared proof.
+- Bind setup and route approval to visible canonical consent snapshots and scoped configuration revisions. Add persisted drafts, host secret backends, input clearing and safe same-generation runtime consent review.
+- Bind proof to the current host/controller subject. Retain uncertain cleanup receipts and reserve operation IDs before allocation so a host can recover routes after a crash without starting another one.
+- Add complete provider inventory, host capability prerequisites, read-only route recovery listing and CLI recovery commands. Add an explicit testing effects factory for real adapters across the detached controller boundary.
+- Add trusted extension loading, descriptor CLI prompts and an installed non-HTTP fixture lifecycle command.
+- Ship a provider-neutral remote access screen example with --fakes and --detect.
+- `@ngrok/ngrok` is now an optional peer dependency. Apps that use the ngrok HTTPS edge must install it; other apps avoid downloading its native binaries (about 10 MB on Linux and 29 MB on macOS).
+
 ## 0.3.4
 
 ### Fixes
@@ -42,7 +77,7 @@
 - **Read what a route needs and proves.** A candidate shows `display.needs` (what to do before it works), the ports the provider may use, and its proof: from where a check runs and which checks it runs for this request. A plain-HTTP provider lists no `tls` check, and `sse` is listed only when the request asks for SSE. A route's `verification.checks` lists only the checks its last passing check made.
 - **`transport: 'any'` for lan and this-device.** An app that accepts plain HTTP on the local network, or on this device, can ask for `transport: 'any'` and no longer needs a TLS-terminating provider.
 - **Give an address you run yourself.** A route its owner keeps can be created with a `provide-value` setup action: the app passes the HTTPS address, and Gozar shows it as an owner-run route. Gozar creates and deletes nothing at that address. Its reach follows the address's host. Loopback addresses and `localhost` names are `this-device`. Private, link-local and site-local addresses, single-label names, `home.arpa` and names that end in `.local`, `.lan` or `.internal` are `lan`. 0.0.0.0/8, 224.0.0.0/3 (multicast, reserved and broadcast), `::`, ff00::/8 (multicast), 100.64.0.0/10 (shared carrier-grade NAT space) and the deprecated `::a.b.c.d` form of a non-loopback address are `unknown`. Any other address is `internet`. If the query names an origin that is not a credential-free HTTPS origin without a path, this provider is unsupported for that query and offers no setup action.
-- **`gozar setup ACTION_ID --value VALUE`.** The command line can now answer a `provide-value` setup action. `--value` and `--secret-file` cannot be used together.
+- **Historical 0.3 command: `gozar setup ACTION_ID --value VALUE`.** The command line can now answer a `provide-value` setup action. `--value` and `--secret-file` cannot be used together.
 - **`@tnunamak/gozar/testing`.** `fakeRegistry` writes a fake provider of kind session or durable; `fakeReadContext` answers the probe and the route check as you tell it; `createRouteApi` runs the route API with no network and no process. A durable fake keeps its rules in a JSON file, so you can check what it holds before and after `closeRoute`.
 
 ### Changed
@@ -87,7 +122,7 @@
 - Tailscale sessions work on Tailscale 1.102.5: the node is identified by its node ID and tailnet DNS suffix, and the catalog says `ready` only when the session's own status checks pass. The Funnel disclosure names port 8443.
 - A second session that needs the installation key held by another route fails with `route_conflict` and a `nextAction` that carries the stop command, instead of `internal_error`.
 - A durable route's `RouteView.origin` is its allocated address from the moment the provider accepts the rule, also while the route is `unverified`, so an app that serves the verification challenge itself can configure that address first. `published` stays `null` until the route is verified.
-- **Setup values reach the adapter.** A value the user supplies through a `provide-secret` setup action (for example the ngrok auth token or reserved domain) is recorded for that adapter in the Gozar home, and the adapter reads it in every later call, so the ngrok HTTPS edge can become ready once its setup is complete. A secret stored for an action that did not complete is deleted.
+- **Setup values reach the adapter.** A value the user supplies through a `provide-secret` setup action (for example the ngrok auth token or reserved domain) is recorded for that adapter in the Gozar home, and the adapter reads it in every later call, so the ngrok HTTPS edge can become ready once its setup is complete. Historical 0.2 behavior: a secret stored for an action that did not complete is deleted. In 0.4, unbound staged handles instead require explicit `discardSecret`.
 
 ### Breaking
 

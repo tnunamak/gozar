@@ -12,6 +12,7 @@
 //   ctx.home       string   canonical Gozar home; the durable plan needs it for durablePlanFacts()
 //   ctx.generation number   generation recorded on receipts built by an adapter
 // `ctx.probe(recipe)` resolves `{ ok: boolean, detail?: string }`: the engine ran the recipe and its parser said yes.
+import { networkInterfaces } from 'node:os';
 import { readFileSync } from 'node:fs';
 import { readFile, realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -83,6 +84,7 @@ export const validateShape = (shape, value) => validate(adapterSchema.$defs[shap
 export function definitionErrors(definition) {
   const errors = validateShape('AdapterDefinition', definition);
   if (errors.length) return errors;
+  for (const fact of definition.facts ?? []) if (!fact.known && !fact.reason) errors.push(`fact ${fact.id}: unknown needs a reason`);
   const kindsDeclared = [...definition.supportedKinds].sort(), lifetimes = [...definition.capabilities.lifetimes].sort();
   if (new Set(kindsDeclared).size !== kindsDeclared.length) errors.push('supportedKinds has duplicates');
   if (!isDeepStrictEqual(kindsDeclared, lifetimes)) errors.push('capabilities.lifetimes must equal supportedKinds');
@@ -111,6 +113,31 @@ function durableFacetErrors(facet) {
 }
 
 const methods = ['detect', 'properties', 'setupActions', 'setup', 'plan', 'create', 'observe', 'verify', 'remove', 'runtimeFacts'];
+
+function declaredContext(context,definition,interfaceRecipe=null){
+  if(!context)return context;
+  if(!context.dispatchEffect)return typeof context.observeInterfaces==='function'?context:{...context,observeInterfaces:async()=>({interfaces:networkInterfaces()})};
+  const dispatch=async request=>{
+    if(!(definition.effectOperations??[]).some(item=>item.kind===request?.kind&&item.operation===request?.operation))throw effectError('unsupported','The adapter has not declared this fixture effect operation');
+    return context.dispatchEffect(request);
+  };
+  // Under fixture effects the interface inventory is the host's declared recipe/probe observation of the adapter's own
+  // interfaces recipe: source-shaped data the host supplies, never read from this computer.
+  return {...context,dispatchEffect:dispatch,probe:recipe=>probeWithEffects(recipe,dispatch),observeInterfaces:fixtureInterfaceObserver(interfaceRecipe,dispatch)};
+}
+/** The host's declared interface inventory for one adapter, read through the adapter's own `interfaces` recipe and a declared recipe/probe effect. */
+export function fixtureInterfaceObserver(recipe,dispatch){
+  return async()=>{
+    if(recipe?.kind!=='interfaces')throw effectError('unsupported','This adapter declares no interface observation');
+    return parseInterfaceInventory(boundedObservation(await dispatch({kind:'recipe',operation:'probe',input:{recipe}}),recipe));
+  };
+}
+function scopedAdapter(adapter){
+  const wrapped={...adapter};
+  for(const name of ['detect','setup','plan','create','observe','verify','remove','runtimeFacts','prepareProof','hostChoices'])if(typeof adapter[name]==='function')wrapped[name]=(...args)=>adapter[name](bindConfiguration(declaredContext(args[0],adapter.definition,adapter.interfaceRecipe),adapter.id),...args.slice(1));
+  if(adapter.durable){wrapped.durable={...adapter.durable};for(const name of ['observe','put','delete'])wrapped.durable[name]=(...args)=>adapter.durable[name](bindConfiguration(declaredContext(args[0],adapter.definition,adapter.interfaceRecipe),adapter.id),...args.slice(1));}
+  return wrapped;
+}
 
 async function inside(root, path, label, id) {
   const providers = await realpath(resolve(root, 'providers')).catch(() => { throw loadError(id, 'providers directory is missing'); });
@@ -156,7 +183,7 @@ export async function loadAdapters({ manifest, root } = {}) {
     const facetErrors = durableFacetErrors(adapter.durable);
     if (facetErrors.length) throw loadError(id, `invalid durable facet: ${facetErrors.join('; ')}`);
     if (adapter.id !== id || file.adapter.id !== id || !isDeepStrictEqual(adapter.definition, file.adapter)) throw loadError(id, 'registry entry, module and definition disagree');
-    adapters.push(adapter);
+    adapters.push(scopedAdapter(adapter));
   }
   return adapters;
 }
@@ -239,14 +266,20 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
   const unsupported = what => effectError('unsupported', `${definition.id} does not support ${what}`);
 
   // Read-only state of the durable listener for a request: the facet reads, this shapes the adapter's observe result.
-  async function listener(request) {
-    try { return await adapter.durable.inspect(request, { transport: durableState.serve ? await durableState.serve() : undefined }); }
+  async function listener(request,context) {
+    try { return await adapter.durable.inspect(request, { transport: durableState.serve ? await durableState.serve() : undefined,context }); }
     catch (error) { throw mapProviderError(error); }
   }
 
   const adapter = {
     id: definition.id,
     definition,
+    // Explicit recipe provenance survives scopedAdapter wrapping; unknown modules use the generic controller.
+    sessionExecution: wrapped?.recipes?.create ? 'recipe' : 'generic',
+    // The recipe through which this adapter observes the interface inventory, when it declares one.
+    interfaceRecipe: wrapped?.recipes?.detect?.kind === 'interfaces' ? wrapped.recipes.detect : null,
+    // The operational plan this adapter wraps. A session runs the plan of the adapter the owner approved, from whichever registry holds it.
+    operationalDefinition: wrapped ?? null,
 
     async detect(ctx) {
       const os = platformOf(ctx);
@@ -258,7 +291,7 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
         result = await ctx.probe(recipes.detect);
         // A session runs these read-only steps first. Readiness is their verdict, so the catalog cannot say `ready` for a route the session then refuses.
         for (const probe of result?.ok === true ? preflightProbes(recipes) : []) if ((result = await ctx.probe(probe))?.ok !== true) break;
-      } catch { return { state: 'unknown', facts: { platform: os, detected: null, setupNeeded: false } }; }
+      } catch (e) { return { state: 'unknown', facts: { platform: os, detected: null, setupNeeded: false } }; }
       const detected = result?.ok === true;
       const setupNeeded = !detected && shown.length > 0;
       return { state: detected ? 'ready' : setupNeeded ? 'action-required' : 'unsupported', facts: { platform: os, detected, setupNeeded } };
@@ -284,7 +317,7 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
         const engine = await durableState.load();
         if (typeof engine.durablePlanFacts !== 'function') throw unsupported('the durable engine');
         let facts, seen;
-        try { facts = await engine.durablePlanFacts({ home: ctx.home, adapterId: definition.id, target: request.target, origin: request.origin, adapters: [adapter] }); seen = await listener(request); }
+        try { facts = await engine.durablePlanFacts({ home: ctx.home, adapterId: definition.id, target: request.target, origin: request.origin, adapters: [adapter] }); seen = await listener(request,ctx); }
         catch (error) { throw mapProviderError(error); }
         return { digest: facts.planDigest, origin: facts.origin ?? request.origin, resourceKey: facts.observedResource, effects: [],
           readback: { kind: 'durable', origin: facts.origin ?? request.origin, target: request.target }, cleanup: { kind: 'durable' }, precondition: { revision: seen.revision } };
@@ -308,7 +341,7 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
     },
 
     async observe(ctx, request) {
-      if (request?.usage?.kind === 'durable' && durableRecipe && adapter.durable) return listener(request);
+      if (request?.usage?.kind === 'durable' && durableRecipe && adapter.durable) return listener(request,ctx);
       const resourceKey = `${definition.id}:${sha({ target: request.target, origin: request.origin }).slice(0, 16)}`;
       return { present: false, resourceKey, identity: null, revision: null };
     },
@@ -340,7 +373,7 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
 
 // The core WASM module and its effect driver load on first use: detecting nothing never pays for them.
 let coreStep = null;
-async function runDetectRecipe(recipe) {
+async function runDetectRecipe(recipe,dispatchEffect) {
   const [{ loadCore }, { EffectDriver }] = await Promise.all([import('./core.mjs'), import('./driver.mjs')]);
   coreStep ??= await loadCore();
   const adapters = [{ id: 'probe', audience: 'local', ownership: 'external-owned', recipes: { detect: recipe } }];
@@ -351,11 +384,35 @@ async function runDetectRecipe(recipe) {
   // Read-only detection yields one spawn effect per round; a bounded loop keeps a misbehaving recipe finite.
   for (let round = 0; round < 8 && output.effects.length; round += 1) {
     const [effect] = output.effects;
-    const completion = await driver.execute(effect);
+    let completion;
+    if(dispatchEffect){
+      if(effect.operation!=='detect'||!['spawn','interfaces'].includes(effect.kind))throw effectError('unsupported','Fixture detection accepts only declared read-only process or interface observations');
+      const observed=boundedObservation(await dispatchEffect({kind:'recipe',operation:'probe',input:{recipe}}),recipe);
+      // An interface inventory is source-shaped output: the JSON document {interfaces:{name:[{address,internal,...}]}} on stdout.
+      const result=effect.kind==='interfaces'?parseInterfaceInventory(observed):observed;
+      completion={type:'effect-result',effectId:effect.id,sessionId:effect.sessionId,generation:effect.generation,ok:true,result};
+    }else completion=await driver.execute(effect);
     output = coreStep({ state: output.state, command: { sessionId: 'probe', ...completion }, adapters, requirements, host: { ...driver.host, nowMs: driver.nowMs() } });
   }
-  return output.snapshot.observations?.probe === 'present';
+  const observation=output.snapshot.observations?.probe;
+  if(observation===undefined||observation==='unknown')throw effectError('provider_unavailable','The read-only probe did not establish its prerequisite');
+  return observation === 'present';
 }
+function boundedObservation(observed,recipe){
+  if(typeof observed?.stdout!=='string'||typeof observed?.stderr!=='string'||!Number.isInteger(observed?.exitCode)||Buffer.byteLength(observed.stdout)+Buffer.byteLength(observed.stderr)>Math.min(recipe.maxOutputBytes??65536,65536))throw effectError('provider_unavailable','The fixture probe returned an invalid bounded observation');
+  return observed;
+}
+/** The interface inventory a host declares through recipe/probe: exit 0 and a JSON document {interfaces:{name:[{address,internal,...}]}}. */
+export function parseInterfaceInventory(observed){
+  let document;
+  try{document=JSON.parse(observed.stdout);}catch{throw effectError('provider_unavailable','The fixture interface inventory is not JSON');}
+  const inventory=document?.interfaces;
+  if(observed.exitCode!==0||inventory===null||typeof inventory!=='object'||Array.isArray(inventory)||
+    !Object.values(inventory).every(rows=>Array.isArray(rows)&&rows.every(row=>row&&typeof row==='object'&&typeof row.address==='string'&&typeof row.internal==='boolean')))
+    throw effectError('provider_unavailable','The fixture interface inventory is invalid');
+  return {interfaces:inventory};
+}
+export async function probeWithEffects(recipe,dispatchEffect){return {ok:await runDetectRecipe(recipe,dispatchEffect)};}
 
 /**
  * The read-only ReadContext an engine hands to adapters. `probe` runs a read-only detect recipe through the same
@@ -375,7 +432,7 @@ export function createReadContext({ home, platform = process.platform, now = Dat
       throw Object.assign(new Error('Unknown route name'), { code: 'route_not_found' });
     }),
     probe: probe ?? (async recipe => {
-      try { return { ok: await runDetectRecipe(recipe) }; } catch { return { ok: false }; }
+      return { ok: await runDetectRecipe(recipe) };
     }),
     verifyChallenge: verifyChallenge ?? (async (origin, target) => {
       const { verification } = await import('./service-state.mjs');

@@ -63,6 +63,237 @@
             "gozar-owned",
             "external-owned"
           ]
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "value",
+              "known",
+              "group",
+              "affectsConsent",
+              "source",
+              "asOf"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "known": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "group": {
+                "type": "string"
+              },
+              "affectsConsent": {
+                "type": "boolean"
+              },
+              "source": {
+                "type": "string"
+              },
+              "asOf": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "availability": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "object",
+              "required": [
+                "state",
+                "reason"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "available",
+                    "detect-only",
+                    "unsupported"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "attached": {
+              "type": "object",
+              "required": [
+                "state",
+                "reason"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "available",
+                    "detect-only",
+                    "unsupported"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "durable": {
+              "type": "object",
+              "required": [
+                "state",
+                "reason"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "available",
+                    "detect-only",
+                    "unsupported"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "prerequisites": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "observation"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "observation": {
+                "type": "string"
+              },
+              "actionId": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "originSchemes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "effectOperations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "operation"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "operation": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inputRequirements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "text",
+                  "domain",
+                  "https-origin"
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "obtainUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "validation": {
+                "const": "syntax-only"
+              },
+              "secret": {
+                "type": "boolean"
+              },
+              "help": {
+                "type": "string"
+              },
+              "actionId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "kind",
+              "required",
+              "obtainUrl",
+              "validation",
+              "secret",
+              "help",
+              "actionId"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false
@@ -127,7 +358,9 @@
           "type": "string",
           "enum": [
             "http",
-            "https"
+            "https",
+            "tcp",
+            "tls"
           ]
         },
         "traffic": {
@@ -454,6 +687,7 @@
         "origin"
       ],
       "properties": {
+        "operationId": { "type": ["string", "null"] },
         "schemaVersion": {
           "const": 1
         },

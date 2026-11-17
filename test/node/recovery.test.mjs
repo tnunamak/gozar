@@ -81,7 +81,7 @@ test('recovery confirms a dead process and absent provider route, clears core de
   const app = http.createServer((_req, res) => res.end('restarted'));
   await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
   t.after(() => { app.closeAllConnections(); app.close(); });
-  const adapter = { id: 'loopback-fixture', audience: 'local', ownership: 'owned', capabilities: { https: false }, recipes: {
+  const adapter = { id: 'loopback-fixture', planVersion: 1, admission: { state: 'admitted', requiredFeatures: [] }, audience: 'local', ownership: 'owned', capabilities: { https: false }, recipes: {
     create: { kind: 'local-forwarder', bindAddress: '127.0.0.1', port: 0, parser: { kind: 'json', pointer: '/origin' } },
     remove: { kind: 'local-forwarder' } } };
   t.after(async () => { try { await control(data.directory, { type: 'stop' }); } catch {} });

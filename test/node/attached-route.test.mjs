@@ -20,10 +20,13 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch { return
 /** A controller module that holds a stub adapter whose create/remove leave marks a test can read from outside the process. */
 async function controllerFixture(t) {
   const dir = await scratch(t), marks = join(dir, 'marks.log'), module = join(dir, 'controller.mjs');
-  await writeFile(module, `import { appendFileSync } from 'node:fs';
+  await writeFile(module, `import { appendFileSync,readFileSync,writeFileSync } from 'node:fs';
+import {randomUUID} from 'node:crypto';
 import { stubAdapter } from ${JSON.stringify(helperUrl)};
 const mark = event => appendFileSync(${JSON.stringify(marks)}, event + '\\n');
 export default async function () {
+  const file=process.argv[3]+'/bootstrap.json',bootstrap=JSON.parse(readFileSync(file,'utf8'));
+  writeFileSync(file,JSON.stringify({...bootstrap,identity:{instanceId:'fixture-instance',bootId:randomUUID()}}));
   const adapter = stubAdapter('stub-a');
   const { create, remove } = adapter;
   adapter.create = async (...args) => { mark('created'); return create(...args); };
@@ -113,7 +116,13 @@ test('an owner that exits normally also loses the lease (unref\'d heartbeat: it 
   const owner = await ownerScript(t, home, controller.module, { exitAfterOpen: true });
   assert.equal(owner.view.state, 'usable');
   assert.equal((await owner.exited).code, 0);
+  const root = join(home, 'attached'), [id] = (await readdir(root)).filter(name => name.startsWith('att_'));
+  const { pid } = JSON.parse(await readFile(join(root, id, 'control.json'), 'utf8'));
   assert.ok(await waitFor(async () => (await controller.read()).includes('removed'), EXPIRY + 5000));
+  assert.deepEqual(await controller.read(), ['created', 'removed']);
+  // Removal is recorded before the controller finishes writing its final state.
+  // Wait for exit before scratch teardown can remove its working directory.
+  assert.equal(await waitFor(() => !alive(pid), 5000), true, 'the controller exits after normal owner exit');
 });
 
 test('open, status, close: the lease holds beyond the expiry, close removes at once and the handle is then released', async t => {

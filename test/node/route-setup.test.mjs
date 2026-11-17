@@ -3,6 +3,7 @@ import { stat, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { runSetupAction, storeSecret, withSecret } from '../../packages/gozar-node/route-setup.mjs';
+import { createEmbeddingServices } from '../../packages/gozar-node/embedding-services.mjs';
 import { catalogRoutes } from '../../packages/gozar-node/route-catalog.mjs';
 import { action, assertShape, codeOf, query, scratch, stubAdapter, tokenStubs } from './route-schema-check.mjs';
 
@@ -32,9 +33,17 @@ const base = (t, over = {}) => ({ platform: 'linux', readContext, ...over });
 const run = (adapters, request, extra = {}) => runSetupAction(request, { adapters, platform: 'linux', readContext,
   executeApprovedAction: async id => { extra.ran?.push(id); return { state: 'complete', nextAction: null }; }, ...extra });
 
+/** The 0.4 setup path: the call names its provider, the configuration revision it read, and an approval of kind 'setup'. */
+async function runScoped(adapter, request, extra = {}) {
+  const embeddingServices = extra.embeddingServices ?? createEmbeddingServices({ registryId: 'route-setup-test' });
+  const configuration = await embeddingServices.readConfiguration({ home: request.home, providerId: adapter.id });
+  return runSetupAction({ providerId: adapter.id, expectedConfigurationRevision: configuration.revision, ...request, approval: { kind: 'setup', ...request.approval } },
+    { adapters: [adapter], platform: 'linux', readContext, embeddingServices, executeApprovedAction: async id => { extra.ran?.push(id); return { state: 'complete', nextAction: null }; } });
+}
+
 test('an approved gozar-runs action runs once through the adapter and returns a valid SetupActionResult', async t => {
   const home = await scratch(t), { adapter, state } = loginAdapter(), ran = [];
-  const result = await run([adapter], { home, actionId: 'login', approval: approvalOf(state.action) }, { ran });
+  const result = await runScoped(adapter, { home, actionId: 'login', approval: approvalOf(state.action) }, { ran });
   assertShape('SetupActionResult', result);
   assert.equal(result.state, 'complete');
   assert.deepEqual(ran, ['login']);
@@ -67,7 +76,7 @@ test('red: setup drift — a changed digest or disclosure revision runs nothing 
 test('open-url and instructions actions are steps for the user: Gozar runs nothing and reports them pending', async t => {
   for (const kind of ['open-url', 'instructions']) {
     const home = await scratch(t), { adapter, state } = loginAdapter(kind, kind === 'open-url' ? { href: 'https://example.invalid/login' } : { instructions: 'Install it yourself.' }), ran = [];
-    const result = await run([adapter], { home, actionId: 'login', approval: approvalOf(state.action) }, { ran });
+    const result = await runScoped(adapter, { home, actionId: 'login', approval: approvalOf(state.action) }, { ran });
     assertShape('SetupActionResult', result);
     assert.equal(result.state, 'pending');
     assert.equal(result.nextAction.id, 'login');
@@ -78,18 +87,23 @@ test('open-url and instructions actions are steps for the user: Gozar runs nothi
 
 test('a provide-secret action reads the secret only through the approved handle, and the secret never appears in the result', async t => {
   const home = await scratch(t), { adapter, state, log } = loginAdapter('provide-secret');
-  const { handle } = await storeSecret({ home, value: 'synthetic-secret-value-1' });
+  const embeddingServices = createEmbeddingServices({ registryId: 'route-setup-test' });
+  const put = async value => {
+    const configuration = await embeddingServices.readConfiguration({ home, providerId: adapter.id });
+    return embeddingServices.storeSecret({ home, providerId: adapter.id, expectedConfigurationRevision: configuration.revision, scopeId: configuration.scopeId, inputId: 'login', bytes: new TextEncoder().encode(value) });
+  };
+  const { handle } = await put('synthetic-secret-value-1');
   assert.match(handle, /^sec_[0-9a-f]{32}$/);
-  const result = await run([adapter], { home, actionId: 'login', approval: approvalOf(state.action), secretHandle: handle });
+  const result = await runScoped(adapter, { home, actionId: 'login', approval: approvalOf(state.action), secretHandle: handle }, { embeddingServices });
   assertShape('SetupActionResult', result);
   assert.deepEqual(log.secrets, ['synthetic-secret-value-1']);
   assert.deepEqual(log.configs, ['synthetic-secret-value-1']);
   assert.doesNotMatch(JSON.stringify(result), /synthetic-secret/);
   // The adapter may not reach any other handle.
-  const other = await storeSecret({ home, value: 'synthetic-secret-value-2' });
+  const other = await put('synthetic-secret-value-2');
   const peek = loginAdapter('provide-secret');
   peek.adapter.setup = async ctx => { await ctx.withSecret(other.handle, async () => {}); return { state: 'complete', nextAction: null }; };
-  assert.equal(await codeOf(run([peek.adapter], { home, actionId: 'login', approval: approvalOf(peek.state.action), secretHandle: handle })), 'invalid_input');
+  assert.equal(await codeOf(runScoped(peek.adapter, { home, actionId: 'login', approval: approvalOf(peek.state.action), secretHandle: handle }, { embeddingServices })), 'invalid_input');
 });
 
 test('a provide-secret action without a handle is invalid_input and runs nothing', async t => {

@@ -15,15 +15,6 @@ export function resolveVia(name) {
 // Read the existing trust declarations without adding facts to session replies.
 const providers = await Promise.all(manifest.providers.map(async provider =>
   JSON.parse(await readFile(new URL(`../../adapters/${provider.definition}`, import.meta.url), 'utf8')).adapter));
-export const trafficFacts = Object.fromEntries(providers.map(provider => {
-  const traffic = provider.capabilities?.traffic;
-  let text;
-  if (traffic?.providerCanReadPayload === true && traffic.readers?.length) {
-    text = `The ${traffic.readers.join(' and ')} can read the traffic.`;
-  } else if (traffic?.providerCanReadPayload === false && traffic.tlsTermination === 'endpoint') {
-    text = 'The relay cannot read the traffic; TLS ends on this computer.';
-  } else if (provider.capabilities?.transport === 'http' && traffic?.providerCanReadPayload === false && traffic?.readers?.length) {
-    text = `Traffic is unencrypted; ${traffic.readers.join(' and ')} can read it.`;
-  }
-  return [provider.id, text];
-}));
+export const trafficFacts = Object.fromEntries(providers.map(provider => [provider.id,
+  provider.facts?.find(fact => fact.id === 'payload-readers' && fact.known)?.value]));
+export const decisionFacts = Object.fromEntries(providers.map(provider => [provider.id, provider.facts ?? []]));

@@ -9,9 +9,9 @@ The commands below use npx with an explicit package, so they need no global inst
 ```sh
 ORIGIN=https://service.example   # replace with your service's public HTTPS address
 TARGET=127.0.0.1:3000            # replace with the host and port your backend listens on
-npx --package=@tnunamak/gozar@0.3.4 gozar service add --origin "$ORIGIN" --target "$TARGET" --json
-npx --package=@tnunamak/gozar@0.3.4 gozar service status --origin "$ORIGIN" --json
-npx --package=@tnunamak/gozar@0.3.4 gozar service remove --origin "$ORIGIN" --json
+npx --package=@tnunamak/gozar@0.4.0 gozar service add --origin "$ORIGIN" --target "$TARGET" --json
+npx --package=@tnunamak/gozar@0.4.0 gozar service status --origin "$ORIGIN" --json
+npx --package=@tnunamak/gozar@0.4.0 gozar service remove --origin "$ORIGIN" --json
 ```
 
 Use a credential-free HTTPS origin without a path, query or fragment. Omitting `--origin` from `service status` lists every record. The target is `HOST:PORT` or `[IPv6]:PORT`, with port 1..65535. The proxy must preserve the application's expected public Host. Removing a record does not stop the service or edit the proxy. To change a target or verifier command, remove its record and add the replacement. Repeating an identical add is safe.
@@ -52,7 +52,7 @@ When source-IP filtering blocks the controller, supply a trusted command:
 ORIGIN=https://service.example                   # replace with your service's public HTTPS address
 TARGET=127.0.0.1:3000                            # replace with the host and port your backend listens on
 VERIFY_CMD=/absolute/path/check-existing-route   # replace with your own trusted check command
-npx --package=@tnunamak/gozar@0.3.4 gozar service add --origin "$ORIGIN" --target "$TARGET" --verify-cmd "$VERIFY_CMD" --json
+npx --package=@tnunamak/gozar@0.4.0 gozar service add --origin "$ORIGIN" --target "$TARGET" --verify-cmd "$VERIFY_CMD" --json
 ```
 
 The command must check the real HTTPS origin from an allowed vantage and establish that it reaches the exact target. An unrelated HTTP 200 is insufficient. Exit zero asserts success; nonzero or timeout reports failure. Gozar passes `GOZAR_SERVICE_ORIGIN`, `GOZAR_SERVICE_TARGET` and fresh `GOZAR_SERVICE_NONCE` through the environment. It does not interpolate them into the command or retain command output.
@@ -128,7 +128,7 @@ Requirements: Linux or macOS, Node.js 22.13 or newer, and a running Tailscale wh
 
 ```sh
 mkdir gozar-check && cd gozar-check
-npm install @tnunamak/gozar@0.3.4
+npm install @tnunamak/gozar@0.4.0
 node node_modules/@tnunamak/gozar/adapters/providers/_shared/check-tailscale-app.mjs
 ```
 
@@ -158,7 +158,7 @@ cat > q.json <<EOF
   "requirements": { "reach": "tailnet", "transport": "https", "payloadAccess": "allow-provider", "address": "stable", "setup": "none", "protocols": [] }
 }
 EOF
-npx --package=@tnunamak/gozar@0.3.4 gozar catalog --query-file q.json --json | node -e '
+npx --package=@tnunamak/gozar@0.4.0 gozar catalog --query-file q.json --json | node -e '
 const o = JSON.parse(require("fs").readFileSync(0, "utf8"));
 for (const c of o.candidates) if (c.display.label.startsWith("Tailscale")) console.log(c.display.label, "| eligible:", c.eligible, "| setup:", c.setup.state, "| token:", c.candidateToken ? "issued" : "none");'
 ```
@@ -211,10 +211,10 @@ await closeRoute({ home, handle: route.handle, mode: 'remove' });
 The user can always see and stop durable routes without the app:
 
 ```sh
-npx --package=@tnunamak/gozar@0.3.4 gozar status                          # sessions, service routes and durable routes
-npx --package=@tnunamak/gozar@0.3.4 gozar status --route coordinator --json
-npx --package=@tnunamak/gozar@0.3.4 gozar stop --route coordinator        # compare-and-set removal; also blocks re-creation
-npx --package=@tnunamak/gozar@0.3.4 gozar allow --route coordinator       # shows the consent text again and lifts the stop
+npx --package=@tnunamak/gozar@0.4.0 gozar status                          # sessions, service routes and durable routes
+npx --package=@tnunamak/gozar@0.4.0 gozar status --route coordinator --json
+npx --package=@tnunamak/gozar@0.4.0 gozar stop --route coordinator        # compare-and-set removal; also blocks re-creation
+npx --package=@tnunamak/gozar@0.4.0 gozar allow --route coordinator       # shows the consent text again and lifts the stop
 ```
 
 `gozar status` shows each route as `owner-run`, says `forwards to 127.0.0.1:PORT whether or not OWNER is running`, and checks the target live: `app answering`, `nothing listening`, or the warning `another program is listening` with `gozar stop --route ID` as the next action. A user stop is sticky: the app's next `ensureRoute` or `adoptRoute` fails with `stopped_by_user` until the user runs `gozar allow --route ID` or the app passes `reconsent: true` together with a fresh `approval` right after the user approved again. No close mode clears it. Suspend, hand-back and dismiss refuse with `stopped_by_user`. Removal succeeds without a provider call if the stop already removed the record; after an interrupted stop, it runs the normal compare-and-set removal and reports any cleanup debt.

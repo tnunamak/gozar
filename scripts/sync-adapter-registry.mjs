@@ -11,7 +11,8 @@
 // core tells an owner-run address from a route Gozar creates, so no provider id appears in core.
 // A provider that has no wrapped plan declares both in its own definition and is left alone.
 import { readFile, writeFile, access } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolve, sep } from 'node:path';
 
 const VANTAGES = ['public', 'tailnet', 'lan', 'this-device', 'none'];
 
@@ -47,7 +48,8 @@ export function deriveDurablePorts(wrapped) {
 /** The route's owner, in the words RouteView.ownership uses. */
 export const deriveOwnership = wrapped => (wrapped?.ownership === 'external-owned' ? 'external-owned' : 'gozar-owned');
 
-const adaptersUrl = new URL('../adapters/', import.meta.url);
+const rootOption = process.argv.indexOf('--root');
+const adaptersUrl = rootOption > 0 ? pathToFileURL(resolve(process.argv[rootOption + 1]) + sep) : new URL('../adapters/', import.meta.url);
 // `--manifest FILE` checks another manifest (a test uses it); provider files are always read from adapters/.
 const custom = process.argv.indexOf('--manifest');
 const path = custom > 0 ? process.argv[custom + 1] : fileURLToPath(new URL('manifest.json', adaptersUrl));
@@ -62,12 +64,13 @@ async function sync() {
     for (const key of ['module', 'definition']) {
       try { await access(new URL(provider[key], adaptersUrl)); } catch { problems.push(`${provider.id}: ${key} ${provider[key]} is missing`); }
     }
-    let wrapped;
-    try { wrapped = JSON.parse(await readFile(new URL(`${provider.id}.definition.json`, adaptersUrl), 'utf8')).definition; }
-    catch { problems.push(`${provider.id}: wrapped definition ${provider.id}.definition.json is missing`); continue; }
     const file = new URL(provider.definition, adaptersUrl);
     let text, data;
     try { text = await readFile(file, 'utf8'); data = JSON.parse(text); } catch { continue; }
+    if (!data.wraps) continue;
+    let wrapped;
+    try { wrapped = JSON.parse(await readFile(new URL(data.wraps, file), 'utf8')).definition; }
+    catch { problems.push(`${provider.id}: declared wrapped definition is missing`); continue; }
     const capabilities = data.adapter?.capabilities;
     if (!capabilities?.address) continue;
     const ports = derivePorts(wrapped), proof = deriveProof(wrapped, capabilities.transport), ownership = deriveOwnership(wrapped);

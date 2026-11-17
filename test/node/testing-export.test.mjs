@@ -1,4 +1,4 @@
-// The @tnunamak/gozar/testing helpers: an app lists and uses a fake provider with no code of ours changed and no network.
+// The @tnunamak/gozar/testing helpers use synthetic providers and isolated loopback transport.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -14,22 +14,54 @@ const fakeId = () => `fake-${randomBytes(4).toString('hex')}`;
 const session = home => query({ home, usage: { kind: 'session', lifetimeMs: 60_000 } });
 
 test('red: a fake registry provider is listed by the testing route API, and expose with session usage succeeds against it', async t => {
-  const home = await scratch(t), id = fakeId();
+  const home = await mkdtemp(join(homedir(), '.tmp', 'gozar-export-')), id = fakeId();
+  let cleaned = false;
+  t.after(async () => {
+    if (cleaned) await rm(home, { recursive: true });
+    else t.diagnostic(`Unconfirmed fixture cleanup retained at ${home}`);
+  });
   assert.match(id, /^fake-[0-9a-f]{8}$/);
-  const registry = await fakeRegistry({ id, kinds: ['session'], reach: 'internet' });
-  t.after(registry.cleanup);
-  const api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home }) });
-  const catalog = await api.catalogRoutes(session(home));
-  assertShape('Catalog', catalog);
-  assert.deepEqual(catalog.candidates.map(item => item.providerId), [id], 'the fake is the whole registry');
-  const [own] = catalog.candidates;
-  assert.equal(own.eligible, true, JSON.stringify(own.unmet));
-  assert.equal(typeof own.candidateToken, 'string');
-  const view = await api.expose({ ...session(home), approval: { candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision }, wait: 'allocated' });
-  assertShape('RouteView', view);
-  assert.equal(view.ownership, 'gozar-owned');
-  assert.notEqual(view.origin, null);
-  assert.equal(view.properties.reach, 'internet');
+  const registry = await fakeRegistry({ id, kinds: ['session'], reach: 'internet', transport: 'tcp', proofProtocol: 'echo' });
+  const requested = { ...session(home), requirements: { ...session(home).requirements, transport: 'tcp', protocols: [] } };
+  let api, handle, bodyFailure, bodyFailed = false;
+  try {
+    api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home }),
+      expose: { startSession: undefined } }); // Exercise a real owned lifecycle, including close.
+    const catalog = await api.catalogRoutes(requested);
+    assertShape('Catalog', catalog);
+    assert.deepEqual(catalog.candidates.map(item => item.providerId), [id], 'the fake is the whole registry');
+    const [own] = catalog.candidates;
+    assert.equal(own.eligible, true, JSON.stringify(own.unmet));
+    assert.equal(typeof own.candidateToken, 'string');
+    let view;
+    try {
+      view = await api.expose({ ...requested, approval: { kind: 'route', consentFactsDigest: own.consentFactsDigest, candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision }, wait: 'allocated' });
+      handle = view.handle;
+    } catch (error) {
+      handle = error.route?.handle;
+      throw error;
+    }
+    assertShape('RouteView', view);
+    assert.equal(view.ownership, 'gozar-owned');
+    assert.notEqual(view.origin, null);
+    assert.equal(view.properties.reach, 'internet');
+  } catch (error) {
+    bodyFailed = true;
+    bodyFailure = error;
+    throw error;
+  } finally {
+    try {
+      if (handle) {
+        const closed = await api.closeRoute({ home, handle, mode: 'remove' });
+        assert.equal(closed.cleanup.state, 'confirmed');
+      }
+      await registry.cleanup();
+      cleaned = true;
+    } catch (cleanupFailure) {
+      if (bodyFailed) throw new AggregateError([bodyFailure, cleanupFailure], 'Fixture body and cleanup failed');
+      throw cleanupFailure;
+    }
+  }
 });
 
 test('a fake whose probe fails is listed but not eligible, and plain HTTP does not meet an https need', async t => {
@@ -75,7 +107,7 @@ test('red: a durable fake is created, checked, shown usable and verified, and cl
   const [own] = catalog.candidates;
   assert.equal(own.providerId, id);
   assert.equal(own.eligible, true, JSON.stringify(own.unmet));
-  const view = await api.ensureRoute({ ...durable, approval: { candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision } });
+  const view = await api.ensureRoute({ ...durable, approval: { kind: 'route', consentFactsDigest: own.consentFactsDigest, candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision } });
   assertShape('RouteView', view);
   assert.deepEqual(await rules(), ['a'], 'the rule is in the store file');
   const status = await api.routeStatus({ home, handle: view.handle });
@@ -95,26 +127,20 @@ test('a durable fake answers the check as told: an unverified answer leaves the 
   const api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home, verified: false }) });
   const durable = query({ home, usage: { kind: 'durable', routeId: 'coordinator' } });
   const [own] = (await api.catalogRoutes(durable)).candidates;
-  const view = await api.ensureRoute({ ...durable, approval: { candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision } });
+  const view = await api.ensureRoute({ ...durable, approval: { kind: 'route', consentFactsDigest: own.consentFactsDigest, candidateToken: own.candidateToken, disclosureRevision: own.disclosure.revision } });
   assert.equal(view.state, 'unverified');
   assert.equal(view.verification.status, 'unverified');
   assert.equal((await api.routeStatus({ home, handle: view.handle })).state, 'unverified', 'a later status asks the same fake');
 });
 
 test('fakeRegistry checks its input, writes only under its own directory and removes it on cleanup', async () => {
-  for (const bad of [{ id: 'Bad Id', kinds: ['session'], reach: 'internet' }, { id: fakeId(), kinds: [], reach: 'internet' }, { id: fakeId(), kinds: ['session'], reach: 'moon' }, { id: fakeId(), kinds: ['session'], reach: 'lan', transport: 'ftp' }, { id: fakeId(), kinds: ['session', 'attached'], reach: 'tailnet' }]) {
+  for (const bad of [{ id: 'Bad Id', kinds: ['session'], reach: 'internet' }, { id: fakeId(), kinds: [], reach: 'internet' }, { id: fakeId(), kinds: ['session'], reach: 'moon' }, { id: fakeId(), kinds: ['session'], reach: 'lan', transport: 'ftp' }, { id: fakeId(), kinds: ['session', 'external'], reach: 'tailnet' }]) {
     assert.equal((await fakeRegistry(bad).then(() => null, e => e))?.code, 'invalid_input', JSON.stringify(bad));
   }
   const registry = await fakeRegistry({ id: fakeId(), kinds: ['session', 'durable'], reach: 'tailnet' });
   await access(join(registry.root, 'providers', registry.manifest.providers[0].id, 'index.mjs'));
   await registry.cleanup();
   await assert.rejects(access(registry.root));
-});
-
-test('red: an attached fake is refused, because expose would start a real controller process for it', async () => {
-  const error = await fakeRegistry({ id: fakeId(), kinds: ['attached'], reach: 'internet' }).then(() => null, e => e);
-  assert.equal(error?.code, 'invalid_input');
-  assert.match(error.message, /only session and durable fakes are supported/);
 });
 
 test('red: cleanup with a caller directory removes the providers directory it made, and leaves the caller directory and other fakes', async t => {

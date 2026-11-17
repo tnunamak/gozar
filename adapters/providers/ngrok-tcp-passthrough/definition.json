@@ -1,13 +1,12 @@
 {
-  "wraps": "../../ngrok-tcp-passthrough.definition.json",
   "adapter": {
     "schemaVersion": 1,
     "id": "ngrok-tcp-passthrough",
     "label": "ngrok TCP passthrough",
-    "needs": "Needs an ngrok account. This route is not available in this release.",
+    "needs": "Needs the optional ngrok SDK, saved auth token.",
     "capabilities": {
       "reach": "internet",
-      "transport": "http",
+      "transport": "tcp",
       "traffic": {
         "tlsTermination": "unknown",
         "providerCanReadPayload": null,
@@ -20,11 +19,11 @@
         "evidenceRef": "https://ngrok.com/pricing (accessed 2026-11-12)"
       },
       "address": {
-        "stability": "unknown",
+        "stability": "ephemeral",
         "scope": "assigned TCP address of your ngrok account",
         "conditions": [
-          "no admitted create recipe",
-          "opaque TCP: no HTTPS origin until a mapping passes a client probe"
+          "the listener lives only while the host process runs",
+          "initial proof verifies the tunnel transport, not application identity or readiness"
         ],
         "ports": null
       },
@@ -36,8 +35,10 @@
         "period": null
       },
       "needsAccount": true,
-      "lifetimes": [],
-      "supervision": "controller",
+      "lifetimes": [
+        "attached"
+      ],
+      "supervision": "host-supervised",
       "protocols": {
         "sse": false,
         "streamableHttp": false,
@@ -46,15 +47,16 @@
       "proof": {
         "vantage": "public",
         "checks": [
-          "nonce",
-          "sse"
+          "nonce"
         ]
       }
     },
-    "supportedKinds": [],
+    "supportedKinds": [
+      "attached"
+    ],
     "disclosure": {
-      "revision": "disc-283687cfc6f4",
-      "text": "ngrok TCP passthrough is detected only. Gozar cannot create a route with it yet.",
+      "revision": "disc-ab12bce00ed9",
+      "text": "Open an attached ngrok TCP passthrough route. Initial nonce proof checks the owned forwarding gate before application traffic starts. Status retains the original proof time; safe automatic reproof is unavailable. TCP payload confidentiality is unknown: plaintext traffic may be read by the relay.",
       "links": [
         {
           "rel": "terms",
@@ -68,7 +70,567 @@
         }
       ]
     },
-    "ownership": "gozar-owned"
+    "ownership": "gozar-owned",
+    "availability": {
+      "session": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      },
+      "attached": {
+        "state": "detect-only",
+        "reason": "http-https-only-in-0.4; raw passthrough deferred by Lead"
+      },
+      "durable": {
+        "state": "unsupported",
+        "reason": "usage-not-supported"
+      }
+    },
+    "prerequisites": [
+      {
+        "id": "runtime",
+        "label": "Runtime module",
+        "observation": "sdk",
+        "actionId": "install-sdk"
+      },
+      {
+        "id": "credential",
+        "label": "Saved credential",
+        "observation": "authSet",
+        "actionId": "auth"
+      }
+    ],
+    "facts": [
+      {
+        "id": "cost-detail",
+        "label": "Cost details",
+        "value": "The ngrok pricing page does not settle the cost of TCP passthrough.",
+        "known": true,
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "entitlement",
+        "label": "Account entitlement",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "quota",
+        "label": "Remaining quota",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "mapping",
+        "label": "Effective provider mapping",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "terms-terms",
+        "label": "Terms",
+        "value": "https://ngrok.com/tos",
+        "known": true,
+        "group": "terms",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "terms-privacy",
+        "label": "Privacy",
+        "value": "https://ngrok.com/privacy",
+        "known": true,
+        "group": "terms",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "public-names",
+        "label": "Public names",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-logs",
+        "label": "Certificate logs",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "browser-warning",
+        "label": "Browser warning",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "initial-proof-only",
+        "label": "Initial transport proof only",
+        "value": "No automatic reproof: status preserves the original observation time. Restart the route for a new proof. Initial proof temporarily directs new connections to the owned echo listener before publication.",
+        "known": true,
+        "group": "verification",
+        "affectsConsent": true,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "provider-clocks",
+        "label": "Actual provider expiry and quota window",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "provider-retry",
+        "label": "Current provider retry-after or refusal",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "diagnostics-access",
+        "label": "Current account diagnostic access",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "credential-validity",
+        "label": "Current credential validity",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "traffic-policy",
+        "label": "Effective remote traffic policy",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "certificate-renewal",
+        "label": "Current CA issuance or renewal outcome",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "dns-authority",
+        "label": "Current DNS configuration and token grants",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "authoritative-address",
+        "label": "Current authoritative provider domain",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "address",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "account-authorization",
+        "label": "Current organization approval and ACL entitlement",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "remote-residue",
+        "label": "Remote DNS, certificate and token residue",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "alternative-cost",
+        "label": "Account-specific alternative cost and quota",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/pricing",
+        "asOf": "2026-11-12"
+      },
+      {
+        "id": "proof-scope",
+        "label": "Proof scope",
+        "value": "Route transport and current Gozar boundary only; application login, authorization and downstream journeys are host-owned.",
+        "known": true,
+        "group": "proof",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "storage-policy",
+        "label": "Credential storage",
+        "value": "The configured host credential backend owns custody; the default uses private local files. Read-back returns presence and non-secret values only.",
+        "known": true,
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "change-policy",
+        "label": "Configuration changes",
+        "value": "Saved inputs do not silently reconfigure a running route; stop and obtain fresh consent before replacing it.",
+        "known": true,
+        "group": "configuration",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "fallback-policy",
+        "label": "Fallback policy",
+        "value": "Never substitute a different provider without consent.",
+        "known": true,
+        "group": "access",
+        "affectsConsent": false,
+        "source": "adapter-definition",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "remote-termination",
+        "label": "Effective remote TLS termination",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-logging",
+        "label": "Account-selected logging and retention",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "privacy",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-name-ownership",
+        "label": "Current reserved name ownership",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "address",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-setup-completion",
+        "label": "Provider consent or remote setup completion",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "provider-status",
+        "label": "Current provider dashboard status",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "runtime",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "browser-warning-applicability",
+        "label": "Account-specific browser warning applicability",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "access",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-collision",
+        "label": "Current remote endpoint collision",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "address",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "revocation-state",
+        "label": "Actual credential revocation and remaining connectors",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-control-authority",
+        "label": "Current remote binding and controller authority",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "provider-depletion",
+        "label": "Current provider depletion or license expiry",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "limits",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-domain-options",
+        "label": "Account reserved-domain choices",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "account-domain-suggestion",
+        "label": "Current account-assigned suggested domain",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-issuance",
+        "label": "Provider credential issuance or refresh outcome",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-job-completion",
+        "label": "Provider provisioning job completion",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "setup",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-identity",
+        "label": "Authenticated remote account or tunnel identity",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "account",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-rotation",
+        "label": "Remote credential rotation outcome",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "remote-deletion-proof",
+        "label": "Remote revocation and deletion proof",
+        "value": null,
+        "known": false,
+        "reason": "needs-provider-call",
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "gozar:catalog:no-provider-call",
+        "asOf": null
+      },
+      {
+        "id": "retained-configuration",
+        "label": "Retained configuration",
+        "value": "Stopping a route keeps saved input values and credentials. Local rotation does not revoke a credential at the provider.",
+        "known": true,
+        "group": "ownership",
+        "affectsConsent": false,
+        "source": "adapter-configuration",
+        "asOf": "2026-11-13"
+      },
+      {
+        "id": "public-plan-requirement",
+        "label": "Public plan requirement",
+        "value": "Free TCP requires payment-card verification; selected account eligibility remains unknown.",
+        "known": true,
+        "group": "cost",
+        "affectsConsent": false,
+        "source": "https://ngrok.com/docs/pricing-limits/free-plan-limits",
+        "asOf": "2026-11-13T00:00:00.000Z"
+      },
+      {
+        "id": "execution-scope",
+        "label": "Execution scope",
+        "value": "Detect-only in 0.4: raw passthrough is deferred so the HTTP(S) embedding contract ships together.",
+        "known": true,
+        "group": "constraints",
+        "affectsConsent": false,
+        "source": "gozar:release-0.4-scope",
+        "asOf": "2026-11-13T00:00:00.000Z"
+      },
+      {
+        "id": "payload-readers",
+        "label": "Payload readers",
+        "value": "Architecture classification: the application endpoint receives opaque TCP; TLS termination and intermediary reader access have not been observed. Raw TCP remains detect-only in this release and is not an executable route. This is not a live deployment observation.",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "adapter architecture: adapters/providers/ngrok-tcp-passthrough/definition.json#adapter.capabilities.traffic",
+        "asOf": null
+      },
+      {
+        "id": "payload-readers-deployment",
+        "label": "Actual deployment payload readers",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "gozar:catalog:no-deployment-observation",
+        "asOf": null
+      }
+    ],
+    "originSchemes": [
+      "tcp:"
+    ],
+    "effectOperations": [
+      {
+        "kind": "sdk-listener",
+        "operation": "detect"
+      },
+      {
+        "kind": "sdk-listener",
+        "operation": "open"
+      },
+      {
+        "kind": "sdk-listener",
+        "operation": "read"
+      },
+      {
+        "kind": "sdk-listener",
+        "operation": "close"
+      },
+      {
+        "kind": "network",
+        "operation": "exchange"
+      }
+    ]
   },
   "evidence": {
     "accessed": "2026-11-12",
@@ -76,8 +638,8 @@
       "https://ngrok.com/pricing"
     ],
     "protocols": {
-      "sse/streamableHttp": "false. no admitted recipe: this adapter creates no route, so no timed stream probe gates a publication",
-      "oauthDcr": "Detected only: no kind, nothing is published."
+      "sse/streamableHttp": "Not claimed. Raw stream transport proof does not test HTTP application protocols.",
+      "oauthDcr": "Not claimed. Raw stream transport is not an HTTPS application origin."
     }
   }
 }

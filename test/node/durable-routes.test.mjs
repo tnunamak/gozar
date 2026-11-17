@@ -41,7 +41,7 @@ import { issueConsentToken, consentBinding } from ${JSON.stringify(packageUrl('c
 import { inspectLegacyRoute } from ${JSON.stringify(packageUrl('legacy-import.mjs'))};
 import { canonicalHome } from ${JSON.stringify(packageUrl('service-state.mjs'))};
 import { loadAdapters } from ${JSON.stringify(packageUrl('adapter-runtime.mjs'))};
-import { adoptDisclosureRevision } from ${JSON.stringify(packageUrl('adopt-disclosure.mjs'))};
+import { adoptDisclosureRevision, consentDisclosureRevision } from ${JSON.stringify(packageUrl('adopt-disclosure.mjs'))};
 const [operation, input] = process.argv.slice(2);
 const args = JSON.parse(input);
 try {
@@ -56,7 +56,7 @@ try {
   } else if (operation === 'facts') result = await durablePlanFacts(args);
   else if (operation === 'adoptRevision') {
     const adapters = await loadAdapters();
-    result = adoptDisclosureRevision(adapters.find(item => item.id === args.adapterId).definition);
+    result = consentDisclosureRevision(adapters.find(item => item.id === args.adapterId).definition, args.intent ?? 'adopt');
   }
   else if (operation === 'inspect') result = await inspectLegacyRoute(args);
   else throw Object.assign(new Error(operation + ' is not implemented'), { code: 'not_implemented' });
@@ -122,7 +122,7 @@ async function world(t, provider = {}) {
   // What the catalog does: observe, then issue a single-use token whose grant names the adapter.
   const mint = async (extra = {}, { adapterId = 'tailscale-funnel', intent = 'create', disclosureRevision, grant, ttlMs } = {}) => {
     const q = query(extra);
-    disclosureRevision ??= intent === 'adopt' ? (await run('adoptRevision', { adapterId })).result : 'disclosure-1';
+    disclosureRevision ??= (await run('adoptRevision', { adapterId, intent })).result;
     const reply = await run('issue', { query: q, adapterId, intent, disclosureRevision, grant, ttlMs });
     if (reply.error) throw Object.assign(new Error(reply.error.message), reply.error);
     return { query: q, approval: { candidateToken: reply.result.token, disclosureRevision }, grant: reply.result.grant };
@@ -615,7 +615,7 @@ test('adopt refuses an approval for the old disclosure before spending its token
     'the stale revision check did not spend the token');
 
   const current = await w.mint({ origin: w.origin }, { intent: 'adopt' });
-  assert.match(current.approval.disclosureRevision, /^disc-[a-f0-9]+:adopt-removal-1$/);
+  assert.match(current.approval.disclosureRevision, /^disc-[a-f0-9]+:adopt-removal-1(?:-facts-[a-f0-9]{12})?$/);
   const adopted = await w.run('adopt', { ...current.query, approval: current.approval, handover });
   assert.equal(adopted.error, undefined, JSON.stringify(adopted.error));
   assert.equal(adopted.result.route.provenance, 'adopted');
@@ -1333,11 +1333,9 @@ test('36. S3 resume without approval verifies only the pin and refuses foreign r
       const file = join(w.home, 'query.json');
       await writeFile(file, JSON.stringify(w.request));
       const resumed = await w.gozar('ensure', '--query-file', file, '--json');
-      assert.equal(resumed.code, 0, resumed.stdout);
-      assertShape('RouteView', resumed.json);
-      assert.equal(resumed.json.state, 'usable');
-      assert.equal(resumed.json.published, w.origin);
-      assert.equal(resumed.json.verification.status, 'verified');
+      assert.equal(resumed.code, 3, resumed.stdout);
+      assert.equal(resumed.json.error.code,'consent_required','the public factory cannot resume an old record without a scoped 0.4 approval');
+      assert.equal(w.writes().length,writes+2,'the public refusal causes no further provider write after the private resume and suspend');
     } else {
       assert.equal(reply.error?.code, { foreign: 'port_occupied', identity: 'address_changed', digest: 'adapter_changed' }[scenario], JSON.stringify(reply));
       assert.equal(w.writes().length, writes);
@@ -1444,7 +1442,7 @@ test('41. S8 crashes before and after delete retain the receipt until confirmed;
   }
 });
 
-test('stopped durable removal succeeds repeatedly without provider calls while suspend refuses', async t => {
+test('stopped durable tombstone refuses cleanup confirmation without terminal ownership evidence', async t => {
   const w = await world(t);
   const created = await w.ensure();
   assert.equal(created.result.route.state, 'usable');
@@ -1454,12 +1452,11 @@ test('stopped durable removal succeeds repeatedly without provider calls while s
   const handle = { kind: 'durable', id: 'coordinator', generation: 1 };
   for (let repeat = 0; repeat < 2; repeat++) {
     assert.equal((await w.run('apiSuspend', { handle })).error?.code, 'stopped_by_user');
+    // A stop tombstone is revocation, not provider absence for this generation: this route has no terminal operation journal,
+    // so a handle names no retained evidence and Gozar claims no confirmed removal (0.4 releaseRoute contract).
     const closed = await w.run('apiClose', { handle, mode: 'remove' });
-    assert.equal(closed.result?.state, 'released', JSON.stringify(closed));
-    assert.equal(closed.result.origin, null);
-    assert.equal(closed.result.published, null);
-    assert.deepEqual(closed.result.cleanup, { state: 'none' });
-    assertShape('RouteView', closed.result);
+    assert.equal(closed.error?.code, 'route_not_found', JSON.stringify(closed));
+    assert.equal(closed.result, undefined);
     assert.deepEqual((await w.run('release', { routeId: 'coordinator', mode: 'remove' })).result,
       { schemaVersion: 1, routeId: 'coordinator', removed: false, providerRemoved: false, cleanupDebt: null });
     assert.equal((await w.run('ensure', w.request)).error?.code, 'stopped_by_user');
@@ -1499,7 +1496,9 @@ test('interrupted user stop removal uses compare-and-set and preserves foreign r
     assert.equal(reply.error, undefined, JSON.stringify(reply));
     if (operation === 'apiClose') {
       assert.equal(reply.result.state, foreign ? 'uncertain' : 'released');
-      assert.deepEqual(reply.result.cleanup, foreign ? { state: 'debt', message: 'rule-changed' } : { state: 'none' });
+      const {nextAction,...cleanup}=reply.result.cleanup;
+      assert.deepEqual(cleanup, foreign ? { state: 'unconfirmed', message: 'rule-changed' } : { state: 'confirmed' });
+      if(foreign)assert.equal(nextAction.kind,'instructions');else assert.equal(nextAction,null);
       assertShape('RouteView', reply.result);
     } else {
       assert.deepEqual(reply.result, { schemaVersion: 1, routeId: 'coordinator', removed: !foreign,

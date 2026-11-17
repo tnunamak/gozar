@@ -9,8 +9,9 @@
 import { lstat, readFile } from 'node:fs/promises';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { defaultHome } from './default-home.mjs';
+import { promptInputRequirement } from './input-requirements.mjs';
 
-export const ROUTE_COMMANDS = ['catalog', 'ensure', 'adopt', 'setup', 'preference', 'watch', 'suspend'];
+export const ROUTE_COMMANDS = ['catalog', 'ensure', 'adopt', 'setup', 'configure', 'preference', 'watch', 'suspend','routes','route-status','close','review-consent','approve-consent'];
 const MAX_FILE_BYTES = 1 << 20;
 const REQUIREMENT_CODES = new Set(['requirements_unsatisfied', 'setup_required', 'unsupported']);
 const APPROVAL_CODES = new Set(['consent_required', 'consent_unknown', 'consent_expired', 'consent_mismatch', 'candidate_stale', 'route_not_found']);
@@ -23,10 +24,16 @@ const specs = {
   ensure: { values: ['query-file', 'approval-file', 'route', 'provider-id', 'home'], flags: ['json', 'reconsent'] },
   adopt: { values: ['query-file', 'approval-file', 'handover-file', 'route', 'provider-id', 'home'], flags: ['json', 'reconsent'] },
   expose: { values: ['query-file', 'approval-file', 'wait', 'route', 'provider-id', 'home'], flags: ['json'] },
-  setup: { values: ['approval-file', 'secret-file', 'value', 'home'], flags: ['json'], positional: 'action id' },
+  setup: { values: ['approval-file', 'secret-file', 'value', 'home', 'query-file', 'provider-id'], flags: ['json', 'prompt'], positional: 'action id' },
+  configure: { values: ['query-file', 'provider-id', 'home'], flags: ['json'] },
   preference: { values: ['profile-home', 'expected-revision', 'on-unavailable'], multi: ['prefer'], flags: ['json'], positional: 'show or set' },
   suspend: { values: ['handle-file', 'route', 'home'], flags: ['json'] },
   watch: { values: ['handle-file', 'home', 'interval-ms'], flags: ['json'] },
+  routes:{values:['home','owner'],flags:['json']},
+  'route-status':{values:['home','handle-file'],flags:['json']},
+  close:{values:['home','handle-file'],flags:['json']},
+  'review-consent':{values:['home','handle-file'],flags:['json']},
+  'approve-consent':{values:['home','handle-file','approval-file'],flags:['json']},
 };
 
 function parse(command, argv) {
@@ -37,7 +44,7 @@ function parse(command, argv) {
     if (!token.startsWith('--')) { positional.push(token); continue; }
     const name = token.slice(2);
     if (spec.flags.includes(name)) options[name] = true;
-    else if (spec.values.includes(name) || spec.multi?.includes(name)) {
+    else if (spec.values.includes(name) || spec.multi?.includes(name) || ['registry-file', 'registry-root'].includes(name)) {
       const value = argv[index += 1];
       if (value === undefined || value.startsWith('--')) throw gozarError('invalid_input', `Missing value for ${token}`);
       if (spec.multi?.includes(name)) (options[name] ??= []).push(value);
@@ -79,6 +86,7 @@ async function readApproval(options, { needed }) {
   }
   return readJson(options['approval-file'], 'The approval file', { privateFile: true });
 }
+async function readRef(options){const file=await readJson(required(options,'handle-file'),'The handle file');return {home:file.home??options.home??defaultHome(),handle:file.handle??file};}
 
 /** Resolves when the lease holder (stdin) ends or the process is asked to stop. */
 function untilReleased(stdin) {
@@ -96,6 +104,38 @@ function untilReleased(stdin) {
 }
 
 const commandsRun = {
+  async routes({options,api,out}){out(await api.listRoutes({home:options.home??defaultHome(),...(options.owner?{owner:options.owner}:{})}));return 0;},
+  async 'route-status'({options,api,out}){out(await api.routeStatus(await readRef(options)));return 0;},
+  async close({options,api,out}){const result=await api.closeRoute({...await readRef(options),mode:'remove'});out(result);return result.cleanup.state==='confirmed'?0:1;},
+  async 'review-consent'({options,api,out}){out(await api.reviewRouteConsent(await readRef(options)));return 0;},
+  async 'approve-consent'({options,api,out}){const approval=await readApproval(options,{needed:true});out(await api.approveRouteConsent({...await readRef(options),approvalToken:approval.approvalToken,consentFactsDigest:approval.consentFactsDigest}));return 0;},
+  async configure({ options, api, out, err, prompt, storeSecret }) {
+    const query = await readQuery(options), home = options.home ?? query.home ?? defaultHome();
+    const catalog = await api.catalogRoutes({ ...query, home });
+    if (catalog.candidates.length !== 1) throw gozarError('invalid_input', 'Select one catalog choice with --provider-id before configuring inputs');
+    const candidate = catalog.candidates[0];
+    err(`Input requirements: ${candidate.display.label}`);
+    for (const fact of candidate.facts) if (fact.affectsConsent) err(`${fact.label}: ${fact.known ? JSON.stringify(fact.value) : `unknown (${fact.reason})`}`);
+    for (const descriptor of candidate.configuration.inputRequirements) {
+      const selected=(await api.catalogRoutes({...query,home})).candidates[0];
+      const configuration=selected.configuration;
+      const action=configuration.actions.find(action=>action.id===descriptor.actionId);
+      if(!action?.consent)throw gozarError('internal_error','The input action has no current consent snapshot');
+      err(action.disclosure.text);
+      for(const fact of action.consent.facts)err(`${fact.label}: ${fact.known?JSON.stringify(fact.value):`unknown (${fact.reason})`}`);
+      const input=await prompt(descriptor);
+      if(!input.trim()&&!descriptor.required)continue;
+      if(!input.trim())throw gozarError('invalid_input',`Required input is missing: ${descriptor.id}`);
+      const scope={home,owner:query.owner,providerId:selected.providerId,expectedConfigurationRevision:configuration.revision};
+      const approval={kind:'setup',digest:action.digest,disclosureRevision:action.disclosure.revision,consentFactsDigest:action.consent.consentFactsDigest};
+      const request=descriptor.secret?{secretHandle:(await storeSecret({...scope,inputId:descriptor.id,scopeId:configuration.scopeId,bytes:new TextEncoder().encode(input)})).handle}:{value:input};
+      await api.runSetupAction({...scope,actionId:action.id,approval,...request});
+    }
+    const current = await api.catalogRoutes({ ...query, home }), selected = current.candidates[0];
+    const complete = selected.setup.state === 'ready';
+    out({ schemaVersion: 1, state: complete ? 'complete' : 'pending', nextAction: selected.setup.actions[0] ?? null, catalogRevision: current.catalogRevision });
+    return complete ? 0 : 2;
+  },
   async catalog({ options, api, out, err }) {
     err('Asking the catalog (read-only; nothing is exposed)');
     const catalog = await api.catalogRoutes(await readQuery(options));
@@ -137,17 +177,33 @@ const commandsRun = {
     return 0;
   },
 
-  async setup({ options, positional, api, out, err, storeSecret }) {
+  async setup({ options, positional, api, out, err, storeSecret, prompt }) {
     if (options.value !== undefined && options['secret-file'] !== undefined) throw gozarError('invalid_input', '--value and --secret-file cannot be used together');
     const home = options.home ?? defaultHome();
     const approval = await readApproval(options, { needed: true });
-    let secretHandle;
-    if (options['secret-file']) {
-      const text = await readFileChecked(options['secret-file'], 'The secret file', { privateFile: true });
-      secretHandle = (await storeSecret({ home, value: text.replace(/\r?\n$/, '') })).handle;
-      err('The secret is in Gozar\'s private store');
+    const query=await readQuery({...options,home});
+    const catalog=await api.catalogRoutes(query);
+    const matches=catalog.candidates.filter(c=>(options['provider-id']??query.providerId)===c.providerId&&c.configuration.actions.some(a=>a.id===positional));
+    const candidate=matches.length===1?matches[0]:null;
+    if(!candidate)throw gozarError('candidate_stale','Select exactly one provider and current offered action');
+    const configuration=candidate.configuration,action=configuration.actions.find(a=>a.id===positional);
+    const descriptor=configuration.inputRequirements.find(i=>i.actionId===positional);
+    if(approval.kind!=='setup'||approval.consentFactsDigest!==action.consent?.consentFactsDigest||approval.digest!==action.digest||approval.disclosureRevision!==action.disclosure.revision)throw gozarError('consent_mismatch','Setup approval changed; review the current action');
+    let secretHandle,value=options.value;
+    const scope={home,owner:query.owner,providerId:candidate.providerId,expectedConfigurationRevision:configuration.revision};
+    const intake=async input=>(await storeSecret({...scope,inputId:descriptor.id,scopeId:configuration.scopeId,bytes:new TextEncoder().encode(input)})).handle;
+    if(options.prompt){
+      if(options.value!==undefined||options['secret-file'])throw gozarError('invalid_input','Prompt takes input interactively; omit --value and --secret-file');
+      if(!descriptor)throw gozarError('invalid_input','This action has no input requirement');
+      const input=await prompt(descriptor);if(descriptor.required&&!input.trim())throw gozarError('invalid_input',`Required input is missing: ${descriptor.id}`);
+      if(descriptor.secret)secretHandle=await intake(input);else value=input;
     }
-    const result = await api.runSetupAction({ home, actionId: positional, approval, ...(secretHandle ? { secretHandle } : {}), ...(options.value === undefined ? {} : { value: options.value }) });
+    if(options['secret-file']){
+      if(!descriptor?.secret)throw gozarError('invalid_input','This action does not accept a secret');
+      secretHandle=await intake((await readFileChecked(options['secret-file'],'The secret file',{privateFile:true})).replace(/\r?\n$/,''));
+      err("The secret is in Gozar's configured private backend");
+    }
+    const result=await api.runSetupAction({...scope,actionId:action.id,approval,...(secretHandle?{secretHandle}:{}),...(value===undefined?{}:{value})});
     out(result);
     return result.state === 'complete' ? 0 : 2;
   },
@@ -210,12 +266,16 @@ export async function routeMain(argv, deps = {}) {
   try {
     if (!Object.hasOwn(commandsRun, command)) throw gozarError('invalid_input', `Unknown command ${command}`);
     const { options, positional } = parse(command, rest);
-    const api = deps.api ?? await import('./api.mjs');
-    const storeSecret = deps.storeSecret ?? (await import('./route-setup.mjs')).storeSecret;
-    return await commandsRun[command]({ options, positional, api, out, outLine, err, stdin: deps.stdin ?? process.stdin, storeSecret });
+    const rootApi = deps.api ?? await import('./api.mjs');
+    const api = deps.api&&!options['registry-file']?rootApi:rootApi.createGozar({...(options['registry-file']?{manifest:options['registry-file'],root:options['registry-root']}:{}),
+      hostCapabilities:{'runtime.attached':{known:true,value:true},'runtime.durable':{known:true,value:true},'secrets.backend':{known:true,value:true},'installer.execute':{known:true,value:false}}});
+    const storeSecret = deps.storeSecret ?? api.storeSecret;
+    const stdin = deps.stdin ?? process.stdin;
+    const prompt = deps.prompt ?? (descriptor => promptInputRequirement(descriptor, { stdin, stderr }));
+    return await commandsRun[command]({ options, positional, api, out, outLine, err, stdin, storeSecret, prompt });
   } catch (cause) {
     const error = normalizeError(cause);
-    const envelope = { schemaVersion: 1, error: { code: error.code, message: error.message, nextAction: error.nextAction ?? null } };
+    const envelope = { schemaVersion: 1, error: { code: error.code, message: error.message, nextAction: error.nextAction ?? null },...(error.route?{route:error.route}:{}) };
     if (json) outLine(envelope);
     else err(`Gozar: ${error.message}${error.nextAction?.instructions ? `\nNext: ${error.nextAction.instructions}` : ''}`);
     return exitCodeFor(error.code);

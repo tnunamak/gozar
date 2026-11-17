@@ -3,7 +3,7 @@
 // One adapter is one directory plus one `{id, module, definition}` entry in adapters/manifest.json
 // `providers`. Types only: no runtime behaviour is declared here. Opaque effect, readback and
 // identity bodies stay provider-specific; core validates the envelope and the admission.
-import type { Action, Properties, RouteView, Ingress, Usage, Requirements, Disclosure } from './route-contract.js';
+import type { Action, Fact, Availability, Properties, RouteView, Ingress, Usage, Requirements, Disclosure,InputRequirement,HostCapabilityId } from './route-contract.js';
 
 export type AdapterState = 'ready' | 'action-required' | 'unsupported' | 'unknown';
 
@@ -17,15 +17,23 @@ export interface Adapter {
   id: string;
   definition: AdapterDefinition;
   detect(ctx: ReadContext): Promise<{ state: AdapterState; facts: unknown }>;
+  /**
+   * Optional. What this adapter's persisted owner choices mean for the session engine, read from live observation just before
+   * a session starts. It rejects with `setup_required` (and starts nothing) when a choice is missing, changed or no longer valid.
+   */
+  hostChoices?(ctx: ReadContext): Promise<{ bindAddresses: string[]; firewallApproved: boolean }>;
   properties(facts: unknown): Properties;
   setupActions(facts: unknown): Action[];
+  configurationActions?(): Action[];
+  /** Prepares this attempt's protocol-specific challenge before provider creation. */
+  prepareProof?(ctx: ReadContext, request: AdapterRequest, attempt: ProofAttempt): Promise<AdapterProofSession>;
   setup(ctx: SetupContext, actionId: string, secretHandle?: string): Promise<SetupResult>;
   plan(ctx: ReadContext, request: AdapterRequest): Promise<AdapterPlan>;
   create(ctx: AdmittedEffectContext, plan: AdapterPlan): Promise<Receipt>;
   observe(ctx: ReadContext, request: AdapterRequest): Promise<Observation>;
   verify(ctx: ReadContext, receipt: Receipt): Promise<Verification>;
   remove(ctx: AdmittedEffectContext, receipt: Receipt, observed: Observation): Promise<Removal>;
-  runtimeFacts(ctx: ReadContext, receipt: Receipt): Promise<{ properties: Properties; ingress: Ingress | null; limits: RouteView['limits'] }>;
+  runtimeFacts(ctx: ReadContext, receipt: Receipt): Promise<{ properties: Properties; ingress: Ingress | null; limits: RouteView['limits'];facts?:Fact[];binding?:RouteView['binding'] }>;
 }
 
 export type AdapterDefinition = {
@@ -33,9 +41,34 @@ export type AdapterDefinition = {
   id: string;
   label: string;
   capabilities: Properties;
+  facts?: Fact[];
+  availability?: Availability;
+  prerequisites?: {id: string; label: string; observation: string; actionId?: string}[];
   supportedKinds: ('session' | 'attached' | 'durable')[];
   disclosure: Disclosure;
+  /** URL schemes accepted from this adapter, including the colon; default derives from transport. */
+  originSchemes?: string[];
+  needs?:string;
+  ownership?:'gozar-owned'|'external-owned';
+  inputRequirements?:InputRequirement[];
+  requiredCapabilities?:HostCapabilityId[];
+  effectOperations?:{kind:string;operation:string}[];
+  byUsage?:Partial<Record<Usage['kind'],{needs?:string;ports?:number[]|null}>>;
 };
+
+/** The adapter binds verification to the fresh challenge and this attempt's endpoint. */
+export type AdapterProofSession = {
+  target: string;
+  verify(input: {origin: string; receipt: Receipt; attempt: ProofAttempt}): Promise<{
+    attemptId: string; endpoint: string;
+    status: 'verified' | 'unverified'; checkedAt: string | null; validUntil?: string;
+    vantage: RouteView['verification']['vantage']; checks: RouteView['verification']['checks']; facts?: Fact[];
+  }>;
+  close(): Promise<void>;
+  /** Optional safe reproof. Without it status retains the original proof and its expiry. */
+  refresh?: AdapterProofSession['verify'];
+};
+export type ProofAttempt = { id: string; nonce: string; deadlineMs: number; signal: AbortSignal };
 
 export type AdapterRequest = {
   target: string;
@@ -70,7 +103,7 @@ export type AdapterEffectError = {
  * No raw secrets in facts, plans or receipts. `origin` (amendment 2) is the address the provider allocated at
  * create, or null when it allocated none; the core reads the published origin from it, never from provider-specific bodies.
  */
-export type Receipt = { schemaVersion: 1; adapterId: string; resourceKey: string; generation: number; identity: unknown; readback: unknown; origin: string | null };
+export type Receipt = { schemaVersion: 1; adapterId: string; resourceKey: string; generation: number; operationId?: string | null; identity: unknown; readback: unknown; origin: string | null };
 
 /** `revision` is the provider's config revision (for example an ETag), or null when the provider has none. */
 export type Observation = { present: boolean; resourceKey: string; identity: unknown; revision: string | null };
@@ -83,6 +116,10 @@ export type SetupResult = { state: 'complete' | 'pending' | 'blocked'; nextActio
 
 /** Injected clock, read-only provider probe, challenge verifier and private configuration lookup. */
 export type ReadContext = {
+  /** Present only in the explicit public testing harness; operations must be declared in adapter data. */
+  dispatchEffect?:(request:{kind:string;operation:string;input:unknown})=>Promise<unknown>;
+  /** The unicast interface inventory in the shape of `os.networkInterfaces()`: the real one, or under testing effects the host's declared `recipe/probe` observation. */
+  observeInterfaces?:()=>Promise<{interfaces:Record<string,{address:string;internal:boolean;family?:string;netmask?:string;mac?:string;cidr?:string|null}[]>}>;
   now: () => number;
   /** Canonical Gozar state home of the calling app (amendment 1: the durable plan needs it). */
   home: string;
@@ -113,6 +150,7 @@ export type SetupContext = ReadContext & {
  * (`precondition_failed` when the provider revision moved; nothing is changed). Neither contains ownership logic.
  */
 export type AdmittedEffectContext = ReadContext & {
+  signal?:AbortSignal;deadlineMs?:number;attemptId?:string;operationId?:string|null;
   /** Route generation the effect is admitted for; receipts carry it (amendment 1). */
   generation: number;
   assertGeneration: () => Promise<void>;

@@ -21,8 +21,10 @@ export class Controller {
       } } });
   }
   async advance(command) {
-    this.last = this.step({ ...(this.state ? { state: this.state } : {}), command: { sessionId: this.sessionId, ...command },
+    const next = this.step({ ...(this.state ? { state: this.state } : {}), command: { sessionId: this.sessionId, ...command },
       adapters: this.adapters, requirements: this.requirements, host: { ...this.driver.host, nowMs: this.driver.nowMs?.() ?? 0 } });
+    if(next.snapshot.phase==='published-ready'&&command.type!=='status')await this.beforePublication?.();
+    this.last=next;
     this.state = this.last.state;
     for (const generation of this.driver.proofExpiries?.keys() ?? []) {
       if (generation !== this.state.generation) this.driver.proofExpiries.delete(generation);
@@ -43,7 +45,32 @@ export class Controller {
     return { ...this.last, ...(this.driver.proofGeneration === this.state.generation && this.driver.acceptedProbeReceipt?.expiresAtMs > this.driver.nowMs() ? { validation: { probeReceipt: this.driver.acceptedProbeReceipt, provenance: this.driver.proofProvenance } } : {}), ...(this.driver.gate ? { gateTarget: this.driver.gate.target } : {}), snapshot: { ...this.last.snapshot,
       limitations: [...this.hostLimitations, ...(this.last.snapshot.limitations ?? [])] } };
   }
+  // Private detached read. It never enters the core transition/effect machinery.
+  observe({gateExpiresAtMs=this.driver.gate?.expiresAtMs}={}) {
+    if(!this.last||!this.state)throw new Error('Controller observation unavailable');
+    const output=structuredClone(this.last),driver=this.driver,now=driver.nowMs();
+    const receipt=driver.acceptedProbeReceipt,authorization=driver.host?.probe;
+    const deadlines=[receipt?.expiresAtMs,driver.proofExpiries?.get(this.state.generation),authorization?.expiresAtMs];
+    if(gateExpiresAtMs!==undefined)deadlines.push(gateExpiresAtMs);
+    const valid=!driver.stopped&&!this.state.stopRequested&&!this.shuttingDown&&
+      this.state.sessionId===this.sessionId&&output.snapshot.sessionId===this.sessionId&&
+      driver.proofGeneration===this.state.generation&&receipt?.instanceMatched===true&&
+      receipt.origin===output.snapshot.published&&receipt.nonceRef===authorization?.nonceRef&&
+      receipt.verifierRef===authorization?.verifierRef&&Number.isFinite(receipt.observedAtMs)&&
+      receipt.observedAtMs<=now&&Number.isFinite(now)&&deadlines.every(end=>Number.isFinite(end)&&end>now)&&
+      output.snapshot.phase==='published-ready';
+    // Original proof is history only when current validation is withdrawn.
+    output.observationEvidence=receipt?structuredClone({probeReceipt:receipt,provenance:driver.proofProvenance}):null;
+    output.validation=valid?structuredClone({probeReceipt:receipt,provenance:driver.proofProvenance}):null;
+    if(!valid)output.snapshot={...output.snapshot,
+      phase:output.snapshot.phase==='stopped'?'stopped':'degraded',published:null};
+    output.effects=[];
+    output.snapshot.limitations=[...this.hostLimitations,...(output.snapshot.limitations??[])];
+    if(driver.gate)output.gateTarget=driver.gate.target;
+    return output;
+  }
   async dispatch(effect) {
+    await this.beforeEffect?.(effect);
     if (effect.kind === 'http-probe' && effect.operation === 'probe') {
       const candidate = this.last.snapshot.candidate;
       if (candidate) this.driver.origin = safeOrigin(candidate);

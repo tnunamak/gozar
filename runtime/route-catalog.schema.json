@@ -86,6 +86,8 @@
           "type": "string",
           "enum": [
             "https",
+            "tcp",
+            "tls",
             "any"
           ]
         },
@@ -171,6 +173,51 @@
         },
         "providerId": {
           "type": "string"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "hostCapabilities": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": true
+                  },
+                  "value": {
+                    "type": [
+                      "boolean",
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "known",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": false
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "known",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
         }
       },
       "additionalProperties": false
@@ -239,7 +286,9 @@
             "instructions",
             "provide-secret",
             "provide-value",
-            "gozar-runs"
+            "gozar-runs",
+            "clear-input",
+            "install-artifact"
           ]
         },
         "label": {
@@ -276,6 +325,84 @@
         },
         "required": {
           "type": "boolean"
+        },
+        "obtainUrl": {
+          "type": "string"
+        },
+        "help": {
+          "type": "string"
+        },
+        "inputId": {
+          "type": "string"
+        },
+        "consent": {
+          "$ref": "#/$defs/SetupConsentSnapshot"
+        },
+        "review": {
+          "type": "object",
+          "properties": {
+            "canonicalInput": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "canonicalInput"
+          ],
+          "additionalProperties": false
+        },
+        "artifact": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "platform": {
+              "type": "string"
+            },
+            "architecture": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "sha256",
+            "platform",
+            "architecture"
+          ],
+          "additionalProperties": false
+        },
+        "effects": {
+          "type": "object",
+          "properties": {
+            "writes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "networkOrigins": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "requiresPrivilege": {
+              "type": "boolean"
+            },
+            "restartRequired": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "writes",
+            "networkOrigins",
+            "requiresPrivilege",
+            "restartRequired"
+          ],
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -301,7 +428,9 @@
           "type": "string",
           "enum": [
             "http",
-            "https"
+            "https",
+            "tcp",
+            "tls"
           ]
         },
         "traffic": {
@@ -522,7 +651,13 @@
         "setup",
         "disclosure",
         "candidateToken",
-        "expiresAt"
+        "expiresAt",
+        "availability",
+        "prerequisites",
+        "facts",
+        "configuration",
+        "consent",
+        "consentFactsDigest"
       ],
       "properties": {
         "providerId": {
@@ -612,7 +747,8 @@
                 "ready",
                 "action-required",
                 "unsupported",
-                "unknown"
+                "unknown",
+                "detect-only"
               ]
             },
             "actions": {
@@ -639,6 +775,42 @@
             "null"
           ],
           "pattern": "^(\\d{4}-\\d{2}-\\d{2}T.*)?$"
+        },
+        "availability": {
+          "$ref": "#/$defs/Availability"
+        },
+        "prerequisites": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Prerequisite"
+          }
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fact"
+          }
+        },
+        "configuration": {
+          "$ref": "#/$defs/Configuration"
+        },
+        "consentFactsDigest": {
+          "type": "string"
+        },
+        "consent": {
+          "$ref": "#/$defs/RouteConsentSnapshot"
+        },
+        "review": {
+          "type": "object",
+          "properties": {
+            "canonicalInput": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "canonicalInput"
+          ],
+          "additionalProperties": false
         }
       },
       "additionalProperties": false,
@@ -685,11 +857,12 @@
         "observedAt",
         "preferenceRevision",
         "candidates",
-        "noMatch"
+        "noMatch",
+        "features"
       ],
       "properties": {
         "schemaVersion": {
-          "const": 1
+          "const": 2
         },
         "catalogRevision": {
           "type": "string"
@@ -733,6 +906,12 @@
               "additionalProperties": false
             }
           ]
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false
@@ -963,11 +1142,18 @@
         "ingress",
         "verification",
         "limits",
-        "cleanup"
+        "cleanup",
+        "facts",
+        "routeState",
+        "expiresAt",
+        "hostConfiguration",
+        "actions",
+        "operationId",
+        "binding"
       ],
       "properties": {
         "schemaVersion": {
-          "const": 1
+          "const": 2
         },
         "handle": {
           "$ref": "#/$defs/Handle"
@@ -1027,7 +1213,11 @@
             "status",
             "checkedAt",
             "vantage",
-            "checks"
+            "checks",
+            "validUntil",
+            "results",
+            "observedAt",
+            "subject"
           ],
           "properties": {
             "status": {
@@ -1064,6 +1254,85 @@
                   "sse"
                 ]
               }
+            },
+            "validUntil": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": true
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": false
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "results": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "check": {
+                    "enum": [
+                      "tls",
+                      "nonce",
+                      "sse"
+                    ]
+                  },
+                  "status": {
+                    "enum": [
+                      "passed",
+                      "failed",
+                      "unknown"
+                    ]
+                  }
+                },
+                "required": [
+                  "check",
+                  "status"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "subject": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/ProofSubject"
+                }
+              ]
+            },
+            "observedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "additionalProperties": false
@@ -1090,21 +1359,297 @@
         "cleanup": {
           "type": "object",
           "required": [
-            "state"
+            "state",
+            "nextAction"
           ],
           "properties": {
             "state": {
               "type": "string",
               "enum": [
                 "none",
-                "debt"
+                "unconfirmed",
+                "confirmed"
               ]
             },
             "message": {
               "type": "string"
+            },
+            "nextAction": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/Action"
+                }
+              ]
             }
           },
           "additionalProperties": false
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fact"
+          }
+        },
+        "routeState": {
+          "enum": [
+            "detected",
+            "verified",
+            "expired",
+            "cleanup-unconfirmed",
+            "inactive",
+            "unknown"
+          ]
+        },
+        "expiresAt": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "known": {
+                  "const": true
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "known",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "known": {
+                  "const": false
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "known",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "hostConfiguration": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": true
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": false
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "localPort": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": true
+                    },
+                    "value": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": false
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "bindTarget": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": true
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": false
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "origin": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": true
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "known": {
+                      "const": false
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "known",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "target",
+            "localPort",
+            "bindTarget",
+            "origin"
+          ],
+          "additionalProperties": false
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "stop",
+              "edit",
+              "rotate"
+            ]
+          }
+        },
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "consentFactsDigest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "consentChange": {
+          "type": "object",
+          "properties": {
+            "oldDigest": {
+              "type": "string"
+            },
+            "newDigest": {
+              "type": "string"
+            },
+            "nextAction": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/Action"
+                }
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "oldDigest",
+            "newDigest",
+            "nextAction",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        "operationId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
@@ -1113,13 +1658,21 @@
       "type": "object",
       "required": [
         "candidateToken",
-        "disclosureRevision"
+        "disclosureRevision",
+        "kind",
+        "consentFactsDigest"
       ],
       "properties": {
         "candidateToken": {
           "type": "string"
         },
         "disclosureRevision": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "route"
+        },
+        "consentFactsDigest": {
           "type": "string"
         }
       },
@@ -1148,7 +1701,17 @@
         "unsupported",
         "ambiguous_route",
         "busy",
-        "internal_error"
+        "internal_error",
+        "configuration_stale",
+        "configuration_in_use",
+        "secret_in_use",
+        "secret_backend_locked",
+        "secret_backend_unavailable",
+        "host_policy_denied",
+        "artifact_integrity_failed",
+        "configuration_migration_required",
+        "proof_refresh_unsupported",
+        "operation_conflict"
       ]
     },
     "GozarError": {
@@ -1187,6 +1750,9 @@
             }
           },
           "additionalProperties": false
+        },
+        "route": {
+          "$ref": "#/$defs/RouteView"
         }
       },
       "additionalProperties": false
@@ -1229,7 +1795,10 @@
         "schemaVersion",
         "state",
         "nextAction",
-        "catalogRevision"
+        "catalogRevision",
+        "configurationRevision",
+        "scopeId",
+        "configuration"
       ],
       "properties": {
         "schemaVersion": {
@@ -1255,6 +1824,15 @@
         },
         "catalogRevision": {
           "type": "string"
+        },
+        "configurationRevision": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "configuration": {
+          "$ref": "#/$defs/Configuration"
         }
       },
       "additionalProperties": false
@@ -1280,11 +1858,31 @@
           "enum": [
             "snapshot",
             "changed",
-            "terminal"
+            "terminal",
+            "consent_changed"
           ]
         },
         "route": {
           "$ref": "#/$defs/RouteView"
+        },
+        "oldDigest": {
+          "type": "string"
+        },
+        "newDigest": {
+          "type": "string"
+        },
+        "nextAction": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Action"
+            }
+          ]
+        },
+        "reason": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -1701,7 +2299,9 @@
       "required": [
         "home",
         "actionId",
-        "approval"
+        "approval",
+        "providerId",
+        "expectedConfigurationRevision"
       ],
       "properties": {
         "home": {
@@ -1714,13 +2314,21 @@
           "type": "object",
           "required": [
             "digest",
-            "disclosureRevision"
+            "disclosureRevision",
+            "kind",
+            "consentFactsDigest"
           ],
           "properties": {
             "digest": {
               "type": "string"
             },
             "disclosureRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "setup"
+            },
+            "consentFactsDigest": {
               "type": "string"
             }
           },
@@ -1731,8 +2339,1201 @@
         },
         "value": {
           "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "expectedConfigurationRevision": {
+          "type": "string"
+        },
+        "draftId": {
+          "type": "string"
         }
       },
+      "additionalProperties": false
+    },
+    "Fact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "value": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            "known": {
+              "const": true
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "group": {
+              "type": "string"
+            },
+            "affectsConsent": {
+              "type": "boolean"
+            },
+            "source": {
+              "type": "string"
+            },
+            "asOf": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "label",
+            "value",
+            "known",
+            "group",
+            "affectsConsent",
+            "source",
+            "asOf"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "value": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            "known": {
+              "const": false
+            },
+            "reason": {
+              "type": "string"
+            },
+            "group": {
+              "type": "string"
+            },
+            "affectsConsent": {
+              "type": "boolean"
+            },
+            "source": {
+              "type": "string"
+            },
+            "asOf": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "label",
+            "value",
+            "known",
+            "group",
+            "affectsConsent",
+            "source",
+            "asOf",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Availability": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "object",
+          "required": [
+            "state",
+            "reason"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "available",
+                "detect-only",
+                "unsupported"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "attached": {
+          "type": "object",
+          "required": [
+            "state",
+            "reason"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "available",
+                "detect-only",
+                "unsupported"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "durable": {
+          "type": "object",
+          "required": [
+            "state",
+            "reason"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "available",
+                "detect-only",
+                "unsupported"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "Prerequisite": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "present",
+            "missing",
+            "unknown",
+            "denied",
+            "unsupported"
+          ]
+        },
+        "observedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "known": {
+                  "const": true
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "known",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "known": {
+                  "const": false
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "known",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "remedy": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Action"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "known": {
+                  "const": true
+                },
+                "value": {
+                  "type": [
+                    "boolean",
+                    "string"
+                  ]
+                }
+              },
+              "required": [
+                "known",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "known": {
+                  "const": false
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "known",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "state",
+        "observedAt",
+        "version",
+        "remedy"
+      ],
+      "additionalProperties": false
+    },
+    "Configuration": {
+      "type": "object",
+      "properties": {
+        "values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "credentials": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "known",
+                  "value"
+                ],
+                "properties": {
+                  "known": {
+                    "const": true
+                  },
+                  "value": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": [
+                  "known",
+                  "reason"
+                ],
+                "properties": {
+                  "known": {
+                    "const": false
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Action"
+          }
+        },
+        "inputRequirements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRequirement"
+          }
+        },
+        "revision": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "inputRequirements",
+        "values",
+        "credentials",
+        "actions",
+        "revision",
+        "scopeId"
+      ],
+      "additionalProperties": false
+    },
+    "InputRequirement": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "text",
+            "domain",
+            "https-origin"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "obtainUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "validation": {
+          "const": "syntax-only"
+        },
+        "secret": {
+          "type": "boolean"
+        },
+        "help": {
+          "type": "string"
+        },
+        "actionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind",
+        "required",
+        "obtainUrl",
+        "validation",
+        "secret",
+        "help",
+        "actionId"
+      ],
+      "additionalProperties": false
+    },
+    "SetupConsentScope": {
+      "type": "object",
+      "properties": {
+        "registryId": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "configurationRevision": {
+          "type": "string"
+        },
+        "actionId": {
+          "type": "string"
+        },
+        "disclosureRevision": {
+          "type": "string"
+        },
+        "actionDigest": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "setup"
+        },
+        "draftId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "registryId",
+        "scopeId",
+        "providerId",
+        "configurationRevision",
+        "actionId",
+        "disclosureRevision",
+        "actionDigest",
+        "kind",
+        "draftId"
+      ],
+      "additionalProperties": false
+    },
+    "RouteConsentScope": {
+      "type": "object",
+      "properties": {
+        "registryId": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "configurationRevision": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "route"
+        },
+        "query": {
+          "type": "object",
+          "properties": {
+            "usage": {
+              "$ref": "#/$defs/Usage"
+            },
+            "reach": {
+              "type": "string"
+            },
+            "transport": {
+              "type": "string"
+            },
+            "target": {
+              "type": "string"
+            },
+            "expectedOrigin": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "usage",
+            "reach",
+            "transport",
+            "target",
+            "expectedOrigin"
+          ],
+          "additionalProperties": false
+        },
+        "reviewHandle": {
+          "type": "string"
+        },
+        "handleGeneration": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "registryId",
+        "scopeId",
+        "providerId",
+        "configurationRevision",
+        "kind",
+        "query"
+      ],
+      "additionalProperties": false
+    },
+    "ConsentDisclosures": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/ConsentAction"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reach": {
+              "$ref": "#/$defs/Reach"
+            },
+            "transport": {
+              "type": "string",
+              "enum": [
+                "http",
+                "https",
+                "tcp",
+                "tls"
+              ]
+            },
+            "traffic": {
+              "type": "object",
+              "required": [
+                "tlsTermination",
+                "providerCanReadPayload",
+                "readers",
+                "metadataVisibleTo",
+                "evidenceRef"
+              ],
+              "properties": {
+                "tlsTermination": {
+                  "type": "string",
+                  "enum": [
+                    "endpoint",
+                    "provider",
+                    "unknown"
+                  ]
+                },
+                "providerCanReadPayload": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "readers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "metadataVisibleTo": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "evidenceRef": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "address": {
+              "type": "object",
+              "required": [
+                "stability",
+                "scope",
+                "conditions"
+              ],
+              "properties": {
+                "stability": {
+                  "type": "string",
+                  "enum": [
+                    "stable",
+                    "ephemeral",
+                    "unknown"
+                  ]
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "conditions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "ports": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "cost": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "free",
+                    "paid",
+                    "unknown"
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            "lifetimes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "session",
+                  "attached",
+                  "durable"
+                ]
+              }
+            },
+            "supervision": {
+              "type": "string",
+              "enum": [
+                "controller",
+                "provider-persistent",
+                "host-supervised"
+              ]
+            },
+            "protocols": {
+              "type": "object",
+              "required": [
+                "sse",
+                "streamableHttp",
+                "oauthDcr"
+              ],
+              "properties": {
+                "sse": {
+                  "type": "boolean"
+                },
+                "streamableHttp": {
+                  "type": "boolean"
+                },
+                "oauthDcr": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "disclosure": {
+              "$ref": "#/$defs/Disclosure"
+            }
+          },
+          "required": [
+            "reach",
+            "transport",
+            "traffic",
+            "address",
+            "cost",
+            "lifetimes",
+            "supervision",
+            "protocols",
+            "disclosure"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ConsentSnapshot": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SetupConsentSnapshot"
+        },
+        {
+          "$ref": "#/$defs/RouteConsentSnapshot"
+        }
+      ]
+    },
+    "ProofSubject": {
+      "type": "object",
+      "properties": {
+        "origin": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "instanceId": {
+          "type": "string"
+        },
+        "handleGeneration": {
+          "type": "integer"
+        },
+        "bootId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin",
+        "target",
+        "instanceId",
+        "handleGeneration",
+        "bootId"
+      ],
+      "additionalProperties": false
+    },
+    "Binding": {
+      "type": "object",
+      "properties": {
+        "authority": {
+          "enum": [
+            "adapter",
+            "owner",
+            "unknown"
+          ]
+        },
+        "target": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "known": {
+                  "const": true
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "known",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "known": {
+                  "const": false
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "known",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "remedy": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Action"
+            }
+          ]
+        }
+      },
+      "required": [
+        "authority",
+        "target",
+        "remedy"
+      ],
+      "additionalProperties": false
+    },
+    "ConsentAction": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "label",
+        "digest",
+        "disclosure"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "open-url",
+            "instructions",
+            "provide-secret",
+            "provide-value",
+            "gozar-runs",
+            "clear-input",
+            "install-artifact"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "disclosure": {
+          "$ref": "#/$defs/Disclosure"
+        },
+        "href": {
+          "type": "string"
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "secretLabel": {
+          "type": "string"
+        },
+        "valueLabel": {
+          "type": "string"
+        },
+        "valuePlaceholder": {
+          "type": "string"
+        },
+        "valueFormat": {
+          "type": "string",
+          "enum": [
+            "https-origin",
+            "domain",
+            "text"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "obtainUrl": {
+          "type": "string"
+        },
+        "help": {
+          "type": "string"
+        },
+        "inputId": {
+          "type": "string"
+        },
+        "artifact": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "platform": {
+              "type": "string"
+            },
+            "architecture": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "sha256",
+            "platform",
+            "architecture"
+          ],
+          "additionalProperties": false
+        },
+        "effects": {
+          "type": "object",
+          "properties": {
+            "writes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "networkOrigins": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "requiresPrivilege": {
+              "type": "boolean"
+            },
+            "restartRequired": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "writes",
+            "networkOrigins",
+            "requiresPrivilege",
+            "restartRequired"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "SetupConsentSnapshot": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/SetupConsentScope"
+        },
+        "consentFactsDigest": {
+          "type": "string"
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fact"
+          }
+        },
+        "disclosures": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/ConsentAction"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "scope",
+        "consentFactsDigest",
+        "facts",
+        "disclosures"
+      ],
+      "additionalProperties": false
+    },
+    "RouteConsentSnapshot": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/RouteConsentScope"
+        },
+        "consentFactsDigest": {
+          "type": "string"
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fact"
+          }
+        },
+        "disclosures": {
+          "type": "object",
+          "properties": {
+            "reach": {
+              "$ref": "#/$defs/Reach"
+            },
+            "transport": {
+              "type": "string",
+              "enum": [
+                "http",
+                "https",
+                "tcp",
+                "tls"
+              ]
+            },
+            "traffic": {
+              "type": "object",
+              "required": [
+                "tlsTermination",
+                "providerCanReadPayload",
+                "readers",
+                "metadataVisibleTo",
+                "evidenceRef"
+              ],
+              "properties": {
+                "tlsTermination": {
+                  "type": "string",
+                  "enum": [
+                    "endpoint",
+                    "provider",
+                    "unknown"
+                  ]
+                },
+                "providerCanReadPayload": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "readers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "metadataVisibleTo": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "evidenceRef": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "address": {
+              "type": "object",
+              "required": [
+                "stability",
+                "scope",
+                "conditions"
+              ],
+              "properties": {
+                "stability": {
+                  "type": "string",
+                  "enum": [
+                    "stable",
+                    "ephemeral",
+                    "unknown"
+                  ]
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "conditions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "ports": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "cost": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "free",
+                    "paid",
+                    "unknown"
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            "lifetimes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "session",
+                  "attached",
+                  "durable"
+                ]
+              }
+            },
+            "supervision": {
+              "type": "string",
+              "enum": [
+                "controller",
+                "provider-persistent",
+                "host-supervised"
+              ]
+            },
+            "protocols": {
+              "type": "object",
+              "required": [
+                "sse",
+                "streamableHttp",
+                "oauthDcr"
+              ],
+              "properties": {
+                "sse": {
+                  "type": "boolean"
+                },
+                "streamableHttp": {
+                  "type": "boolean"
+                },
+                "oauthDcr": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "disclosure": {
+              "$ref": "#/$defs/Disclosure"
+            }
+          },
+          "required": [
+            "reach",
+            "transport",
+            "traffic",
+            "address",
+            "cost",
+            "lifetimes",
+            "supervision",
+            "protocols",
+            "disclosure"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "scope",
+        "consentFactsDigest",
+        "facts",
+        "disclosures"
+      ],
       "additionalProperties": false
     }
   }

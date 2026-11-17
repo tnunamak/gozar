@@ -3,14 +3,20 @@
 // Inspection is read-only: it calls detect, properties, setupActions, plan and observe, nothing else.
 import { createHash } from 'node:crypto';
 import { canonicalHome } from './service-state.mjs';
-import { gozarError, normalizeError } from './error-normalizer.mjs';
+import { gozarError, normalizeError, instructionAction } from './error-normalizer.mjs';
 import { supportedPlatform } from './platform.mjs';
+import { availabilityFor, prerequisitesFor, configurationFor, features } from './embedding-state.mjs';
+import { readConfiguration } from './adapter-configuration.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { loopbackTarget } from './durable-route.mjs';
 import { checksFor, completeProperties, needsFor } from './route-view.mjs';
-import { adoptDisclosureRevision } from './adopt-disclosure.mjs';
+import { adoptDisclosureRevision, consentDisclosureRevision } from './adopt-disclosure.mjs';
+import { routeConsentReview, setupConsentReview,consentSnapshot } from './consent-facts.mjs';
+import {catalogFactsFor} from './catalog-facts.mjs';
+import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
 
 export { adoptDisclosureRevision } from './adopt-disclosure.mjs';
+export { consentDisclosureRevision } from './adopt-disclosure.mjs';
 
 const sha = text => createHash('sha256').update(text).digest('hex');
 /** Stable opaque handles for an adapter; apps store the preferenceRef and show the label. */
@@ -33,7 +39,7 @@ export function validateQuery(query) {
   if (usage.kind === 'durable' && !text(usage.routeId)) bad('a durable usage needs routeId');
   if (usage.kind === 'session' && !(Number.isInteger(usage.lifetimeMs) && usage.lifetimeMs > 0)) bad('a session usage needs lifetimeMs');
   const r = query.requirements;
-  if (!REACH.includes(r?.reach) || !['https', 'any'].includes(r.transport) || !['endpoint-only', 'allow-provider'].includes(r.payloadAccess) ||
+  if (!REACH.includes(r?.reach) || !['https', 'tcp', 'tls', 'any'].includes(r.transport) || !['endpoint-only', 'allow-provider'].includes(r.payloadAccess) ||
       !['stable', 'any'].includes(r.address) || !['none', 'allow'].includes(r.setup) || !Array.isArray(r.protocols) ||
       r.protocols.some(item => !(item in PROTOCOL_KEY))) bad('requirements are incomplete or not in the closed vocabulary');
   if (r.transport === 'any' && !['lan', 'this-device'].includes(r.reach)) bad("transport 'any' is valid only with reach 'lan' or 'this-device'");
@@ -67,8 +73,10 @@ export async function defaultReadContext() {
  * The read context for one call: an injected or default base, with the caller's canonical state home and the
  * injected host platform stamped on it (amendment 1). Adapters never read process.platform themselves.
  */
-export async function readContextFor(deps, home, platform) {
-  return { ...(deps.readContext ?? await defaultReadContext()), home, platform };
+export async function readContextFor(deps, home, platform, owner = deps.owner) {
+  return { ...(deps.readContext ?? await defaultReadContext()), home, platform,
+    ...(deps.embeddingServices ? {providerConfiguration: providerId => deps.embeddingServices.resolveConfiguration({home,owner,providerId})} : {}),
+    ...(deps.dispatchEffect ? {dispatchEffect: deps.dispatchEffect,probe:async recipe=>(await loadRuntime()).probeWithEffects(recipe,deps.dispatchEffect)} : {}) };
 }
 
 /** `providerId` picks exactly one adapter by the id its definition declares; an unknown id lists every id on offer, in registry order. */
@@ -79,6 +87,28 @@ export function selectAdapters(adapters, providerId) {
   return chosen;
 }
 
+
+// Closed diagnostic vocabulary: never echo provider messages, raw codes or actions.
+function catalogFailure(error, phase = 'detect') {
+  const rows = {
+    secret_backend_locked: ['secret_backend_locked', 'unknown', 'Unlock the configured secret backend'],
+    secret_backend_unavailable: ['secret_backend_unavailable', 'unknown', 'Restore the configured secret backend'],
+    ENOENT: ['software_missing', 'missing', 'Install the software declared by this adapter'],
+    host_policy_denied: ['host_policy_denied', 'denied', 'Review the host policy for this adapter'],
+    provider_unavailable: ['provider_unavailable', 'unknown', 'Retry the read-only provider observation'],
+    setup_required: ['setup_required', 'missing', 'Complete the declared provider setup'],
+    unsupported: [phase === 'plan' ? 'usage_unsupported' : 'read_operation_unsupported', 'unsupported',
+      phase === 'plan' ? 'Choose a supported usage' : 'Supply the declared read-only operation capability']
+  };
+  const [reason, state, label] = Object.hasOwn(rows, error?.code) ? rows[error.code]
+    : ['observation_unavailable', 'unknown', 'Retry the read-only provider observation'];
+  return {reason, state, observation: {known: false, reason},
+    remedy: instructionAction('catalog-' + reason, label, label + '. Gozar changes nothing.')};
+}
+const failureFacts = failure => failure ? [{id: 'catalog-observation', label: 'Route availability observation',
+  known: false, reason: failure.reason, value: null, group: 'availability', affectsConsent: true,
+  source: 'catalog', asOf: null}] : [];
+
 // --- One adapter, observed ----------------------------------------------------------------------
 
 /**
@@ -88,19 +118,31 @@ export function selectAdapters(adapters, providerId) {
 export async function inspectAdapter(adapter, context, platform) {
   const base = { adapter, properties: adapter.definition.capabilities, actions: [] };
   if (!supportedPlatform(platform)) return { ...base, state: 'unsupported', facts: null, probed: false };
-  let detected;
-  try { detected = await adapter.detect(bindConfiguration(context, adapter.id)); }
-  catch { return { ...base, state: 'unknown', facts: null, probed: true }; }
-  const state = ['ready', 'action-required', 'unsupported', 'unknown'].includes(detected?.state) ? detected.state : 'unknown';
+  let detected, failure = null;
+  const observedContext = {...context};
+  for (const name of ['probe', 'dispatchEffect']) if (typeof context[name] === 'function') {
+    observedContext[name] = async (...args) => {
+      try { return await context[name](...args); }
+      catch (error) { failure ??= catalogFailure(error); throw error; }
+    };
+  }
+  try { detected = await adapter.detect(bindConfiguration(observedContext, adapter.id)); }
+  catch (error) { return { ...base, state: 'unknown', facts: null, probed: true, failure: failure ?? catalogFailure(error) }; }
+  const state = failure ? 'unknown' : ['ready', 'action-required', 'unsupported', 'unknown'].includes(detected?.state) ? detected.state : 'unknown';
+  if (state === 'unknown') failure ??= catalogFailure(null);
   let properties = base.properties, actions = [];
   try { properties = adapter.properties(detected.facts); } catch { /* keep the declared capabilities */ }
-  if (state === 'action-required') { try { actions = adapter.setupActions(detected.facts); } catch { /* no usable actions */ } }
-  return { ...base, state, facts: detected.facts, properties, actions, probed: true };
+  if (state !== 'unsupported') { try { actions = adapter.configurationActions ? adapter.configurationActions() : adapter.setupActions({ ...detected.facts, setupNeeded: true }); } catch { /* no usable actions */ } }
+  let missingActions = [];
+  try { missingActions = adapter.setupActions(detected.facts); } catch {}
+  actions=[...new Map([...actions,...missingActions].map(action=>[action.id,action])).values()];
+  return { ...base, state, facts: detected.facts, properties, actions, missingActions, probed: true, failure };
 }
 
 /** One revision for the provider-side state: it changes when a setup state, an action or a property changes. */
 export function catalogRevisionOf(inspections, platform) {
   const view = inspections.map(item => ({ id: item.adapter.id, state: item.state, properties: item.properties,
+    facts: [...catalogFactsFor(item), ...failureFacts(item.failure)], availability: availabilityFor(item.adapter.definition),
     actions: item.actions.map(action => [action.id, action.digest, action.disclosure.revision]), disclosure: item.adapter.definition.disclosure.revision }));
   return `catrev_${sha(JSON.stringify([platform, view])).slice(0, 32)}`;
 }
@@ -142,7 +184,7 @@ async function collect(query, deps) {
   const consentBinding = deps.consentBinding ?? (await import('./consent-token.mjs')).consentBinding;
   const home = await canonicalHome(query.home, true);
   // The origin the app named is part of what an adapter reads: an owner-run address is judged by it.
-  const context = { ...await readContextFor(deps, home, platform), origin: query.origin ?? null };
+  const context = { ...await readContextFor(deps, home, platform, query.owner), origin: query.origin ?? null };
   // An unknown named route is an error before any provider is asked.
   if (query.route !== undefined && supportedPlatform(platform)) await context.configuration(query.route);
   const inspections = await Promise.all(selectAdapters(adapters, query.providerId).map(adapter => inspectAdapter(adapter, context, platform)));
@@ -154,7 +196,10 @@ async function collect(query, deps) {
     // so the stream check appears only when the request needs SSE.
     const declared = completeProperties(inspection.properties, definition, query.usage.kind);
     const properties = { ...declared, proof: { ...declared.proof, checks: checksFor(declared.proof.checks, { sse: query.requirements.protocols.includes('sse') }) } };
-    let setupState = state, grant = null;
+    const hostPrerequisites=capabilityPrerequisites(definition,query.hostCapabilities??deps.hostCapabilities??{});
+    const unavailableHost=hostPrerequisites.find(item=>item.state!=='present');
+    let setupState = unavailableHost?'unsupported':state, grant = null;
+    let failure = inspection.failure;
     const unmet = [];
     if (supportedPlatform(platform)) {
       unmet.push(...unmetRequirements({ requirements: query.requirements, usage: query.usage, definition, properties, setupState }));
@@ -176,29 +221,59 @@ async function collect(query, deps) {
             const own = bindConfiguration(context, adapter.id);
             const plan = await adapter.plan(own, request);
             const observed = await adapter.observe(own, request);
-            grant = { adapterId: adapter.id, planDigest: plan.digest, observedResource: observed.resourceKey };
+            grant = { adapterId: adapter.id, planDigest: plan.digest, observedResource: observed.resourceKey,...(plan.origin?{origin:plan.origin}:{}) };
           }
         } catch (error) {
           // No durable recipe or no plan: not usable for this usage. A failing provider read leaves the state unknown.
           if (normalizeError(error).code === 'unsupported') unmet.push({ requirement: 'usage', actual: query.usage.kind, reasonCode: 'not_met' });
           else { setupState = 'unknown'; unmet.push({ requirement: 'setup', actual: 'unknown', reasonCode: 'unknown' }); }
+          failure = catalogFailure(error, 'plan');
         }
       }
     } else unmet.push({ requirement: 'platform', actual: platform, reasonCode: 'unsupported_platform' });
 
-    const eligible = unmet.length === 0;
+    if (failure) {
+      const setup = unmet.find(item => item.requirement === 'setup');
+      if (setup) setup.actual = {known: false, reason: failure.reason};
+      inspection.failure = failure;
+    }
+    const availability = availabilityFor(definition);
+    if(unavailableHost)for(const kind of Object.keys(availability))if(availability[kind].state==='available')availability[kind]={state:'unsupported',reason:`host-capability-${unavailableHost.state}`};
+    if (supportedPlatform(platform) && availability[query.usage.kind].state === 'detect-only') setupState = 'detect-only';
+    const eligible = unmet.length === 0 && availability[query.usage.kind].state === 'available';
+    const observedAt = new Date(context.now()).toISOString();
+    const saved = deps.embeddingServices ? await deps.embeddingServices.readConfiguration({home,owner:query.owner,providerId:adapter.id,draftId:query.draftId}) : await readConfiguration({ home, adapterId: adapter.id });
+    const offered = [...new Map([...actions, ...(inspection.missingActions ?? [])].map(action => [action.id, action])).values()];
+    const decorate = action => {
+      if (!deps.registryId || !saved.revision) return action;
+      const review = setupConsentReview({registryId:deps.registryId,providerId:adapter.id,configuration:saved,draftId:query.draftId??null,action,facts:catalogFactsFor(inspection)});
+      return {...action,consent:consentSnapshot(review),review:{canonicalInput:review.canonicalInput}};
+    };
+    const decorated = offered.map(decorate);
+    const configuration = configurationFor(decorated, saved,definition.inputRequirements);
     const candidate = { providerId: adapter.id, name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
       display: { label: definition.label, description: describe(definition, properties), needs: needsFor(definition, query.usage.kind) }, properties,
-      setup: { state: setupState, actions: setupState === 'action-required' ? actions : [] }, disclosure: definition.disclosure,
+      availability, prerequisites: [...prerequisitesFor(inspection, observedAt),...hostPrerequisites,
+        ...(failure ? [{id: 'catalog-observation', label: 'Route availability observation', state: failure.state,
+          observation: failure.observation, observedAt, version: {known: false, reason: 'not_observed'}, remedy: failure.remedy}] : [])],
+      configuration, facts: [...catalogFactsFor(inspection), ...failureFacts(failure)],
+      setup: { state: setupState, actions: setupState === 'action-required' ? (inspection.missingActions ?? actions).map(decorate) : [] }, disclosure: { ...definition.disclosure, revision: consentDisclosureRevision(definition) },
       candidateToken: null, expiresAt: null };
     if (query.usage.kind === 'durable' && query.intent === 'adopt') {
       const takeover = 'Gozar takes over the existing rule and removes it when the route is released or stopped.';
       candidate.display.description += ` ${takeover}`;
-      candidate.disclosure = { ...definition.disclosure, revision: adoptDisclosureRevision(definition),
+      candidate.disclosure = { ...definition.disclosure, revision: consentDisclosureRevision(definition, 'adopt'),
         text: `${definition.disclosure.text} ${takeover}` };
     }
+    if (deps.registryId && saved.revision) {
+      const review=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration:saved,target:query.target,origin:query.origin,properties,disclosure:candidate.disclosure,facts:candidate.facts});
+      candidate.consentFactsDigest=review.consentFactsDigest;
+      candidate.consent=consentSnapshot(review);
+      candidate.review={canonicalInput:review.canonicalInput};
+      if(grant)grant={...grant,consentFactsDigest:review.consentFactsDigest,configurationRevision:saved.revision,scopeId:saved.scopeId};
+    }
     if (eligible && setupState === 'ready' && grant) {
-      const issued = await issue({ home, binding: consentBinding(query, home, candidate.disclosure.revision), grant });
+      const issued = await issue({ home, binding: consentBinding(query, home, candidate.disclosure.revision,candidate.consentFactsDigest), grant });
       candidate.candidateToken = issued.token; candidate.expiresAt = issued.expiresAt;
     }
     return candidate;
@@ -237,7 +312,7 @@ export async function catalogRoutes(query, deps = {}) {
     const adapters = deps.adapters ?? await runtime.loadAdapters();
     const { candidates, inspections } = await collect(query, { ...deps, adapters, platform, issue, durablePlanFacts, preferences: preferenceRecord.adapterPreference });
     const unmetNames = [...new Set(candidates.flatMap(candidate => candidate.unmet.map(item => item.requirement)))].sort();
-    return { schemaVersion: 1, catalogRevision: catalogRevisionOf(inspections, platform), observedAt: new Date((deps.now ?? Date.now)()).toISOString(),
+    return { schemaVersion: 2, features: [...features], catalogRevision: catalogRevisionOf(inspections, platform), observedAt: new Date((deps.now ?? Date.now)()).toISOString(),
       preferenceRevision: preferenceRecord.revision, candidates,
       noMatch: candidates.some(candidate => candidate.eligible) ? null : { code: 'requirements_unsatisfied', requirements: unmetNames } };
   } catch (error) { throw normalizeError(error); }

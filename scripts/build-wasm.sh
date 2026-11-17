@@ -24,4 +24,4 @@ nice -n 19 ${ionice[@]+"${ionice[@]}"} cargo build -p gozar-core --lib --release
 nice -n 19 ${ionice[@]+"${ionice[@]}"} "$wasm_bindgen_cli" "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/gozar_core.wasm" --target nodejs --out-dir packages/gozar-core/generated
 
 # wasm-bindgen's Node target is CommonJS even when the workspace uses ESM.
-printf '{"type":"commonjs"}\n' > packages/gozar-core/generated/package.json
+printf '{"type":"commonjs","license":"Apache-2.0"}\n' > packages/gozar-core/generated/package.json

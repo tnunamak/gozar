@@ -255,10 +255,22 @@ test('initial create URL is handled by the core result and never re-emitted as a
     timeoutMs: 1000, maxOutputBytes: 4096, longRunning: true, collectMs: 30 };
   const { driver } = await fixture(t, { create: recipe });
   const lines = [];
-  driver.onProcessOutput = event => { if (event.completeLine !== undefined) lines.push(event.completeLine); };
-  await persist(driver);
-  const result = await driver.execute(effect(recipe, 'create'));
-  assert.equal(result.ok, true);
-  await new Promise(resolve => setTimeout(resolve, 180));
-  assert.deepEqual(lines, ['https://b.lhr.life']);
+  let timeout;
+  const laterRoute = new Promise((resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error('Timed out waiting for the later route output')), 2000);
+    driver.onProcessOutput = event => {
+      if (event.completeLine === undefined) return;
+      lines.push(event.completeLine);
+      if (event.completeLine === 'https://b.lhr.life') resolve();
+    };
+  });
+  try {
+    await persist(driver);
+    const result = await driver.execute(effect(recipe, 'create'));
+    assert.equal(result.ok, true);
+    await laterRoute;
+    assert.deepEqual(lines, ['https://b.lhr.life']);
+  } finally {
+    clearTimeout(timeout);
+  }
 });

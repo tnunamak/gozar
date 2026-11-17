@@ -6,6 +6,7 @@ import http from 'node:http';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { createNgrokAdapter } from '../../adapters/providers/ngrok-https-edge/index.mjs';
 import { runAttachedController, controlAttached } from '../../packages/gozar-node/attached-route.mjs';
 import { createAttachedEffectContext } from '../../packages/gozar-node/adapter-runtime.mjs';
@@ -60,7 +61,9 @@ async function world(t, { buffer }) {
   const directory = join(dir, 'att_0123456789abcdef');
   const { mkdir } = await import('node:fs/promises');
   await mkdir(directory, { mode: 0o700 });
-  await writeFile(join(directory, 'bootstrap.json'), JSON.stringify({ schemaVersion: 1, id: 'att_0123456789abcdef', home: dir, platform: 'linux', adapterId: adapter.id, request, plan, leaseExpiryMs: 60_000 }));
+  await writeFile(join(directory, 'bootstrap.json'), JSON.stringify({ schemaVersion: 1, id: 'att_0123456789abcdef', home: dir, platform: 'linux', adapterId: adapter.id, request, plan, leaseExpiryMs: 60_000,
+    // 0.4 binds a verified route to the registered controller instance; a production controller gets this from the host resolver.
+    identity: { instanceId: randomUUID(), bootId: randomUUID() } }));
   // The public origin is mapped to the edge the SDK opened.
   const fetchThroughEdge = (url, init) => {
     const target = new URL(url);
@@ -95,4 +98,68 @@ test('red: a stub SDK whose stream buffers makes the route fail to publish, and 
   assert.equal(failure.code, 'verification_failed');
   assert.equal(sdk.opened.length, 1, 'the SDK listener was opened');
   assert.equal(sdk.open().length, 0, 'and withdrawn');
+});
+
+test('ngrok edge metadata distinguishes domain choices and conditional app OAuth from transport proof', async () => {
+  const {adapter, evidence} = JSON.parse(await readFile(new URL('../../adapters/providers/ngrok-https-edge/definition.json', import.meta.url), 'utf8'));
+  const fact = id => adapter.facts.find(item => item.id === id);
+  assert.equal(adapter.prerequisites.find(item => item.id === 'domain').label, 'Assigned development or reserved domain');
+  for (const text of [adapter.capabilities.cost.summary, fact('cost-detail').value,
+    adapter.capabilities.address.conditions[0], fact('address-condition-0').value]) {
+    assert.match(text, /Free/);
+    assert.match(text, /assigned development domain/);
+    assert.match(text, /reserved ngrok-branded/i);
+    assert.match(text, /bring-your-own/);
+    assert.doesNotMatch(text, /\$\d|Pay-as-you-go \(/);
+  }
+  assert.equal(adapter.capabilities.cost.kind, 'unknown');
+  assert.equal(adapter.capabilities.cost.amount, null);
+  assert.deepEqual(adapter.capabilities.proof, {vantage:'public', checks:['tls','nonce','sse']});
+  assert.equal(adapter.capabilities.protocols.oauthDcr, true);
+  assert.match(evidence.protocols.oauthDcr, /configured app/);
+  assert.match(evidence.protocols.oauthDcr, /client registration/);
+  assert.match(evidence.protocols.oauthDcr, /authorization/);
+  assert.match(evidence.protocols.oauthDcr, /does not prove/);
+  for (const source of [adapter.capabilities.traffic.evidenceRef, fact('payload-readers').source]) {
+    assert.match(source, /adapter architecture/);
+    assert.match(source, /terminates TLS/);
+    assert.match(source, /HTTP/);
+    assert.doesNotMatch(source, /ngrok\.com\/(?:pricing|tos|privacy)/);
+  }
+  assert.equal(adapter.disclosure.revision, 'disc-da9c3b77b850');
+  assert.equal(adapter.disclosure.text, 'Serve this app through an ngrok HTTPS listener on your assigned development or permitted reserved domain while the app runs. The ngrok edge terminates TLS and can read payloads. Credential custody stays with the configured host backend.');
+  for (const id of ['entitlement','quota','mapping','remote-termination','remote-logging','account-authorization']) {
+    assert.equal(fact(id).known, false, id);
+    assert.equal(fact(id).value, null, id);
+    assert.equal(fact(id).reason, 'needs-provider-call', id);
+  }
+});
+
+test('ngrok domain setup help is specific and remains part of its action digest', async () => {
+  const source = await readFile(new URL('../../adapters/providers/ngrok-https-edge/index.mjs', import.meta.url), 'utf8');
+  const domainAction = source.slice(source.indexOf('const domainAction ='), source.indexOf('const installAction ='));
+  assert.match(domainAction, /assigned development domain/);
+  assert.match(domainAction, /Free/);
+  assert.match(domainAction, /reserved ngrok-branded/);
+  assert.match(domainAction, /bring-your-own/);
+  assert.doesNotMatch(domainAction, /reserved\/custom/);
+  assert.match(domainAction, /digest: sha\(body\)/);
+  assert.match(domainAction, /disclosure: definition\.disclosure/);
+});
+
+test('generated ngrok provider row exactly matches the scoped generator format', async () => {
+  const {adapter} = JSON.parse(await readFile(new URL('../../adapters/providers/ngrok-https-edge/definition.json', import.meta.url), 'utf8'));
+  const document = await readFile(new URL('../../docs/providers.md', import.meta.url), 'utf8');
+  const c = adapter.capabilities;
+  const cell = value => String(value).replaceAll('|', '\\|').replaceAll('\n', ' ');
+  const flag = value => value ? 'yes' : 'no';
+  const list = value => value?.length ? value.join(', ') : 'provider assigns';
+  const byKind = (field, shown) => Object.entries(adapter.byUsage ?? {}).filter(([, facts]) => Object.hasOwn(facts, field)).map(([kind, facts]) => kind + ': ' + shown(facts[field]));
+  const ports = [list(c.address.ports), ...byKind('ports', list)].join('; ');
+  const needs = [adapter.needs ?? '', ...byKind('needs', String)].join(' ');
+  const proof = c.proof ? c.proof.vantage + ': ' + (c.proof.checks.join(', ') || 'no checks') : 'none';
+  const payload = c.traffic.providerCanReadPayload === null ? 'unknown' : c.traffic.providerCanReadPayload ? 'provider can read' : 'endpoint only';
+  const expected = '| '+String.fromCharCode(96)+adapter.id+String.fromCharCode(96)+' | '+cell(adapter.label)+' | '+cell(needs)+' | '+(adapter.supportedKinds.join(', ') || 'none yet')+' | '+c.reach+' | '+c.address.stability+' | '+ports+' | '+proof+' | '+payload+' | '+flag(c.protocols.sse)+' / '+flag(c.protocols.streamableHttp)+' / '+flag(c.protocols.oauthDcr)+' | '+cell(c.cost.summary)+' |';
+  const rows = document.split('\n').filter(line => line.startsWith('| '+String.fromCharCode(96)+'ngrok-https-edge'+String.fromCharCode(96)+' |'));
+  assert.deepEqual(rows, [expected]);
 });

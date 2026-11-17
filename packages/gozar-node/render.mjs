@@ -1,6 +1,7 @@
+import { cleanupForSession } from './embedding-state.mjs';
 import { cliCommand } from './cli-command.mjs';
 import { safeOrigin } from './catalog.mjs';
-import { ways, trafficFacts } from './expose-copy.mjs';
+import { ways, trafficFacts, decisionFacts } from './expose-copy.mjs';
 import { plainCaveat, reachWords } from './plain-copy.mjs';
 
 export function installLink(template, endpoint) {
@@ -137,9 +138,9 @@ export function render(reply, adapters, options = {}) {
   const retryClean = `After fixing the cause, retry: ${expose}`;
   const cleanupWarning = 'Public access or a background process may remain. Cleanup is not confirmed.';
   const cleanupDone = "Cleanup confirmed: nothing Gozar created is still published. Your server's settings were not changed.";
-  const cleanupConfirmed = snapshot.phase === 'stopped' && Array.isArray(reply.localCleanupFailures) && !reply.localCleanupFailures.length &&
-    (snapshot.resources ?? []).every(resource => resource.ownership !== 'owned' || resource.cleanup === 'removed');
-  const cleanupPending = ['cleanup-pending', 'stopping'].includes(snapshot.phase) || Boolean(reply.localCleanupFailures?.length);
+  const cleanup = reply.cleanup ?? cleanupForSession(reply);
+  const cleanupConfirmed = cleanup.state === 'confirmed';
+  const cleanupPending = cleanup.state === 'unconfirmed' && snapshot.phase !== 'stopped';
   const lines = [];
   if (cleanupPending) {
     if (failure) lines.push(`✗ ${failureText}`);
@@ -157,6 +158,7 @@ export function render(reply, adapters, options = {}) {
       `  Address  ${selected?.endpoint ?? addressLine(ways[selected?.id]?.address)}`,
       `  Lasts    ${lifetime(reply, selected, port, options)}${selected?.planVersion === 1 ? '; the stop command below ends it sooner' : ''}`);
     if (trafficFacts[selected?.id] && !alternatives) lines.push(trafficFacts[selected.id]);
+    for (const fact of decisionFacts[selected?.id] ?? []) if (fact.affectsConsent && fact.id !== 'payload-readers') lines.push(`${fact.label}: ${fact.known ? fact.value : `unknown (${fact.reason})`}`);
     const ownership = plainCaveat(selected?.copy?.consent).plain;
     if (ownership) lines.push(ownership);
     lines.push(`Stop: ${cliCommand('stop', port)}`);
@@ -207,6 +209,7 @@ export function render(reply, adapters, options = {}) {
     // The old stopped screen omitted limitations; retain them in the detail view too.
     if (snapshot.phase === 'stopped') lines.push(...(snapshot.limitations ?? []));
   }
+  if (verbose) for (const fact of decisionFacts[selected?.id] ?? []) if (!fact.affectsConsent) lines.push(`${fact.label}: ${fact.known ? fact.value : `unknown (${fact.reason})`}`);
   return lines.join('\n');
 }
 

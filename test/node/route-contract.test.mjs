@@ -51,8 +51,10 @@ function validate(schema, value, defs, path = '$') {
         if (kinds.object(value)) for (const [name, sub] of Object.entries(schema.properties)) if (name in value) errors.push(...validate(sub, value[name], defs, `${path}.${name}`));
         break;
       case 'additionalProperties':
-        if (schema.additionalProperties !== false) throw new Error('Only additionalProperties:false is supported');
-        if (kinds.object(value)) for (const name of Object.keys(value)) if (!(name in (schema.properties ?? {}))) errors.push(`${path}: unknown property ${name}`);
+        if (kinds.object(value)) for (const name of Object.keys(value)) if (!(name in (schema.properties ?? {}))) {
+          if (schema.additionalProperties === false) errors.push(`${path}: unknown property ${name}`);
+          else errors.push(...validate(schema.additionalProperties, value[name], defs, `${path}.${name}`));
+        }
         break;
       case 'items': if (Array.isArray(value)) value.forEach((item, i) => errors.push(...validate(schema.items, item, defs, `${path}[${i}]`))); break;
       case 'oneOf': {
@@ -73,7 +75,7 @@ const check = (schemaName, shape, value) => {
 };
 
 const consumerShapes = ['Reach', 'Usage', 'Requirements', 'Query', 'Disclosure', 'Action', 'Properties', 'Candidate', 'Catalog', 'Handle', 'Ingress', 'RouteView', 'Approval',
-  'GozarError', 'ErrorCode', 'PreferenceRecord', 'SetupActionResult', 'WatchEvent', 'InspectLegacyRouteResult', 'ResolveClientAddressResult'];
+  'GozarError', 'ErrorCode', 'PreferenceRecord', 'SetupActionResult', 'WatchEvent', 'InspectLegacyRouteResult', 'ResolveClientAddressResult', 'Binding', 'Availability', 'Prerequisite', 'Fact'];
 
 test('both schemas parse, use only supported keywords and resolve every $ref', () => {
   for (const [name, schema] of Object.entries(schemas)) {
@@ -82,9 +84,9 @@ test('both schemas parse, use only supported keywords and resolve every $ref', (
   }
 });
 
-test('schemaVersion is const 1 wherever a shape carries it', () => {
+test('request and response schema versions are explicit', () => {
   for (const shape of ['Query', 'Catalog', 'RouteView', 'GozarError', 'PreferenceRecord', 'SetupActionResult', 'WatchEvent', 'InspectLegacyRouteResult']) {
-    assert.deepEqual(catalogSchema.$defs[shape].properties.schemaVersion, { const: 1 }, shape);
+    assert.deepEqual(catalogSchema.$defs[shape].properties.schemaVersion, { const: ['Catalog','RouteView'].includes(shape) ? 2 : 1 }, shape);
   }
   assert.deepEqual(adapterSchema.$defs.AdapterDefinition.properties.schemaVersion, { const: 1 });
 });
@@ -99,14 +101,14 @@ test('adapter.schema.json shares Properties, Reach and Disclosure with the catal
 
 test('closed shapes reject unknown properties', () => {
   for (const [name, schema] of Object.entries(schemas)) {
-    for (const [shape, def] of Object.entries(schema.$defs)) if (def.type === 'object') assert.equal(def.additionalProperties, false, `${name}.${shape}`);
+    for (const [shape, def] of Object.entries(schema.$defs)) if (def.type === 'object' && !['Configuration'].includes(shape)) assert.equal(def.additionalProperties, false, `${name}.${shape}`);
   }
 });
 
 test('every consumer shape has at least one valid fixture, and every valid fixture passes', () => {
   const covered = new Set(fixtures.valid.map(item => item.shape));
   for (const shape of [...consumerShapes, 'AdapterDefinition', 'ProviderEntry', 'AdapterPlan', 'AdapterEffectError']) assert.ok(covered.has(shape), `no valid fixture for ${shape}`);
-  for (const item of fixtures.valid) assert.deepEqual(check(item.schema, item.shape, item.value), [], `${item.shape}: ${item.name}`);
+  assert.deepEqual(fixtures.valid.flatMap(item=>check(item.schema,item.shape,item.value).map(error=>`${item.shape}: ${item.name}: ${error}`)),[]);
 });
 
 test('valid catalog fixtures cover eligible, ineligible, macOS-unsupported, setup-required and unknown-privacy candidates', () => {
@@ -133,7 +135,7 @@ test('the required invalid cases are present', () => {
 
 test('every errorNormalization target is in the frozen union, which equals the schema enum', () => {
   assert.deepEqual([...fixtures.frozenErrorCodes].sort(), [...catalogSchema.$defs.ErrorCode.enum].sort());
-  assert.equal(fixtures.frozenErrorCodes.length, 21);
+  assert.equal(fixtures.frozenErrorCodes.length, 31);
   for (const [code, entry] of Object.entries(fixtures.errorNormalization)) assert.ok(fixtures.frozenErrorCodes.includes(entry.target), `${code} -> ${entry.target}`);
 });
 
@@ -213,4 +215,56 @@ test('no fixture holds a real-looking secret or private name', async () => {
   const text = await readFile(join(root, 'test/fixtures/route-contract.json'), 'utf8');
   for (const token of text.matchAll(/"(tok_[A-Za-z0-9_]+)"/g)) assert.match(token[1], /^tok_synthetic_/);
   assert.doesNotMatch(text, /\/home\/|\/Users\//);
+});
+
+test('unknown Catalog and RouteView versions fail only the version invariant', () => {
+  for (const shape of ['Catalog', 'RouteView']) {
+    const current = fixtures.valid.find(item => item.schema === 'route-catalog' && item.shape === shape);
+    const unknown = fixtures.invalid.find(item => item.shape === shape && item.name === 'unknown schemaVersion');
+    assert.ok(current && unknown, shape);
+    assert.equal(current.value.schemaVersion, 2);
+    assert.deepEqual(check('route-catalog', shape, current.value), []);
+    assert.equal(unknown.value.schemaVersion, 999);
+    assert.deepEqual({ ...unknown.value, schemaVersion: 2 }, current.value, 'only version may differ');
+    assert.deepEqual(check('route-catalog', shape, unknown.value), ['$.schemaVersion: expected const 2']);
+    assert.match(unknown.why, /constant 2/);
+  }
+});
+
+test('direct observation fixtures cover detect-only, consent change and known binding authorities', () => {
+  const values = shape => fixtures.valid.filter(item => item.schema === 'route-catalog' && item.shape === shape).map(item => item.value);
+  const detectOnly = values('Candidate').find(value => value.setup.state === 'detect-only');
+  assert.ok(detectOnly);
+  assert.equal(detectOnly.candidateToken, null);
+  assert.equal(detectOnly.eligible, false);
+  assert.ok(Object.values(detectOnly.availability).some(value => value.state === 'detect-only'));
+  const changed = values('WatchEvent').find(value => value.type === 'consent_changed');
+  assert.ok(changed);
+  assert.notEqual(changed.oldDigest, changed.newDigest);
+  assert.deepEqual(check('route-catalog', 'Action', changed.nextAction), []);
+  for (const authority of ['adapter', 'owner']) {
+    const binding = values('Binding').find(value => value.authority === authority);
+    assert.ok(binding, authority);
+    assert.equal(binding.target.known, true);
+    assert.ok(binding.target.value);
+    assert.notEqual(binding.remedy, null);
+    assert.deepEqual(check('route-catalog', 'Action', binding.remedy), []);
+  }
+  for (const state of ['available', 'detect-only', 'unsupported'])
+    assert.ok(values('Availability').some(value => Object.values(value).some(entry => entry.state === state)), state);
+  for (const known of [true, false]) {
+    assert.ok(values('Prerequisite').some(value => value.observation.known === known));
+    assert.ok(values('Fact').some(value => value.known === known));
+  }
+  for (const transport of ['https', 'tcp', 'tls', 'any'])
+    assert.ok(values('Requirements').some(value => value.transport === transport), transport);
+});
+
+test('new direct observation shapes remain closed to unknown fields', () => {
+  for (const shape of ['Binding', 'Availability', 'Prerequisite', 'Fact']) {
+    const item = fixtures.valid.find(item => item.schema === 'route-catalog' && item.shape === shape);
+    assert.ok(item, shape);
+    assert.deepEqual(check('route-catalog', shape, item.value), []);
+    assert.notDeepEqual(check('route-catalog', shape, { ...item.value, unexpectedFixtureField: true }), []);
+  }
 });
