@@ -8,6 +8,12 @@ import {fileURLToPath} from 'node:url';
 export const SURVEY_REVISION='ae83f3d71954d4220da77b80e62ddb0f859ef323';
 export const CLARITY_REVISION='e27b326a7e29e08bba65bff9bcba02c7124f8845';
 export const REQUIRED_REVIEWS=['r040-survey-primary-counts-1117','r040-survey-primary-profiles-1117','r040-survey-data-parity-1117'];
+const PARITY_REVIEW='r040-survey-data-parity-1117';
+// v1 receipt field candidateInventoryDigest is SHA-256 of this exact byte encoding.
+// Paths are sorted by ECMAScript UTF-16 code units (Array.sort(), no locale collation).
+// Leaves hash original Buffer bytes, or UTF-8 bytes for synthetic string snapshots.
+// Tuple order is path, byte length, lowercase raw-content SHA-256; JSON has no whitespace.
+const INVENTORY_DIGEST_BASIS='v1: SHA-256 of UTF-8 compact JSON array of [path,bytes,sha256] tuples, sorted by path in ECMAScript UTF-16 code-unit order; bytes and leaf sha256 cover original raw file bytes (synthetic strings use UTF-8).';
 const CLARITY_BRANCH='dot/r040-manifest-coverage-clarity-1117';
 const exec=promisify(execFile);
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -55,18 +61,24 @@ export function assembleEvidence({surveyRevision,survey,candidate,clarity,receip
  });
  const coverageText=text(candidate,'docs/release-0.4-interface-coverage.md');
  const supplied=receipts.map(receipt=>({receipt,sha256:hash(JSON.stringify(receipt)),trust:'caller-supplied-review-receipt'}));
- const completed=REQUIRED_REVIEWS.filter(id=>receipts.some(r=>r?.id===id&&r.status==='completed'&&r.surveyRevision===SURVEY_REVISION));
+ const candidateFiles=inventory(candidate.files);
+ const candidateInventoryDigest=hash(Buffer.from(JSON.stringify(candidateFiles.map(({path,bytes,sha256})=>[path,bytes,sha256])),'utf8'));
+ // Primary counts/profiles describe the pinned survey and intentionally remain reusable.
+ // Parity describes this candidate: both the immutable revision and raw inventory must match.
+ // These fields bind a caller assertion, never authenticate its author or semantic truth.
+ const completed=REQUIRED_REVIEWS.filter(id=>receipts.some(r=>r?.id===id&&r.status==='completed'&&r.surveyRevision===SURVEY_REVISION
+  &&(id!==PARITY_REVIEW||(r.candidateRevision===candidate.revision&&r.candidateInventoryDigest===candidateInventoryDigest))));
  const missing=REQUIRED_REVIEWS.filter(id=>!completed.includes(id));
  return {
   schemaVersion:1,purpose:'one-shot-source-reconciliation',survey:{revision:survey.revision,files:inventory(survey.files)},
-  candidate:{revision:candidate.revision,files:inventory(candidate.files)},providers,normalizedDefinitions:normalized,
+  candidate:{revision:candidate.revision,files:candidateFiles,inventoryDigest:candidateInventoryDigest,inventoryDigestBasis:INVENTORY_DIGEST_BASIS},providers,normalizedDefinitions:normalized,
   coverage:{path:'docs/release-0.4-interface-coverage.md',sha256:hash(bytes(candidate,'docs/release-0.4-interface-coverage.md')),text:coverageText,
    gapRows:coverageText.split('\n').filter(line=>/^\|/.test(line)&&!/^[| :\-]+$/.test(line)),
    missingBounds:['329','306','441','319','six','descriptor','posture'].filter(term=>!coverageText.toLowerCase().includes(term)),
    limitations:'Full document retained verbatim; table rows are evidence to review, not inferred semantic verdicts.'},
   clarity:{branch:CLARITY_BRANCH,...clarity},
   reviewPrerequisites:{required:REQUIRED_REVIEWS,completed,missing,receipts:supplied,
-   note:'Caller receipts are retained provenance, not independently authenticated approvals. Queued work never counts as completed.'},
+   note:'Caller receipts are retained provenance, not independently authenticated approvals or semantic truth. Primary counts/profiles require only the exact survey revision. Data parity also requires candidateRevision and candidateInventoryDigest matching candidate.revision and candidate.inventoryDigest, using candidate.inventoryDigestBasis. Missing or mismatched bindings remain unresolved. Queued work never counts as completed.'},
   semanticCoverageClosed:false,saturationEstablished:false,hostAcceptance:'not-established',consumerAcceptance:'not-established',
   unresolved:[
    ...missing.map(id=>'Required completed survey review: '+id),
