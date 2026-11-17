@@ -194,6 +194,7 @@ export async function serve(directory, { step: suppliedStep, probeExecutor, host
   } catch (error) { await abandon(error); }
   controller.driver.lifetimeMs = config.lifetimeMs;
   if(embedding?.spawnProcess)controller.driver.spawnProcess=embedding.spawnProcess;
+  if(embedding?.fixtureForward){controller.driver.fixtureForward=embedding.fixtureForward;controller.driver.interfaceInventory=embedding.interfaceInventory;}
   if(embedding)controller.beforeEffect=embedding.beforeEffect;
   if(embedding)controller.beforePublication=embedding.check;
   controller.driver.probeWaitMs = config.probeWaitMs;

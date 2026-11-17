@@ -332,7 +332,7 @@ npx --package=@tnunamak/gozar@0.4.0 gozar health --port 3000
 
 Set `ORIGIN` to your own proxy's address first; point your own HTTPS proxy to the local Gozar proxy target printed during setup, then run the health check. If your proxy's address changes while the session runs, run `npx --package=@tnunamak/gozar@0.4.0 gozar update-origin --port 3000 --origin "$NEW_ORIGIN"` and then the health check again. Gozar stops publishing the old address at once and publishes the new one only after the health check verifies it. Stopping Gozar closes its local proxy, not your DNS or external proxy. For a service and reverse proxy that should outlive Gozar independently, [register a service route](#keep-an-existing-service-address) instead.
 
-Private tailnet routes require a trusted check from the intended client network. LAN requires an explicit selected interface, exact firewall approval and a trusted check; it serves HTTP rather than HTTPS.
+Private tailnet routes require a trusted check from the intended client network. LAN requires an explicit selected interface, exact firewall approval and a trusted check; it serves HTTP rather than HTTPS. In the library API the interface and the firewall approval are two declared `provide-value` inputs (`interface` and `firewall`): each is the exact interface address, and Gozar re-checks that address at catalog, plan and start. It binds that one address, never a wildcard or loopback, and changes no firewall rule.
 
 ## Security and privacy
 

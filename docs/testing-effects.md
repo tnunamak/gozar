@@ -58,6 +58,28 @@ A `fakeRegistry` session or attached fake opens its transport through the
 `process-runtime` operations `open`, `read` and `close` when the host maps them.
 `open` receives the fake's own origin and the gate target, so `network/fetch`
 proof reaches only an origin that an effect opened. `close` and a following
-`read` must both report absence before the fake reports its route removed. A
-host that maps no `process-runtime` effects keeps the in-process forwarder of
-earlier releases; the fake does not guess an origin the host never admitted.
+`read` must both report absence before the fake reports its route removed.
+`createTestingGozar` is an explicit mapping. A host that maps effects but omits
+`process-runtime/open` gets a refusal (`unsupported`, cleanup confirmed with
+nothing held), never a quiet listener in this process. Only a lower-level
+fixture that has no effect dispatcher at all keeps the in-process forwarder.
+
+The LAN session declares `recipe/probe` for its interface inventory and
+`process-runtime` `open`, `read` and `close` for its owned listener. The
+inventory is source-shaped data the host supplies: `recipe/probe` receives
+`{recipe}` with `recipe.kind === 'interfaces'` and returns `{stdout,stderr,exitCode}`
+where `stdout` is the JSON document `{"interfaces":{"<name>":[{"address","internal",...}]}}`
+(the shape of Node's `os.networkInterfaces()`) and `exitCode` is `0`. The owner chooses
+the interface and confirms the firewall scope through the adapter's two declared
+`provide-value` inputs (`interface` and `firewall`, each the exact interface address).
+Gozar offers the observed addresses in the action help, binds only that exact address
+(no wildcard, no loopback, no firewall change), and `process-runtime/open` receives
+`origin: "http://<that address>:<port>"` with `target` the loopback gate. A missing,
+changed or vanished choice is a refusal that names the input to provide again.
+
+A relay session such as tunnl.gg runs through the same operational lifecycle: an
+owned installation identity and a private `known_hosts` file exist (mode `0600`)
+before `spawn/run` starts, and the parser accepts only the relay's own hostname
+pattern. The tunnl.gg parser takes the JSON event
+`{"event":"tunnel","url":"https://<label>.tunnl.gg"}`; any other hostname, such as a
+generic `https://fixture.lhr.life`, is refused and nothing stays owned.

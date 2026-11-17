@@ -23,6 +23,8 @@ export type LocalApiEffectRequest={kind:'local-api';operation:'request';input:{p
 export type LocalApiEffectResult={status:number;headers:Record<string,string>;body:string};
 export type RecipeProbeRequest={kind:'recipe';operation:'probe';input:{recipe:JsonValue}};
 export type RecipeProbeResult={stdout:string;stderr:string;exitCode:number};
+/** The LAN interface inventory: `recipe/probe` for a recipe of kind `interfaces` returns this document as JSON on stdout with exit code 0. */
+export type InterfaceInventoryDocument={interfaces:Record<string,{address:string;internal:boolean;family?:string;netmask?:string;mac?:string;cidr?:string|null}[]>};
 /** Long-running fixtures return an actual harmless child PID; the normal owned-PID ledger still governs removal. */
 export type SpawnEffectRequest=
  |{kind:'spawn';operation:'run';input:{program:string;args:string[];longRunning:boolean}}

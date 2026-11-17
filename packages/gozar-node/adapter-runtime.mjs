@@ -12,6 +12,7 @@
 //   ctx.home       string   canonical Gozar home; the durable plan needs it for durablePlanFacts()
 //   ctx.generation number   generation recorded on receipts built by an adapter
 // `ctx.probe(recipe)` resolves `{ ok: boolean, detail?: string }`: the engine ran the recipe and its parser said yes.
+import { networkInterfaces } from 'node:os';
 import { readFileSync } from 'node:fs';
 import { readFile, realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -113,18 +114,28 @@ function durableFacetErrors(facet) {
 
 const methods = ['detect', 'properties', 'setupActions', 'setup', 'plan', 'create', 'observe', 'verify', 'remove', 'runtimeFacts'];
 
-function declaredContext(context,definition){
-  if(!context?.dispatchEffect)return context;
+function declaredContext(context,definition,interfaceRecipe=null){
+  if(!context)return context;
+  if(!context.dispatchEffect)return typeof context.observeInterfaces==='function'?context:{...context,observeInterfaces:async()=>({interfaces:networkInterfaces()})};
   const dispatch=async request=>{
     if(!(definition.effectOperations??[]).some(item=>item.kind===request?.kind&&item.operation===request?.operation))throw effectError('unsupported','The adapter has not declared this fixture effect operation');
     return context.dispatchEffect(request);
   };
-  return {...context,dispatchEffect:dispatch,probe:recipe=>probeWithEffects(recipe,dispatch)};
+  // Under fixture effects the interface inventory is the host's declared recipe/probe observation of the adapter's own
+  // interfaces recipe: source-shaped data the host supplies, never read from this computer.
+  return {...context,dispatchEffect:dispatch,probe:recipe=>probeWithEffects(recipe,dispatch),observeInterfaces:fixtureInterfaceObserver(interfaceRecipe,dispatch)};
+}
+/** The host's declared interface inventory for one adapter, read through the adapter's own `interfaces` recipe and a declared recipe/probe effect. */
+export function fixtureInterfaceObserver(recipe,dispatch){
+  return async()=>{
+    if(recipe?.kind!=='interfaces')throw effectError('unsupported','This adapter declares no interface observation');
+    return parseInterfaceInventory(boundedObservation(await dispatch({kind:'recipe',operation:'probe',input:{recipe}}),recipe));
+  };
 }
 function scopedAdapter(adapter){
   const wrapped={...adapter};
-  for(const name of ['detect','setup','plan','create','observe','verify','remove','runtimeFacts','prepareProof'])if(typeof adapter[name]==='function')wrapped[name]=(...args)=>adapter[name](bindConfiguration(declaredContext(args[0],adapter.definition),adapter.id),...args.slice(1));
-  if(adapter.durable){wrapped.durable={...adapter.durable};for(const name of ['observe','put','delete'])wrapped.durable[name]=(...args)=>adapter.durable[name](bindConfiguration(declaredContext(args[0],adapter.definition),adapter.id),...args.slice(1));}
+  for(const name of ['detect','setup','plan','create','observe','verify','remove','runtimeFacts','prepareProof','hostChoices'])if(typeof adapter[name]==='function')wrapped[name]=(...args)=>adapter[name](bindConfiguration(declaredContext(args[0],adapter.definition,adapter.interfaceRecipe),adapter.id),...args.slice(1));
+  if(adapter.durable){wrapped.durable={...adapter.durable};for(const name of ['observe','put','delete'])wrapped.durable[name]=(...args)=>adapter.durable[name](bindConfiguration(declaredContext(args[0],adapter.definition,adapter.interfaceRecipe),adapter.id),...args.slice(1));}
   return wrapped;
 }
 
@@ -265,6 +276,10 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
     definition,
     // Explicit recipe provenance survives scopedAdapter wrapping; unknown modules use the generic controller.
     sessionExecution: wrapped?.recipes?.create ? 'recipe' : 'generic',
+    // The recipe through which this adapter observes the interface inventory, when it declares one.
+    interfaceRecipe: wrapped?.recipes?.detect?.kind === 'interfaces' ? wrapped.recipes.detect : null,
+    // The operational plan this adapter wraps. A session runs the plan of the adapter the owner approved, from whichever registry holds it.
+    operationalDefinition: wrapped ?? null,
 
     async detect(ctx) {
       const os = platformOf(ctx);
@@ -276,7 +291,7 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
         result = await ctx.probe(recipes.detect);
         // A session runs these read-only steps first. Readiness is their verdict, so the catalog cannot say `ready` for a route the session then refuses.
         for (const probe of result?.ok === true ? preflightProbes(recipes) : []) if ((result = await ctx.probe(probe))?.ok !== true) break;
-      } catch { return { state: 'unknown', facts: { platform: os, detected: null, setupNeeded: false } }; }
+      } catch (e) { return { state: 'unknown', facts: { platform: os, detected: null, setupNeeded: false } }; }
       const detected = result?.ok === true;
       const setupNeeded = !detected && shown.length > 0;
       return { state: detected ? 'ready' : setupNeeded ? 'action-required' : 'unsupported', facts: { platform: os, detected, setupNeeded } };
@@ -371,9 +386,10 @@ async function runDetectRecipe(recipe,dispatchEffect) {
     const [effect] = output.effects;
     let completion;
     if(dispatchEffect){
-      if(effect.operation!=='detect'||effect.kind!=='spawn')throw effectError('unsupported','Fixture detection accepts only declared read-only process observations');
-      const result=await dispatchEffect({kind:'recipe',operation:'probe',input:{recipe}});
-      if(typeof result?.stdout!=='string'||typeof result?.stderr!=='string'||!Number.isInteger(result?.exitCode)||Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr)>Math.min(recipe.maxOutputBytes??65536,65536))throw effectError('provider_unavailable','The fixture probe returned an invalid bounded observation');
+      if(effect.operation!=='detect'||!['spawn','interfaces'].includes(effect.kind))throw effectError('unsupported','Fixture detection accepts only declared read-only process or interface observations');
+      const observed=boundedObservation(await dispatchEffect({kind:'recipe',operation:'probe',input:{recipe}}),recipe);
+      // An interface inventory is source-shaped output: the JSON document {interfaces:{name:[{address,internal,...}]}} on stdout.
+      const result=effect.kind==='interfaces'?parseInterfaceInventory(observed):observed;
       completion={type:'effect-result',effectId:effect.id,sessionId:effect.sessionId,generation:effect.generation,ok:true,result};
     }else completion=await driver.execute(effect);
     output = coreStep({ state: output.state, command: { sessionId: 'probe', ...completion }, adapters, requirements, host: { ...driver.host, nowMs: driver.nowMs() } });
@@ -381,6 +397,20 @@ async function runDetectRecipe(recipe,dispatchEffect) {
   const observation=output.snapshot.observations?.probe;
   if(observation===undefined||observation==='unknown')throw effectError('provider_unavailable','The read-only probe did not establish its prerequisite');
   return observation === 'present';
+}
+function boundedObservation(observed,recipe){
+  if(typeof observed?.stdout!=='string'||typeof observed?.stderr!=='string'||!Number.isInteger(observed?.exitCode)||Buffer.byteLength(observed.stdout)+Buffer.byteLength(observed.stderr)>Math.min(recipe.maxOutputBytes??65536,65536))throw effectError('provider_unavailable','The fixture probe returned an invalid bounded observation');
+  return observed;
+}
+/** The interface inventory a host declares through recipe/probe: exit 0 and a JSON document {interfaces:{name:[{address,internal,...}]}}. */
+export function parseInterfaceInventory(observed){
+  let document;
+  try{document=JSON.parse(observed.stdout);}catch{throw effectError('provider_unavailable','The fixture interface inventory is not JSON');}
+  const inventory=document?.interfaces;
+  if(observed.exitCode!==0||inventory===null||typeof inventory!=='object'||Array.isArray(inventory)||
+    !Object.values(inventory).every(rows=>Array.isArray(rows)&&rows.every(row=>row&&typeof row==='object'&&typeof row.address==='string'&&typeof row.internal==='boolean')))
+    throw effectError('provider_unavailable','The fixture interface inventory is invalid');
+  return {interfaces:inventory};
 }
 export async function probeWithEffects(recipe,dispatchEffect){return {ok:await runDetectRecipe(recipe,dispatchEffect)};}
 

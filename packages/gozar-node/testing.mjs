@@ -112,7 +112,9 @@ const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('
 const servers = new Map();
 const proofProtocol = ${JSON.stringify(proofProtocol)};
 const mark = event => appendFileSync(new URL('./events.jsonl', import.meta.url), JSON.stringify({event}) + '\\n');
-// A host that maps process-runtime effects admits a route's transport through them; a host that maps none gets a forwarder in this process.
+// A host that maps process-runtime effects admits a route's transport through them. Only a lower-level fixture that has no
+// effect dispatcher at all (no explicit mapping) gets a forwarder in this process. A host that maps effects but omits this one
+// is refused: an unmapped transport never falls back to a real listener.
 async function openOwned(ctx, plan) {
   if (typeof ctx.dispatchEffect !== 'function') return null;
   const scheme = definition.originSchemes?.[0]?.replace(':', '') ?? (definition.capabilities.transport === 'http' ? 'http' : 'https');
@@ -120,7 +122,7 @@ async function openOwned(ctx, plan) {
   try {
     const opened = await ctx.dispatchEffect({ kind: 'process-runtime', operation: 'open', input: { program: 'fake-forwarder', args: [], credential: '', origin, target: plan.effects[0].target, deadlineMs: 5000 } });
     return typeof opened?.handle === 'string' ? { origin, handle: opened.handle } : null;
-  } catch (error) { if (error?.code === 'unsupported') return null; throw error; }
+  } catch (error) { throw error?.code === 'unsupported' ? Object.assign(new Error('The host declared no process-runtime transport for this fixture route'), { code: 'unsupported' }) : error; }
 }
 export default {
   id: definition.id,
@@ -158,7 +160,10 @@ export default {
   }:{}),
   async create(ctx, plan) {
     const forwarding = ['attached', 'session'].includes(plan.readback.kind);
-    const owned = forwarding && proofProtocol !== 'echo' ? await openOwned(ctx, plan) : null;
+    // Nothing is opened when the host maps no transport, so the refusal carries an empty receipt: cleanup confirms nothing is held.
+    const owned = forwarding && proofProtocol !== 'echo'
+      ? await openOwned(ctx, plan).catch(error => { throw Object.assign(error, { cleanupReceipt: { schemaVersion: 1, adapterId: definition.id, resourceKey: plan.resourceKey, generation: ctx.generation ?? 1, operationId: ctx.operationId ?? null, identity: null, readback: plan.readback, origin: 'https://' + definition.id + '.example.invalid' } }); })
+      : null;
     if (owned) {
       plan = { ...plan, origin: owned.origin, readback: { ...plan.readback, ownedHandle: owned.handle } }; mark('start');
     } else if (forwarding && proofProtocol === 'echo') {

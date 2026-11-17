@@ -525,15 +525,15 @@
         "operation": "probe"
       },
       {
-        "kind": "spawn",
-        "operation": "run"
+        "kind": "process-runtime",
+        "operation": "open"
       },
       {
-        "kind": "spawn",
+        "kind": "process-runtime",
         "operation": "read"
       },
       {
-        "kind": "spawn",
+        "kind": "process-runtime",
         "operation": "close"
       },
       {

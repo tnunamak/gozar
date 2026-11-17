@@ -1,6 +1,6 @@
 // Host-owned authority for one operational controller incarnation. No secret bytes enter bootstrap.
 import {randomBytes} from 'node:crypto';
-import {loadAdapters} from './adapter-runtime.mjs';
+import {loadAdapters,fixtureInterfaceObserver} from './adapter-runtime.mjs';
 import {registryIdentity} from './registry-identity.mjs';
 import {connectEmbeddingBroker} from './embedding-broker.mjs';
 import {currentRouteReview} from './route-consent.mjs';
@@ -31,7 +31,7 @@ export async function connectSessionEmbedding(config,{onLoss}){
  const check=async()=>{await refresh();if(blocked)throw gozarError('consent_mismatch','Runtime consent changed; review the current route');};
  const tokens=new Map();
  return {
-  ...(saved.fixtureEffects?{spawnProcess:fixtureSpawn(dispatch),fixtureVerifier:gate=>({vantages:['public','tailnet','lan'],async verify({origin,vantage,authorization,requirements,signal}){
+  ...(saved.fixtureEffects?{fixtureForward:dispatch,interfaceInventory:fixtureInterfaceObserver(adapter.interfaceRecipe,dispatch),spawnProcess:fixtureSpawn(dispatch),fixtureVerifier:gate=>({vantages:['public','tailnet','lan'],async verify({origin,vantage,authorization,requirements,signal}){
    if(requirements.streamableHttp||requirements.oauthDcr)throw gozarError('unsupported','This fixture executor has no application protocol proof');
    const checked=await gate.verify(origin,{sse:requirements.sse,signal,fetch:testingFetch(dispatch)}),observedAtMs=Date.now();
    return {probeReceipt:{nonceRef:authorization.nonceRef,verifierRef:authorization.verifierRef,origin,vantage,remote:true,observedAtMs,expiresAtMs:Math.min(authorization.expiresAtMs,observedAtMs+15000),tls:checked.tls,instanceMatched:checked.instanceMatched,sse:checked.sse,streamableHttp:false,oauthDcr:false},provenance:{kind:'explicit-fixture-effects'}};

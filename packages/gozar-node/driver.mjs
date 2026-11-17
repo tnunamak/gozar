@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { open } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomInt } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import net from 'node:net';
 import http from 'node:http';
@@ -253,7 +253,7 @@ export class EffectDriver {
           result = await this.removeProcess(effect.resourceId, effect); break;
         case 'read-file': result = await this.readHandle(effect); break;
         case 'http-probe': result = await this.probe(effect); break;
-        case 'interfaces': result = { interfaces: networkInterfaces() }; break;
+        case 'interfaces': result = this.interfaceInventory ? await this.interfaceInventory() : { interfaces: networkInterfaces() }; break;
         case 'timer': result = await this.timer(effect); break;
         case 'local-forwarder': result = await this.forward(effect); break;
         default: throw new Error('Unsupported effect kind');
@@ -428,8 +428,10 @@ export class EffectDriver {
     if (!recipe?.ledger) return {};
     const expected = expandPlan(recipe.ledger, effect.bindings ?? {});
     if (actual === undefined) return expected;
-    if (!isDeepStrictEqual(expected, actual)) throw new Error('Declared ownership ledger differs from actual local resource');
-    return actual;
+    // A ledger that records the port the effect asked for compares it with the port requested, not the one the OS then assigned.
+    const observed = Object.hasOwn(recipe.ledger, 'requestedPort') ? { ...actual, requestedPort: effect.port ?? 0 } : actual;
+    if (!isDeepStrictEqual(expected, observed)) throw new Error('Declared ownership ledger differs from actual local resource');
+    return observed;
   }
   async proveProcessAbsent(resource) {
     const observedAtMs = this.nowMs();
@@ -619,6 +621,12 @@ export class EffectDriver {
     this.proofExpiries.set(effect.generation, probeReceipt.expiresAtMs);
     return { status: 200, vantage: 'local', streaming: checked.streaming, streamableHttp: false, oauthDcr: false, probeReceipt };
   }
+  /** True when `address` is a usable non-internal unicast address of an interface that exists now (the host's declared inventory under fixture effects). */
+  async presentInterface(address) {
+    if (!selectedInterfaceAddress(address)) return false;
+    const inventory = this.interfaceInventory ? (await this.interfaceInventory()).interfaces : networkInterfaces();
+    return Object.values(inventory).flat().some(row => row?.address === address && row.internal === false);
+  }
   async forward(effect) {
     if (effect.operation === 'remove') {
       const server = this.forwarders.get(effect.resourceId);
@@ -633,9 +641,15 @@ export class EffectDriver {
         else await this.journal.removed(effect.resourceId);
         return { removed: true, resourceId: effect.resourceId };
       }
-      const closed = new Promise(resolve => server.once('close', resolve));
-      server.close(); server._ownedSockets.forEach(socket => socket.destroy());
-      await closed;
+      if (server.fixtureHandle) {
+        const closed = await this.fixtureForward({ kind: 'process-runtime', operation: 'close', input: { handle: server.fixtureHandle } });
+        const seen = await this.fixtureForward({ kind: 'process-runtime', operation: 'read', input: { handle: server.fixtureHandle } });
+        if (closed?.closed !== true || seen?.present !== false) throw new Error('The fixture transport is not confirmed closed');
+      } else {
+        const closed = new Promise(resolve => server.once('close', resolve));
+        server.close(); server._ownedSockets.forEach(socket => socket.destroy());
+        await closed;
+      }
       this.forwarders.delete(effect.resourceId);
       if (effect.recipeRef || effect.retainRecord) { this.journal.value.owned[effect.resourceId].retired = true; await this.journal.save(); }
       else await this.journal.removed(effect.resourceId);
@@ -644,7 +658,7 @@ export class EffectDriver {
     if (effect.targetPort !== undefined && effect.targetPort !== this.targetPort) throw new Error('Forward target is outside approved port');
     if (effect.targetHost && effect.targetHost !== '127.0.0.1') throw new Error('Forward target must be loopback');
     const host = effect.bindAddress ?? '127.0.0.1';
-    const exactInterface = selectedInterfaceAddress(host) && Object.values(networkInterfaces()).flat().some(address => address?.address === host && address.internal === false);
+    const exactInterface = await this.presentInterface(host);
     if (host !== '127.0.0.1' && (!exactInterface || !this.bindAddresses.includes(host) || !this.firewallApproved)) {
       throw new Error('Firewall prerequisite: approve the exact interface before starting the forwarder');
     }
@@ -658,13 +672,23 @@ export class EffectDriver {
       client.pipe(upstream); upstream.pipe(client);
     });
     server._ownedSockets = sockets;
-    await new Promise((resolve, reject) => { server.once('error', reject); server.listen({ host, port: 0, exclusive: true }, resolve); });
+    // Under explicit fixture effects the listener is a declared process-runtime transport on the (synthetic) selected address, not a socket here.
+    let fixtureHandle;
+    const port = this.fixtureForward ? 49152 + randomInt(16000) : undefined;
+    if (this.fixtureForward) {
+      const origin = `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
+      const opened = await this.fixtureForward({ kind: 'process-runtime', operation: 'open', input: { program: 'fixture-forwarder', args: [], credential: '', origin, target: `127.0.0.1:${this.targetPort}`, deadlineMs: 5000 } });
+      if (typeof opened?.handle !== 'string' || !opened.handle) throw new Error('The fixture transport returned no handle');
+      fixtureHandle = opened.handle;
+    } else await new Promise((resolve, reject) => { server.once('error', reject); server.listen({ host, port: 0, exclusive: true }, resolve); });
     const id = randomUUID();
-    const result = { resourceId: id, origin: `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`, port: server.address().port };
+    const boundPort = fixtureHandle ? port : server.address().port;
+    const result = { resourceId: id, origin: `http://${host.includes(':') ? `[${host}]` : host}:${boundPort}`, port: boundPort };
+    if (fixtureHandle) server.fixtureHandle = fixtureHandle;
     this.forwarders.set(id, server);
     try { await this.journal.own({ id, kind: 'local-forwarder', sessionId: this.sessionId, generation: effect.generation,
       adapterId: this.selectedAdapter, continuityRef: randomUUID(), details, baseline: this.intentRecords.get(this.receiptKey(effect))?.baseline ?? {}, bindings: effect.bindings ?? {}, daemonPid: process.pid, daemonStartIdentity: await processIdentity(process.pid), nonce: randomUUID(), origin: result.origin }); }
-    catch (error) { server.close(); this.forwarders.delete(id); throw error; }
+    catch (error) { server.close(); this.forwarders.delete(id); if (fixtureHandle) await this.fixtureForward({ kind: 'process-runtime', operation: 'close', input: { handle: fixtureHandle } }).catch(() => {}); throw error; }
     if (effect.recipeRef) result.ownership = this.ownership(this.journal.value.owned[id]);
     return result;
   }

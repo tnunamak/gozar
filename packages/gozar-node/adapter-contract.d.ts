@@ -17,6 +17,11 @@ export interface Adapter {
   id: string;
   definition: AdapterDefinition;
   detect(ctx: ReadContext): Promise<{ state: AdapterState; facts: unknown }>;
+  /**
+   * Optional. What this adapter's persisted owner choices mean for the session engine, read from live observation just before
+   * a session starts. It rejects with `setup_required` (and starts nothing) when a choice is missing, changed or no longer valid.
+   */
+  hostChoices?(ctx: ReadContext): Promise<{ bindAddresses: string[]; firewallApproved: boolean }>;
   properties(facts: unknown): Properties;
   setupActions(facts: unknown): Action[];
   configurationActions?(): Action[];
@@ -113,6 +118,8 @@ export type SetupResult = { state: 'complete' | 'pending' | 'blocked'; nextActio
 export type ReadContext = {
   /** Present only in the explicit public testing harness; operations must be declared in adapter data. */
   dispatchEffect?:(request:{kind:string;operation:string;input:unknown})=>Promise<unknown>;
+  /** The unicast interface inventory in the shape of `os.networkInterfaces()`: the real one, or under testing effects the host's declared `recipe/probe` observation. */
+  observeInterfaces?:()=>Promise<{interfaces:Record<string,{address:string;internal:boolean;family?:string;netmask?:string;mac?:string;cidr?:string|null}[]>}>;
   now: () => number;
   /** Canonical Gozar state home of the calling app (amendment 1: the durable plan needs it). */
   home: string;
