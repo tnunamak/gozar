@@ -38,7 +38,7 @@ For a project or an embedded integration:
 npm install @tnunamak/gozar@0.4.0
 ```
 
-The ngrok SDK is optional. To use the ngrok HTTPS edge, install it in your app with `npm install @ngrok/ngrok`; without it, Gozar reports the ngrok candidate as needing setup.
+The ngrok SDK is optional. To use the ngrok HTTPS edge, install it in your app with `npm install @ngrok/ngrok@1.7.0`; without it, Gozar reports the ngrok candidate as needing setup.
 
 The examples below use npx with an explicit package, so they do not require a global installation. Installing locally does not add a bare `gozar` command to your normal shell PATH.
 
@@ -100,13 +100,15 @@ Set `ORIGIN` and `TARGET` to your own values first; the sample origin is not a r
 
 An app that needs a route states what it needs and never names a provider. Gozar's catalog lists the providers that meet the requirements. The app shows the user the chosen candidate's disclosure and passes the approval back.
 
-The example below opens a 15-minute session route to the demo server from the top of this page, so start that first. Save it as `route-example.mjs` in a project with `@tnunamak/gozar@0.4.0` installed, and run `node route-example.mjs`. It prints the disclosure and creates the route only if you answer `y`. For an address that survives restarts, use `ensureRoute` with `usage: { kind: 'durable', routeId }` instead of `expose`. The route-contract types are in `node_modules/@tnunamak/gozar/packages/gozar-node/route-contract.d.ts`, and the package exposes them to TypeScript through its `types` field.
+The example below opens a 15-minute session route to the demo server from the top of this page, so start that first. Save it as `route-example.mjs` in a project with `@tnunamak/gozar@0.4.0` installed, and run `node route-example.mjs`. On its first run it prints the disclosure and creates the route only if you answer `y`; later runs recover that same logical request for inspection and exact cleanup, rather than making another route. For an address that survives restarts, use `ensureRoute` with `usage: { kind: 'durable', routeId }` instead of `expose`. The route-contract types are in `node_modules/@tnunamak/gozar/packages/gozar-node/route-contract.d.ts`, and the package exposes them to TypeScript through its `types` field.
 
 ```js
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { catalogRoutes, expose, watchRoutes, closeRoute } from '@tnunamak/gozar';
+import { mkdir, lstat, open, readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { catalogRoutes, expose, listRoutes, watchRoutes, closeRoute } from '@tnunamak/gozar';
 
 // Gozar's state directory. The CLI uses the same one, so `gozar status` lists this app's routes too.
 const stateDirectory = process.env.GOZAR_HOME ?? join(homedir(), '.local', 'state', 'gozar');
@@ -116,22 +118,73 @@ const query = {
   usage: { kind: 'session', lifetimeMs: 900_000 },            // or { kind: 'attached' }
   requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] },
 };
+// App-owned intent storage, NOT a file inside Gozar's state directory.
+// Run one copy of this example at a time. Do not share this directory with another app.
+const intentDirectory = join(homedir(), '.gozar-route-example');
+await mkdir(intentDirectory, { recursive: true, mode: 0o700 });
+const directoryInfo = await lstat(intentDirectory);
+if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink() ||
+    directoryInfo.uid !== process.getuid() || (directoryInfo.mode & 0o777) !== 0o700) {
+  throw new Error('Intent directory must be an owned private directory');
+}
+const intentPath = join(intentDirectory, 'demo-route.json');
+const intent = JSON.stringify(query); // includes exact owner, target, home, usage and requirements
+let saved, restarting = false;
+try {
+  const file = await open(intentPath, 'wx', 0o600); // never overwrite an earlier intent
+  try {
+    saved = { version: 1, intent, operationId: randomUUID() };
+    await file.writeFile(JSON.stringify(saved) + '\n');
+    await file.sync(); // intent is durable before expose can allocate
+  } finally { await file.close(); }
+  const directory = await open(intentDirectory, 'r');
+  try { await directory.sync(); } finally { await directory.close(); }
+} catch (error) {
+  if (error.code !== 'EEXIST') throw error; // retain any partial file; never invent a replacement ID
+  restarting = true;
+  const info = await lstat(intentPath);
+  if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.getuid() ||
+      (info.mode & 0o777) !== 0o600) throw new Error('Intent file must be owned and private');
+  saved = JSON.parse(await readFile(intentPath, 'utf8'));
+}
+if (saved.version !== 1 || saved.intent !== intent ||
+    typeof saved.operationId !== 'string' || !saved.operationId) {
+  throw new Error('Different or unreadable intent: keep this file and reconcile the original request');
+}
+const operationId = saved.operationId;
 const catalog = await catalogRoutes(query);                    // read-only: nothing is exposed
+// Recover via public enumeration, never by scanning or editing Gozar's private files.
+// A failed listing refuses this run; retain the app intent and all recovery state.
+const matches = restarting
+  ? (await listRoutes({ home: stateDirectory, owner: query.owner })).routes
+      .filter(item => item.operationId === operationId)
+  : [];
+if (matches.length > 1) throw new Error('Ambiguous operation recovery; retain all handles');
+const recovered = matches[0];
+if (recovered?.cleanup.state === 'confirmed') {
+  console.log('This logical request is already closed; its operation ID stays terminal.');
+  process.exit(0);
+}
 const candidate = catalog.candidates.find(item => item.eligible && item.candidateToken);
-if (!candidate) throw new Error(catalog.noMatch?.code ?? 'setup needed');   // candidate.setup.actions says what the user can do
+if (!recovered && !candidate) throw new Error(catalog.noMatch?.code ?? 'setup needed');   // candidate.setup.actions says what the user can do
 
 const ask = createInterface({ input: process.stdin, output: process.stdout });
-console.log(candidate.disclosure.text);
-console.log(candidate.consent.disclosures); // render the typed consent disclosures in your UI
-for (const fact of candidate.consent.facts.filter(row => row.affectsConsent)) {
-  console.log(fact.label, fact.known ? fact.value : `unknown (${fact.reason})`);
+if (!recovered) {
+  console.log(candidate.disclosure.text);
+  console.log(candidate.consent.disclosures); // render the typed consent disclosures in your UI
+  for (const fact of candidate.consent.facts.filter(row => row.affectsConsent)) {
+    console.log(fact.label, fact.known ? fact.value : `unknown (${fact.reason})`);
+  }
 }
-if ((await ask.question('Create this route? [y/N] ')).trim().toLowerCase() !== 'y') { ask.close(); process.exit(0); }
-const route = await expose({ ...query, wait: 'verified',
+if ((await ask.question(recovered ? 'Inspect and close this recovered route? [y/N] ' : 'Create this route? [y/N] ')).trim().toLowerCase() !== 'y') { ask.close(); process.exit(0); }
+const route = recovered
+  ? { ...recovered, published: null } // enumeration is not fresh publication authority
+  : await expose({ ...query, operationId, wait: 'verified',
   approval: { ...Object.fromEntries(Object.entries(candidate).filter(([key]) =>
     ['candidateToken', 'consentFactsDigest'].includes(key))),
     kind: 'route', disclosureRevision: candidate.disclosure.revision } });
-console.log('Published at', route.published);
+if (route.published) console.log('Published at', route.published);
+else console.log('Not currently published; keep the exact handle for cleanup.');
 
 const controller = new AbortController();
 const watching = (async () => {
@@ -148,7 +201,10 @@ if (closed.cleanup.state !== 'confirmed') {
   throw new Error('Cleanup is unconfirmed; retain the handle and retry closeRoute');
 }
 await watching;
+// Keep demo-route.json: the same logical request must not allocate again after close.
 ```
+
+Keep `GOZAR_HOME` separate from `.gozar-route-example`; the latter belongs only to this app. The app intent file contains no candidate token or credential. Re-running the example reuses its operation ID and validates the unchanged request. If the first run failed after reserving the intent, retain that file and use the same owner/ID to recover; an unreadable file or failed public listing is a refusal, not permission to create another route. A deliberately new logical request needs a separately named app intent file and a fresh ID, only after the earlier route's owned cleanup is confirmed. Do not delete the old intent to bypass a conflict. This small single-process example is not a multi-controller journal; production hosts must serialize their own intent creation and recovery.
 
 - `candidateToken` is private bearer data. It is single-use, expires after 10 minutes, and is bound to the query, the disclosure revision and what Gozar observed at the provider. If the provider changed, the call fails with `candidate_stale` and changes nothing: ask the catalog again. Do not log it.
 - Each candidate shows what an app needs to list, choose and explain a route without knowing any provider. `providerId` is the provider's own stable id; add it to the query (`providerId: 'ID'`) and the catalog holds only that candidate. An unknown id fails with `route_not_found` and a message that lists the ids on offer. It cannot be combined with `route`. Show the id, store it and send it back; do not compare it with a literal. `display.needs` is one static sentence on what the route needs on this computer. `properties.address.ports` lists the public ports Gozar tries, in order (`null` when the provider assigns the port). `properties.proof` says what Gozar checks before it publishes: `vantage` is where the check runs from and `checks` is a subset of `tls`, `nonce` and `sse`. `RouteView.verification` carries the same two fields for the last check, so it says where that check actually ran from. [docs/providers.md](docs/providers.md) lists them for every provider.

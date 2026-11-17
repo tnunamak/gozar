@@ -17,7 +17,7 @@ responses use 2, including routes nested in watch events. Update checks/mocks.
   Configuration adds opaque revision/scopeId; InputRequirement adds actionId.
   An input ID can differ from its action ID. Descriptors use kind, secret,
   required, help and obtainUrl; there is no fields API. Hosts choose their UI.
-- Root/factory storeSecret({home,value}) is replaced by
+- Historical 0.3 root/factory storeSecret({home,value}) is replaced by
   {home,owner?,providerId,inputId,scopeId,expectedConfigurationRevision,draftId?,bytes}.
   It returns {handle,configurationRevision,scopeId} only to the trusted host.
   Intake does not advance configuration. Presence is not token validity.
@@ -34,11 +34,37 @@ responses use 2, including routes nested in watch events. Update checks/mocks.
   After commit, discardSecret deletes only an owned, unreferenced local secret.
   Neither close nor discard revokes provider credentials.
 
-The default backend imports checked ownerless 0.3 setup references on first read.
-Named-owner import returns configuration_migration_required; choose an explicit
-migration instead of claiming an old ownerless credential. Custom backends never
-import or mirror file-backed bytes. Registry identity includes trusted code/data
-and excludes installation paths; changed registries have different scopes.
+The default backend imports checked ownerless 0.3 setup references on first read
+ONLY when owner is omitted. It never silently assigns them to a named owner:
+a named-owner import returns configuration_migration_required. Custom backends
+never import or mirror file-backed bytes. Registry identity includes trusted
+code/data and excludes installation paths; changed registries have different scopes.
+
+### Move an ownerless installation to a named app by re-intake
+
+There is no migration API or import command for assigning legacy bindings to a
+named owner. Do not copy or manually edit private configuration/binding files.
+
+1. Retain the old private home and its credential bytes. Through the recorded
+   original owner/installation, close or reconcile the old exact runtimes and
+   confirm owned resource removal. An unconfirmed cleanup is an explicit refusal
+   to proceed: retain its handle/state and retry its public cleanup action.
+2. Create a NEW private Gozar home for the named app. In a new query file, set
+   `home` to that directory and `owner` to the app's stable name. Use that same
+   named owner in every new query, setup request and configuration draft.
+3. Select the provider from a fresh catalog and configure/re-enter its credential
+   through the current public input requirements. For a local installation:
+   `./node_modules/.bin/gozar configure --query-file new-query.json --provider-id PROVIDER --json`.
+   Here `new-query.json` selects the NEW home and named owner; PROVIDER is the
+   selected catalog ID. The configured factory's trusted host may instead perform
+   scoped secret intake and approve the offered setup action with its fresh revision.
+4. Obtain fresh route approval for that exact query, then start the new route.
+   An old credential reference or old proof is not new-owner authority.
+
+Keep old state and bytes until both cleanup and deletion authority are established.
+Use public discard only for an owned, unreferenced handle; never erase evidence to
+force migration. Closing or discarding does not automatically revoke a provider
+credential, remove owner-managed DNS/tunnels, or migrate a custom backend.
 
 ## Routes and proof
 
