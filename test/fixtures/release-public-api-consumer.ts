@@ -21,6 +21,7 @@ type Inventory = Awaited<ReturnType<Api['listProviders']>>;
 type Listed = Awaited<ReturnType<Api['listRoutes']>>;
 type NotAny = [
  AssertFalse<IsAny<Api>>, AssertFalse<IsAny<Catalog>>,
+ AssertFalse<IsAny<RouteView['consentFactsDigest']>>, AssertFalse<IsAny<RouteView['consentChange']>>,
  AssertFalse<IsAny<Catalog['candidates'][number]>>,
  AssertFalse<IsAny<Draft>>, AssertFalse<IsAny<DraftRead>>,
  AssertFalse<IsAny<Setup>>, AssertFalse<IsAny<Setup['configuration']>>,
@@ -32,6 +33,58 @@ type NotAny = [
  AssertFalse<IsAny<Awaited<ReturnType<Api['commitConfigurationDraft']>>>>,
  AssertFalse<IsAny<Awaited<ReturnType<Api['reviewRouteConsent']>>>>,
 ];
+
+// Existing runtime/schema fields, consumed through installed public declarations.
+type RouteConsentFields=Pick<RouteView,'consentFactsDigest'|'consentChange'>;
+const absentConsentFields:RouteConsentFields={};
+const nullableConsentDigest:RouteConsentFields={consentFactsDigest:null};
+const changedConsentFields:RouteConsentFields={
+ consentFactsDigest:'current',
+ consentChange:{oldDigest:'previous',newDigest:'current',nextAction:null,reason:'configuration-changed'},
+};
+// @ts-expect-error A digest is nullable text, not a number.
+const badConsentDigest:RouteConsentFields={consentFactsDigest:123};
+// @ts-expect-error consentChange is optional, but is not nullable.
+const badConsentChange:RouteConsentFields={consentChange:null};
+// @ts-expect-error All four consentChange members are required.
+const incompleteConsentChange:RouteConsentFields={consentChange:{oldDigest:'old',newDigest:'new',nextAction:null}};
+type InventoryAvailability=Inventory['providers'][number]['availability'];
+const supportedAvailability:InventoryAvailability={
+ session:{state:'available',reason:'admitted'},
+ attached:{state:'detect-only',reason:'inspection-only'},
+ durable:{state:'unsupported',reason:'usage-not-supported'},
+};
+// @ts-expect-error Setup readiness is not provider availability.
+const readyAvailability:InventoryAvailability['session']={state:'ready',reason:'not-availability'};
+// @ts-expect-error Setup actions are not provider availability.
+const actionAvailability:InventoryAvailability['attached']={state:'action-required',reason:'not-availability'};
+// @ts-expect-error Unknown readiness is not provider availability.
+const unknownAvailability:InventoryAvailability['durable']={state:'unknown',reason:'not-availability'};
+function consumeRouteMetadata(route:RouteView){
+ const digest:string|null|undefined=route.consentFactsDigest;
+ if(route.consentChange){
+  const oldDigest:string=route.consentChange.oldDigest;
+  const newDigest:string=route.consentChange.newDigest;
+  const reason:string=route.consentChange.reason;
+  const nextAction:RouteView['binding']['remedy']=route.consentChange.nextAction;
+  if(nextAction){const label:string=nextAction.label;const actionDigest:string=nextAction.digest;void label;void actionDigest;}
+  void oldDigest;void newDigest;void reason;
+ }
+ const authority:'adapter'|'owner'|'unknown'=route.binding.authority;
+ const target=route.binding.target;
+ if(target.known){const value:string=target.value;void value;}
+ else {const reason:string=target.reason;void reason;}
+ const expires=route.expiresAt;
+ if(expires.known){const value:string=expires.value;void value;}
+ else {const reason:string=expires.reason;void reason;}
+ if(route.binding.remedy){
+  const kind:NonNullable<RouteView['binding']['remedy']>['kind']=route.binding.remedy.kind;
+  const label:string=route.binding.remedy.label;
+  void kind;void label;
+ }
+ void digest;void authority;
+}
+
 declare const backend: SecretBackend;
 declare const identity: HostIdentity;
 const options: GozarOptions = {secretBackend:backend,identity,
@@ -72,6 +125,11 @@ async function consume(){
  const scope:string=result.scopeId;
  const values:Record<string,string>=result.configuration.values;
  const route:RouteView=await api.expose(expose);
+ consumeRouteMetadata(route);
+ const inventory=await api.listProviders({home:query.home,owner:query.owner});
+ const availability:InventoryAvailability=inventory.providers[0].availability;
+ const availabilityState:'available'|'detect-only'|'unsupported'=availability.attached.state;
+ void availabilityState;
  const replay:RouteView=await api.expose(expose);
  const listed=await api.listRoutes({home:query.home,owner:query.owner});
  const exact:RouteView[]=listed.routes;

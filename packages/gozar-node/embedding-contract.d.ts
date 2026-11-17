@@ -1,4 +1,4 @@
-import type {Configuration,Reach,Properties,Prerequisite,Fact,Action,Usage} from './route-contract.js';
+import type {Configuration,Reach,Properties,Prerequisite,Fact,Action,Availability} from './route-contract.js';
 /** Additive host embedding contract for Gozar 0.4.0. Trusted host APIs only. */
 export type Observation<T> = {known:true;value:T}|{known:false;reason:string};
 export type HostCapabilityId = 'installer.execute'|'privilege.elevate'|'secrets.backend'|'runtime.attached'|'runtime.durable'|(string & {});
@@ -25,7 +25,7 @@ export interface HostEmbeddingMethods {
 }
 export interface ProviderInventory {
  providerId:string;label:string;reach:Reach;transport:Properties['transport'];
- availability:Record<Usage['kind'],{state:'available'|'detect-only'|'unsupported'|'ready'|'action-required'|'unknown';reason:string}>;
+ availability:Availability;
  prerequisites:Prerequisite[];configuration:Configuration;facts:Fact[];
 }
 export interface RouteBinding {authority:'adapter'|'owner'|'unknown';target:Observation<string>;remedy:Action|null}

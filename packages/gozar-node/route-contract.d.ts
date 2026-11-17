@@ -219,6 +219,8 @@ export type Ingress = {
 };
 
 export type RouteView = {
+  consentFactsDigest?:string|null;
+  consentChange?:{oldDigest:string;newDigest:string;nextAction:Action|null;reason:string};
   operationId:string|null;
   binding:import('./embedding-contract.js').RouteBinding;
   schemaVersion: 2;
