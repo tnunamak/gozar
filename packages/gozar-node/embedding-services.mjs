@@ -186,14 +186,18 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
    const c=draftId?applied.drafts[draftId]:applied;
    const stale=!c||(draftId&&c.baseRevision!==applied.revision)||(record&&record.configurationRevision!==c.revision);
    const tx=configurationTransaction(s,h,{...r,draftId},applied,stale?null:c);
+   // Observe journal custody without asking the backend to release credential bytes.
+   const managementHandle=slot=>{
+    const handle=record?.management?.[slot],ref=s.secrets[handle];
+    return ref?.scopeId===scopeId&&ref.registryId===registryId&&ref.operationId===r.operationId?handle:null;
+   };
    return run({
     home:h,scopeId,record,stale:!!stale,tx,checkpoint,
     reserve:record=>{journal[key]=record;},
+    hasManagementSecret:slot=>managementHandle(slot)!==null,
     withManagementSecret:async(slot,use)=>{
-     const handle=record?.management?.[slot];
-     const ref=s.secrets[handle];
-     if(!ref||ref.scopeId!==scopeId||ref.registryId!==registryId||ref.operationId!==r.operationId)return null;
-     return call(h,'withSecret',{scopeId,handle},use);
+     const handle=managementHandle(slot);
+     return handle===null?null:call(h,'withSecret',{scopeId,handle},use);
     },
     retainManagementSecret:async(slot,inputId,handle)=>{
      await tx.withSecret(inputId,handle,async()=>{});

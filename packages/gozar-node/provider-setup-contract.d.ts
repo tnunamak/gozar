@@ -58,8 +58,10 @@ export type SetupOperation = {
   operationId: string;
   revision: number;
   scope: Pick<SetupConsentScope, 'registryId' | 'scopeId' | 'providerId' | 'configurationRevision' | 'draftId'>;
+  /** Complete reflects the adapter's setup workflow. Route publication requires separate consent and proof. */
   state: 'authorization-required' | 'pending' | 'denied' | 'expired' | 'blocked'
     | 'reconciling' | 'complete' | 'cancelled';
+  /** Setup observation in this operation, which may be unknown when the workflow is complete. */
   evidence: SetupEvidence;
   nextAction: SetupOffer | null;
   resources: SetupResource[];

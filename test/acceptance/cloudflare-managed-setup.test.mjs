@@ -101,7 +101,11 @@ async function fixture(t) {
           records.delete(id);
           return success({ id });
         }
-        return success(records.get(id));
+        const snapshot = structuredClone(records.get(id));
+        if (id === dnsId && --state.exactReadsBeforeEdit === 0) {
+          records.set(id, { ...snapshot, content: 'concurrent-edit.example.net', modified_on: new Date().toISOString() });
+        }
+        return success(snapshot);
       }
       assert.fail(method + ' ' + path);
     } },
@@ -217,7 +221,22 @@ test('managed authorization, exact independent resources, live gate proof, resta
   assert.equal(fx.tunnels.size, 2);
   assert.equal(fx.records.size, 2);
 
-  view = await fx.drive(await fx.api.readSetupOperation(fx.ref));
+  const handoff = await fx.api.readSetupOperation(fx.ref);
+  const remove = handoff.nextAction;
+  // Acknowledgement leaves the exact record and its debt intact.
+  view = await fx.drive(handoff);
+  assert.equal(remove.kind, 'instructions');
+  assert.equal(remove.step.actor, 'owner');
+  assert.equal(remove.step.purpose, 'remove-resource');
+  for (const exact of [account, zone, host, dnsId, fx.records.get(dnsId).content]) {
+    assert.ok(remove.instructions.includes(exact));
+  }
+  assert.equal(view.resources.find(row => row.kind === 'dns').removal, 'required');
+  assert.equal(fx.records.size, 2);
+  assert.equal(fx.connectors.size, 0);
+  assert.ok(fx.records.delete(dnsId), 'the owner removes the exact record through Cloudflare');
+  view = await fx.api.readSetupOperation(fx.ref);
+  assert.equal(view.resources.find(row => row.kind === 'dns').removal, 'confirmed');
   assert.equal(view.nextAction.step.purpose, 'revoke-credential');
   assert.equal(fx.tunnels.size, 2);
   assert.equal(fx.records.size, 1);
@@ -233,6 +252,7 @@ test('managed authorization, exact independent resources, live gate proof, resta
   assert.equal(view.nextAction, null);
   assert.ok(view.resources.every(row => row.removal === 'confirmed'));
   assert.deepEqual([...fx.records.keys()], [retainedDNS]);
+  assert.ok(!fx.writes.some(([method, path]) => method === 'DELETE' && path.startsWith(dnsPath)));
   assert.deepEqual([...fx.tunnels.keys()], [fx.foreign.id]);
   const persisted = await readFile(join(fx.ref.home, 'embedding-state.json'), 'utf8');
   for (const secret of [fx.management, fx.runToken, ...fx.state.handles]) {
@@ -293,4 +313,37 @@ test('a changed DNS record with the same provider ID keeps cleanup debt and is n
   assert.equal(view.resources.find(row => row.kind === 'dns').removal, 'unconfirmed');
   assert.equal(fx.records.get(dnsId).content, 'foreign-change.example.net');
   assert.ok(fx.writes.every(([method]) => method !== 'DELETE'));
+});
+
+test('an edit after the final exact DNS read cannot cause a machine deletion', async t => {
+  const fx = await fixture(t);
+  let view = await fx.configure(await fx.intake(await fx.start()));
+  for (let step = 0; step < 3; step++) view = await fx.drive(view);
+  const exact = structuredClone(fx.records.get(dnsId));
+  const handoff = await fx.api.cancelSetupOperation(fx.ref);
+  assert.equal(handoff.resources.find(row => row.kind === 'dns').removal, 'required');
+
+  // The old executor did two exact reads: offer refresh, then its last pre-delete check.
+  // The provider replies to that last read with the old snapshot after changing the same ID.
+  fx.state.exactReadsBeforeEdit = 2;
+  await fx.drive(handoff);
+  if (handoff.nextAction.kind === 'instructions') {
+    await assert.rejects(fx.drive(handoff, { actionId: 'managed-remove-dns', approval: { ...approved(handoff.nextAction), digest: 'obsolete-machine-offer' } }),
+      { code: 'consent_mismatch' });
+  }
+  assert.equal(fx.state.exactReadsBeforeEdit, 0);
+  assert.deepEqual(fx.writes.filter(([method, path]) => method === 'DELETE' && path.startsWith(dnsPath)), []);
+  assert.equal(fx.records.get(dnsId).content, 'concurrent-edit.example.net');
+
+  view = await fx.api.readSetupOperation(fx.ref);
+  assert.equal(view.nextAction.id, 'review-uncertain');
+  assert.equal(view.resources.find(row => row.kind === 'dns').removal, 'unconfirmed');
+
+  // The provider owner resolves the edit and removes the original record independently.
+  fx.records.set(dnsId, exact);
+  assert.ok(fx.records.delete(dnsId));
+  fx.records.set(retainedDNS, { id: retainedDNS, name: host, content: 'foreign.example.net' });
+  view = await fx.api.readSetupOperation(fx.ref);
+  assert.equal(view.resources.find(row => row.kind === 'dns').removal, 'confirmed');
+  assert.equal(fx.records.get(retainedDNS).content, 'foreign.example.net');
 });

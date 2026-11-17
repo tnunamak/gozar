@@ -91,6 +91,9 @@ export function ngrokSetup({ definition, authAction, domainAction, sdkAvailable,
     obtainUrl: 'https://dashboard.ngrok.com/api-keys',
     help: 'Ask the administrator of the intended account for a dedicated API key authorized to list reserved domains. An API key can have wider account permissions. Gozar uses this key only for GET requests to the reserved domains inventory. If you cannot obtain suitable authority, clear Domain source in the draft and choose the dashboard.',
   }, 'owner', 'Read reserved domains from api.ngrok.com', 'provider', 'authorize');
+  const disconnect = action({ id: 'ngrok-disconnect-inventory', kind: 'gozar-runs', label: 'Forget the local ngrok domain inventory key',
+    help: 'Remove the private copy stored by this setup. The agent credential, ngrok account API key and existing domains remain available.',
+  }, 'owner', 'Delete this operation’s local domain inventory key', 'host', 'disconnect');
   const entry = action({ id: 'ngrok-setup', kind: 'gozar-runs', label: 'Set up an ngrok HTTPS listener',
     help: 'Check the SDK and guide account credential and domain selection for the HTTPS listener.' },
   'machine', 'Read ngrok HTTPS setup prerequisites', 'host', 'authorize');
@@ -116,7 +119,10 @@ export function ngrokSetup({ definition, authAction, domainAction, sdkAvailable,
   async function observeSetup(ctx, operation) {
     const outcome = (state, nextAction, summary, stepId = nextAction?.id ?? 'ngrok-ready', source = nextAction?.step.verification ?? 'host') =>
       ({ state, nextAction, evidence: { operationId: operation.id, stepId, source, observedAt: new Date(ctx.now()).toISOString(), summary } });
-    if (operation.cancelled) return outcome('complete', null, 'Setup paused. The account’s existing credentials and domains are retained.', 'ngrok-retained');
+    if (operation.cancelled) {
+      if (ctx.hasManagementSecret(inventorySlot)) return outcome('pending', disconnect, 'This setup retains a local domain inventory key.');
+      return outcome('complete', null, 'No local domain inventory key is retained by this setup. The account’s existing credentials and domains are retained.', disconnect.id);
+    }
     if (operation.lastActionId === null) return outcome('authorization-required', entry, entry.help);
     if (!supportedPlatform(ctx.platform)) return outcome('blocked', null, 'The ngrok runtime is unavailable on this platform.', 'ngrok-platform');
     if (!await sdkAvailable(ctx)) return outcome('blocked', artifact(ctx.platform, ctx.architecture ?? process.arch),
@@ -154,7 +160,9 @@ export function ngrokSetup({ definition, authAction, domainAction, sdkAvailable,
     configurationActions: () => [authAction, domainAction, entry],
     observeSetup,
     async executeSetup(ctx, { action: approved }) {
-      if (approved.id === auth.id) {
+      if (approved.id === disconnect.id) {
+        await ctx.disconnectManagementSecret(inventorySlot);
+      } else if (approved.id === auth.id) {
         if (!await ctx.withInputSecret(async bytes => Boolean(credential(bytes))))
           throw effectError('setup_required', 'Enter a single ngrok agent authtoken.');
         return { state: 'complete', bindInputSecret: true };

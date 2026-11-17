@@ -69,11 +69,13 @@ export default recipeAdapter({
   extend: ({ base, definition, platformOf, unsupported }) => {
     const action = (id, kind, label, actor, verification, purpose, fields) => {
       const body = { id, kind, label, disclosure: definition.disclosure, ...fields,
-        step: { actor, verification, purpose, permission: { id, label } } };
+        ...(purpose && { step: { actor, verification, purpose, permission: { id, label } } }) };
       return { ...body, digest: sha(body) };
     };
-    const originAction = action('origin', 'provide-value', 'Provide the HTTPS address you run', 'owner', 'host', 'configure',
-      { valueLabel: 'HTTPS address', valuePlaceholder: 'https://app.example.com', valueFormat: 'https-origin', required: true });
+    const originFields = { valueLabel: 'HTTPS address', valuePlaceholder: 'https://app.example.com', valueFormat: 'https-origin', required: true };
+    const originAction = action('origin', 'provide-value', 'Provide the HTTPS address you run', 'owner', 'host', 'configure', originFields);
+    const localOrigin = action('origin', 'provide-value', originAction.label, null, null, null, originFields);
+    const entry = action('own-address-setup', 'gozar-runs', 'Set up an existing HTTPS address', 'machine', 'host', 'configure');
     const retained = 'The owner retains DNS records, the certificate, proxy settings, router rules and existing credentials. Stop in Gozar to withdraw its route and close any Gozar-owned gate. Remove in Gozar to forget its tracking record. The infrastructure administrator must retire any mapping that was added solely for this route.';
     const mapping = (origin, bindTarget) => {
       const exact = /^127\.0\.0\.1:[1-9]\d{0,4}$/.test(bindTarget ?? '') && Number(bindTarget.split(':')[1]) <= 65535;
@@ -103,13 +105,16 @@ export default recipeAdapter({
       // The proof is a check from this device until the route is verified; Gozar claims no wider vantage.
       properties: facts => ({ ...base.properties(), reach: facts?.reach ?? 'unknown', proof: { vantage: 'this-device', checks: ['tls', 'nonce'] } }),
 
-      setupActions: facts => (!facts?.setupNeeded ? [] : facts.origin ? [mapping(facts.origin)] : [structuredClone(originAction)]),
+      configurationActions: () => [structuredClone(localOrigin), entry],
+
+      setupActions: facts => (!facts?.setupNeeded ? [] : facts.origin ? [mapping(facts.origin)] : [structuredClone(localOrigin)]),
 
       async observeSetup(ctx, operation) {
         const route = ctx.route;
         if (operation.cancelled) return { state: 'cancelled', evidence: unknown('external-resources-retained'),
           nextAction: action('retain-infrastructure', 'instructions', 'Keep your existing infrastructure',
             'owner', 'host', 'reconcile', { instructions: retained }) };
+        if (operation.lastActionId === null) return { state: 'authorization-required', nextAction: entry };
         const origin = await given(ctx);
         if (!origin) return {
           state: ctx.origin == null ? 'authorization-required' : 'blocked',
@@ -151,13 +156,14 @@ export default recipeAdapter({
       },
 
       async executeSetup(ctx, { action: { id }, value }) {
+        if (id === entry.id) return { state: 'complete' };
         if (id !== originAction.id || !parseOrigin(value)) throw effectError('invalid_input', 'Provide a credential-free HTTPS origin');
         return { state: 'complete', nextAction: null };
       },
 
       async setup(ctx, actionId) {
         if (actionId !== originAction.id) throw unsupported(`setup action ${String(actionId).slice(0, 64)}`);
-        return { state: 'pending', nextAction: structuredClone(originAction) };
+        return { state: 'pending', nextAction: structuredClone(localOrigin) };
       },
 
       async plan(ctx, request) {

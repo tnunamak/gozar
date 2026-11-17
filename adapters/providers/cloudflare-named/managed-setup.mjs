@@ -112,7 +112,7 @@ export function managedCloudflareSetup(action, dependencies) {
     { valueLabel: label, valueFormat: format, required: true }, options ? { options } : {});
   const access = (purpose = 'authorize') => step('managed-api-token', 'provide-secret', 'Authorize managed Cloudflare setup', purpose, {
     secretLabel: 'Scoped Cloudflare API token', obtainUrl: tokensUrl, required: true,
-    instructions: 'Create a Custom API token in My Profile → API Tokens. Grant Cloudflare Tunnel Edit for one account, Zone Read and DNS Edit for one existing Cloudflare zone, and set an expiry long enough for cleanup. Enter that API token in the private input. Gozar uses it to manage the tunnel and DNS. Keep its dashboard entry until cleanup. Browser-only management authorization is unavailable here.',
+    instructions: 'Create a Custom API token in My Profile → API Tokens. Grant Cloudflare Tunnel Edit for one account, Zone Read and DNS Edit for one existing Cloudflare zone, and set an expiry long enough for cleanup. Enter that API token in the private input. Gozar uses it to manage the tunnel, create the DNS record and verify DNS removal. Keep its dashboard entry until cleanup. Browser-only management authorization is unavailable here.',
   });
   const initial = () => access();
   const next = (state, nextAction = null, extra = {}) => ({ state, nextAction, ...extra });
@@ -168,8 +168,18 @@ export function managedCloudflareSetup(action, dependencies) {
       if (operation.cancelled) {
         if (ctx.configurationInUse()) return reply('pending', instruct('managed-stop-connector', 'Stop the attached route', 'stop-connector',
           'Close the active route in Gozar and confirm its cleanup. Refresh here to remove the owned DNS and tunnel resources.'));
-        if (dns) return reply('pending', step('managed-remove-dns', 'gozar-runs', 'Remove the exact owned DNS record', 'remove-resource',
-          { help: 'Close the attached route and keep the zone free of concurrent edits during removal.' }, { resourceHandle: dns.id }));
+        if (dns) {
+          const { zone, name, content } = dns.subject;
+          const { id, modifiedAt } = dns.identity ?? dns.receiptIdentity;
+          const account = operation.resources.find(row => row.kind === 'tunnel')?.subject.account;
+          return reply('pending', step('managed-owner-remove-dns', 'instructions', 'Remove the exact owned DNS record in Cloudflare', 'remove-resource', {
+            href: 'https://dash.cloudflare.com/' + account,
+            instructions: `As the Cloudflare zone owner, open account ${account} and go to DNS → Records for zone ${zone}. ` +
+              `Confirm the proxied CNAME ${name} points to ${content}, has record ID ${id} and was last modified at ${modifiedAt}. ` +
+              'Use the zone’s DNS record details or API inventory to confirm the ID and timestamp. If any detail changed, leave the record in place and reconcile it with the zone owner. ' +
+              'Remove only the matching record from Cloudflare, then refresh this operation so Gozar can verify exact absence.',
+          }, { resourceHandle: dns.id }));
+        }
         if (credential) return reply('pending', step('managed-revoke-run-token', 'instructions', 'Rotate the owned tunnel run token', 'revoke-credential', {
           href: tokenDocs, instructions: 'Close the attached route in Gozar. In Cloudflare Networking → Tunnels, select ' +
             credential.subject.name + ' (' + credential.subject.tunnelId + '), choose Rotate token, then refresh here. Gozar checks that the exact previous token is no longer current. Rotation affects new connections. Existing connectors need to be stopped.',
@@ -304,7 +314,6 @@ export function managedCloudflareSetup(action, dependencies) {
           } finally { bytes.fill(0); }
           break;
         }
-        case 'managed-remove-dns':
         case 'managed-remove-tunnel': {
           if ((await readResource(call, resource)).status !== 'present') refuse();
           result(await call('DELETE', endpoint(subject, resource.identity)));

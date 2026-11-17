@@ -75,6 +75,10 @@ export default {
       { operationId: operation.id, stepId: 'grant', source: 'provider', observedAt, summary: 'Provider authorization status observed.' };
     if (current.grant !== 'verified') return next(current.grant, current.grant === 'pending' ? nextAction : null, { evidence });
 
+    if (current.completion) return next('complete', null, {
+      evidence: current.completion === 'foreign' ? { ...evidence, operationId: 'another-operation' } : undefined,
+    });
+
     const [row] = operation.resources;
     if (row?.settledAbsent && current.offerAgain && !operation.cancelled) return next('pending',
       action('create-tunnel', 'gozar-runs', 'machine', 'provision'),

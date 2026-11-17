@@ -326,3 +326,20 @@ test('a replaced allocation cannot rearm the original intent after exact absence
   assert.equal((await fx.world()).creates, 1);
   assert.equal((await fx.world()).resources.tunnel, replacement);
 });
+
+test('an unknown adapter can report workflow completion with missing or foreign evidence without publishing', async t => {
+  const fx = await fixture(t, 'complete');
+  await fx.begin();
+  for (const completion of ['missing', 'foreign']) {
+    await fx.update({ completion });
+    const view = await fx.api.readSetupOperation(fx.ref);
+    assertShape('SetupOperation', view);
+    assert.equal(view.state, 'complete');
+    assert.deepEqual(view.evidence, { known: false, reason: 'setup-evidence-unavailable' });
+    assert.deepEqual(view.resources, []);
+    const [candidate] = (await fx.api.catalogRoutes(fx.q)).candidates;
+    assert.equal(candidate.candidateToken, null);
+    await assert.rejects(fx.api.expose({ ...fx.q, operationId: fx.ref.operationId, wait: 'verified' }), { code: 'consent_required' });
+    assert.deepEqual((await fx.world()).calls, []);
+  }
+});

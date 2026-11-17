@@ -83,7 +83,8 @@
       {
         "id": "local-setup",
         "label": "Local prerequisites",
-        "observation": "detected"
+        "observation": "detected",
+        "actionId": "own-address-setup"
       }
     ],
     "facts": [

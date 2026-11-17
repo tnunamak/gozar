@@ -7,8 +7,6 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { processIdentity } from '../../packages/gozar-node/process-identity.mjs';
-
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const schema = JSON.parse(readFileSync(join(root, 'runtime/route-catalog.schema.json'), 'utf8'));
 export const fixtures = JSON.parse(readFileSync(join(root, 'test/fixtures/route-contract.json'), 'utf8'));
@@ -72,14 +70,15 @@ export async function attachedScratch(t, deps = {}) {
   let dispose;
   const home = await scratch({ after: hook => { dispose = hook; } });
   t.after(async () => {
-    await retireAttachedControllers(home, deps);
+    const identity = deps.identity ?? (await import('../../packages/gozar-node/process-identity.mjs')).processIdentity;
+    await retireAttachedControllers(home, { ...deps, identity });
     await dispose();
   });
   return home;
 }
 
 async function retireAttachedControllers(home, {
-  identity = processIdentity, signal = (pid, value) => process.kill(pid, value),
+  identity, signal = (pid, value) => process.kill(pid, value),
   now = Date.now, wait = ms => new Promise(resolve => setTimeout(resolve, ms)),
   timeoutMs = 5000,
 } = {}) {

@@ -84,12 +84,15 @@ test('ngrok setup journey: auth, then reserved domain, then ready; expose opens 
   const { home, api, forwards, candidateOf, provide, provideValue } = await ngrokWorld(t);
   let candidate = await candidateOf();
   assert.equal(candidate.setup.state, 'action-required');
-  assert.deepEqual(candidate.setup.actions.map(item => item.id), ['auth', 'reserved-domain']);
+  const setupEntry = candidate.setup.actions.find(item => item.id === 'ngrok-setup');
+  assert.equal(setupEntry?.kind, 'gozar-runs');
+  assert.equal(setupEntry.step.purpose, 'authorize');
+  assert.deepEqual(candidate.setup.actions.filter(item => !item.step).map(item => item.id), ['auth', 'reserved-domain']);
   assert.equal(candidate.candidateToken, null);
 
   assert.equal((await provide(candidate, 'auth', TOKEN)).result.state, 'complete');
   candidate = await candidateOf();
-  assert.deepEqual(candidate.setup.actions.map(item => item.id), ['reserved-domain'], 'only the missing value is asked for');
+  assert.deepEqual(candidate.setup.actions.filter(item => !item.step).map(item => item.id), ['reserved-domain'], 'only the missing legacy value is asked for');
   assert.equal(candidate.setup.state, 'action-required');
 
   assert.equal((await provideValue(candidate, 'reserved-domain', DOMAIN)).state, 'complete');

@@ -36,6 +36,8 @@ export default recipeAdapter({
       address ? [{ value: address, label: `Approve HTTP on ${address}` }] : undefined);
     const guidance = (id, label, actor, verification, purpose, instructions) =>
       action(id, 'instructions', label, actor, verification, purpose, { instructions });
+    const entry = action('lan-setup', 'gozar-runs', 'Set up a LAN listener', 'machine', 'host', 'configure');
+    const localInput = ({ step, digest, ...body }) => ({ ...body, digest: sha(body) });
     const unknown = reason => ({ known: false, reason });
 
     const choice = async ctx => {
@@ -72,24 +74,24 @@ export default recipeAdapter({
         return { state: pending.needs.length || result.state !== 'ready' ? 'action-required' : 'ready', facts };
       },
 
-      configurationActions: () => [interfaceAction(), firewallAction()],
+      configurationActions: () => [localInput(interfaceAction()), localInput(firewallAction()), entry],
 
       setupActions(facts) {
         if (!facts?.setupNeeded) return [];
         const detail = [facts.reason, listed(facts.observedInterfaces ?? [])].filter(Boolean).join(' ');
         if (!facts.interfaceNeeded && !facts.firewallNeeded) {
-          return [interfaceAction(facts.observedInterfaces, detail), firewallAction(facts.selectedInterface)];
+          return [interfaceAction(facts.observedInterfaces, detail), firewallAction(facts.selectedInterface)].map(localInput);
         }
         return [
           ...(facts.interfaceNeeded ? [interfaceAction(facts.observedInterfaces, detail)] : []),
           ...(facts.firewallNeeded ? [firewallAction(facts.selectedInterface)] : []),
-        ];
+        ].map(localInput);
       },
 
       async setup(ctx, actionId) {
         const offered = { interface: interfaceAction(), firewall: firewallAction() }[actionId];
         if (!offered) return base.setup(ctx, actionId);
-        return { state: 'pending', nextAction: structuredClone(offered) };
+        return { state: 'pending', nextAction: localInput(offered) };
       },
 
       async observeSetup(ctx, operation) {
@@ -106,6 +108,7 @@ export default recipeAdapter({
                 'Stop the exact route in Gozar. This closes the owned HTTP listener. Ask the administrator to remove any rule added solely for this route. Shared firewall rules remain in place.')
               : null };
         }
+        if (operation.lastActionId === null) return { state: 'authorization-required', nextAction: entry };
         const chosen = await choice(ctx);
         let seen;
         try { seen = await inventory(ctx); }
@@ -170,6 +173,7 @@ export default recipeAdapter({
       },
 
       async executeSetup(ctx, { action: { id }, value }) {
+        if (id === entry.id) return { state: 'complete' };
         if (id !== 'interface' && id !== 'firewall') throw effectError('invalid_input', 'Unknown LAN choice');
         const seen = await inventory(ctx);
         if (!seen.some(row => row.address === value) ||

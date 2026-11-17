@@ -184,6 +184,8 @@ export type AdapterSetupObservation = {
 export type SetupObservationContext = ReadContext & {
   configurationInUse(): boolean;
   configurationPresence(): Promise<Pick<import('./route-contract.js').Configuration, 'scopeId' | 'revision' | 'values' | 'credentials'> | null>;
+  /** Whether this operation retains a reference in the slot. Does not read the secret backend. */
+  hasManagementSecret(slot: string): boolean;
   withManagementSecret<T>(slot: string, use: (bytes: Uint8Array) => Promise<T>): Promise<T | null>;
   dispatchEffect?: (request: { kind: string; operation: string; input: unknown }) => Promise<unknown>;
 };

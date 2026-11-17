@@ -18,6 +18,10 @@ const recovery = new Set(['reconcile', 'remove-resource', 'revoke-credential', '
 const inputRequirement = (adapter, action) => (adapter.definition.inputRequirements ?? []).find(row => row.actionId === action.id)?.id ?? action.id;
 const kinds = ['connector', 'tunnel', 'dns', 'credential', 'other'];
 const slotPattern = /^[a-z][a-z0-9._-]{0,63}$/;
+const slot = value => {
+  if (typeof value !== 'string' || !slotPattern.test(value)) fail('invalid_input');
+  return value;
+};
 const timestamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
 
 function validateRef(request) {
@@ -79,13 +83,13 @@ async function openContext(request, deps, storage) {
 }
 
 async function refresh(request, deps, storage, adapter, context, record, { includeBrowserHandoff = false } = {}) {
-  const { tx, stale, withManagementSecret } = storage;
+  const { tx, stale, withManagementSecret, hasManagementSecret } = storage;
   const configuration = await tx.configuration() ?? { scopeId: record.scopeId, revision: record.configurationRevision };
   const inspection = await inspectAdapter(adapter, context, deps.platform);
   const now = Date.now();
   let observed;
   try {
-    observed = await adapter.observeSetup({ ...context, withManagementSecret }, {
+    observed = await adapter.observeSetup({ ...context, withManagementSecret, hasManagementSecret: name => hasManagementSecret(slot(name)) }, {
       id: request.operationId, cancelled: record.cancelled || stale, resources: structuredClone(record.resources),
       connectorInputs: Object.keys(record.connectorSecrets ?? {}),
       lastActionId: record.lastActionId ?? null,
@@ -175,7 +179,6 @@ async function execute(request, deps, storage, adapter, context, record, command
   record.lastActionId = action.id;
   await storage.checkpoint();
 
-  const slot = value => { if (typeof value !== 'string' || !slotPattern.test(value)) fail('invalid_input'); return value; };
   let persistenceError;
   const checkpoint = async () => {
     try { await storage.checkpoint(); }
@@ -184,6 +187,7 @@ async function execute(request, deps, storage, adapter, context, record, command
   const assertAdvancing = () => { if (record.cancelled || storage.stale) fail('configuration_stale'); };
   const effectContext = {
     ...context,
+    hasManagementSecret: name => storage.hasManagementSecret(slot(name)),
     withInputSecret: use => tx.withSecret(inputId, request.secretHandle, use),
     withManagementSecret: (name, use) => storage.withManagementSecret(slot(name), use),
     retainManagementSecret: name => storage.retainManagementSecret(slot(name), inputId, request.secretHandle),

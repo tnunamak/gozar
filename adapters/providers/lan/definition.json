@@ -78,7 +78,8 @@
       {
         "id": "local-setup",
         "label": "Local prerequisites",
-        "observation": "detected"
+        "observation": "detected",
+        "actionId": "lan-setup"
       }
     ],
     "facts": [
