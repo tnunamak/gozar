@@ -70,23 +70,31 @@ async function retireFixture(world, deps = {}) {
   const socketRetired = deps.socketRetired ?? fixtureSocketRetired;
   const remove = deps.remove ?? (path => rm(path, { recursive: true, force: true }));
   const failures = [];
+  const waitMs = deps.waitMs ?? 2000;
+  // Never signal a PID without rechecking the exact start identity.
+  const killExact = () => {
+    return Promise.resolve(identify(identity.pid)).then(current => {
+      if (current === identity.startIdentity) kill(identity.pid, 'SIGKILL');
+    }).catch(killError => { if (killError.code !== 'ESRCH') failures.push(killError); });
+  };
+  const waitGone = async () => {
+    const deadline = Date.now() + waitMs;
+    while (await identify(identity.pid) === identity.startIdentity) {
+      if (Date.now() >= deadline) return false;
+      await sleep(10);
+    }
+    return true;
+  };
   if (await identify(identity.pid) === identity.startIdentity) {
     try { await stop(world); }
-    catch (error) {
-      failures.push(error);
-      // Never signal a PID without rechecking the exact start identity.
-      try {
-        if (await identify(identity.pid) === identity.startIdentity) kill(identity.pid, 'SIGKILL');
-      } catch (killError) {
-        if (killError.code !== 'ESRCH') failures.push(killError);
-      }
-    }
+    catch (error) { failures.push(error); await killExact(); }
   }
   try {
-    const deadline = Date.now() + 2000;
-    while (await identify(identity.pid) === identity.startIdentity) {
-      if (Date.now() >= deadline) throw new Error('Fixture process did not retire; recovery home: ' + home);
-      await sleep(10);
+    if (!await waitGone()) {
+      // An acknowledged stop does not prove retirement: record it, then retire the exact identity.
+      failures.push(new Error('Fixture process did not retire; recovery home: ' + home));
+      await killExact();
+      if (!await waitGone()) failures.push(new Error('Fixture process survived exact retirement; recovery home: ' + home));
     }
     const socketDeadline = Date.now() + 2000;
     while (!await socketRetired(directory)) {
@@ -220,3 +228,37 @@ test('fixture teardown preserves a failed graceful stop after exact fallback ret
   assert.equal(removed, false, 'unexpected cleanup failure retains recovery evidence');
 });
 
+
+test('an acknowledged stop that leaves the exact process alive is retired by identity-guarded fallback', async () => {
+  const identity = { pid: 12345, startIdentity: 'fixture-start', nonce: 'fixture-nonce' };
+  let alive = true, removed = false;
+  const calls = [];
+  await assert.rejects(retireFixture({ home: '/fixture', directory: '/fixture/session', sessionId: 'fixture-session', identity }, {
+    waitMs: 30,
+    identify: async pid => { assert.equal(pid, identity.pid); return alive ? identity.startIdentity : null; },
+    stop: async () => { calls.push('stop'); },
+    kill: (pid, signal) => { assert.equal(signal, 'SIGKILL'); calls.push('kill:' + pid); alive = false; },
+    socketRetired: async () => { calls.push('socket'); return true; },
+    remove: async () => { removed = true; },
+  }), error => /did not retire; recovery home: \/fixture/.test(error.message));
+  assert.deepEqual(calls, ['stop', 'kill:12345', 'socket']);
+  assert.equal(removed, false, 'the original timeout failure retains the recovery home');
+});
+
+test('exact fallback never signals a PID that a different process now owns', async () => {
+  const identity = { pid: 12345, startIdentity: 'fixture-start', nonce: 'fixture-nonce' };
+  let reads = 0;
+  const calls = [];
+  await retireFixture({ home: '/fixture', directory: '/fixture/session', sessionId: 'fixture-session', identity }, {
+    waitMs: 20,
+    // Alive for the first checks, then a different process owns the PID.
+    identify: async () => (++reads <= 3 ? identity.startIdentity : 'foreign-start'),
+    stop: async () => { calls.push('stop'); },
+    kill: () => { calls.push('kill'); },
+    socketRetired: async () => true,
+    remove: async () => { calls.push('remove'); },
+  });
+  // The original process is gone (the PID is foreign): no signal, and the owned home is removed.
+  assert.equal(calls.includes('kill'), false);
+  assert.deepEqual(calls, ['stop', 'remove']);
+});

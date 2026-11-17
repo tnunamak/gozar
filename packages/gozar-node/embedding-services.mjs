@@ -123,7 +123,10 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   mutateConfiguration:(r,effect,{mutatesConfiguration=true}={})=>transaction(r.home,async(s,h)=>{
    const applied=await config(s,h,r.providerId,r.owner),c=select(applied,r.draftId);compare(c,r.expectedConfigurationRevision);const assertMutable=()=>{if(!r.draftId&&applied.uses.length)fail('configuration_in_use');};if(mutatesConfiguration)assertMutable();
    const next={...c,bindings:clone(c.bindings),values:clone(c.values)};let changed=false;
-   const tx={assertMutable,clearInput:inputId=>{assertMutable();if(!r.draftId)fail('invalid_input');delete next.bindings[inputId];delete next.values[inputId];changed=true;},resolveConfiguration:()=>resolvedValues(h,c),configuration:()=>redacted(h,c),withSecret:async(inputId,handle,use)=>{const ref=s.secrets[handle];if(!ref||ref.registryId!==registryId||ref.scopeId!==c.scopeId||ref.inputId!==inputId||ref.revision!==c.revision||ref.draftId!==(r.draftId??null))fail('invalid_input');return call(h,'withSecret',{scopeId:c.scopeId,handle},use);},
+   const tx={assertMutable,clearInput:inputId=>{assertMutable();if(!r.draftId)fail('invalid_input');delete next.bindings[inputId];delete next.values[inputId];changed=true;},resolveConfiguration:()=>resolvedValues(h,c),configuration:()=>redacted(h,c),withSecret:async(inputId,handle,use)=>{const ref=s.secrets[handle];
+    // Authority is the exact current binding, or the exact intake revision and draft that stored the handle. Immutable intake metadata still pins registry, scope and input.
+    const current=c.bindings[inputId]===handle,intake=ref?.revision===c.revision&&ref?.draftId===(r.draftId??null);
+    if(!ref||ref.registryId!==registryId||ref.scopeId!==c.scopeId||ref.inputId!==inputId||!(current||intake))fail('invalid_input');return call(h,'withSecret',{scopeId:c.scopeId,handle},use);},
     bindSecret:async(inputId,handle)=>{assertMutable();await tx.withSecret(inputId,handle,async()=>{});next.bindings[inputId]=handle;delete next.values[inputId];changed=true;},
     bindText:(inputId,value)=>{assertMutable();next.values[inputId]=value;delete next.bindings[inputId];changed=true;},markChanged:()=>{assertMutable();changed=true;}};
    const result=await effect(tx);if(changed){next.revision=fresh();if(r.draftId)applied.drafts[r.draftId]=next;else s.configs[c.scopeId]=next;}

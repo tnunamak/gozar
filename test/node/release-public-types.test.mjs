@@ -68,3 +68,25 @@ test('escaped declaration export cannot qualify',async t=>{
  await writeFile(join(f.pkg,'package.json'),JSON.stringify({exports:{'.':{types:'./../../../outside.d.ts'},'./testing':{types:'./testing.d.ts'}}}));
  await assert.rejects(checkPublicTypes({installedRoot:f.root,tsc:f.compiler}),/escaping/);
 });
+test('compiler output flood is capped, stops the child group and still cleans up',async t=>{
+ const f=await fixture(t,`process.stdout.write('x'.repeat(5_000_000));setInterval(()=>{},1000)`);
+ const started=Date.now();
+ const result=await checkPublicTypes({installedRoot:f.root,tsc:f.compiler,outputCapBytes:4096});
+ assert.equal(result.overflow,true);assert.ok(Buffer.byteLength(result.stdout)<=4096);assert.ok(Date.now()-started<20000);
+ assert.equal((await readdir(f.root)).some(x=>x.startsWith('.gozar-public-types-')),false);
+ await assert.rejects(checkPublicTypes({installedRoot:f.root,tsc:f.compiler,outputCapBytes:0}),/output cap/);
+});
+test('a link at any depth inside the installed package cannot qualify, dependency typings may be linked',async t=>{
+ const f=await fixture(t,'process.exit(0)');
+ const source=join(f.root,'source-internal.d.ts');await writeFile(source,'export declare const leak:never;');
+ await mkdir(join(f.pkg,'dist','deep'),{recursive:true});
+ await symlink(source,join(f.pkg,'dist','deep','internal.d.ts'));
+ await assert.rejects(checkPublicTypes({installedRoot:f.root,tsc:f.compiler}),/Source-linked installed package member: dist\/deep\/internal\.d\.ts/);
+ assert.equal((await readdir(f.root)).some(x=>x.startsWith('.gozar-public-types-')),false);
+ await rm(join(f.pkg,'dist'),{recursive:true});
+ // An ordinary installed dependency may be linked (package-manager layout); it is not owned-package source.
+ const dependency=join(f.root,'store','left-pad');await mkdir(dependency,{recursive:true});await writeFile(join(dependency,'index.d.ts'),'export {};');
+ await symlink(dependency,join(f.root,'node_modules','left-pad'),'dir');
+ const ok=await checkPublicTypes({installedRoot:f.root,tsc:f.compiler});
+ assert.equal(ok.code,0);assert.equal(ok.overflow,false);
+});
