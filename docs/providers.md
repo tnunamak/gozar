@@ -6,7 +6,9 @@ This table lists what the registry ships. Each row is read from the provider's d
 what `catalogRoutes` reports. The Id column is the value `Query.providerId` takes. Ports are the public
 ports Gozar tries, in order; where a durable route tries other ports, they follow `durable:`, and the
 catalog reports them, with the durable Needs line, for a durable query.
-Proof is what Gozar checks before it publishes; the sse check runs only when the app asks for SSE.
+Proof lists the provider's declared proof profile. Actual checks depend on the provider and lifecycle phase;
+there is no blanket rule that SSE is checked only when the app requests it. Consult
+`RouteView.verification.checks` for the checks recorded for that verification, rather than treating this table as live proof.
 
 Gozar 0.2.0 supports Linux and macOS. On any other platform (for example Windows) every candidate answers
 `unsupported`.

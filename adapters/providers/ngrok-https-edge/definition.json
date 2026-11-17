@@ -634,7 +634,7 @@
       "https://ngrok.com/privacy"
     ],
     "protocols": {
-      "sse/streamableHttp": "true. the attached controller (packages/gozar-node/attached-route.mjs, runAttachedController) forwards the SDK listener to a gate it runs in front of the app. Before it reports a published origin it runs the same timed-SSE validation as recipe routes (gate.verify with sse) through the public origin. Frames must arrive unbuffered and in order, or the listener is closed and the route fails with verification_failed. Red test: test/adapters/ngrok-attached-validation.test.mjs",
+      "sse/streamableHttp": "true. The attached controller (packages/gozar-node/attached-route.mjs, runAttachedController) forwards the SDK listener to a gate in front of the app. Initial attached publication proof is capability-driven: claimsSse is true for this adapter, so checkProof(claimsSse) requires timed SSE through the public origin even when the request omits SSE. Frames must arrive unbuffered and in order; failed initial validation withdraws the listener and reports verification_failed. This is not a guarantee for every refresh: the gate-backed refresh path calls checkProof(false), retaining TLS/nonce validation without repeating timed SSE. Consult RouteView.verification.checks for the checks recorded for that verification. Transport proof does not establish application or live-client authorization. Regression: test/adapters/ngrok-attached-validation.test.mjs",
       "oauthDcr": "oauthDcr: transport support is conditional on the configured app implementing client registration and authorization. A stable HTTPS origin preserves the configured authority but does not prove live OAuth DCR or application authorization."
     }
   }
