@@ -75,40 +75,86 @@ export async function withRouteOperation(request,{registryId,embeddingServices,a
   },{waitSeconds:30});
   const immediate=await observe(null);
   if(immediate)return immediate;
-  // Only initial startup owes a wait; settled replay remains historical recovery.
-  // Status can refresh proof, so do not call it while the winner owns startup.
-  if(request.wait==='verified'||request.wait==='allocated'){
-   const timeout=Number.isFinite(startTimeoutMs)&&startTimeoutMs>=0?startTimeoutMs:120_000;
-   const deadline=Date.now()+timeout;
-   while(currentRecord.phase==='starting'){
-    const remaining=deadline-Date.now();
-    let waitError,timer;
-    if(remaining<=0)waitError=gozarError('provider_unavailable','The original route operation did not finish in time');
-    else try{
-     await Promise.race([
-      Promise.resolve().then(()=>replayWait(Math.min(150,remaining))),
-      new Promise((_,reject)=>{timer=setTimeout(()=>reject(gozarError('provider_unavailable','The original route operation did not finish in time')),remaining);}),
-     ]);
-    }catch(error){waitError=error;}finally{clearTimeout(timer);}
-    // Stop, reference cleanup and completed startup dominate even at timeout.
+  const waits=request.wait==='verified'||request.wait==='allocated';
+  const timeout=Number.isFinite(startTimeoutMs)&&startTimeoutMs>=0?startTimeoutMs:120_000;
+  const deadline=Date.now()+timeout;
+  // Only delays and status IO share this budget. Journal observations acquire
+  // the independent reservation lock (up to 30s each); no lock spans status IO.
+  const bounded=async action=>{
+   if(!waits)return {value:await action()};
+   const remaining=deadline-Date.now();if(remaining<=0)return {expired:true};
+   let timer;
+   try{
+    const result=await Promise.race([
+     Promise.resolve().then(action).then(value=>({value})),
+     new Promise(resolve=>{timer=setTimeout(()=>resolve({expired:true}),remaining);}),
+    ]);
+    // A late IO completion cannot turn an elapsed deadline into success.
+    return Date.now()>=deadline?{expired:true}:result;
+   }catch(error){if(waits&&Date.now()>=deadline)return {expired:true};throw error;}
+   finally{clearTimeout(timer);}
+  };
+  const recovery=()=>({...structuredClone(currentRecord.view),state:'uncertain',routeState:'cleanup-unconfirmed',published:null,ingress:null,
+   verification:{...currentRecord.view.verification,status:'unverified'},cleanup:{state:'unconfirmed',nextAction:null}});
+  const atDeadline=async()=>{
+   const terminal=await observe(null);if(terminal)return terminal;
+   // Historical settled failure is not a fresh readiness promise.
+   if(currentRecord.phase==='recovery'&&(currentRecord.view.cleanup?.state!=='none'||currentRecord.view.verification?.status==='failed'))return structuredClone(currentRecord.view);
+   const error=gozarError('provider_unavailable','The original route operation did not finish in time');
+   // Never decorate an arbitrary (possibly frozen) provider error.
+   error.route=currentRecord.phase==='starting'?recovery():structuredClone(currentRecord.view);
+   throw error;
+  };
+  // Status may refresh proof; never call it while the winner owns startup.
+  while(waits&&currentRecord.phase==='starting'){
+   let delayed;
+   try{delayed=await bounded(()=>replayWait(Math.min(150,Math.max(0,deadline-Date.now()))));}
+   catch(error){
     const terminal=await observe(null);if(terminal)return terminal;
     if(currentRecord.phase!=='starting')break;
-    if(waitError){
-     const debt={...structuredClone(currentRecord.view),state:'uncertain',routeState:'cleanup-unconfirmed',published:null,ingress:null,
-      verification:{...currentRecord.view.verification,status:'unverified'},cleanup:{state:'unconfirmed',nextAction:null}};
-     const retained=await observe(debt);
-     if(currentRecord.referenceCleanup||retained.cleanup.state==='confirmed')return retained;
-     if(currentRecord.phase!=='starting')break;
-     waitError.route=retained;throw waitError;
-    }
+    const refusal=gozarError('provider_unavailable','The original route operation did not finish in time',undefined,error);
+    refusal.route=recovery();throw refusal;
    }
+   const terminal=await observe(null);if(terminal)return terminal;
+   if(delayed.expired)return atDeadline();
   }
-  try{return await observe({...await status({home,handle:currentRecord.view.handle}),operationId:request.operationId});}
-  catch(error){
-   if(error.code==='route_conflict'){const reference=await operationReferenceForRoute({home,handle:currentRecord.view.handle});if(reference?.owner===record.owner&&reference.operationId===record.operationId)return observe({...await status({home,handle:reference.handle}),operationId:request.operationId});}
-   if(!['route_not_found','provider_unavailable',...(currentRecord.phase==='starting'?['route_conflict']:[])].includes(error.code))throw error;
-   return observe({...structuredClone(currentRecord.view),state:'uncertain',routeState:'cleanup-unconfirmed',published:null,ingress:null,
-    verification:{...currentRecord.view.verification,status:'unverified'},cleanup:{state:'unconfirmed',nextAction:null}});
+  for(;;){
+   let refreshed;
+   try{
+    refreshed=await bounded(async()=>{
+     try{return {...await status({home,handle:currentRecord.view.handle}),operationId:request.operationId};}
+     catch(error){
+      if(error.code==='route_conflict'&&(!waits||Date.now()<deadline)){
+       const reference=await operationReferenceForRoute({home,handle:currentRecord.view.handle});
+       if(reference?.owner===record.owner&&reference.operationId===record.operationId&&(!waits||Date.now()<deadline))
+        return {...await status({home,handle:reference.handle}),operationId:request.operationId};
+      }
+      throw error;
+     }
+    });
+   }catch(error){
+    const terminal=await observe(null);if(terminal)return terminal;
+    if(!['route_not_found','provider_unavailable',...(currentRecord.phase==='starting'?['route_conflict']:[])].includes(error.code))throw error;
+    // Creator loss remains a recovery read, including a stronger verified call.
+    return observe(recovery());
+   }
+   if(refreshed.expired)return atDeadline();
+   const view=await observe(refreshed.value);
+   const live=view.cleanup?.state==='none'&&view.verification?.status!=='failed'&&
+    !['released','failed','blocked'].includes(view.state);
+   if(request.wait!=='verified'||!live||
+      view.verification?.status==='verified'&&typeof view.published==='string'&&view.published.length>0)return view;
+   // Allocated is not verified: wait only for current live readiness, never
+   // reallocate or demand publication from retained historical cleanup debt.
+   let delayed;
+   try{delayed=await bounded(()=>replayWait(Math.min(150,Math.max(0,deadline-Date.now()))));}
+   catch(error){
+    const terminal=await observe(null);if(terminal)return terminal;
+    const refusal=gozarError('provider_unavailable','The original route operation did not finish in time',undefined,error);
+    refusal.route=structuredClone(currentRecord.view);throw refusal;
+   }
+   const terminal=await observe(null);if(terminal)return terminal;
+   if(delayed.expired)return atDeadline();
   }
  }
  try{const view={...await run(record.view.handle),operationId:request.operationId};record.view=view;record.phase='allocated';return await persist(record);}

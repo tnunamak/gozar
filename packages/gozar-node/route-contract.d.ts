@@ -343,6 +343,12 @@ export type ExposeRequest = Query & {
   intent?: 'create';
   usage: { kind: 'session'; lifetimeMs: number } | { kind: 'attached' };
   approval: Approval;
+  /**
+   * Matching operation replay never reallocates. Verified waits for live readiness;
+   * retained failure/creator-loss evidence and confirmed Stop remain recovery reads.
+   * Internal replay delays and status IO share a deadline; expiry is provider_unavailable
+   * with the exact retained route. Journal locks have an independent acquisition bound.
+   */
   wait: 'allocated' | 'verified';
 };
 
