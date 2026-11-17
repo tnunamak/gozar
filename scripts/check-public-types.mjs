@@ -1,10 +1,22 @@
 #!/usr/bin/env node
 // Artifact gate: run AFTER packing/installing. Source-unit tests do not qualify declarations.
 import {spawn} from 'node:child_process';
-import {access,stat,realpath,readFile,mkdtemp,writeFile,copyFile,rm} from 'node:fs/promises';
+import {access,stat,lstat,readdir,realpath,readFile,mkdtemp,writeFile,copyFile,rm} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {join,resolve,isAbsolute,relative,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
+
+export const MAX_COMPILER_OUTPUT_BYTES=1024*1024;
+
+// Only this installed package is inspected. Sibling dependencies and compiler libraries
+// remain normal compiler inputs; this is materialization checking, not archive provenance.
+async function materializedTree(directory){
+ for(const entry of await readdir(directory)){
+  const path=join(directory,entry),info=await lstat(path);
+  if(info.isSymbolicLink())throw new Error('Source-linked installed package entry (symbolic link): '+path);
+  if(info.isDirectory())await materializedTree(path);
+ }
+}
 
 export function parseArgs(args){
  const values={};
@@ -49,6 +61,7 @@ export async function checkPublicTypes({installedRoot,tsc,timeoutMs=30000}){
   const path=await existing(resolve(pkg,target),'installed type export '+name);
   if(!inside(pkg,path))throw new Error('Source-linked or escaping installed type export: '+name);
  }
+ await materializedTree(pkg);
  let project;
  try{
   project=await mkdtemp(join(root,'.gozar-public-types-'));
@@ -58,15 +71,24 @@ export async function checkPublicTypes({installedRoot,tsc,timeoutMs=30000}){
    target:'ES2022',module:'NodeNext',moduleResolution:'NodeNext',strict:true,noEmit:true,skipLibCheck:false,types:[],
   },files:['consumer.ts']},null,2));
   return await new Promise((resolveResult,reject)=>{
-   let stdout='',stderr='',timedOut=false,spawnError,settled=false;
+   const captured={stdout:[],stderr:[]};let retainedBytes=0,outputOverflow=false;
+   let timedOut=false,spawnError,settled=false,terminating=false;
    let exitCode=null,exitSignal=null,exited=false,drainTimer,timer;
    const terminationErrors=[];
    const grouped=process.platform!=='win32';
    const child=spawn(compiler,['--project',join(project,'tsconfig.json'),'--pretty','false'],{cwd:project,detached:grouped,stdio:['ignore','pipe','pipe']});
-   child.stdout.on('data',data=>{stdout+=data;});child.stderr.on('data',data=>{stderr+=data;});
+   const capture=(stream,data)=>{
+    if(settled||outputOverflow)return;
+    const bytes=Buffer.isBuffer(data)?data:Buffer.from(data);
+    const keep=Math.min(bytes.length,MAX_COMPILER_OUTPUT_BYTES-retainedBytes);
+    if(keep){captured[stream].push(Buffer.from(bytes.subarray(0,keep)));retainedBytes+=keep;}
+    if(keep<bytes.length){outputOverflow=true;terminate();}
+   };
+   child.stdout.on('data',data=>capture('stdout',data));child.stderr.on('data',data=>capture('stderr',data));
    const finish=(outputTruncated=false)=>{
     if(settled)return;
     settled=true;clearTimeout(timer);clearTimeout(drainTimer);
+    outputTruncated=outputTruncated||outputOverflow;
     if(outputTruncated){
      child.stdout.destroy();child.stderr.destroy();
      // A failed kill must not give this child ownership of the gate's lifetime.
@@ -74,11 +96,16 @@ export async function checkPublicTypes({installedRoot,tsc,timeoutMs=30000}){
      if(!exited)child.unref();
     }
     if(spawnError){reject(new Error('Compiler could not start: '+spawnError.message,{cause:spawnError}));return;}
-    resolveResult({code:exitCode,signal:exitSignal,stdout,stderr,timedOut,outputTruncated,
-     descendantCleanup:timedOut?'unverified':'not-requested',terminationErrors});
+    // Decode complete captured byte sequences once, never individual pipe chunks.
+    // On overflow, omit an incomplete trailing code point at the truncation boundary.
+    const decode=chunks=>new TextDecoder('utf-8',{ignoreBOM:true}).decode(Buffer.concat(chunks),{stream:outputOverflow});
+    const stdout=decode(captured.stdout),stderr=decode(captured.stderr);
+    resolveResult({code:outputOverflow&&exitCode===0?1:exitCode,signal:exitSignal,stdout,stderr,timedOut,outputTruncated,outputOverflow,
+     descendantCleanup:terminating?'unverified':'not-requested',terminationErrors});
    };
-   timer=setTimeout(()=>{
-    timedOut=true;
+   const terminate=()=>{
+    if(terminating||settled)return;
+    terminating=true;
     // Terminate our group, but escaped descendants may still own output pipes.
     // Independently bound draining those pipes instead of waiting for close forever.
     drainTimer=setTimeout(()=>finish(true),250);
@@ -93,7 +120,8 @@ export async function checkPublicTypes({installedRoot,tsc,timeoutMs=30000}){
       }
      }
     }
-   },timeoutMs);
+   };
+   timer=setTimeout(()=>{timedOut=true;terminate();},timeoutMs);
    child.on('error',error=>{spawnError=error;});
    // exit records compiler status; only close proves its pipes have drained.
    child.on('exit',(code,signal)=>{exited=true;exitCode=code;exitSignal=signal;});
@@ -109,6 +137,7 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const result=await checkPublicTypes(parseArgs(process.argv.slice(2)));
   process.stdout.write(result.stdout);process.stderr.write(result.stderr);
   if(result.timedOut){process.stderr.write('\nInstalled public type compiler timed out; descendant cleanup is unverified'+(result.outputTruncated?'; output drain was truncated':'')+'\n');process.exitCode=124;}
+  else if(result.outputOverflow){process.stderr.write('\nCompiler output exceeded the shared raw-byte limit; descendant cleanup is unverified\n');process.exitCode=1;}
   else if(result.code!==0){process.stderr.write('\nInstalled public type compilation failed (exit '+result.code+', signal '+result.signal+')\n');process.exitCode=result.code??1;}
   else process.stdout.write('Installed public consumer compiled. This is not archive/head provenance or release qualification.\n');
  }catch(error){process.stderr.write(error.message+'\n');process.exitCode=1;}

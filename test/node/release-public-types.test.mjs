@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,readdir,rm,chmod,rename,symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {checkPublicTypes,parseArgs} from '../../scripts/check-public-types.mjs';
+import {checkPublicTypes,parseArgs,MAX_COMPILER_OUTPUT_BYTES} from '../../scripts/check-public-types.mjs';
 
 async function fixture(t,body){
  const root=await mkdtemp(join(tmpdir(),'public-types-unit-'));
@@ -128,4 +128,62 @@ test('deadline settles even after compiler exit when a detached descendant holds
    })]);
   }finally{clearTimeout(cleanupTimer);}
  }
+});
+
+
+test('compiler flood has one raw-byte budget across both output pipes',async t=>{
+ // Real owned process, not a TypeScript qualification.
+ const f=await fixture(t,`const fs=require('node:fs');
+ const block=Buffer.alloc(65536,0x78);
+ for(let i=0;i<128;i++){fs.writeSync(1,block);fs.writeSync(2,block);}
+ process.exit(0);`);
+ const result=await checkPublicTypes({installedRoot:f.root,tsc:f.compiler});
+ assert.equal(result.outputOverflow,true);
+ assert.equal(result.outputTruncated,true);
+ assert.notEqual(result.code,0,'overflow cannot qualify even if the compiler exits zero');
+ assert.ok(Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr)<=MAX_COMPILER_OUTPUT_BYTES);
+ assert.equal(result.descendantCleanup,'unverified');
+ assert.equal((await readdir(f.root)).some(x=>x.startsWith('.gozar-public-types-')),false);
+});
+
+test('within-budget split UTF-8 output is decoded only after capture',async t=>{
+ const f=await fixture(t,`const fs=require('node:fs');
+ const data=Buffer.from('é😀');
+ fs.writeSync(1,data.subarray(0,1));fs.writeSync(2,data.subarray(0,3));
+ setTimeout(()=>{fs.writeSync(1,data.subarray(1));fs.writeSync(2,data.subarray(3));},30);`);
+ const result=await checkPublicTypes({installedRoot:f.root,tsc:f.compiler});
+ assert.equal(result.code,0);assert.equal(result.outputOverflow,false);
+ assert.equal(result.stdout,'é😀');assert.equal(result.stderr,'é😀');
+ assert.equal(result.outputTruncated,false);
+ assert.equal((await readdir(f.root)).some(x=>x.startsWith('.gozar-public-types-')),false);
+});
+
+test('nested source-linked declarations cannot qualify a materialized entry',async t=>{
+ const f=await fixture(t,`require('node:fs').writeFileSync('../compiler-ran','yes');`);
+ const source=join(f.root,'separate-source');await mkdir(source);
+ await writeFile(join(source,'internal.d.ts'),'export interface Nested { value: string }');
+ await writeFile(join(f.pkg,'index.d.ts'),"export * from './internal.js';");
+ await symlink(join(source,'internal.d.ts'),join(f.pkg,'internal.d.ts'),'file');
+ await assert.rejects(checkPublicTypes({installedRoot:f.root,tsc:f.compiler}),/source-linked|symbolic link/i);
+ await assert.rejects(readFile(join(f.root,'compiler-ran')),{code:'ENOENT'});
+ assert.equal((await readdir(f.root)).some(x=>x.startsWith('.gozar-public-types-')),false);
+});
+
+test('materialized nested declarations allow separate installed dependencies',async t=>{
+ const f=await fixture(t,`const fs=require('node:fs');
+ const config=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
+ if(config.compilerOptions.strict!==true||config.compilerOptions.skipLibCheck!==false||
+ config.compilerOptions.module!=='NodeNext'||config.compilerOptions.moduleResolution!=='NodeNext')process.exit(9);
+ if(JSON.stringify(process.argv.slice(2))!==JSON.stringify(['--project',process.argv[3],'--pretty','false']))process.exit(8);
+ process.stdout.write('synthetic transport success, not type qualification');`);
+ await mkdir(join(f.pkg,'nested'));
+ await writeFile(join(f.pkg,'index.d.ts'),"export * from './nested/internal.js';");
+ await writeFile(join(f.pkg,'nested','internal.d.ts'),"export type { External } from 'fixture-external';\nexport interface Nested { value: string }");
+ const external=join(f.root,'node_modules','fixture-external');await mkdir(external);
+ await writeFile(join(external,'package.json'),JSON.stringify({name:'fixture-external',types:'index.d.ts'}));
+ await writeFile(join(external,'index.d.ts'),'export interface External { date: Date }');
+ const result=await checkPublicTypes({installedRoot:f.root,tsc:f.compiler});
+ assert.equal(result.code,0);assert.equal(result.outputOverflow,false);
+ assert.match(result.stdout,/not type qualification/);
+ assert.equal((await readdir(f.root)).some(x=>x.startsWith('.gozar-public-types-')),false);
 });
