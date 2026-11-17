@@ -70,30 +70,45 @@ async function retireFixture(world, deps = {}) {
   const socketRetired = deps.socketRetired ?? fixtureSocketRetired;
   const remove = deps.remove ?? (path => rm(path, { recursive: true, force: true }));
   const failures = [];
-  if (await identify(identity.pid) === identity.startIdentity) {
-    try { await stop(world); }
-    catch (error) {
-      failures.push(error);
-      // Never signal a PID without rechecking the exact start identity.
-      try {
-        if (await identify(identity.pid) === identity.startIdentity) kill(identity.pid, 'SIGKILL');
-      } catch (killError) {
-        if (killError.code !== 'ESRCH') failures.push(killError);
-      }
+  const now = deps.now ?? Date.now;
+  const pause = deps.sleep ?? sleep;
+  async function exactFallback() {
+    // Identity-read failure is uncertainty, never evidence of exit or permission to kill.
+    let current;
+    try { current = await identify(identity.pid); }
+    catch (error) { failures.push(error); return; }
+    if (current !== identity.startIdentity) return;
+    try { kill(identity.pid, 'SIGKILL'); }
+    catch (error) { if (error.code !== 'ESRCH') failures.push(error); }
+  }
+  const timeoutError = () => new Error('Fixture process did not retire; recovery home: ' + home);
+  async function waitForRetirement(processTimeout = timeoutError()) {
+    const deadline = now() + 2000;
+    while (await identify(identity.pid) === identity.startIdentity) {
+      if (now() >= deadline) throw processTimeout;
+      await pause(10);
+    }
+    const socketDeadline = now() + 2000;
+    while (!await socketRetired(directory)) {
+      if (now() >= socketDeadline) throw new Error('Fixture socket did not retire; recovery home: ' + home);
+      await pause(10);
     }
   }
-  try {
-    const deadline = Date.now() + 2000;
-    while (await identify(identity.pid) === identity.startIdentity) {
-      if (Date.now() >= deadline) throw new Error('Fixture process did not retire; recovery home: ' + home);
-      await sleep(10);
+  if (await identify(identity.pid) === identity.startIdentity) {
+    try { await stop(world); }
+    catch (error) { failures.push(error); await exactFallback(); }
+  }
+  const retirementTimeout = timeoutError();
+  try { await waitForRetirement(retirementTimeout); }
+  catch (error) {
+    failures.push(error);
+    if (error === retirementTimeout) {
+      // A stop ACK is not exit. Preserve this timeout even if emergency cleanup works.
+      await exactFallback();
+      try { await waitForRetirement(); }
+      catch (retirementError) { failures.push(retirementError); }
     }
-    const socketDeadline = Date.now() + 2000;
-    while (!await socketRetired(directory)) {
-      if (Date.now() >= socketDeadline) throw new Error('Fixture socket did not retire; recovery home: ' + home);
-      await sleep(10);
-    }
-  } catch (error) { failures.push(error); }
+  }
   // Even a successful emergency kill does not erase a graceful-stop failure.
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, 'Fixture teardown failed; retained ' + home);
@@ -220,3 +235,72 @@ test('fixture teardown preserves a failed graceful stop after exact fallback ret
   assert.equal(removed, false, 'unexpected cleanup failure retains recovery evidence');
 });
 
+
+for (const killFails of [false, true]) test('fixture stop ACK cannot hide live-child timeout; fallback ' + (killFails ? 'failure is aggregated' : 'retires exact child'), async () => {
+  const identity = { pid: 12345, startIdentity: 'fixture-start', nonce: 'fixture-nonce' };
+  const killFailure = new Error('exact kill denied');
+  let alive = true, removed = false, now = 0, caught;
+  const calls = [];
+  try {
+    await retireFixture({ home: '/fixture', directory: '/fixture/session', sessionId: 'fixture-session', identity }, {
+      now: () => now,
+      sleep: async () => { now += 2100; },
+      identify: async pid => { assert.equal(pid, identity.pid); calls.push('identify'); return alive ? identity.startIdentity : null; },
+      stop: async () => { calls.push('ack'); return { snapshot: { phase: 'stopped', sessionId: 'fixture-session' } }; },
+      kill: (pid, signal) => {
+        assert.equal(pid, identity.pid); assert.ok(pid > 0); assert.equal(signal, 'SIGKILL');
+        calls.push('kill');
+        if (killFails) throw killFailure;
+        alive = false;
+      },
+      socketRetired: async directory => { assert.equal(directory, '/fixture/session'); calls.push('socket'); return !alive; },
+      remove: async () => { removed = true; },
+    });
+    assert.fail('original retirement timeout must remain a failure');
+  } catch (error) { caught = error; }
+  const failures = caught instanceof AggregateError ? caught.errors : [caught];
+  assert.match(failures[0].message, /^Fixture process did not retire; recovery home: \/fixture$/);
+  assert.equal(calls.filter(call => call === 'kill').length, 1);
+  const killedAt = calls.indexOf('kill');
+  assert.equal(calls[killedAt - 1], 'identify', 'recheck start identity immediately before exact kill');
+  if (killFails) {
+    assert.ok(failures.includes(killFailure));
+    assert.ok(failures.length >= 2, 'original timeout and fallback error both survive');
+  } else {
+    assert.equal(alive, false);
+    assert.deepEqual(calls.slice(killedAt + 1), ['identify', 'socket'], 'verify process and socket after fallback');
+    assert.equal(failures.length, 1);
+  }
+  assert.equal(removed, false, 'timeout preserves recovery home even after emergency retirement');
+});
+
+for (const unreadable of [false, true]) test('post-ACK timeout never signals a ' + (unreadable ? 'unreadable' : 'replaced') + ' identity', async () => {
+  const identity = { pid: 12345, startIdentity: 'fixture-start', nonce: 'fixture-nonce' };
+  const readFailure = new Error('identity inspection denied');
+  let reads = 0, now = 0, removed = false, socketChecks = 0, killCalls = 0, caught;
+  try {
+    await retireFixture({ home: '/fixture', directory: '/fixture/session', sessionId: 'fixture-session', identity }, {
+      now: () => now, sleep: async () => { now += 2100; },
+      identify: async pid => {
+        assert.equal(pid, identity.pid);
+        if (++reads < 4) return identity.startIdentity;
+        if (unreadable) throw readFailure;
+        return 'replacement-start';
+      },
+      stop: async () => ({ snapshot: { phase: 'stopped', sessionId: 'fixture-session' } }),
+      kill: () => { killCalls++; assert.fail('no authority to signal an unreadable or replaced identity'); },
+      socketRetired: async () => { socketChecks++; return true; },
+      remove: async () => { removed = true; },
+    });
+    assert.fail('original timeout must survive');
+  } catch (error) { caught = error; }
+  const failures = caught instanceof AggregateError ? caught.errors : [caught];
+  assert.match(failures[0].message, /^Fixture process did not retire;/);
+  assert.ok(reads >= 5, 'fallback rechecks identity and subsequently verifies retirement');
+  assert.equal(killCalls, 0, 'no signal when the captured identity cannot be confirmed');
+  if (unreadable) {
+    assert.ok(failures.includes(readFailure));
+    assert.equal(socketChecks, 0, 'identity uncertainty cannot become process absence');
+  } else assert.equal(socketChecks, 1);
+  assert.equal(removed, false);
+});
