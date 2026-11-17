@@ -60,8 +60,8 @@ export type Disclosure = {
   links: { rel: 'terms' | 'privacy'; label: string; href: string }[];
 };
 
-export type {SetupStep,SetupEvidence,SetupResource,SetupOperationRef,RunSetupOperationRequest,SetupOperation} from './provider-setup-contract.js';
-import type {SetupStep,SetupOperationRef,RunSetupOperationRequest,SetupOperation} from './provider-setup-contract.js';
+export type {SetupStep,SetupEvidence,SetupResource,SetupOperationRef,RunSetupOperationRequest,SetupOperation,InteractiveSetupOperation,SafeSetupAction} from './provider-setup-contract.js';
+import type {SetupStep,SetupOperationRef,RunSetupOperationRequest,SetupOperation,InteractiveSetupOperation,SafeSetupAction} from './provider-setup-contract.js';
 
 export type Action = {
   id: string;
@@ -130,7 +130,7 @@ export type Fact = { id: string; label: string; value: string | number | boolean
 export type SetupConsentScope={kind:'setup';registryId:string;scopeId:string;providerId:string;configurationRevision:string;draftId:string|null;actionId:string;disclosureRevision:string;actionDigest:string;operation?:{id:string;revision:number}};
 export type RouteConsentScope={kind:'route';registryId:string;scopeId:string;providerId:string;configurationRevision:string;query:{usage:Usage;reach:Reach;transport:Properties['transport'];target:string;expectedOrigin:string|null};reviewHandle?:string;handleGeneration?:number};
 /** The actual typed canonical input. Setup includes the full trusted action, including artifact/effect disclosures. */
-export type SetupConsentDisclosures={action:Omit<Action,'consent'|'review'>};
+export type SetupConsentDisclosures={action:SafeSetupAction};
 export type RouteConsentDisclosures={reach:Reach;transport:Properties['transport'];traffic:Properties['traffic'];address:Properties['address'];cost:{kind:Properties['cost']['kind']};lifetimes:Properties['lifetimes'];supervision:Properties['supervision'];protocols:Properties['protocols'];disclosure:Disclosure};
 export type ConsentDisclosures=SetupConsentDisclosures|RouteConsentDisclosures;
 export type SetupConsentSnapshot={scope:SetupConsentScope;consentFactsDigest:string;facts:Fact[];disclosures:SetupConsentDisclosures};
@@ -416,7 +416,10 @@ export function setRoutePreferences(request: SetRoutePreferencesRequest): Promis
 export function runSetupAction(request: RunSetupOperationRequest): Promise<SetupOperation>;
 export function runSetupAction(request: RunSetupActionRequest): Promise<SetupActionResult>;
 /** Ask for the ephemeral handoff only when opening it in an authorized interactive host. */
-export function readSetupOperation(request: SetupOperationRef & { includeBrowserHandoff?: boolean }): Promise<SetupOperation>;
+export function readSetupOperation<Interactive extends boolean | undefined = undefined>(
+  request: SetupOperationRef & { includeBrowserHandoff?: Interactive } &
+    (true extends Interactive ? (Interactive extends true ? { includeBrowserHandoff: true } : unknown) : unknown),
+): Promise<Interactive extends true ? InteractiveSetupOperation : SetupOperation>;
 export function cancelSetupOperation(request: SetupOperationRef): Promise<SetupOperation>;
 export function resolveClientAddress(proof: ClientAddressProof, ingress: Ingress): ResolveClientAddressResult;
 

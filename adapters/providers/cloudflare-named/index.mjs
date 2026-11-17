@@ -1,13 +1,13 @@
-// Only the connector process is owned here. Registration, DNS and token revocation stay with the owner.
+// Attached connector lifecycle and Cloudflare-managed setup share only the run token and gate mapping.
+import { managedCloudflareSetup } from './managed-setup.mjs';
 import { recipeAdapter, effectError } from '../../../packages/gozar-node/adapter-runtime.mjs';
 import { supportedPlatform } from '../../../packages/gozar-node/platform.mjs';
 import { createGate } from '../../../packages/gozar-node/gate.mjs';
 import { findOnPath } from '../../../packages/gozar-node/program-resolution.mjs';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {startTokenProcess} from '../_shared/token-process.mjs';
 import {createListenerLifecycle} from '../_shared/sdk-lifecycle.mjs';
 import {testingFetch} from '../../../packages/gozar-node/testing-network.mjs';
-import {randomUUID} from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -37,10 +37,20 @@ export function createNamedAdapter({ detectBinary = async () => findOnPath('clou
       action('gate-port', 'provide-value', 'Local connector port', { valueLabel: 'Local connector port', valueFormat: 'text',
         help: 'Set the dashboard service target to http://127.0.0.1:PORT using this port (1024–65535). Keep it distinct from your app port.' }),
     ];
-    const install = action('install-connector', 'instructions', 'Install the connector', { instructions: 'Install cloudflared from its official package, then ask the catalog again.' });
-    const supervisorAction=action('install-supervisor','instructions','Install the process supervisor',{instructions:'Install Bash, then ask the catalog again. The supervisor passes credentials through anonymous pipes.'});
+    const install = action('install-connector', 'instructions', 'Install the connector', { instructions: 'Open the Cloudflare downloads page, select this host’s operating system and architecture, and install cloudflared on PATH. Package installation may require a host administrator. Refresh to check the executable.' });
+    const supervisorAction=action('install-supervisor','instructions','Install the process supervisor',{instructions:'Install the bash package with the host package manager and ensure bash is on PATH. Ask the host administrator if installation requires privileges. Refresh to check the executable. Bash supervises the connector and passes its token through an anonymous pipe.'});
+    const managed = managedCloudflareSetup(action, async ctx => {
+      const binary = ctx.dispatchEffect ? (await ctx.dispatchEffect({kind:'process-runtime',operation:'detect',input:{program:'cloudflared'}})).available === true : await detectBinary();
+      const bash = ctx.dispatchEffect ? (await ctx.dispatchEffect({kind:'process-runtime',operation:'detect',input:{program:'bash'}})).available === true : findOnPath('bash',process.env.PATH)!==null;
+      const dependency = !binary ? install : !bash ? supervisorAction : null;
+      if (!dependency) return null;
+      return { ...dependency, ...(!binary && { href: 'https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/' }),
+        step: { actor: 'owner', purpose: 'configure', verification: 'host', permission: { id: dependency.id, label: dependency.label } } };
+    });
+    const { initial, ...setup } = managed;
     return {
-      configurationActions: () => inputs,
+      ...setup,
+      configurationActions: () => [initial(), ...inputs],
       async detect(ctx) {
         if(!supportedPlatform(ctx.platform))return {state:'unsupported',facts:{platform:ctx.platform}};
         const config=await ctx.configuration(null),binary=ctx.dispatchEffect?(await ctx.dispatchEffect({kind:'process-runtime',operation:'detect',input:{program:'cloudflared'}})).available===true:await detectBinary();
@@ -48,7 +58,7 @@ export function createNamedAdapter({ detectBinary = async () => findOnPath('clou
         return { state: binary && supervisor && settings(config) ? 'ready' : 'action-required', facts: { detected: binary,supervisor,
           authSet: typeof config?.token === 'string' && config.token.trim().length > 0, originSet: typeof config?.origin === 'string', portSet: settings(config) !== null } };
       },
-      setupActions: facts => facts?.platform && !supportedPlatform(facts.platform) ? [] : [...(facts?.detected ? [] : [install]),...(facts?.supervisor?[]:[supervisorAction]), ...(facts?.authSet ? [] : [inputs[0]]), ...(facts?.originSet ? [] : [inputs[1]]), ...(facts?.portSet ? [] : [inputs[2]])],
+      setupActions: facts => facts?.platform && !supportedPlatform(facts.platform) ? [] : [...(!facts?.authSet ? [initial()] : []),...(facts?.detected ? [] : [install]),...(facts?.supervisor?[]:[supervisorAction]), ...(facts?.authSet ? [] : [inputs[0]]), ...(facts?.originSet ? [] : [inputs[1]]), ...(facts?.portSet ? [] : [inputs[2]])],
       async setup(ctx, id, handle) {
         if (id !== 'token') throw effectError('unsupported', 'This input is not a secret');
         const valid = await ctx.withSecret(handle, async bytes => bytes.length <= 65536 && new TextDecoder().decode(bytes).trim().length>0);

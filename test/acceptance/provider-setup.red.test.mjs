@@ -4,13 +4,14 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, writeFile, rename, copyFile } from 'node:fs/promises';
+import { readFile, writeFile, rename, copyFile, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createGozar } from '@tnunamak/gozar';
 import { fakeRegistry } from '@tnunamak/gozar/testing';
 import { assertShape, query, scratch } from '../node/route-schema-check.mjs';
 
 const exec = promisify(execFile);
+const cli = new URL(import.meta.resolve('@tnunamak/gozar/bin/gozar.mjs'));
 const approvalFor = action => ({
   kind: 'setup', digest: action.digest, disclosureRevision: action.disclosure.revision,
   consentFactsDigest: action.consent.consentFactsDigest,
@@ -59,7 +60,7 @@ async function fixture(t, mode) {
     assertShape('RunSetupOperationRequest', start);
     let view;
     await assert.doesNotReject(async () => { view = await api.runSetupAction(start); },
-      'expected red on 0.4: reserving a setup operation needs no approval and makes no provider write');
+      'reserving a setup operation needs no approval and makes no provider write');
     assertShape('SetupOperation', view);
     assert.equal(view.operationId, ref.operationId);
     assert.equal(view.scope.scopeId, configuration.scopeId);
@@ -84,10 +85,10 @@ async function fixture(t, mode) {
     assertShape('SetupOperation', view);
     return view;
   };
-  return { api, ref, start, q, first, world, update, begin, command, restartRead };
+  return { api, ref, start, q, first, world, update, begin, command, restartRead, draft, registry };
 }
 
-test('expected red: a browser return remains pending across host restart, and denial or expiry is authoritative', async t => {
+test('a browser return remains pending across host restart, and denial or expiry is authoritative', async t => {
   for (const terminal of ['denied', 'expired']) {
     await t.test(terminal, async t => {
       const fx = await fixture(t, 'browser');
@@ -97,6 +98,13 @@ test('expected red: a browser return remains pending across host restart, and de
       assert.equal(initial.nextAction.href, undefined);
       const handoff = await fx.api.readSetupOperation({ ...fx.ref, includeBrowserHandoff: true });
       assert.equal(new URL(handoff.nextAction.href).protocol, 'https:');
+      assertShape('InteractiveSetupOperation', handoff);
+      assert.throws(() => assertShape('SetupOperation', handoff));
+      const canary = 'transient-fixture-canary';
+      const guesses = [initial, handoff.nextAction.consent, await fx.api.catalogRoutes(fx.q),
+        await fx.api.listProviders({ home: fx.ref.home, owner: fx.ref.owner })];
+      assert.ok(JSON.stringify(handoff).includes(canary));
+      assert.ok(!JSON.stringify(guesses).includes(canary));
       assert.equal(handoff.nextAction.consent.disclosures.action.href, undefined);
       await fx.update({ browserReturned: true });
       const pending = await fx.restartRead();
@@ -110,7 +118,7 @@ test('expected red: a browser return remains pending across host restart, and de
   }
 });
 
-test('expected red: verified grant offers choices, secret intake and admin verification without authorizing provisioning', async t => {
+test('verified grant offers choices, secret intake and admin verification without authorizing provisioning', async t => {
   const fx = await fixture(t, 'browser');
   await fx.begin();
   await fx.update({ grant: 'verified' });
@@ -143,26 +151,26 @@ test('expected red: verified grant offers choices, secret intake and admin verif
   assert.equal(output.includes(canary) || output.includes(handle), false);
 });
 
-test('expected red: an unscoped setup approval at revision zero causes no external write', async t => {
+test('an unscoped setup approval at revision zero causes no external write', async t => {
   const fx = await fixture(t, 'owned');
   // An old root-catalog snapshot has no operation binding. The actual legacy
   // executor can create with this approval, so this guards the overload boundary.
   const outcome = await fx.api.runSetupAction({ ...fx.start, approval: approvalFor(fx.first) })
     .then(() => 'accepted', error => error.code);
-  assert.equal((await fx.world()).creates, 0, 'expected red on 0.4: an unscoped approval performed a create');
+  assert.equal((await fx.world()).creates, 0, 'an unscoped approval performed a create');
   assert.equal(outcome, 'invalid_input');
 });
 
-test('expected red: operation-only provision is refused on the legacy setup path', async t => {
+test('operation-only provision is refused on the legacy setup path', async t => {
   const fx = await fixture(t, 'owned');
   const { home, owner, providerId, expectedConfigurationRevision, actionId } = fx.start;
   const outcome = await fx.api.runSetupAction({ home, owner, providerId, expectedConfigurationRevision,
     actionId, approval: approvalFor(fx.first) }).then(() => 'accepted', error => error.code);
-  assert.equal((await fx.world()).creates, 0, 'expected red on 0.4: legacy setup bypassed the operation journal');
+  assert.equal((await fx.world()).creates, 0, 'legacy setup bypassed the operation journal');
   assert.equal(outcome, 'setup_required');
 });
 
-test('expected red: restart and replay reconcile a lost create before cleanup, preserving foreign resources', async t => {
+test('restart and replay reconcile a lost create before cleanup, preserving foreign resources', async t => {
   const fx = await fixture(t, 'loss');
   const initial = await fx.begin();
   // Crossing the operation scope must fail even with the same provider and revision.
@@ -202,4 +210,119 @@ test('expected red: restart and replay reconcile a lost create before cleanup, p
   assert.equal(removed.resources.find(resource => resource.handle === debt.handle).removal, 'confirmed');
   assert.deepEqual((await fx.world()).resources, { adopted: 'adopted-dns-sentinel', foreign: 'foreign-tunnel-sentinel' });
   assert.deepEqual((await fx.world()).calls, ['create-tunnel', 'remove-tunnel']);
+});
+
+
+test('concurrent reservation and replay allocate once, and unrelated scopes or altered replay are refused', async t => {
+  const fx = await fixture(t, 'owned');
+  const [first, second] = await Promise.all([fx.api.runSetupAction(fx.start), fx.api.runSetupAction(fx.start)]);
+  assert.equal(second.revision, first.revision);
+  assert.deepEqual(second.scope, first.scope);
+  assert.deepEqual(second.nextAction, first.nextAction);
+  assert.deepEqual(second.resources, first.resources);
+  const run = fx.command(first);
+  const otherHome = await scratch(t);
+  for (const patch of [
+    { home: otherHome }, { providerId: 'foreign-provider' }, { owner: 'foreign-owner' },
+    { draftId: randomUUID() }, { expectedConfigurationRevision: 'wrong' }, { expectedSetupRevision: first.revision + 10 },
+  ]) {
+    await assert.rejects(fx.api.runSetupAction({ ...run, ...patch }));
+  }
+  assert.equal((await fx.world()).creates, 0);
+  await Promise.all([fx.api.runSetupAction(run), fx.api.runSetupAction(run), fx.api.runSetupAction(run)]);
+  assert.equal((await fx.world()).creates, 1);
+  await assert.rejects(fx.api.runSetupAction({ ...run, value: 'changed' }), { code: 'consent_mismatch' });
+  await assert.rejects(fx.api.runSetupAction({ ...run, approval: { ...run.approval, digest: 'changed' } }), { code: 'consent_mismatch' });
+});
+
+test('not-found while create can still settle stays uncertain through cancel and discarded draft', async t => {
+  const fx = await fixture(t, 'loss');
+  await fx.update({ deferCreate: true, readable: true });
+  const command = fx.command(await fx.begin());
+  const initial = await fx.api.runSetupAction(command);
+  assert.equal(initial.state, 'reconciling');
+  assert.equal(initial.resources[0].presence.known, false);
+  await fx.api.discardConfigurationDraft({ ...fx.ref, draftId: fx.draft.draftId });
+  await fx.api.cancelSetupOperation(fx.ref);
+  assert.equal((await fx.api.runSetupAction(command)).resources[0].presence.known, false);
+  assert.equal((await fx.world()).creates, 1);
+  const current = await fx.world();
+  await fx.update({ allocation: current.pendingAllocation, resources: {
+    ...current.resources, tunnel: current.pendingAllocation.id,
+  } });
+  const recoverable = await fx.restartRead();
+  assert.equal(recoverable.state, 'cancelled');
+  assert.equal(recoverable.nextAction.step.purpose, 'remove-resource');
+  const removed = await fx.api.runSetupAction(fx.command(recoverable));
+  assert.equal(removed.resources[0].removal, 'confirmed');
+  assert.equal((await fx.world()).creates, 1);
+});
+
+test('persistence failures before dispatch and after provider success preserve admission boundaries', async t => {
+  for (const when of ['before', 'after']) {
+    await t.test(when, async t => {
+      const fx = await fixture(t, 'owned');
+      const run = fx.command(await fx.begin());
+      await fx.update({ journalFault: when });
+      await assert.rejects(fx.api.runSetupAction(run));
+      const journal = join(fx.ref.home, 'embedding-state.json');
+      await rmdir(journal);
+      await rename(journal + '.saved', journal);
+      const expected = when === 'before' ? 0 : 1;
+      assert.equal((await fx.world()).creates, expected);
+      await fx.update({ journalFault: null });
+      const restored = await fx.restartRead();
+      assert.equal(restored.resources.length, expected);
+      await fx.api.runSetupAction(run);
+      assert.equal((await fx.world()).creates, 1);
+    });
+  }
+});
+
+test('installed CLI and package API drive a randomized provider from the same safe offers', async t => {
+  const fx = await fixture(t, 'browser');
+  const manifest = join(fx.ref.home, 'manifest.json');
+  const request = join(fx.ref.home, 'request.json');
+  await writeFile(manifest, JSON.stringify(fx.registry.manifest));
+  const drive = async (verb, data, ...flags) => {
+    await writeFile(request, JSON.stringify(data), { mode: 0o600 });
+    const response = await exec(process.execPath, [cli.pathname, 'setup-operation', verb,
+      '--request-file', request, '--registry-file', manifest, '--registry-root', fx.registry.root, '--json', ...flags]);
+    return JSON.parse(response.stdout);
+  };
+  const reserved = await drive('reserve', fx.start);
+  assertShape('SetupOperation', reserved);
+  assert.equal(reserved.nextAction.href, undefined);
+  const handoff = await drive('read', fx.ref, '--browser-handoff');
+  assertShape('InteractiveSetupOperation', handoff);
+  assert.ok(handoff.nextAction.href);
+  assert.equal(handoff.nextAction.consent.disclosures.action.href, undefined);
+  await fx.update({ grant: 'verified' });
+  const choice = await drive('read', fx.ref);
+  const intake = await drive('run', fx.command(choice, { value: choice.nextAction.step.options[0].value }));
+  const secretFile = join(fx.ref.home, 'secret.txt');
+  const credential = 'cli-canary-' + randomUUID();
+  await writeFile(secretFile, credential, { mode: 0o600 });
+  const admin = await drive('run', fx.command(intake), '--secret-file', secretFile);
+  assert.equal(admin.nextAction.step.actor, 'administrator');
+  assert.ok(!JSON.stringify(admin).includes(credential));
+  const cancelled = await drive('cancel', fx.ref);
+  assert.equal(cancelled.state, 'cancelled');
+  assert.equal((await fx.world()).creates, 0);
+});
+
+test('a replaced allocation cannot rearm the original intent after exact absence', async t => {
+  const fx = await fixture(t, 'owned');
+  const command = fx.command(await fx.begin());
+  const created = await fx.api.runSetupAction(command);
+  assert.equal(created.resources[0].ownership, 'owned');
+  const world = await fx.world();
+  const replacement = 'foreign-replacement';
+  await fx.update({ offerAgain: true, resources: { ...world.resources, tunnel: replacement } });
+  const missing = await fx.api.readSetupOperation(fx.ref);
+  assert.equal(missing.resources[0].removal, 'confirmed');
+  assert.equal((await fx.api.readSetupOperation(fx.ref)).nextAction, null);
+  await fx.api.runSetupAction(command);
+  assert.equal((await fx.world()).creates, 1);
+  assert.equal((await fx.world()).resources.tunnel, replacement);
 });

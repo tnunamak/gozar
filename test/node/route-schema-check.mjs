@@ -32,6 +32,7 @@ function validate(node, value, defs, path = '$') {
       case 'items': if (Array.isArray(value)) value.forEach((item, i) => errors.push(...validate(node.items, item, defs, `${path}[${i}]`))); break;
       case 'oneOf': { const hits = node.oneOf.filter(sub => validate(sub, value, defs, path).length === 0).length; if (hits !== 1) errors.push(`${path}: matches ${hits} oneOf branches`); break; }
       case 'anyOf': if (!node.anyOf.some(sub => validate(sub, value, defs, path).length === 0)) errors.push(`${path}: matches no anyOf branch`); break;
+      case 'not': if (!validate(node.not, value, defs, path).length) errors.push(`${path}: matches forbidden schema`); break;
       default: throw new Error(`Unsupported schema keyword ${key}`);
     }
   }

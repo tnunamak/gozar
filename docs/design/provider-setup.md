@@ -1,6 +1,6 @@
-# Provider setup contract draft
+# Provider setup
 
-A host can guide an owner through setup and remove what Gozar created using only public Gozar data. The trusted adapter supplies the provider knowledge. Gozar binds each offer to its authority and retains enough evidence to recover from interrupted writes. This draft specifies the upcoming public API. The 0.4 runtime does not implement setup operations.
+A host can guide an owner through setup and remove what Gozar created using only public Gozar data. The trusted adapter supplies the provider knowledge. Gozar binds each offer to its authority and retains enough evidence to recover from interrupted writes.
 
 ## Render the current action
 
@@ -23,7 +23,7 @@ Gozar returns `pending` while authoritative evidence is outstanding, `denied` af
 1. Save a caller-chosen `operationId` before the first call. Call `runSetupAction` with that ID, `expectedSetupRevision: 0`, the initial `actionId`, and the configuration or draft revision. Start reserves the operation and returns its first scoped offer. It accepts no approval or input at revision zero and performs no external mutation. The legacy call returns `setup_required` for an operation-only action.
 2. Advance with `runSetupAction` using the current setup revision, action ID and configuration revision. Pass the existing setup approval and input where requested. The setup consent scope adds the operation ID and revision. Gozar recomputes the disclosure and current consent facts under that scope before running an effect. Changed facts, stale configuration, an approval copied across operations or scopes, and altered replay input all refuse before effects.
 3. Call `readSetupOperation` with home, owner, provider ID and operation ID on restart or while waiting. It reads the persisted operation and may refresh observations. It never allocates, deletes or grants access. An authorization exchange that needs a write runs as a separately admitted machine action. Pending browser handoffs may expire while the host is absent. Denial and expiry carry no grant. A retry is a fresh offer, with a new setup revision and handoff.
-4. Call `cancelSetupOperation` with the same reference. Cancel is idempotent and prevents further setup effects. It preserves exact recovery state and offers reconciliation or removal for any partial effects. A completion reported after cancellation can update the cleanup evidence and cannot advance provisioning.
+4. Call `cancelSetupOperation` with the same reference. Cancel is idempotent and prevents new provisioning or grant advancement. It preserves exact recovery state and allows separately approved reconciliation, removal, revocation and disconnection under the retained scope and current authority. A completion reported after cancellation can update the cleanup evidence and cannot advance provisioning.
 
 The private journal binds the canonical home, owner, registry, provider and applied configuration or draft scope. A setup revision changes when the authority or actionable state changes, including when setup itself commits a new configuration revision. Display-only timestamps do not change it. The current action carries the current consent snapshot. Historical approvals remain tied to their admitted command. A successful replay of the same command returns the latest safe view of its operation, including cancellation or cleanup, and cannot run the command again. A different action, approval or input for the same admitted revision is an operation conflict. Reading and cleaning up a partial operation still use its retained scope when its draft is stale or unavailable.
 
@@ -41,9 +41,18 @@ Public `resources` rows carry opaque handles, the last observed presence and rem
 
 Stopping the connector, removing owned provisioning resources such as the tunnel and DNS record, and revoking owned credentials are distinct actions. Removal offers use `step.resourceHandle` and bind the exact mutation into consent. Gozar rechecks ownership and identity before the conditional remove, and records readback afterward. Where the provider couples effects, the review lists every affected owned resource and requires authority for all consequences. Disconnecting a local reference is separate from revocation. Keep a recovery path for missing management authority as long as debt remains. A discarded draft or cancelled setup never clears debt.
 
+## Adapter observations and execution
+
+An adapter implements `observeSetup(ctx, operation)` and `executeSetup(ctx, command)`. The read receives the operation identity, cancellation state and private resource rows. It returns a state, current action, optional evidence and exact resource observations. Evidence names the operation, verified step and observation time. An action's prerequisites describe dependencies for the host. The adapter decides when the observations justify offering it.
+
+An allocation offer supplies a kind, label and stable subject. Gozar records the subject and a unique intent ID before dispatch. The executor can checkpoint an identity from the admitted provider response via `recordAllocation`. Ownership requires later exact provider readback or an equivalent provider-supported correlation to that intent. Each resource observation repeats the intent ID and subject, supplies its observation time and identifies the exact immutable resource if present. Absence must rule out delayed completion. An unidentified allocation or an inconclusive read keeps debt. A previously allocated subject cannot be rearmed in the same operation.
+
+The observation context exposes configuration values and credential presence through `configurationPresence()`. An admitted executor may read the exact input, retain it in a private management slot, or bind a connector credential in the existing configuration. An approved command dispatches once. A new cleanup command gets its own approval. The route lifecycle still supplies transport proof and connector stop. Use the route's public view for actual bind target and verification.
+
 ## Provider capability decisions still open
 
-- Cloudflare documents separate Tunnel and DNS endpoint permissions. The probes observed public OAuth metadata and a CLI login handoff. An approved browser grant's account/zone discovery, runner enrollment and exact lifecycle authority remain unverified. The CLI certificate carries account-wide tunnel authority. Its DNS DELETE authority remains unproven.
+- Cloudflare managed setup accepts a scoped REST API token through assisted intake. It enumerates active zones and their accounts, creates a remote-managed tunnel, writes its loopback mapping and proxied CNAME, and captures the tunnel run token in the connector secret backend. Browser-only management remains unverified. It would need a third-party client and a grant with the right REST audience, account/zone scope, token retrieval and DNS DELETE permission. The cloudflared login certificate does not establish that grant.
+- Cloudflare cleanup reads the exact tunnel and DNS record IDs before deletion and verifies absence afterward. The DNS endpoint has no documented compare-and-delete precondition. Keep the selected zone free of concurrent edits to that record during removal. A lost create response without an immutable receipt remains unresolved. Cloudflare run-token rotation is an explicit dashboard step with API readback. Local secret disconnection and revocation of the imported management token are separate.
 - Ngrok's management API documents agent authtoken creation. The public MCP metadata lists `credentials:write`, and its docs say tools do not return secrets. Authenticated MCP tool support, token audience and one-time secret delivery remain unverified. Secure intake remains available where the management grant cannot deliver the connector credential.
 - Tailscale's isolated CLI reported `NeedsLogin` and a browser handoff. Exact node and tailnet identity, admin completion, Serve/Funnel mapping readback and independent client proof remain unverified.
 
@@ -51,6 +60,8 @@ These results select the adapter's offered steps and evidence source. Management
 
 Existing raw ngrok TCP/TLS are detect-only. Own-address is adopt-only. These profiles do not get a managed create offer.
 
-## Topic-branch acceptance
+## CLI and acceptance
 
-Run `node --test test/acceptance/provider-setup.red.test.mjs` explicitly. These specifications are expected to fail against the current runtime and sit outside its normal test glob. The fixture uses a randomized provider ID and local synthetic state. Its readback format is fixture data for the forthcoming adapter integration. The tests exercise the consumer contract through the package root, and the integration can wire fixture observations through the same adapter seam as production.
+Use `gozar setup-operation reserve|read|run|cancel --request-file FILE --json` with the public request or reference in a mode 0600 file. For secret intake use `run --secret-file FILE`. An explicit interactive `read --browser-handoff` returns an unexpired handoff when the adapter offers one.
+
+Run `node --test test/acceptance/provider-setup.red.test.mjs test/acceptance/cloudflare-managed-setup.test.mjs` explicitly. The first suite uses a randomized provider and exercises the same operations through the package root and CLI. The second intercepts the real Cloudflare adapter's REST and connector calls and drives actual loopback gate and app traffic. Cloudflare account permissions, browser enrollment, external reachability and provider-side cleanup still require live acceptance.

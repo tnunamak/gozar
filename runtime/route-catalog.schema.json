@@ -421,7 +421,7 @@
         },
         "verification": { "enum": ["provider", "host", "trusted-client"] },
         "purpose": {
-          "enum": ["authorize", "configure", "provision", "reconcile", "stop-connector", "remove-resource", "revoke-credential"]
+          "enum": ["authorize", "configure", "provision", "reconcile", "stop-connector", "remove-resource", "revoke-credential", "disconnect"]
         },
         "prerequisites": { "type": "array", "items": { "type": "string" } },
         "options": {
@@ -489,7 +489,17 @@
       "properties": { "known": { "const": false }, "reason": { "type": "string" } },
       "additionalProperties": false
     },
+    "NoBrowserHref": {
+      "not": {
+        "required": ["step", "href"],
+        "properties": { "step": { "required": ["browser"] } }
+      }
+    },
     "SetupOperation": {
+      "$ref": "#/$defs/InteractiveSetupOperation",
+      "properties": { "nextAction": { "oneOf": [{ "type": "null" }, { "type": "object", "$ref": "#/$defs/NoBrowserHref" }] } }
+    },
+    "InteractiveSetupOperation": {
       "type": "object",
       "required": ["schemaVersion", "operationId", "revision", "scope", "state", "evidence", "nextAction", "resources"],
       "properties": {
@@ -536,7 +546,7 @@
         "nextAction": {
           "oneOf": [
             { "type": "null" },
-            { "$ref": "#/$defs/Action", "type": "object", "required": ["step", "consent"] }
+            { "$ref": "#/$defs/Action", "type": "object", "required": ["step", "consent"], "not": { "required": ["review"] } }
           ]
         },
         "resources": { "type": "array", "items": { "$ref": "#/$defs/SetupResource" } }
@@ -2508,6 +2518,13 @@
         "secretHandle": { "type": "string" },
         "value": { "type": "string" }
       },
+      "oneOf": [
+        {
+          "properties": { "expectedSetupRevision": { "const": 0 } },
+          "not": { "anyOf": [{ "required": ["approval"] }, { "required": ["secretHandle"] }, { "required": ["value"] }] }
+        },
+        { "properties": { "expectedSetupRevision": { "minimum": 1 } } }
+      ],
       "additionalProperties": false
     },
     "Fact": {
@@ -3471,6 +3488,19 @@
       },
       "additionalProperties": false
     },
+    "SafeSetupConsentAction": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ConsentAction",
+          "not": { "required": ["href"] }
+        },
+        {
+          "$ref": "#/$defs/ConsentAction",
+          "required": ["href"],
+          "not": { "required": ["step"], "properties": { "step": { "required": ["browser"] } } }
+        }
+      ]
+    },
     "SetupConsentSnapshot": {
       "type": "object",
       "properties": {
@@ -3490,7 +3520,7 @@
           "type": "object",
           "properties": {
             "action": {
-              "$ref": "#/$defs/ConsentAction"
+              "$ref": "#/$defs/SafeSetupConsentAction"
             }
           },
           "required": [

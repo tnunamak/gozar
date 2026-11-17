@@ -63,6 +63,7 @@ function validate(schema, value, defs, path = '$') {
         break;
       }
       case 'anyOf': if (!schema.anyOf.some(sub => validate(sub, value, defs, path).length === 0)) errors.push(`${path}: matches no anyOf branch`); break;
+      case 'not': if (!validate(schema.not, value, defs, path).length) errors.push(`${path}: matches forbidden schema`); break;
       default: throw new Error(`Unsupported schema keyword ${key} at ${path}`);
     }
   }

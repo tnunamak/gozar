@@ -1,9 +1,15 @@
-// This adapter is copied beside the generated fake. Its JSON file stands in for
-// state held by an external provider across Gozar host restarts.
+// Copied beside the generated fake. Its file stands in for the external provider.
 import base from './base.mjs';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+
+import { join } from 'node:path';
 
 const stateFile = new URL('./world.json', import.meta.url);
+function obstructJournal(home) {
+  const file = join(home, 'embedding-state.json');
+  renameSync(file, file + '.saved');
+  mkdirSync(file, { mode: 0o700 });
+}
 const world = () => JSON.parse(readFileSync(stateFile, 'utf8'));
 const action = (id, kind, actor, purpose, extra = {}, step = {}) => ({
   id, kind, label: id, digest: 'fixture:' + id, required: true,
@@ -12,60 +18,79 @@ const action = (id, kind, actor, purpose, extra = {}, step = {}) => ({
   ...extra,
 });
 
-function offers(current, configuration) {
+function offer(current, configuration) {
   if (current.mode === 'browser') {
     if (current.grant !== 'verified') {
-      return [action('grant', 'open-url', 'owner', 'authorize', { href: 'https://fixture.invalid/authorize' },
-        { browser: { expiresAt: current.expiresAt, pollAfterMs: 50 } })];
+      return action('grant', 'open-url', 'owner', 'authorize', { href: 'https://fixture.invalid/authorize?session=transient-fixture-canary' },
+        { browser: { expiresAt: current.expiresAt, pollAfterMs: 50 } });
     }
-    if (!configuration?.account) return [action('account', 'provide-value', 'owner', 'configure', { valueFormat: 'text' },
-      { options: [{ value: 'account-1', label: 'Fixture account' }], prerequisites: ['grant'] })];
-    if (!current.connectorCredential) return [action('connector', 'provide-secret', 'owner', 'configure', { secretLabel: 'Connector credential' })];
-    if (!current.admin) return [action('allow-route', 'instructions', 'administrator', 'configure',
-      { instructions: 'Allow the exact fixture route in account policy.' })];
+    if (!configuration?.account) return action('account', 'provide-value', 'owner', 'configure', { valueFormat: 'text' },
+      { options: [{ value: 'account-1', label: 'Fixture account' }], prerequisites: ['grant'] });
+    if (!current.connectorCredential) return action('connector', 'provide-secret', 'owner', 'configure', { secretLabel: 'Connector credential' });
+    if (!current.admin) return action('allow-route', 'instructions', 'administrator', 'configure',
+      { instructions: 'Allow the exact fixture route in account policy.' });
   }
-  if (current.resources.tunnel) {
-    return [action('remove-tunnel', 'gozar-runs', 'machine', 'remove-resource')];
-  }
-  return [action('create-tunnel', 'gozar-runs', 'machine', 'provision')];
+  return action('create-tunnel', 'gozar-runs', 'machine', 'provision');
 }
+
+const next = (state, nextAction, extra = {}) => ({ state, nextAction, ...extra });
+const subject = operation => ({ provider: 'fixture', allocationKey: operation.id });
 
 export default {
   ...base,
   async detect(ctx) {
     const current = world();
     const configuration = await ctx.configuration(null);
-    return { state: 'action-required', facts: { offers: offers(current, configuration), price: current.price } };
+    return { state: 'action-required', facts: { offer: offer(current, configuration), price: current.price } };
   },
   configurationActions: undefined,
-  setupActions: facts => facts?.offers ?? [],
-  // The setup executor supplies effects. A future orchestration layer supplies
-  // the journal and admission. This counter advances only when called.
-  async setup(ctx, id, secretHandle) {
+  setupActions: facts => facts?.offer ? [facts.offer] : [],
+  async setup() { throw new Error('legacy setup bypass'); },
+  async executeSetup(ctx, { action, intent, resource }) {
     const current = world();
-    current.calls.push(id);
-    if (id === 'connector') {
-      current.connectorCredential = await ctx.withSecret(secretHandle, async bytes => bytes.byteLength > 0);
+    current.calls.push(action.id);
+    if (action.id === 'connector') {
+      current.connectorCredential = await ctx.withInputSecret(async bytes => bytes.byteLength > 0);
     }
-    if (id === 'create-tunnel') {
-      current.resources.tunnel = 'fixture-tunnel';
+    if (action.id === 'create-tunnel') {
+      const allocation = { id: 'fixture-tunnel-' + intent.id, intentId: intent.id };
+      if (current.deferCreate) current.pendingAllocation = allocation;
+      else {
+        current.allocation = allocation;
+        current.resources.tunnel = allocation.id;
+      }
       current.creates += 1;
     }
-    if (id === 'remove-tunnel') delete current.resources.tunnel;
+    if (action.id === 'remove-tunnel' && current.resources.tunnel === resource.identity.id) delete current.resources.tunnel;
     writeFileSync(stateFile, JSON.stringify(current));
-    if (id === 'create-tunnel' && current.loseResponse) {
-      throw new Error('synthetic provider lost response');
-    }
-    return { state: 'complete', nextAction: null };
+    if (action.id === 'create-tunnel' && current.journalFault === 'after') obstructJournal(ctx.home);
+    if (action.id === 'create-tunnel' && current.loseResponse) throw new Error('synthetic provider lost response');
+    return { state: 'complete' };
   },
-  // Read-only fixture observations used by the setup-operation runner when
-  // implemented. Browser return is deliberately independent of grant evidence.
-  async observeSetup() {
+  async observeSetup(ctx, operation) {
     const current = world();
-    return {
-      grant: current.grant,
-      administrator: current.admin,
-      resources: current.readable ? current.resources : null,
-    };
+    const observedAt = new Date().toISOString();
+    const nextAction = offer(current, await ctx.configuration(null));
+    const evidence = current.grant === 'pending' ? undefined :
+      { operationId: operation.id, stepId: 'grant', source: 'provider', observedAt, summary: 'Provider authorization status observed.' };
+    if (current.grant !== 'verified') return next(current.grant, current.grant === 'pending' ? nextAction : null, { evidence });
+
+    const [row] = operation.resources;
+    if (row?.settledAbsent && current.offerAgain && !operation.cancelled) return next('pending',
+      action('create-tunnel', 'gozar-runs', 'machine', 'provision'),
+      { evidence, intent: { kind: 'tunnel', label: 'Fixture tunnel', subject: subject(operation) } });
+    if (!row && current.journalFault === 'before') obstructJournal(ctx.home);
+    if (!row) return next('pending', nextAction, { evidence, ...(nextAction.id === 'create-tunnel' && {
+      intent: { kind: 'tunnel', label: 'Fixture tunnel', subject: subject(operation) },
+    }) });
+    const allocation = current.allocation;
+    const exactAllocation = current.readable && allocation?.intentId === row.id;
+    const exactPresent = exactAllocation && allocation.id === current.resources.tunnel;
+    const status = exactPresent ? 'present' : exactAllocation && row.identity ? 'absent' : 'pending';
+    const observations = [{ intentId: row.id, subject: subject(operation), status, observedAt,
+      ...(status !== 'pending' && { identity: { id: allocation.id } }) }];
+    return next(status === 'pending' ? 'reconciling' : 'complete', exactPresent
+      ? action('remove-tunnel', 'gozar-runs', 'machine', 'remove-resource', {}, { resourceHandle: row.id })
+      : null, { evidence, observations });
   },
 };

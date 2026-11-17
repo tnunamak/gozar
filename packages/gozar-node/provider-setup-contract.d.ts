@@ -6,7 +6,7 @@ export type SetupStep = {
   permission: { id: string; label: string };
   verification: 'provider' | 'host' | 'trusted-client';
   purpose: 'authorize' | 'configure' | 'provision' | 'reconcile'
-    | 'stop-connector' | 'remove-resource' | 'revoke-credential';
+    | 'stop-connector' | 'remove-resource' | 'revoke-credential' | 'disconnect';
   prerequisites?: string[];
   /** Opaque choice values for a provide-value action. */
   options?: { value: string; label: string }[];
@@ -46,6 +46,13 @@ export type RunSetupOperationRequest = Omit<RunSetupActionRequest, keyof SetupOp
     approval?: RunSetupActionRequest['approval'];
   };
 
+/** Ordinary documentation hrefs remain usable. Browser handoff URLs are opt-in. */
+export type SafeSetupAction = Omit<Action, 'consent' | 'review' | 'step' | 'href'> & (
+  | { step?: Omit<SetupStep, 'browser'> & { browser?: never }; href?: string }
+  | { step: SetupStep & { browser: NonNullable<SetupStep['browser']> }; href?: never }
+);
+type SetupOffer = SafeSetupAction & { step: SetupStep; consent: NonNullable<Action['consent']> };
+
 export type SetupOperation = {
   schemaVersion: 1;
   operationId: string;
@@ -54,6 +61,10 @@ export type SetupOperation = {
   state: 'authorization-required' | 'pending' | 'denied' | 'expired' | 'blocked'
     | 'reconciling' | 'complete' | 'cancelled';
   evidence: SetupEvidence;
-  nextAction: (Action & { step: SetupStep; consent: NonNullable<Action['consent']> }) | null;
+  nextAction: SetupOffer | null;
   resources: SetupResource[];
+};
+
+export type InteractiveSetupOperation = Omit<SetupOperation, 'nextAction'> & {
+  nextAction: (Omit<Action, 'review'> & { step: SetupStep; consent: NonNullable<Action['consent']> }) | null;
 };

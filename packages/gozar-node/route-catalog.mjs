@@ -11,7 +11,7 @@ import { bindConfiguration } from './adapter-configuration.mjs';
 import { loopbackTarget } from './durable-route.mjs';
 import { checksFor, completeProperties, needsFor } from './route-view.mjs';
 import { adoptDisclosureRevision, consentDisclosureRevision } from './adopt-disclosure.mjs';
-import { routeConsentReview, setupConsentReview,consentSnapshot } from './consent-facts.mjs';
+import { routeConsentReview, setupConsentReview,consentSnapshot,safeSetupAction,needsSetupOperation } from './consent-facts.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
 import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
 
@@ -247,13 +247,13 @@ async function collect(query, deps) {
     const decorate = action => {
       if (!deps.registryId || !saved.revision) return action;
       const review = setupConsentReview({registryId:deps.registryId,providerId:adapter.id,configuration:saved,draftId:query.draftId??null,action,facts:catalogFactsFor(inspection)});
-      return {...action,consent:consentSnapshot(review),review:{canonicalInput:review.canonicalInput}};
+      return {...safeSetupAction(action),consent:consentSnapshot(review),...(!needsSetupOperation(action)&&{review:{canonicalInput:review.canonicalInput}})};
     };
     const decorated = offered.map(decorate);
     const configuration = configurationFor(decorated, saved,definition.inputRequirements);
     const candidate = { providerId: adapter.id, name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
       display: { label: definition.label, description: describe(definition, properties), needs: needsFor(definition, query.usage.kind) }, properties,
-      availability, prerequisites: [...prerequisitesFor(inspection, observedAt),...hostPrerequisites,
+      availability, prerequisites: [...prerequisitesFor(inspection, observedAt).map(item => needsSetupOperation(item.remedy) ? { ...item, remedy: decorate(item.remedy) } : item),...hostPrerequisites,
         ...(failure ? [{id: 'catalog-observation', label: 'Route availability observation', state: failure.state,
           observation: failure.observation, observedAt, version: {known: false, reason: 'not_observed'}, remedy: failure.remedy}] : [])],
       configuration, facts: [...catalogFactsFor(inspection), ...failureFacts(failure)],

@@ -78,11 +78,19 @@ export function routeConsentReview({ registryId, providerId, usage, configuratio
     facts:[...facts,...priceFacts] });
 }
 
-export function setupConsentReview({ registryId, providerId, configuration, draftId = null, action, facts }) {
+// A browser handoff is live authorization data, even when its action is public.
+export function safeSetupAction(action) {
+  const { consent, review, ...safe } = canonicalConsentValue(action);
+  if (safe.step?.browser) delete safe.href;
+  return safe;
+}
+export const needsSetupOperation = action => !!action?.step;
+
+export function setupConsentReview({ registryId, providerId, configuration, draftId = null, action, facts, operation }) {
   return consentReview({ scope: { kind: 'setup', registryId, scopeId: configuration.scopeId, providerId,
     configurationRevision: configuration.revision, draftId, actionId: action.id,
-    disclosureRevision: action.disclosure.revision, actionDigest: action.digest },
-    typedDisclosures: { action }, facts });
+    disclosureRevision: action.disclosure.revision, actionDigest: action.digest, ...(operation && {operation}) },
+    typedDisclosures: { action: safeSetupAction(action) }, facts });
 }
 
 /** Display exactly the redacted authority-bearing values; timestamps carry no approval. */

@@ -18,7 +18,8 @@ import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { registryIdentity } from './registry-identity.mjs';
 import { createEmbeddingServices } from './embedding-services.mjs';
 import { listProviders as inventory } from './embedding-inventory.mjs';
-import { setupConsentReview,consentSnapshot } from './consent-facts.mjs';
+import { setupConsentReview,consentSnapshot,safeSetupAction,needsSetupOperation } from './consent-facts.mjs';
+import { runSetupOperation, readSetupOperation, cancelSetupOperation } from './setup-operations.mjs';
 import {offeredConfiguration,readConfigurationDraft,clearConfigurationInput} from './embedding-setup.mjs';
 import {withRouteOperation,listRecordedRoutes,recordOperationView,operationReferenceForRoute,retainedOperationView,recordPendingReferenceCleanup,retryRecordedReferenceCleanup,referenceCleanupDebt} from './route-operations.mjs';
 import {cleanupReferenceRecord,prepareCleanupReference,recordCleanupRemoval,retryCleanupReference,listCleanupReferences} from './route-operations.mjs';
@@ -46,9 +47,9 @@ export function createRouteApi(deps = {}) {
     ...(deps.readContext ? { readContext: deps.readContext } : {}),
     decorateSetupAction:({action,adapter,configuration,draftId=null,inspection})=>{
       const review=setupConsentReview({registryId:resolved.registryId,providerId:adapter.id,configuration,draftId,action,facts:catalogFactsFor(inspection??{adapter})});
-      return {...action,consent:consentSnapshot(review),review:{canonicalInput:review.canonicalInput}};
+      return {...safeSetupAction(action),consent:consentSnapshot(review),...(!needsSetupOperation(action)&&{review:{canonicalInput:review.canonicalInput}})};
     } }); };
-  const publicError=cause=>{const normalized=normalizeError(cause),error=gozarError(normalized.code,normalized.message,normalized.nextAction?structuredClone(normalized.nextAction):null);if(normalized.route)error.route=structuredClone(normalized.route);return error;};
+  const publicError=cause=>{const normalized=normalizeError(cause),error=gozarError(normalized.code,normalized.message,normalized.nextAction?(needsSetupOperation(normalized.nextAction)?safeSetupAction(normalized.nextAction):structuredClone(normalized.nextAction)):null);if(normalized.route)error.route=structuredClone(normalized.route);return error;};
   const guard = async action => { try { return structuredClone(await action()); } catch (error) { throw publicError(error); } };
   const setupDeps=async request=>{
     const context=await shared(request);
@@ -210,7 +211,13 @@ export function createRouteApi(deps = {}) {
     suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }),request)),
     watchRoutes:async function*(request){try{for await(const event of pollRoutes(request,{routeStatus:api.routeStatus,...deps.watch}))yield structuredClone(event);}catch(error){throw publicError(error);}},
     getRoutePreferences, setRoutePreferences,
-    runSetupAction: request => guard(async () => runSetup(request,await setupDeps(request))),
+    runSetupAction: request => guard(async () => {
+      const context=await setupDeps(request);
+      return request && typeof request === 'object' && ('operationId' in request || 'expectedSetupRevision' in request)
+        ? runSetupOperation(request,context) : runSetup(request,context);
+    }),
+    readSetupOperation: request => guard(async () => readSetupOperation(request,await setupDeps(request))),
+    cancelSetupOperation: request => guard(async () => cancelSetupOperation(request,await setupDeps(request))),
     listProviders: request => guard(async()=>inventory(request,await shared(request))),
     listRoutes:request=>guard(async()=>{
       const context=await shared(request);

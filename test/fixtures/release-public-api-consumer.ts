@@ -177,6 +177,13 @@ declare const setupOperation: RunSetupOperationRequest;
 async function consumeSetupOperation(api: Api) {
  const view: SetupOperation = await api.runSetupAction(setupOperation);
  const read: SetupOperation = await api.readSetupOperation(setupOperation);
+ const interactive = await api.readSetupOperation({ ...setupOperation, includeBrowserHandoff: true });
+ const href: string | undefined = interactive.nextAction?.href;
+ // @ts-expect-error the interactive result type requires opting in on the call
+ await api.readSetupOperation<true>(setupOperation);
+ // @ts-expect-error operation results exclude raw canonical input
+ void read.nextAction?.review;
+ void href;
  const cancelled: SetupOperation = await api.cancelSetupOperation(setupOperation);
  return [view, read, cancelled];
 }

@@ -1,6 +1,7 @@
 // Stable computation fields and open-ended display facts. Unknown evidence stays explicit.
 export const unknown = (reason = 'not-observed') => ({ known: false, reason });
 export const known = value => ({ known: true, value });
+import { needsSetupOperation } from './consent-facts.mjs';
 import { bindingFor, cleanupRecovery } from './embedding-projections.mjs';
 export const features = ['structured-state', 'open-facts', 'input-requirements', 'secret-intake',
   'configuration-revisions', 'consent-facts-digest', 'proof-subject', 'host-secret-backend',
@@ -25,7 +26,7 @@ export function prerequisitesFor(inspection, observedAt) {
 }
 
 export function configurationFor(actions, saved, declared) {
-  const inputRequirements = declared?structuredClone(declared):actions.filter(action => ['provide-secret', 'provide-value'].includes(action.kind)).map(action => ({
+  const inputRequirements = declared?structuredClone(declared):actions.filter(action => !needsSetupOperation(action) && ['provide-secret', 'provide-value'].includes(action.kind)).map(action => ({
     id: action.id, actionId: action.id, label: action.secretLabel ?? action.valueLabel ?? action.label,
     kind: action.valueFormat ?? 'text', secret: action.kind === 'provide-secret', help: action.help ?? action.label,
     required: action.required !== false, obtainUrl: action.obtainUrl ?? null, validation: 'syntax-only',

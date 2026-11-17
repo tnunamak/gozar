@@ -94,9 +94,9 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   return {scopeId:c.scopeId,revision:c.revision,values:clone(c.values),credentials};
  }
  const referenced=(state,handle)=>Object.values(state.configs).some(c=>Object.values(c.bindings).includes(handle)||Object.values(c.drafts).some(d=>Object.values(d.bindings).includes(handle)));
- async function remove(state,home,handle){
+ async function remove(state,home,handle,{operationId}={}){
   const ref=state.secrets[handle];if(!ref||ref.registryId!==registryId)return {discarded:false};
-  if(referenced(state,handle))fail('secret_in_use');
+  if((ref.operationId&&ref.operationId!==operationId)||referenced(state,handle))fail('secret_in_use');
   const presence=async()=>{
    const result=await call(home,'presence',{scopeId:ref.scopeId,handle});
    if(result?.known!==true||typeof result.value!=='boolean')fail(result?.reason==='secret_backend_locked'?'secret_backend_locked':'secret_backend_unavailable');
@@ -108,29 +108,120 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   }
   delete state.secrets[handle];return {discarded:true};
  }
+ async function putSecret(s,h,c,draftId,inputId,input){
+  if(typeof inputId!=='string'||!inputId||!(input instanceof Uint8Array)||!input.length||input.length>65536)fail('invalid_input');
+  const bytes=new Uint8Array(input);
+  let result;
+  try{result=await call(h,'put',{scopeId:c.scopeId,inputId,revision:c.revision,bytes});}finally{bytes.fill(0);}
+  if(typeof result?.handle!=='string'||!result.handle||Object.hasOwn(s.secrets,result.handle))fail('secret_backend_unavailable');
+  s.secrets[result.handle]={registryId,scopeId:c.scopeId,inputId,revision:c.revision,draftId:draftId??null};
+  return result.handle;
+ }
+ function configurationTransaction(s,h,r,applied,c){
+  const assertCurrent=()=>{if(!c)fail('configuration_stale');};
+  const assertUnused=()=>{if(applied.uses.length)fail('configuration_in_use');};
+  const assertMutable=()=>{assertCurrent();if(!r.draftId)assertUnused();};
+  const next=c&&{...c,bindings:clone(c.bindings),values:clone(c.values)};
+  let changed=false;
+  const tx={
+   assertMutable,assertUnused,inUse:()=>applied.uses.length>0,
+   clearInput:inputId=>{assertMutable();if(!r.draftId)fail('invalid_input');delete next.bindings[inputId];delete next.values[inputId];changed=true;},
+   unbindSecret:handle=>{
+    assertUnused();
+    // A draft can be committed or discarded after setup. Search this scope only.
+    for(const config of [applied,...Object.values(applied.drafts)]){
+     const ids=Object.keys(config.bindings).filter(id=>config.bindings[id]===handle);
+     if(!ids.length)continue;
+     for(const id of ids)delete config.bindings[id];
+     config.revision=fresh();
+    }
+   },
+   resolveConfiguration:()=>c?resolvedValues(h,c):null,
+   configuration:()=>c?redacted(h,c):null,
+   withSecret:async(inputId,handle,use)=>{
+    assertCurrent();
+    const ref=s.secrets[handle],current=c.bindings[inputId]===handle;
+    const intake=ref?.revision===c.revision&&ref?.draftId===(r.draftId??null);
+    if(!ref||ref.operationId||ref.registryId!==registryId||ref.scopeId!==c.scopeId||ref.inputId!==inputId||!(current||intake))fail('invalid_input');
+    return call(h,'withSecret',{scopeId:c.scopeId,handle},use);
+   },
+   bindSecret:async(inputId,handle)=>{assertMutable();await tx.withSecret(inputId,handle,async()=>{});next.bindings[inputId]=handle;delete next.values[inputId];changed=true;},
+   bindText:(inputId,value)=>{assertMutable();next.values={...next.values,[inputId]:value};delete next.bindings[inputId];changed=true;},
+   markChanged:()=>{assertMutable();changed=true;},
+   finish:()=>{
+    if(!changed)return c;
+    next.revision=fresh();
+    if(r.draftId)applied.drafts[r.draftId]=next;else s.configs[c.scopeId]=next;
+    return next;
+   },
+  };
+  return tx;
+ }
  const api={hostCapabilities,
   readConfiguration:r=>transaction(r.home,async(s,h)=>redacted(h,select(await config(s,h,r.providerId,r.owner),r.draftId))),
   readConfigurationDraft:r=>transaction(r.home,async(s,h)=>{if(!r.draftId)fail('invalid_input');const c=await config(s,h,r.providerId,r.owner),d=select(c,r.draftId);return {draftId:r.draftId,scopeId:d.scopeId,baseRevision:d.baseRevision,configuration:await redacted(h,d)};},{readOnly:true}),
   resolveConfiguration:r=>transaction(r.home,async(s,h)=>{const c=select(await config(s,h,r.providerId,r.owner),r.draftId);return resolvedValues(h,c);},{readOnly:true}),
   resolveIdentity:({home,bootId}={})=>transaction(home,async s=>identity?clone(identity):{instanceId:s.instanceId,bootId:bootId??boot}),
   storeSecret:r=>transaction(r.home,async(s,h)=>{
-   const c=select(await config(s,h,r.providerId,r.owner),r.draftId);compare(c,r.expectedConfigurationRevision);if(c.scopeId!==r.scopeId||typeof r.inputId!=='string'||!r.inputId)fail('invalid_input');
-   if(!(r.bytes instanceof Uint8Array)||!r.bytes.length||r.bytes.length>65536)fail('invalid_input');
-   const bytes=new Uint8Array(r.bytes);let result;try{result=await call(h,'put',{scopeId:c.scopeId,inputId:r.inputId,revision:c.revision,bytes});}finally{bytes.fill(0);}
-   if(typeof result?.handle!=='string'||!result.handle||s.secrets[result.handle])fail('secret_backend_unavailable');
-   s.secrets[result.handle]={registryId,scopeId:c.scopeId,inputId:r.inputId,revision:c.revision,draftId:r.draftId??null};return {handle:result.handle,configurationRevision:c.revision,scopeId:c.scopeId};
+   const c=select(await config(s,h,r.providerId,r.owner),r.draftId);compare(c,r.expectedConfigurationRevision);if(c.scopeId!==r.scopeId)fail('invalid_input');
+   const handle=await putSecret(s,h,c,r.draftId,r.inputId,r.bytes);
+   return {handle,configurationRevision:c.revision,scopeId:c.scopeId};
   }),
   mutateConfiguration:(r,effect,{mutatesConfiguration=true}={})=>transaction(r.home,async(s,h)=>{
-   const applied=await config(s,h,r.providerId,r.owner),c=select(applied,r.draftId);compare(c,r.expectedConfigurationRevision);const assertMutable=()=>{if(!r.draftId&&applied.uses.length)fail('configuration_in_use');};if(mutatesConfiguration)assertMutable();
-   const next={...c,bindings:clone(c.bindings),values:clone(c.values)};let changed=false;
-   const tx={assertMutable,clearInput:inputId=>{assertMutable();if(!r.draftId)fail('invalid_input');delete next.bindings[inputId];delete next.values[inputId];changed=true;},resolveConfiguration:()=>resolvedValues(h,c),configuration:()=>redacted(h,c),withSecret:async(inputId,handle,use)=>{const ref=s.secrets[handle];
-    // Authority is the exact current binding, or the exact intake revision and draft that stored the handle. Immutable intake metadata still pins registry, scope and input.
-    const current=c.bindings[inputId]===handle,intake=ref?.revision===c.revision&&ref?.draftId===(r.draftId??null);
-    if(!ref||ref.registryId!==registryId||ref.scopeId!==c.scopeId||ref.inputId!==inputId||!(current||intake))fail('invalid_input');return call(h,'withSecret',{scopeId:c.scopeId,handle},use);},
-    bindSecret:async(inputId,handle)=>{assertMutable();await tx.withSecret(inputId,handle,async()=>{});next.bindings[inputId]=handle;delete next.values[inputId];changed=true;},
-    bindText:(inputId,value)=>{assertMutable();next.values[inputId]=value;delete next.bindings[inputId];changed=true;},markChanged:()=>{assertMutable();changed=true;}};
-   const result=await effect(tx);if(changed){next.revision=fresh();if(r.draftId)applied.drafts[r.draftId]=next;else s.configs[c.scopeId]=next;}
-   return {result,configuration:await redacted(h,next)};
+   const applied=await config(s,h,r.providerId,r.owner),c=select(applied,r.draftId);
+   compare(c,r.expectedConfigurationRevision);
+   const tx=configurationTransaction(s,h,r,applied,c);
+   if(mutatesConfiguration)tx.assertMutable();
+   const result=await effect(tx);
+   return {result,configuration:await redacted(h,tx.finish())};
+  }),
+  setupTransaction:(r,run)=>transaction(r.home,async(s,h,checkpoint)=>{
+   const scopeId=scope(h,r.providerId,r.owner);
+   const key=hash(JSON.stringify([registryId,r.operationId]));
+   const journal=s.setupOperations??={};
+   const record=journal[key];
+   if(record&&record.scopeId!==scopeId)fail('configuration_stale');
+   const applied=await config(s,h,r.providerId,r.owner);
+   const draftId=record?record.draftId:r.draftId??null;
+   const c=draftId?applied.drafts[draftId]:applied;
+   const stale=!c||(draftId&&c.baseRevision!==applied.revision)||(record&&record.configurationRevision!==c.revision);
+   const tx=configurationTransaction(s,h,{...r,draftId},applied,stale?null:c);
+   return run({
+    home:h,scopeId,record,stale:!!stale,tx,checkpoint,
+    reserve:record=>{journal[key]=record;},
+    withManagementSecret:async(slot,use)=>{
+     const handle=record?.management?.[slot];
+     const ref=s.secrets[handle];
+     if(!ref||ref.scopeId!==scopeId||ref.registryId!==registryId||ref.operationId!==r.operationId)return null;
+     return call(h,'withSecret',{scopeId,handle},use);
+    },
+    retainManagementSecret:async(slot,inputId,handle)=>{
+     await tx.withSecret(inputId,handle,async()=>{});
+     if(Object.hasOwn(record.management,slot))await remove(s,h,record.management[slot],{operationId:r.operationId});
+     s.secrets[handle]={...s.secrets[handle],draftId:null,operationId:r.operationId};
+     record.management[slot]=handle;
+    },
+    disconnectManagementSecret:async slot=>{
+     const handle=record.management[slot];
+     if(!handle)return;
+     await remove(s,h,handle,{operationId:r.operationId});
+     delete record.management[slot];
+    },
+    bindConnectorSecret:async(inputId,bytes)=>{
+     tx.assertMutable();
+     const handle=await putSecret(s,h,c,draftId,inputId,bytes);
+     await tx.bindSecret(inputId,handle);
+     (record.connectorSecrets??={})[inputId]=handle;
+    },
+    disconnectConnectorSecret:async inputId=>{
+     const handle=record.connectorSecrets?.[inputId];
+     if(!handle)return;
+     tx.unbindSecret(handle);
+     await checkpoint();
+     await remove(s,h,handle);
+     delete record.connectorSecrets[inputId];
+    },
+   });
   }),
   beginConfigurationDraft:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner);compare(c,r.expectedConfigurationRevision);const draftId=fresh();const d={scopeId:c.scopeId,revision:fresh(),baseRevision:c.revision,bindings:clone(c.bindings),values:clone(c.values)};c.drafts[draftId]=d;return {draftId,scopeId:c.scopeId,baseRevision:c.revision,configuration:await redacted(h,d)};}),
   commitConfigurationDraft:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner),d=select(c,r.draftId);if(!r.draftId)fail('invalid_input');compare(d,r.expectedConfigurationRevision);compare(c,d.baseRevision);if(c.uses.length)fail('configuration_in_use');c.bindings=d.bindings;c.values=d.values;c.revision=fresh();delete c.drafts[r.draftId];return redacted(h,c);}),
