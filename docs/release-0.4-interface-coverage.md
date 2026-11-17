@@ -8,9 +8,18 @@ The release report binds this map to an integrated Gozar commit and tarball.
 
 These are semantic coverage claims, not live-provider results. A documented
 provider feature is not proof that the selected account enables it. The survey
-does not establish saturation: the failure survey retains 329 unknown cells,
-and the posture/schema extensions retain new candidate dimensions. A historical
-issue opener is not a reproduced current defect.
+does not establish saturation. The primary-review counts supplied for this map
+are 329 unknown of 441 failure-survey cells (7 items × 63 dimensions), with 112
+evidenced and 0 not applicable. The 319 listed sources include 306 unique
+historical issue openers and 13 non-issue sources; bodies were inspected unevenly.
+These issue openers are not confirmed current regressions.
+
+The six posture rows are only a bounded zero-new tail, not population saturation;
+five further candidates remain unexamined. The descriptor matrix has 468 cells
+(12 × 39): 92 sourced and 376 unknown. Nine NEW candidates are proposed, not
+certified; Nango remains unresolved, not zero, and 89 S entries await atomic
+review. There is no certified three-item-zero tail and no exhaustive or saturated
+schema claim.
 
 ## Public representations
 
@@ -27,6 +36,37 @@ issue opener is not a reproduced current defect.
 | Restart/crash recovery | `operationId`, `listRoutes({home,owner})`, idempotent replay, terminal key replay | Records must be readable; unreadable state is an error, not empty success. Listing is historical recovery evidence |
 | Cleanup authority and absence | Ownership-scoped removal plus exact runtime/config read-back; `cleanup.state` and `nextAction` | A close RPC/exit 0 alone is not confirmed absence. Account registrations, names, DNS and credential revocation may remain owner-owned |
 
+## Execution authority and observation boundaries
+
+The manifest's `activeDrop1a`, `nextDrop` and `operationalCatalog` are historical
+projection groupings, not the authoritative current executable inventory. Keep
+them as historical groups. Execution authority comes from the registered adapter
+definition, runtime admission and the current public catalog for the requested
+usage, host capabilities, configuration and audience. Manifest inclusion alone
+does not grant admission; its warning explicitly requires feature negotiation.
+
+For example, `adapters/manifest.json` registers Cloudflare named's definition and
+runtime even though `nextDrop` still names it. The registered definition declares
+attached availability as available/admitted, while session and durable usage are
+unsupported. Its runtime implements attached planning, owned connector start,
+proof preparation and cleanup. `named-lifecycle.test.mjs` exercises owned start,
+incomplete-input refusal and unconfirmed cleanup with injected local fixtures.
+Those facts establish implemented attached behavior, not live success or admission
+for every audience/usage. Named protocol metadata correction is separately queued;
+this map does not claim that correction shipped on this base. Raw ngrok TLS/TCP
+remain detect-only.
+
+Static definition prerequisites are shorthand lookup descriptors. Runtime
+`prerequisitesFor` projects detected facts into present/missing/denied/unknown
+with observation time, version and remedy; runtime observation fields should not
+be duplicated into static data. A displayed per-dimension fact row and implemented
+runtime behavior are different evidence. Missing individual fact IDs remain gaps,
+but do not disprove target bindings, SSH process identities or SDK error mapping
+outside that row review. `known: true` is not a blanket claim of runtime
+observation: documented features and valid not-applicable classifications retain
+their own provenance. A true not-applicable classification need not become unknown
+merely to match an unrelated provider-call fact.
+
 ## Provider profiles
 
 | Profile at the pinned survey revision | Shipped mapping | Open coverage gaps |
@@ -42,6 +82,19 @@ contract together. Raw profiles remain visible as detect-only; the independent
 fixture still declares non-HTTP proof through the protocol-neutral extension seam.
 The operator may revisit scope in the owner walk. No production account was used
 to settle these rows.
+
+The Funnel and Serve cost categories must be read separately, not as one shared
+price or selected-account entitlement. Their private/public audience distinction
+does not remove certificate-transparency name disclosure: the primary profile
+review records it for both Funnel and Serve. Cloudflare's documented connector-link
+count is distinct from an unobserved deployed replica count; those are not
+contradictory observations. Stable/documented features do not prove deployment in
+the selected account.
+
+On this base, localhost.run execution is available while tunnl.gg is detect-only.
+Their shared profile row above describes representation and evidence, not equal
+execution admission; queued tunnl execution is not shipped behavior. Individual
+unrepresented limits remain gaps even where the underlying runtime is implemented.
 
 ## Cross-profile extensions and negative evidence
 
