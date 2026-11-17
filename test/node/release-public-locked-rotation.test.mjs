@@ -97,3 +97,66 @@ test('both service resolution entrypoints refuse unknown presence before raw rea
   assert.equal(await readFile(home+'/embedding-state.json','utf8'),before);
  }
 });
+
+test('two bound inputs require a global presence barrier at both resolution entrypoints',async t=>{
+ const home=await scratch(t),backend=backendFixture(),calls=[],overrides=new Map();
+ const presence=backend.presence,withSecret=backend.withSecret;
+ backend.presence=async request=>{
+  calls.push(['presence',request.handle]);
+  return overrides.has(request.handle)?overrides.get(request.handle):presence(request);
+ };
+ backend.withSecret=async(request,use)=>{
+  calls.push(['withSecret',request.handle]);
+  return withSecret(request,use);
+ };
+ const services=createEmbeddingServices({registryId:'multi-binding-service',secretBackend:backend});
+ const request={home,providerId:'provider',owner:'owner'};
+ let configuration=await services.readConfiguration(request);
+ const handles=[];
+ // Real transactions establish insertion order and carry each new revision forward.
+ for(const [inputId,value]of [['first','first-service-canary'],['second','second-service-canary']]){
+  const stored=await services.storeSecret({...request,scopeId:configuration.scopeId,inputId,expectedConfigurationRevision:configuration.revision,bytes:new TextEncoder().encode(value)});
+  const bound=await services.mutateConfiguration({...request,expectedConfigurationRevision:configuration.revision},async tx=>{
+   await tx.bindSecret(inputId,stored.handle);
+   tx.bindText('ordinary','unrelated text');
+  });
+  assert.notEqual(bound.configuration.revision,configuration.revision);
+  configuration=bound.configuration;handles.push(stored.handle);
+ }
+ const [first,second]=handles,current={...request,expectedConfigurationRevision:configuration.revision};
+ const before=await readFile(home+'/embedding-state.json','utf8');
+ const presences=[['presence',first],['presence',second]];
+ const entrypoints=[
+  ['service',()=>services.resolveConfiguration(current)],
+  ['transaction',()=>services.mutateConfiguration(current,tx=>tx.resolveConfiguration(),{mutatesConfiguration:false}).then(r=>r.result)],
+ ];
+ const unknowns=[
+  ['locked',{known:false,reason:'secret_backend_locked'},'secret_backend_locked'],
+  ['unavailable',{known:false,reason:'secret_backend_unavailable'},'secret_backend_unavailable'],
+  ['null',null,'secret_backend_unavailable'],
+  ['empty',{},'secret_backend_unavailable'],
+  ['nonboolean',{known:true,value:'true'},'secret_backend_unavailable'],
+ ];
+ for(const [name,resolve]of entrypoints){
+  for(const [variant,observation,code]of unknowns){
+   backend.mode('ready');calls.length=0;overrides.clear();overrides.set(second,observation);
+   await assert.rejects(resolve,{code},name+': '+variant);
+   assert.equal(backend.attempts(),0,'later '+variant+' must prevent even the first raw read');
+   assert.deepEqual(calls,presences);
+   assert.equal(await readFile(home+'/embedding-state.json','utf8'),before);
+  }
+  for(const missing of [false,true]){
+   backend.mode('ready');calls.length=0;overrides.clear();
+   if(missing)overrides.set(second,{known:true,value:false});
+   assert.deepEqual(await resolve(),missing
+    ?{ordinary:'unrelated text',first:'first-service-canary'}
+    :{ordinary:'unrelated text',first:'first-service-canary',second:'second-service-canary'});
+   const reads=[['withSecret',first],...(!missing?[['withSecret',second]]:[])];
+   // The transaction also redacts its returned configuration after resolution.
+   assert.deepEqual(calls,[...presences,...reads,...(name==='transaction'?presences:[])]);
+   assert.equal(backend.attempts(),missing?1:2);
+   assert.deepEqual(backend.used,missing?['first-service-canary']:['first-service-canary','second-service-canary']);
+   assert.equal(await readFile(home+'/embedding-state.json','utf8'),before);
+  }
+ }
+});
