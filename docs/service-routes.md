@@ -61,6 +61,15 @@ The command is trusted owner code, executed by a shell under the invoking user's
 
 ## JavaScript and JSON contract
 
+Use the standalone calls below for service tracking and challenge checks. To publish
+an existing owner-managed HTTPS origin through a factory's `RouteView`, pass the
+exact origin and target in a durable `catalogRoutes` query. Show the eligible
+owner-managed offer to the user and pass its approval to `ensureRoute`. Use the
+returned external handle with `routeStatus` and advertise only `published`.
+A standalone `addService` receipt has no scoped route consent. If a standalone
+record already exists for the exact origin, remove its tracking record before
+registering through the approved factory flow. The existing relay and app stay up.
+
 ```js
 import { addService, statusServices, removeService, createServiceVerifier }
   from '@tnunamak/gozar/service';
