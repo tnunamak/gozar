@@ -116,7 +116,13 @@ test('an owner that exits normally also loses the lease (unref\'d heartbeat: it 
   const owner = await ownerScript(t, home, controller.module, { exitAfterOpen: true });
   assert.equal(owner.view.state, 'usable');
   assert.equal((await owner.exited).code, 0);
+  const root = join(home, 'attached'), [id] = (await readdir(root)).filter(name => name.startsWith('att_'));
+  const { pid } = JSON.parse(await readFile(join(root, id, 'control.json'), 'utf8'));
   assert.ok(await waitFor(async () => (await controller.read()).includes('removed'), EXPIRY + 5000));
+  assert.deepEqual(await controller.read(), ['created', 'removed']);
+  // Removal is recorded before the controller finishes writing its final state.
+  // Wait for exit before scratch teardown can remove its working directory.
+  assert.equal(await waitFor(() => !alive(pid), 5000), true, 'the controller exits after normal owner exit');
 });
 
 test('open, status, close: the lease holds beyond the expiry, close removes at once and the handle is then released', async t => {

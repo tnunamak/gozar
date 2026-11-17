@@ -540,6 +540,27 @@
         "affectsConsent": false,
         "source": "adapter-configuration",
         "asOf": "2026-11-13"
+      },
+      {
+        "id": "payload-readers",
+        "label": "Payload readers",
+        "value": "Architecture classification: the owner-managed proxy may read payloads; its actual TLS termination and reader access have not been observed. Selecting this address does not grant Gozar authority over the proxy or its owner. This is not a live deployment observation.",
+        "known": true,
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "adapter architecture: adapters/providers/own-address/definition.json#adapter.capabilities.traffic",
+        "asOf": null
+      },
+      {
+        "id": "payload-readers-deployment",
+        "label": "Actual deployment payload readers",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "privacy",
+        "affectsConsent": true,
+        "source": "gozar:catalog:no-deployment-observation",
+        "asOf": null
       }
     ],
     "effectOperations": [
