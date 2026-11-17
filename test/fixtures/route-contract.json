@@ -4953,6 +4953,603 @@
           "remedy": null
         }
       }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Binding",
+      "name": "adapter known target with remedy",
+      "value": {
+        "authority": "adapter",
+        "target": {
+          "known": true,
+          "value": "127.0.0.1:8799"
+        },
+        "remedy": {
+          "id": "act_synthetic_binding",
+          "kind": "instructions",
+          "label": "Review the synthetic binding",
+          "digest": "sha256:synthetic-binding",
+          "disclosure": {
+            "revision": "disc-synthetic-1",
+            "text": "Example disclosure text for a synthetic provider.",
+            "links": [
+              {
+                "rel": "terms",
+                "label": "Terms",
+                "href": "https://provider.example/terms"
+              },
+              {
+                "rel": "privacy",
+                "label": "Privacy",
+                "href": "https://provider.example/privacy"
+              }
+            ]
+          },
+          "instructions": "Review the target binding before proceeding."
+        }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Binding",
+      "name": "owner known target with remedy",
+      "value": {
+        "authority": "owner",
+        "target": {
+          "known": true,
+          "value": "127.0.0.1:8799"
+        },
+        "remedy": {
+          "id": "act_synthetic_binding",
+          "kind": "instructions",
+          "label": "Review the synthetic binding",
+          "digest": "sha256:synthetic-binding",
+          "disclosure": {
+            "revision": "disc-synthetic-1",
+            "text": "Example disclosure text for a synthetic provider.",
+            "links": [
+              {
+                "rel": "terms",
+                "label": "Terms",
+                "href": "https://provider.example/terms"
+              },
+              {
+                "rel": "privacy",
+                "label": "Privacy",
+                "href": "https://provider.example/privacy"
+              }
+            ]
+          },
+          "instructions": "Review the target binding before proceeding."
+        }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Availability",
+      "name": "three observed usage states",
+      "value": {
+        "session": {
+          "state": "available",
+          "reason": "Synthetic session supported"
+        },
+        "attached": {
+          "state": "detect-only",
+          "reason": "Synthetic route may only be detected"
+        },
+        "durable": {
+          "state": "unsupported",
+          "reason": "Synthetic durable route unsupported"
+        }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Prerequisite",
+      "name": "observed present",
+      "value": {
+        "id": "synthetic-prerequisite",
+        "label": "Synthetic tool",
+        "state": "present",
+        "observedAt": "2026-11-12T12:00:00.000Z",
+        "version": {
+          "known": true,
+          "value": "1.0.0"
+        },
+        "remedy": null,
+        "observation": {
+          "known": true,
+          "value": true
+        }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Fact",
+      "name": "known observation",
+      "value": {
+        "id": "synthetic-fact",
+        "label": "Synthetic observation",
+        "value": true,
+        "known": true,
+        "group": "runtime",
+        "affectsConsent": true,
+        "source": "synthetic-fixture",
+        "asOf": "2026-11-12T12:00:00.000Z"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Prerequisite",
+      "name": "observation unknown",
+      "value": {
+        "id": "synthetic-prerequisite",
+        "label": "Synthetic tool",
+        "state": "unknown",
+        "observedAt": null,
+        "version": {
+          "known": false,
+          "reason": "not-observed"
+        },
+        "remedy": {
+          "id": "act_synthetic_binding",
+          "kind": "instructions",
+          "label": "Review the synthetic binding",
+          "digest": "sha256:synthetic-binding",
+          "disclosure": {
+            "revision": "disc-synthetic-1",
+            "text": "Example disclosure text for a synthetic provider.",
+            "links": [
+              {
+                "rel": "terms",
+                "label": "Terms",
+                "href": "https://provider.example/terms"
+              },
+              {
+                "rel": "privacy",
+                "label": "Privacy",
+                "href": "https://provider.example/privacy"
+              }
+            ]
+          },
+          "instructions": "Review the target binding before proceeding."
+        },
+        "observation": {
+          "known": false,
+          "reason": "not-observed"
+        }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Fact",
+      "name": "unknown observation",
+      "value": {
+        "id": "synthetic-fact",
+        "label": "Synthetic observation",
+        "value": null,
+        "known": false,
+        "reason": "not-observed",
+        "group": "runtime",
+        "affectsConsent": true,
+        "source": "synthetic-fixture",
+        "asOf": null
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Candidate",
+      "name": "detect-only without route authority",
+      "value": {
+        "providerId": "example-96",
+        "name": "cand_synthetic_detect_only",
+        "preferenceRef": "pref_synthetic_1",
+        "rank": 1,
+        "eligible": false,
+        "unmet": [
+          {
+            "requirement": "usage",
+            "actual": "detect-only",
+            "reasonCode": "not_met"
+          }
+        ],
+        "display": {
+          "label": "Example public route",
+          "description": "Example public route (synthetic)",
+          "needs": "Needs nothing beyond this computer."
+        },
+        "properties": {
+          "reach": "internet",
+          "transport": "https",
+          "traffic": {
+            "tlsTermination": "provider",
+            "providerCanReadPayload": true,
+            "readers": [
+              "provider"
+            ],
+            "metadataVisibleTo": [
+              "provider"
+            ],
+            "evidenceRef": "evidence-synthetic-1"
+          },
+          "address": {
+            "stability": "stable",
+            "scope": "account",
+            "conditions": [
+              "reserved name kept by the account"
+            ],
+            "ports": [
+              8443,
+              10000
+            ]
+          },
+          "cost": {
+            "kind": "free",
+            "summary": "No charge",
+            "currency": null,
+            "amount": null,
+            "period": null
+          },
+          "needsAccount": true,
+          "lifetimes": [
+            "session",
+            "attached",
+            "durable"
+          ],
+          "supervision": "provider-persistent",
+          "protocols": {
+            "sse": true,
+            "streamableHttp": true,
+            "oauthDcr": true
+          },
+          "proof": {
+            "vantage": "public",
+            "checks": [
+              "tls",
+              "nonce"
+            ]
+          }
+        },
+        "setup": {
+          "state": "detect-only",
+          "actions": []
+        },
+        "disclosure": {
+          "revision": "disc-synthetic-1",
+          "text": "Example disclosure text for a synthetic provider.",
+          "links": [
+            {
+              "rel": "terms",
+              "label": "Terms",
+              "href": "https://provider.example/terms"
+            },
+            {
+              "rel": "privacy",
+              "label": "Privacy",
+              "href": "https://provider.example/privacy"
+            }
+          ]
+        },
+        "candidateToken": null,
+        "expiresAt": null,
+        "availability": {
+          "session": {
+            "state": "detect-only",
+            "reason": "Synthetic observation only"
+          },
+          "attached": {
+            "state": "detect-only",
+            "reason": "Synthetic observation only"
+          },
+          "durable": {
+            "state": "detect-only",
+            "reason": "Synthetic observation only"
+          }
+        },
+        "prerequisites": [],
+        "facts": [],
+        "configuration": {
+          "values": {},
+          "credentials": {},
+          "actions": [],
+          "inputRequirements": [],
+          "revision": "cfg-synthetic-1",
+          "scopeId": "scope-synthetic-1"
+        },
+        "consent": {
+          "scope": {
+            "configurationRevision": "cfg-synthetic-1",
+            "kind": "route",
+            "providerId": "example-96",
+            "query": {
+              "expectedOrigin": null,
+              "reach": "internet",
+              "target": "127.0.0.1:1234",
+              "transport": "https",
+              "usage": {
+                "kind": "attached"
+              }
+            },
+            "registryId": "registry-synthetic-1",
+            "scopeId": "scope-synthetic-1"
+          },
+          "consentFactsDigest": "consent-v1:fd89d64637aa75d369afdf1feef7a94f0b671a7e43dad14e063032361a52e5c9",
+          "facts": [],
+          "disclosures": {
+            "address": {
+              "conditions": [
+                "reserved name kept by the account"
+              ],
+              "ports": [
+                8443,
+                10000
+              ],
+              "scope": "account",
+              "stability": "stable"
+            },
+            "cost": {
+              "kind": "free"
+            },
+            "disclosure": {
+              "links": [
+                {
+                  "href": "https://provider.example/terms",
+                  "label": "Terms",
+                  "rel": "terms"
+                },
+                {
+                  "href": "https://provider.example/privacy",
+                  "label": "Privacy",
+                  "rel": "privacy"
+                }
+              ],
+              "revision": "disc-synthetic-1",
+              "text": "Example disclosure text for a synthetic provider."
+            },
+            "lifetimes": [
+              "session",
+              "attached",
+              "durable"
+            ],
+            "protocols": {
+              "oauthDcr": true,
+              "sse": true,
+              "streamableHttp": true
+            },
+            "reach": "internet",
+            "supervision": "provider-persistent",
+            "traffic": {
+              "evidenceRef": "evidence-synthetic-1",
+              "metadataVisibleTo": [
+                "provider"
+              ],
+              "providerCanReadPayload": true,
+              "readers": [
+                "provider"
+              ],
+              "tlsTermination": "provider"
+            },
+            "transport": "https"
+          }
+        },
+        "consentFactsDigest": "consent-v1:fd89d64637aa75d369afdf1feef7a94f0b671a7e43dad14e063032361a52e5c9"
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "WatchEvent",
+      "name": "consent_changed with remedy",
+      "value": {
+        "schemaVersion": 1,
+        "sequence": 0,
+        "type": "consent_changed",
+        "route": {
+          "schemaVersion": 2,
+          "handle": {
+            "kind": "durable",
+            "id": "example-main",
+            "generation": 4
+          },
+          "origin": "https://example.invalid",
+          "published": "https://example.invalid",
+          "state": "usable",
+          "ownership": "gozar-owned",
+          "properties": {
+            "reach": "internet",
+            "transport": "https",
+            "traffic": {
+              "tlsTermination": "provider",
+              "providerCanReadPayload": true,
+              "readers": [
+                "provider"
+              ],
+              "metadataVisibleTo": [
+                "provider"
+              ],
+              "evidenceRef": "evidence-synthetic-1"
+            },
+            "address": {
+              "stability": "stable",
+              "scope": "account",
+              "conditions": [
+                "reserved name kept by the account"
+              ],
+              "ports": null
+            },
+            "cost": {
+              "kind": "free",
+              "summary": "No charge",
+              "currency": null,
+              "amount": null,
+              "period": null
+            },
+            "needsAccount": true,
+            "lifetimes": [
+              "session",
+              "attached",
+              "durable"
+            ],
+            "supervision": "provider-persistent",
+            "protocols": {
+              "sse": true,
+              "streamableHttp": true,
+              "oauthDcr": true
+            },
+            "proof": {
+              "vantage": "public",
+              "checks": [
+                "tls",
+                "nonce"
+              ]
+            }
+          },
+          "ingress": null,
+          "verification": {
+            "status": "verified",
+            "checkedAt": "2026-11-12T12:00:00.000Z",
+            "vantage": "this-device",
+            "checks": [
+              "nonce"
+            ],
+            "validUntil": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "results": [],
+            "observedAt": "2026-11-12T12:00:00.000Z",
+            "subject": {
+              "origin": "https://example.invalid",
+              "target": "127.0.0.1:8799",
+              "instanceId": "fixture-instance",
+              "bootId": "fixture-boot",
+              "handleGeneration": 4
+            }
+          },
+          "limits": {
+            "recommendedPollIntervalMs": 60000,
+            "idleTimeoutMs": null
+          },
+          "cleanup": {
+            "state": "none",
+            "nextAction": null
+          },
+          "routeState": "verified",
+          "expiresAt": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "hostConfiguration": {
+            "target": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "localPort": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "bindTarget": {
+              "known": false,
+              "reason": "not-observed"
+            },
+            "origin": {
+              "known": false,
+              "reason": "not-observed"
+            }
+          },
+          "facts": [],
+          "actions": [
+            "stop",
+            "edit",
+            "rotate"
+          ],
+          "operationId": null,
+          "binding": {
+            "authority": "unknown",
+            "target": {
+              "known": false,
+              "reason": "unobserved"
+            },
+            "remedy": null
+          }
+        },
+        "oldDigest": "consent-v1:synthetic-old",
+        "newDigest": "consent-v1:synthetic-new",
+        "reason": "Synthetic binding facts changed",
+        "nextAction": {
+          "id": "act_synthetic_binding",
+          "kind": "instructions",
+          "label": "Review the synthetic binding",
+          "digest": "sha256:synthetic-binding",
+          "disclosure": {
+            "revision": "disc-synthetic-1",
+            "text": "Example disclosure text for a synthetic provider.",
+            "links": [
+              {
+                "rel": "terms",
+                "label": "Terms",
+                "href": "https://provider.example/terms"
+              },
+              {
+                "rel": "privacy",
+                "label": "Privacy",
+                "href": "https://provider.example/privacy"
+              }
+            ]
+          },
+          "instructions": "Review the target binding before proceeding."
+        }
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Requirements",
+      "name": "tcp transport",
+      "value": {
+        "reach": "internet",
+        "transport": "tcp",
+        "payloadAccess": "allow-provider",
+        "address": "stable",
+        "setup": "allow",
+        "protocols": [
+          "sse",
+          "streamable-http",
+          "oauth-dcr"
+        ]
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Requirements",
+      "name": "tls transport",
+      "value": {
+        "reach": "internet",
+        "transport": "tls",
+        "payloadAccess": "allow-provider",
+        "address": "stable",
+        "setup": "allow",
+        "protocols": [
+          "sse",
+          "streamable-http",
+          "oauth-dcr"
+        ]
+      }
+    },
+    {
+      "schema": "route-catalog",
+      "shape": "Requirements",
+      "name": "any transport",
+      "value": {
+        "reach": "internet",
+        "transport": "any",
+        "payloadAccess": "allow-provider",
+        "address": "stable",
+        "setup": "allow",
+        "protocols": [
+          "sse",
+          "streamable-http",
+          "oauth-dcr"
+        ]
+      }
     }
   ],
   "invalid": [
@@ -4960,9 +5557,9 @@
       "schema": "route-catalog",
       "shape": "Catalog",
       "name": "unknown schemaVersion",
-      "why": "schemaVersion must be the constant 1; an unknown version fails closed",
+      "why": "schemaVersion must be the constant 2; changing only the version fails closed",
       "value": {
-        "schemaVersion": 2,
+        "schemaVersion": 999,
         "catalogRevision": "catrev_synthetic_1",
         "observedAt": "2026-11-12T12:00:00.000Z",
         "preferenceRevision": 3,
@@ -5049,10 +5646,108 @@
               ]
             },
             "candidateToken": "tok_synthetic_eligible_1",
-            "expiresAt": "2026-11-12T12:10:00.000Z"
+            "expiresAt": "2026-11-12T12:10:00.000Z",
+            "availability": {
+              "session": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "attached": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "durable": {
+                "state": "available",
+                "reason": "fixture"
+              }
+            },
+            "prerequisites": [],
+            "facts": [],
+            "configuration": {
+              "values": {},
+              "credentials": {},
+              "actions": [],
+              "inputRequirements": [],
+              "revision": "cfg-synthetic-1",
+              "scopeId": "scope-synthetic-1"
+            },
+            "consent": {
+              "scope": {
+                "configurationRevision": "cfg-synthetic-1",
+                "kind": "route",
+                "providerId": "example-96",
+                "query": {
+                  "expectedOrigin": null,
+                  "reach": "internet",
+                  "target": "127.0.0.1:1234",
+                  "transport": "https",
+                  "usage": {
+                    "kind": "attached"
+                  }
+                },
+                "registryId": "registry-synthetic-1",
+                "scopeId": "scope-synthetic-1"
+              },
+              "consentFactsDigest": "consent-v1:201d0217a47beb55c0159c73f905c230b4a2dc67561ea806ed21caab71a8b84b",
+              "facts": [],
+              "disclosures": {
+                "address": {
+                  "conditions": [
+                    "reserved name kept by the account"
+                  ],
+                  "ports": null,
+                  "scope": "account",
+                  "stability": "stable"
+                },
+                "cost": {
+                  "kind": "free"
+                },
+                "disclosure": {
+                  "links": [
+                    {
+                      "href": "https://provider.example/terms",
+                      "label": "Terms",
+                      "rel": "terms"
+                    },
+                    {
+                      "href": "https://provider.example/privacy",
+                      "label": "Privacy",
+                      "rel": "privacy"
+                    }
+                  ],
+                  "revision": "disc-synthetic-1",
+                  "text": "Example disclosure text for a synthetic provider."
+                },
+                "lifetimes": [
+                  "session",
+                  "attached",
+                  "durable"
+                ],
+                "protocols": {
+                  "oauthDcr": true,
+                  "sse": true,
+                  "streamableHttp": true
+                },
+                "reach": "internet",
+                "supervision": "provider-persistent",
+                "traffic": {
+                  "evidenceRef": "evidence-synthetic-1",
+                  "metadataVisibleTo": [
+                    "provider"
+                  ],
+                  "providerCanReadPayload": true,
+                  "readers": [
+                    "provider"
+                  ],
+                  "tlsTermination": "provider"
+                },
+                "transport": "https"
+              }
+            },
+            "consentFactsDigest": "consent-v1:201d0217a47beb55c0159c73f905c230b4a2dc67561ea806ed21caab71a8b84b"
           },
           {
-            "providerId": "example-43",
+            "providerId": "example-32",
             "name": "cand_synthetic_2",
             "preferenceRef": "pref_synthetic_2",
             "rank": 2,
@@ -5061,7 +5756,7 @@
               {
                 "requirement": "address",
                 "actual": "ephemeral",
-                "reasonCode": "address_not_stable"
+                "reasonCode": "not_met"
               }
             ],
             "display": {
@@ -5139,10 +5834,108 @@
               ]
             },
             "candidateToken": null,
-            "expiresAt": null
+            "expiresAt": null,
+            "availability": {
+              "session": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "attached": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "durable": {
+                "state": "available",
+                "reason": "fixture"
+              }
+            },
+            "prerequisites": [],
+            "facts": [],
+            "configuration": {
+              "values": {},
+              "credentials": {},
+              "actions": [],
+              "inputRequirements": [],
+              "revision": "cfg-synthetic-1",
+              "scopeId": "scope-synthetic-1"
+            },
+            "consent": {
+              "scope": {
+                "configurationRevision": "cfg-synthetic-1",
+                "kind": "route",
+                "providerId": "example-32",
+                "query": {
+                  "expectedOrigin": null,
+                  "reach": "internet",
+                  "target": "127.0.0.1:1234",
+                  "transport": "https",
+                  "usage": {
+                    "kind": "attached"
+                  }
+                },
+                "registryId": "registry-synthetic-1",
+                "scopeId": "scope-synthetic-1"
+              },
+              "consentFactsDigest": "consent-v1:b537950474ff35b2240fec89e6b7a41a6a03eadc5e08b5df0fac10f9cbdef06c",
+              "facts": [],
+              "disclosures": {
+                "address": {
+                  "conditions": [
+                    "address changes on restart"
+                  ],
+                  "ports": null,
+                  "scope": "session",
+                  "stability": "ephemeral"
+                },
+                "cost": {
+                  "kind": "free"
+                },
+                "disclosure": {
+                  "links": [
+                    {
+                      "href": "https://provider.example/terms",
+                      "label": "Terms",
+                      "rel": "terms"
+                    },
+                    {
+                      "href": "https://provider.example/privacy",
+                      "label": "Privacy",
+                      "rel": "privacy"
+                    }
+                  ],
+                  "revision": "disc-synthetic-1",
+                  "text": "Example disclosure text for a synthetic provider."
+                },
+                "lifetimes": [
+                  "session",
+                  "attached",
+                  "durable"
+                ],
+                "protocols": {
+                  "oauthDcr": true,
+                  "sse": true,
+                  "streamableHttp": true
+                },
+                "reach": "internet",
+                "supervision": "provider-persistent",
+                "traffic": {
+                  "evidenceRef": "evidence-synthetic-1",
+                  "metadataVisibleTo": [
+                    "provider"
+                  ],
+                  "providerCanReadPayload": true,
+                  "readers": [
+                    "provider"
+                  ],
+                  "tlsTermination": "provider"
+                },
+                "transport": "https"
+              }
+            },
+            "consentFactsDigest": "consent-v1:b537950474ff35b2240fec89e6b7a41a6a03eadc5e08b5df0fac10f9cbdef06c"
           },
           {
-            "providerId": "example-42",
+            "providerId": "example-51",
             "name": "cand_synthetic_3",
             "preferenceRef": "pref_synthetic_3",
             "rank": 3,
@@ -5151,7 +5944,7 @@
               {
                 "requirement": "platform",
                 "actual": "darwin",
-                "reasonCode": "unsupported"
+                "reasonCode": "unsupported_platform"
               }
             ],
             "display": {
@@ -5229,7 +6022,105 @@
               ]
             },
             "candidateToken": null,
-            "expiresAt": null
+            "expiresAt": null,
+            "availability": {
+              "session": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "attached": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "durable": {
+                "state": "available",
+                "reason": "fixture"
+              }
+            },
+            "prerequisites": [],
+            "facts": [],
+            "configuration": {
+              "values": {},
+              "credentials": {},
+              "actions": [],
+              "inputRequirements": [],
+              "revision": "cfg-synthetic-1",
+              "scopeId": "scope-synthetic-1"
+            },
+            "consent": {
+              "scope": {
+                "configurationRevision": "cfg-synthetic-1",
+                "kind": "route",
+                "providerId": "example-51",
+                "query": {
+                  "expectedOrigin": null,
+                  "reach": "internet",
+                  "target": "127.0.0.1:1234",
+                  "transport": "https",
+                  "usage": {
+                    "kind": "attached"
+                  }
+                },
+                "registryId": "registry-synthetic-1",
+                "scopeId": "scope-synthetic-1"
+              },
+              "consentFactsDigest": "consent-v1:1e85f4c24f35410a321009e9e5d930534ac574246f68280f5c20e4180ea722ad",
+              "facts": [],
+              "disclosures": {
+                "address": {
+                  "conditions": [
+                    "reserved name kept by the account"
+                  ],
+                  "ports": null,
+                  "scope": "account",
+                  "stability": "stable"
+                },
+                "cost": {
+                  "kind": "free"
+                },
+                "disclosure": {
+                  "links": [
+                    {
+                      "href": "https://provider.example/terms",
+                      "label": "Terms",
+                      "rel": "terms"
+                    },
+                    {
+                      "href": "https://provider.example/privacy",
+                      "label": "Privacy",
+                      "rel": "privacy"
+                    }
+                  ],
+                  "revision": "disc-synthetic-1",
+                  "text": "Example disclosure text for a synthetic provider."
+                },
+                "lifetimes": [
+                  "session",
+                  "attached",
+                  "durable"
+                ],
+                "protocols": {
+                  "oauthDcr": true,
+                  "sse": true,
+                  "streamableHttp": true
+                },
+                "reach": "internet",
+                "supervision": "provider-persistent",
+                "traffic": {
+                  "evidenceRef": "evidence-synthetic-1",
+                  "metadataVisibleTo": [
+                    "provider"
+                  ],
+                  "providerCanReadPayload": true,
+                  "readers": [
+                    "provider"
+                  ],
+                  "tlsTermination": "provider"
+                },
+                "transport": "https"
+              }
+            },
+            "consentFactsDigest": "consent-v1:1e85f4c24f35410a321009e9e5d930534ac574246f68280f5c20e4180ea722ad"
           },
           {
             "providerId": "example-39",
@@ -5337,10 +6228,108 @@
               ]
             },
             "candidateToken": null,
-            "expiresAt": null
+            "expiresAt": null,
+            "availability": {
+              "session": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "attached": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "durable": {
+                "state": "available",
+                "reason": "fixture"
+              }
+            },
+            "prerequisites": [],
+            "facts": [],
+            "configuration": {
+              "values": {},
+              "credentials": {},
+              "actions": [],
+              "inputRequirements": [],
+              "revision": "cfg-synthetic-1",
+              "scopeId": "scope-synthetic-1"
+            },
+            "consent": {
+              "scope": {
+                "configurationRevision": "cfg-synthetic-1",
+                "kind": "route",
+                "providerId": "example-39",
+                "query": {
+                  "expectedOrigin": null,
+                  "reach": "internet",
+                  "target": "127.0.0.1:1234",
+                  "transport": "https",
+                  "usage": {
+                    "kind": "attached"
+                  }
+                },
+                "registryId": "registry-synthetic-1",
+                "scopeId": "scope-synthetic-1"
+              },
+              "consentFactsDigest": "consent-v1:65758a2e0ea83b77ced769dff36c65272f0c10af507ef055f217651f1cb9ba95",
+              "facts": [],
+              "disclosures": {
+                "address": {
+                  "conditions": [
+                    "reserved name kept by the account"
+                  ],
+                  "ports": null,
+                  "scope": "account",
+                  "stability": "stable"
+                },
+                "cost": {
+                  "kind": "free"
+                },
+                "disclosure": {
+                  "links": [
+                    {
+                      "href": "https://provider.example/terms",
+                      "label": "Terms",
+                      "rel": "terms"
+                    },
+                    {
+                      "href": "https://provider.example/privacy",
+                      "label": "Privacy",
+                      "rel": "privacy"
+                    }
+                  ],
+                  "revision": "disc-synthetic-1",
+                  "text": "Example disclosure text for a synthetic provider."
+                },
+                "lifetimes": [
+                  "session",
+                  "attached",
+                  "durable"
+                ],
+                "protocols": {
+                  "oauthDcr": true,
+                  "sse": true,
+                  "streamableHttp": true
+                },
+                "reach": "internet",
+                "supervision": "provider-persistent",
+                "traffic": {
+                  "evidenceRef": "evidence-synthetic-1",
+                  "metadataVisibleTo": [
+                    "provider"
+                  ],
+                  "providerCanReadPayload": true,
+                  "readers": [
+                    "provider"
+                  ],
+                  "tlsTermination": "provider"
+                },
+                "transport": "https"
+              }
+            },
+            "consentFactsDigest": "consent-v1:65758a2e0ea83b77ced769dff36c65272f0c10af507ef055f217651f1cb9ba95"
           },
           {
-            "providerId": "example-90",
+            "providerId": "example-82",
             "name": "cand_synthetic_5",
             "preferenceRef": "pref_synthetic_5",
             "rank": 5,
@@ -5349,7 +6338,7 @@
               {
                 "requirement": "payloadAccess",
                 "actual": null,
-                "reasonCode": "privacy_unknown"
+                "reasonCode": "unknown"
               }
             ],
             "display": {
@@ -5421,10 +6410,108 @@
               ]
             },
             "candidateToken": null,
-            "expiresAt": null
+            "expiresAt": null,
+            "availability": {
+              "session": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "attached": {
+                "state": "available",
+                "reason": "fixture"
+              },
+              "durable": {
+                "state": "available",
+                "reason": "fixture"
+              }
+            },
+            "prerequisites": [],
+            "facts": [],
+            "configuration": {
+              "values": {},
+              "credentials": {},
+              "actions": [],
+              "inputRequirements": [],
+              "revision": "cfg-synthetic-1",
+              "scopeId": "scope-synthetic-1"
+            },
+            "consent": {
+              "scope": {
+                "configurationRevision": "cfg-synthetic-1",
+                "kind": "route",
+                "providerId": "example-82",
+                "query": {
+                  "expectedOrigin": null,
+                  "reach": "internet",
+                  "target": "127.0.0.1:1234",
+                  "transport": "https",
+                  "usage": {
+                    "kind": "attached"
+                  }
+                },
+                "registryId": "registry-synthetic-1",
+                "scopeId": "scope-synthetic-1"
+              },
+              "consentFactsDigest": "consent-v1:50b15d0fad44e30a670e5ae6d9582b8dd6d8355d881cdcaf21e598e5111a638d",
+              "facts": [],
+              "disclosures": {
+                "address": {
+                  "conditions": [],
+                  "ports": null,
+                  "scope": "unknown",
+                  "stability": "unknown"
+                },
+                "cost": {
+                  "kind": "unknown"
+                },
+                "disclosure": {
+                  "links": [
+                    {
+                      "href": "https://provider.example/terms",
+                      "label": "Terms",
+                      "rel": "terms"
+                    },
+                    {
+                      "href": "https://provider.example/privacy",
+                      "label": "Privacy",
+                      "rel": "privacy"
+                    }
+                  ],
+                  "revision": "disc-synthetic-1",
+                  "text": "Example disclosure text for a synthetic provider."
+                },
+                "lifetimes": [
+                  "session",
+                  "attached",
+                  "durable"
+                ],
+                "protocols": {
+                  "oauthDcr": true,
+                  "sse": true,
+                  "streamableHttp": true
+                },
+                "reach": "internet",
+                "supervision": "provider-persistent",
+                "traffic": {
+                  "evidenceRef": null,
+                  "metadataVisibleTo": [],
+                  "providerCanReadPayload": null,
+                  "readers": [],
+                  "tlsTermination": "unknown"
+                },
+                "transport": "https"
+              }
+            },
+            "consentFactsDigest": "consent-v1:50b15d0fad44e30a670e5ae6d9582b8dd6d8355d881cdcaf21e598e5111a638d"
           }
         ],
-        "noMatch": null
+        "noMatch": null,
+        "features": [
+          "structured-state",
+          "open-facts",
+          "input-requirements",
+          "secret-intake"
+        ]
       }
     },
     {
@@ -5460,9 +6547,9 @@
       "schema": "route-catalog",
       "shape": "RouteView",
       "name": "unknown schemaVersion",
-      "why": "schemaVersion must be the constant 1",
+      "why": "schemaVersion must be the constant 2; changing only the version fails closed",
       "value": {
-        "schemaVersion": 2,
+        "schemaVersion": 999,
         "handle": {
           "kind": "durable",
           "id": "example-main",
@@ -5521,21 +6608,98 @@
             ]
           }
         },
-        "ingress": null,
+        "ingress": {
+          "generation": 2,
+          "verifiedAt": "2026-11-12T12:00:00.000Z",
+          "validUntil": "2026-11-12T12:05:00.000Z",
+          "publicAuthority": "example.invalid",
+          "authorityHandling": "configured-origin",
+          "clientAddress": {
+            "source": "trusted-header",
+            "evidenceRef": "evidence-synthetic-2",
+            "peer": {
+              "kind": "unix-socket",
+              "path": "/private/gozar-state/ingress.sock",
+              "ownerUid": 1000
+            },
+            "header": {
+              "name": "x-forwarded-for",
+              "format": "ip-list",
+              "sanitization": "strip-inbound-and-write",
+              "selection": "rightmost-untrusted",
+              "trustedHops": 1,
+              "trustedProxyCidrs": [
+                "192.0.2.0/24"
+              ]
+            }
+          }
+        },
         "verification": {
           "status": "verified",
           "checkedAt": "2026-11-12T12:00:00.000Z",
           "vantage": "this-device",
           "checks": [
             "nonce"
-          ]
+          ],
+          "validUntil": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "results": [],
+          "observedAt": "2026-11-12T12:00:00.000Z",
+          "subject": {
+            "origin": "https://example.invalid",
+            "target": "127.0.0.1:8799",
+            "instanceId": "fixture-instance",
+            "bootId": "fixture-boot",
+            "handleGeneration": 4
+          }
         },
         "limits": {
           "recommendedPollIntervalMs": 60000,
           "idleTimeoutMs": null
         },
         "cleanup": {
-          "state": "none"
+          "state": "none",
+          "nextAction": null
+        },
+        "routeState": "verified",
+        "expiresAt": {
+          "known": false,
+          "reason": "not-observed"
+        },
+        "hostConfiguration": {
+          "target": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "localPort": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "bindTarget": {
+            "known": false,
+            "reason": "not-observed"
+          },
+          "origin": {
+            "known": false,
+            "reason": "not-observed"
+          }
+        },
+        "facts": [],
+        "actions": [
+          "stop",
+          "edit",
+          "rotate"
+        ],
+        "operationId": null,
+        "binding": {
+          "authority": "unknown",
+          "target": {
+            "known": false,
+            "reason": "unobserved"
+          },
+          "remedy": null
         }
       }
     },
@@ -6153,7 +7317,7 @@
       "schema": "route-catalog",
       "shape": "Requirements",
       "name": "transport http",
-      "why": "only https can be required",
+      "why": "transport is https|tcp|tls|any; http cannot be required",
       "value": {
         "reach": "internet",
         "transport": "http",
@@ -6375,7 +7539,7 @@
       "schema": "route-catalog",
       "shape": "Candidate",
       "name": "setup state outside enum",
-      "why": "setup.state is ready|action-required|unsupported|unknown",
+      "why": "setup.state is ready|action-required|unsupported|unknown|detect-only",
       "value": {
         "providerId": "example-96",
         "name": "cand_synthetic_1",
@@ -6873,7 +8037,7 @@
       "schema": "route-catalog",
       "shape": "WatchEvent",
       "name": "type outside enum",
-      "why": "type is snapshot|changed|terminal",
+      "why": "type is snapshot|changed|terminal|consent_changed",
       "value": {
         "schemaVersion": 1,
         "sequence": 0,
@@ -9081,7 +10245,7 @@
       "schema": "route-catalog",
       "shape": "Requirements",
       "name": "unknown transport word",
-      "why": "transport is 'https' or 'any'",
+      "why": "transport is https|tcp|tls|any; http cannot be required",
       "value": {
         "reach": "lan",
         "transport": "http",
