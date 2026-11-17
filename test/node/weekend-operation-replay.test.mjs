@@ -258,3 +258,100 @@ test('committed durable generation dominates older awaited status', {timeout:100
   assert.equal(f.removals.length,0);
  }finally{finish.resolve();await settled;}
 });
+
+for(const initial of ['missing','creating'])test('verified replay awaits initial allocation and proof: '+initial,{timeout:10000},async t=>{
+ const f=await fixture(t),entered=deferred(),release=deferred(),waiting=deferred(),resume=deferred();
+ let handle,statusCalls=0,settled=false;
+ const first=f.invoke({wait:'verified'},{run:async reserved=>{
+  handle=reserved;if(initial==='creating')f.ledger.set(handle.id,startingRoute(handle,f.request.target,f.request.operationId));
+  entered.resolve();await release.promise;f.ledger.delete(handle.id);return f.allocate(handle);
+ }});
+ const firstResult=first.then(view=>({view}),error=>({error}));
+ await entered.promise;
+ const replay=f.invoke({wait:'verified'},{replayWait:async()=>{waiting.resolve();await resume.promise;},
+  status:async query=>{statusCalls++;return f.status(query);}});
+ const result=replay.then(view=>{settled=true;return {view};},error=>{settled=true;return {error};});
+ try{
+  await Promise.race([waiting.promise,result.then(()=>assert.fail('replay settled before wait barrier'))]);
+  assert.equal(settled,false);assert.equal(statusCalls,0,'no status proof while creator owns startup');
+  assert.equal(f.allocations.length,0);
+  release.resolve();const winner=await firstResult;assert.ifError(winner.error);
+  resume.resolve();const replayed=await result;assert.ifError(replayed.error);
+  assert.deepEqual(replayed.view.handle,handle);assert.deepEqual(replayed.view.handle,winner.view.handle);
+  assert.equal(replayed.view.published,winner.view.published);assert.equal(replayed.view.verification.status,'verified');
+  assert.equal(f.allocations.length,1);
+ }finally{release.resolve();resume.resolve();await firstResult;await result;}
+});
+
+test('stop dominates a verified replay held on startup',{timeout:10000},async t=>{
+ const f=await fixture(t),entered=deferred(),release=deferred(),waiting=deferred(),resume=deferred();
+ const first=f.invoke({wait:'verified'},{run:async handle=>{
+  const view=await f.allocate(handle);entered.resolve(view);await release.promise;return view;
+ }});
+ const winner=first.then(view=>({view}),error=>({error}));
+ const view=await entered.promise;
+ const replay=f.invoke({wait:'verified'},{replayWait:async()=>{waiting.resolve();await resume.promise;},
+  status:async()=>assert.fail('stopped startup must not probe')});
+ const result=replay.then(view=>({view}),error=>({error}));
+ try{
+  await Promise.race([waiting.promise,result.then(()=>assert.fail('missing wait barrier'))]);
+  const terminal=await f.stop(view.handle);resume.resolve();
+  const observed=await result;assert.ifError(observed.error);assert.deepEqual(observed.view,terminal);
+  release.resolve();assert.deepEqual((await winner).view,terminal);
+  assert.equal(f.allocations.length,1);
+ }finally{release.resolve();resume.resolve();await winner;await result;}
+});
+
+test('verified replay timeout retains exact startup handle without another allocation',{timeout:10000},async t=>{
+ const f=await fixture(t),entered=deferred(),release=deferred();let handle;
+ const first=f.invoke({wait:'verified'},{run:async reserved=>{handle=reserved;entered.resolve();await release.promise;return f.allocate(reserved);}});
+ const winner=first.then(view=>({view}),error=>({error}));
+ await entered.promise;
+ try{
+  await assert.rejects(f.invoke({wait:'verified'},{startTimeoutMs:0,status:async()=>assert.fail('startup status forbidden')}),
+   error=>{assert.equal(error.code,'provider_unavailable');assert.deepEqual(error.route.handle,handle);
+    assert.equal(error.route.published,null);assert.equal(error.route.cleanup.state,'unconfirmed');return true;});
+  assert.equal(f.allocations.length,0);
+ }finally{release.resolve();await winner;}
+});
+
+test('verified replay of settled failure preserves failed evidence, not a new readiness error',async t=>{
+ const f=await fixture(t);let failed;
+ await assert.rejects(f.invoke({wait:'verified'},{run:async handle=>{
+  const allocated=await f.allocate(handle);
+  failed={...allocated,state:'uncertain',published:null,verification:{...allocated.verification,status:'failed'},
+   cleanup:{state:'unconfirmed'}};
+  f.ledger.set(handle.id,failed);
+  throw Object.assign(new Error('original proof failed'),{code:'verification_failed',route:failed});
+ }}),{code:'verification_failed'});
+ const replay=await f.invoke({wait:'verified'});
+ assert.deepEqual(replay,{...failed,operationId:f.request.operationId});
+ assert.equal(f.allocations.length,1);
+});
+
+test('verified historical replay remains a recovery read after creator loss',async t=>{
+ const f=await fixture(t),first=await f.invoke({wait:'verified'});
+ const replay=await f.invoke({wait:'verified'},{status:async()=>{throw missing();}});
+ assert.deepEqual(replay.handle,first.handle);assert.equal(replay.published,null);
+ assert.equal(replay.state,'uncertain');assert.equal(f.allocations.length,1);
+});
+
+test('creator failure releases a waiting replay into exact recovery debt',{timeout:10000},async t=>{
+ const f=await fixture(t),entered=deferred(),release=deferred(),waiting=deferred(),resume=deferred();let failed;
+ const first=f.invoke({wait:'verified'},{run:async handle=>{
+  const view=await f.allocate(handle);
+  failed={...view,state:'uncertain',published:null,verification:{...view.verification,status:'failed'},cleanup:{state:'unconfirmed'}};
+  entered.resolve();await release.promise;f.ledger.set(handle.id,failed);
+  throw Object.assign(new Error('proof failed'),{code:'verification_failed',route:failed});
+ }});
+ const winner=first.then(view=>({view}),error=>({error}));await entered.promise;
+ const replay=f.invoke({wait:'verified'},{replayWait:async()=>{waiting.resolve();await resume.promise;}});
+ const result=replay.then(view=>({view}),error=>({error}));
+ try{
+  await Promise.race([waiting.promise,result.then(()=>assert.fail('missing startup wait'))]);
+  release.resolve();assert.equal((await winner).error.code,'verification_failed');resume.resolve();
+  const observed=await result;assert.ifError(observed.error);
+  assert.deepEqual(observed.view,{...failed,operationId:f.request.operationId});
+  assert.equal(f.allocations.length,1);
+ }finally{release.resolve();resume.resolve();await winner;await result;}
+});

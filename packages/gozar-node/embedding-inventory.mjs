@@ -7,11 +7,12 @@ import {catalogFactsFor} from './catalog-facts.mjs';
 export async function listProviders(request,deps={}){
  if(!Array.isArray(deps.adapters))throw embeddingError('provider_unavailable');
  const platform=deps.platform??process.platform;const observedAt=new Date().toISOString();
- const read=await readContextFor(deps,request.home,platform);
+ const owner=request.owner===undefined?deps.owner:request.owner;
+ const read=await readContextFor(deps,request.home,platform,owner);
  const inspections=await Promise.all(deps.adapters.map(a=>inspectAdapter(a,read,platform)));
  const providers=await Promise.all(inspections.map(async item=>{
   const {adapter,properties}=item;let actions=[...new Map([...item.actions,...(item.missingActions??[])].map(a=>[a.id,a])).values()];
-  const saved=await deps.embeddingServices.readConfiguration({...request,providerId:adapter.id});
+  const saved=await deps.embeddingServices.readConfiguration({...request,owner,providerId:adapter.id});
   const decorate=action=>deps.decorateSetupAction?deps.decorateSetupAction({action,adapter,configuration:saved,draftId:null,inspection:item}):action;
   actions=await Promise.all([...actions,...clearInputActions(saved)].map(decorate));
   const configuration={...configurationFor(actions,saved,adapter.definition.inputRequirements),revision:saved.revision,scopeId:saved.scopeId};
