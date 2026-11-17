@@ -25,7 +25,9 @@ function newHandle(request){
  if(request.usage.kind==='session'){const port=request.target.split(':').at(-1);return {kind:'session',id:`port-${port}:${randomUUID()}`,generation:1};}
  return {kind:'durable',id:request.usage.routeId,generation:1};
 }
-export async function withRouteOperation(request,{registryId,embeddingServices,adapters,run,status,startTimeoutMs=120_000,replayWait=ms=>new Promise(resolve=>setTimeout(resolve,ms))}){
+// Fresh proofs this incarnation may attempt for a route with no controller before the replay settles as recovery.
+const REPROOF_ATTEMPTS=3;
+export async function withRouteOperation(request,{registryId,embeddingServices,adapters,run,status,progress,startTimeoutMs=120_000,replayWait=ms=>new Promise(resolve=>setTimeout(resolve,ms))}){
  if(request.operationId===undefined)return run(null);
  if(typeof request.operationId!=='string'||!request.operationId||request.operationId.length>256||typeof request.owner!=='string'||!request.owner)throw gozarError('invalid_input','A route operation needs a non-empty operationId and owner');
  const home=await canonicalHome(request.home,true),dir=await directory(home,true),path=join(dir,hash(JSON.stringify([request.owner,request.operationId]))+'.json');
@@ -105,6 +107,18 @@ export async function withRouteOperation(request,{registryId,embeddingServices,a
    error.route=currentRecord.phase==='starting'?recovery():structuredClone(currentRecord.view);
    throw error;
   };
+  // True only when the route's own authority says another read cannot become verified.
+  let stale=0,booted;
+  const cannotProgress=async view=>{
+   if(view.consentChange?.reason==='host-resolver-unavailable')return true;
+   const asked=progress?await bounded(()=>progress({home,owner:record.owner,handle:view.handle})).catch(()=>({})):{};
+   if(asked.value)return asked.value.viable===false;
+   // No controller to ask: this incarnation's own fresh proofs are the evidence, and they must repeat.
+   if(booted===undefined)booted=await (async()=>embeddingServices.resolveIdentity({home}))().catch(()=>null);
+   const subject=view.verification?.subject;
+   stale=booted&&subject&&subject.instanceId===booted.instanceId&&subject.bootId===booted.bootId?stale+1:0;
+   return stale>=REPROOF_ATTEMPTS;
+  };
   // Status may refresh proof; never call it while the winner owns startup.
   while(waits&&currentRecord.phase==='starting'){
    let delayed;
@@ -144,6 +158,8 @@ export async function withRouteOperation(request,{registryId,embeddingServices,a
     !['released','failed','blocked'].includes(view.state);
    if(request.wait!=='verified'||!live||
       view.verification?.status==='verified'&&typeof view.published==='string'&&view.published.length>0)return view;
+   // Creator loss: settle with the retained recovery view only on authority evidence, never on a bare unverified read.
+   if(await cannotProgress(view))return observe(recoveryHistory(structuredClone(view),'The route creator is gone and its proof cannot progress; retry close with the retained handle.'));
    // Allocated is not verified: wait only for current live readiness, never
    // reallocate or demand publication from retained historical cleanup debt.
    let delayed;

@@ -451,3 +451,54 @@ test('live readiness delay is bounded by the same remaining deadline',{timeout:1
  });
  assert.equal(calls,1);assert.equal(delays,1);assert.equal(f.allocations.length,1);
 });
+
+// Creator loss: a verified replay settles only on authority evidence, never on a bare unverified read.
+const unverifiedLive=(view,extra={})=>({...view,state:'unverified',routeState:'detected',published:null,
+ verification:{...view.verification,status:'unverified',subject:{origin:view.origin,target:'127.0.0.1:41237',instanceId:'creator-instance',bootId:'creator-boot',handleGeneration:view.handle.generation}},...extra});
+
+test('authority that cannot progress settles a verified replay with its retained recovery view',{timeout:10000},async t=>{
+ const f=await fixture(t),first=await f.invoke({wait:'verified'});let waits=0,calls=0;
+ const replay=await f.invoke({wait:'verified'},{status:async q=>{calls++;return unverifiedLive(await f.status(q));},
+  progress:async()=>({viable:false}),replayWait:async()=>{waits++;}});
+ assert.deepEqual(replay.handle,first.handle);assert.equal(replay.published,null);assert.equal(replay.ingress,null);
+ assert.equal(replay.verification.status,'unverified');assert.equal(replay.cleanup.state,'unconfirmed');
+ assert.equal(replay.cleanup.nextAction.id,'retry-close');assert.equal(replay.operationId,f.request.operationId);
+ assert.equal(waits,0);assert.equal(calls,1);assert.equal(f.allocations.length,1);
+ const entry=(await readdir(join(f.home,'operations'))).find(n=>n.endsWith('.json'));
+ const journal=JSON.parse(await readFile(join(f.home,'operations',entry),'utf8'));
+ assert.deepEqual(journal.view,first,'a replay observation never rewrites the operation journal');
+ // The retained handle still closes exactly.
+ assert.equal((await f.stop(first.handle)).cleanup.state,'confirmed');
+});
+
+test('viable reproof and an initial proof still in flight keep a verified replay waiting',{timeout:10000},async t=>{
+ const f=await fixture(t),first=await f.invoke({wait:'verified'});let calls=0;const asked=[];
+ const replay=await f.invoke({wait:'verified'},{status:async q=>{calls++;const view=await f.status(q);return calls<4?unverifiedLive(view):view;},
+  progress:async q=>{asked.push(q.handle.id);return {viable:true};},replayWait:async()=>{}});
+ assert.deepEqual(replay.handle,first.handle);assert.equal(replay.verification.status,'verified');
+ assert.equal(replay.published,first.published);assert.equal(calls,4);assert.equal(asked.length,3);assert.equal(f.allocations.length,1);
+});
+
+test('a lost host resolver reported by the owning controller settles without asking for more proof',{timeout:10000},async t=>{
+ const f=await fixture(t),first=await f.invoke({wait:'verified'});let waits=0;
+ const replay=await f.invoke({wait:'verified'},{status:async q=>unverifiedLive(await f.status(q),{consentChange:{reason:'host-resolver-unavailable',nextAction:null}}),
+  replayWait:async()=>{waits++;}});
+ assert.deepEqual(replay.handle,first.handle);assert.equal(replay.published,null);assert.equal(replay.cleanup.state,'unconfirmed');
+ assert.equal(waits,0);assert.equal(f.allocations.length,1);
+});
+
+test('without a controller only repeated fresh proofs by this incarnation settle a replay',{timeout:10000},async t=>{
+ const identity={instanceId:'replay-instance',bootId:'replay-boot'};
+ const mine=async(f,calls)=>q=>f.status(q).then(view=>{calls.n++;return unverifiedLive(view,{verification:{...view.verification,status:'unverified',
+  subject:{origin:view.origin,target:view.target??'127.0.0.1:41237',...identity,handleGeneration:view.handle.generation}}});});
+ const f=await fixture(t),first=await f.invoke({wait:'verified'});const calls={n:0};
+ const options={embeddingServices:{...f.options.embeddingServices,resolveIdentity:async()=>identity}};
+ const replay=await withRouteOperation({...f.request,wait:'verified'},{...f.options,...options,run:f.allocate,status:await mine(f,calls),replayWait:async()=>{}});
+ assert.deepEqual(replay.handle,first.handle);assert.equal(replay.published,null);assert.equal(replay.cleanup.state,'unconfirmed');
+ assert.equal(calls.n,3,'one failed proof is not evidence; three are');assert.equal(f.allocations.length,1);
+ // A stale proof from the creator's boot is never counted: the replay keeps waiting until its own deadline.
+ const g=await fixture(t);await g.invoke({wait:'verified'});
+ await assert.rejects(g.invoke({wait:'verified'},{startTimeoutMs:60,embeddingServices:options.embeddingServices,
+  status:async q=>unverifiedLive(await g.status(q)),replayWait:ms=>new Promise(r=>setTimeout(r,Math.min(ms,5)))}),{code:'provider_unavailable'});
+ assert.equal(g.allocations.length,1);
+});

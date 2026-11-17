@@ -22,7 +22,7 @@ import { setupConsentReview,consentSnapshot } from './consent-facts.mjs';
 import {offeredConfiguration,readConfigurationDraft,clearConfigurationInput} from './embedding-setup.mjs';
 import {withRouteOperation,listRecordedRoutes,recordOperationView,operationReferenceForRoute,retainedOperationView,recordPendingReferenceCleanup,retryRecordedReferenceCleanup,referenceCleanupDebt} from './route-operations.mjs';
 import {cleanupReferenceRecord,prepareCleanupReference,recordCleanupRemoval,retryCleanupReference,listCleanupReferences} from './route-operations.mjs';
-import {attachedCleanupReference,attachedRemovalEvidence,finishCleanupController} from './attached-route.mjs';
+import {attachedCleanupReference,attachedRemovalEvidence,finishCleanupController,attachedReplayProgress} from './attached-route.mjs';
 import {withServiceContext,reviewExternalConsent,approveExternalConsent} from './service.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
 
@@ -99,15 +99,15 @@ export function createRouteApi(deps = {}) {
     inspectLegacyRoute: request => guard(async () => (await legacy()).inspectLegacyRoute(request)),
 
     // The loaded adapters go to every durable engine call as an optional second argument; an engine that does not use it ignores it.
-    ensureRoute: request => guard(async()=>withRouteOperation(request,{...await shared(request),status:api.routeStatus,run:()=>verified(async () => (await ownerKept(request)) ?? durableView((await (await engine()).ensureRoute(request, { adapters: await adapters() })).route),request)})),
+    ensureRoute: request => guard(async()=>withRouteOperation(request,{...await shared(request),status:api.routeStatus,progress:attachedReplayProgress,run:()=>verified(async () => (await ownerKept(request)) ?? durableView((await (await engine()).ensureRoute(request, { adapters: await adapters() })).route),request)})),
     adoptRoute: request => guard(() => verified(async () => durableView((await (await engine()).adoptRoute(request, { adapters: await adapters() })).route),request)),
 
     /** A request with schemaVersion 1 is the route API; anything else is the legacy session call (handled by the caller). */
     expose: request => guard(async () => {
       const options = { ...await shared(request), ...deps.expose };
       await preflightExpose(request, options);
-      if (request?.usage?.kind === 'attached') return withRouteOperation(request,{...options,status:api.routeStatus,run:reservedHandle=>openAttachedRoute(request,{...options,reservedHandle})});
-      if (request?.usage?.kind === 'session') return withRouteOperation(request,{...options,status:api.routeStatus,run:async reservedHandle=>(await verified(()=>ownerKept(request),request))??openSessionRoute(request,{...options,reservedHandle})});
+      if (request?.usage?.kind === 'attached') return withRouteOperation(request,{...options,status:api.routeStatus,progress:attachedReplayProgress,run:reservedHandle=>openAttachedRoute(request,{...options,reservedHandle})});
+      if (request?.usage?.kind === 'session') return withRouteOperation(request,{...options,status:api.routeStatus,progress:attachedReplayProgress,run:async reservedHandle=>(await verified(()=>ownerKept(request),request))??openSessionRoute(request,{...options,reservedHandle})});
       throw gozarError('invalid_input', "expose needs usage 'session' or 'attached'");
     }),
 

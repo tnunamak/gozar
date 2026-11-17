@@ -309,6 +309,27 @@ export async function observeAttachedRoute(request) {
   }
 }
 
+/**
+ * Whether this route's own controller can still move an unverified route to verified. Authenticated like an observation;
+ * it never refreshes proof. A lost host resolver can never authorize another proof, and an initial-only proof cannot repeat
+ * once settled. `undefined` means the route has no such authority (durable, owner-kept) or it could not be asked.
+ */
+export async function attachedReplayProgress(request) {
+  const handle=checkRef(request);
+  if(!['attached','session'].includes(handle.kind))return undefined;
+  if(handle.kind==='session'&&!await genericSessionRecord(request))return undefined;
+  try {
+    const home=await canonicalHome(request.home,false),directory=await routeDirectory(home,handle);
+    const reply=await controlAttached(directory,{type:'observe',handleKind:handle.kind,handleId:handle.id,generation:handle.generation});
+    const progress=reply.progress;
+    if(!progress)return undefined;
+    return {viable:progress.resolverLost!==true&&(progress.initialSettled!==true||progress.refreshable===true)};
+  } catch(error) {
+    if(error.gone)return {viable:false};
+    return undefined;
+  }
+}
+
 /** Fresh proof from the controller. Without a controller the last record is all there is, and it says so. */
 export async function attachedStatus(request, deps = {}) {
   const handle = checkRef(request);
@@ -750,7 +771,9 @@ export async function runAttachedController(directory, runtime = {}) {
             throw gozarError('route_conflict','Observation handle does not match the controller');
           return reply({view:projectControllerObservation(lastView(),{now:now(),lastBeat,expiryMs,
             heartbeat:!session&&runtime.lease?.kind!=='stdin',expiresAtMs:session?bootstrap.expiresAtMs:null,
-            initialSettled,failure,releasing,resourceRemoval,resolverLost,identity:lease.identity}),startupComplete:initialSettled});
+            initialSettled,failure,releasing,resourceRemoval,resolverLost,identity:lease.identity}),startupComplete:initialSettled,
+            // Authority evidence for a replay: can this controller still produce a fresh proof?
+            progress:{initialSettled,resolverLost,refreshable:safeRefresh()}});
         }
         if(session&&command.handleId!==undefined&&command.handleId!==handle.id)throw gozarError('route_conflict','The session was replaced');
         if(expired()&&command.type!=='close'&&command.type!=='finalize-removal'){await release();if(command.type==='status')return reply({view:lastView(),startupComplete:initialSettled});throw gozarError('verification_failed','The session lifetime has expired');}
