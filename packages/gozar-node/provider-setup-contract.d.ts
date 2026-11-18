@@ -38,20 +38,28 @@ export type SetupResource = {
 
 export type SetupOperationRef = { home: string; owner: string; providerId: string; operationId: string };
 
-export type RunSetupOperationRequest = Omit<RunSetupActionRequest, keyof SetupOperationRef | 'approval'> &
-  SetupOperationRef & {
-    /** Zero reserves without input or approval. A later command names the exact revision that offered its action. */
-    expectedSetupRevision: number;
-    /** Omit for an observation or a machine drive with previously granted exact authority. */
-    approval?: RunSetupActionRequest['approval'];
-  };
+type SetupOperationCommand = Omit<RunSetupActionRequest,
+  keyof SetupOperationRef | 'approval' | 'value' | 'secretHandle'> & SetupOperationRef;
+type SetupOperationInputs = Partial<Pick<RunSetupActionRequest, 'approval' | 'value' | 'secretHandle'>>;
 
-/** Ordinary documentation hrefs remain usable. Browser handoff URLs are opt-in. */
-export type SafeSetupAction = Omit<Action, 'consent' | 'review' | 'step' | 'href'> & (
+/**
+ * Literal zero reserves without approval or input. A dynamic number still needs
+ * runtime integer/range and zero-input validation; TypeScript cannot prove it positive.
+ */
+export type RunSetupOperationRequest<Revision extends number = number> =
+  Revision extends 0
+    ? SetupOperationCommand & { expectedSetupRevision: 0; approval?: never; value?: never; secretHandle?: never }
+    : SetupOperationCommand & { expectedSetupRevision: Revision } & SetupOperationInputs;
+
+type SetupActionFields = Omit<Action, 'consent' | 'review' | 'step' | 'href'> & { review?: never };
+type SafeSetupLocation =
   | { step?: Omit<SetupStep, 'browser'> & { browser?: never }; href?: string }
-  | { step: SetupStep & { browser: NonNullable<SetupStep['browser']> }; href?: never }
-);
-type SetupOffer = SafeSetupAction & { step: SetupStep; consent: NonNullable<Action['consent']> };
+  | { step: SetupStep & { browser: NonNullable<SetupStep['browser']> }; href?: never };
+
+/** Public consent actions are leaf projections: no raw review, nested consent or browser href. */
+export type SafeSetupAction = SetupActionFields & SafeSetupLocation & { consent?: never };
+type SetupOffer = SetupActionFields & SafeSetupLocation &
+  { step: SetupStep; consent: NonNullable<Action['consent']> };
 
 export type SetupOperation = {
   schemaVersion: 1;
@@ -68,5 +76,5 @@ export type SetupOperation = {
 };
 
 export type InteractiveSetupOperation = Omit<SetupOperation, 'nextAction'> & {
-  nextAction: (Omit<Action, 'review'> & { step: SetupStep; consent: NonNullable<Action['consent']> }) | null;
+  nextAction: (Omit<Action, 'review' | 'consent'> & { review?: never; step: SetupStep; consent: NonNullable<Action['consent']> }) | null;
 };

@@ -3308,6 +3308,7 @@
       "additionalProperties": false
     },
     "ConsentAction": {
+      "$ref": "#/$defs/NoBrowserHref",
       "type": "object",
       "required": [
         "id",

@@ -420,7 +420,9 @@ export function closeRoute(request: CloseRouteRequest): Promise<RouteView>;
 export function watchRoutes(request: WatchRoutesRequest): AsyncIterable<WatchEvent>;
 export function getRoutePreferences(request: { profileHome: string }): Promise<PreferenceRecord>;
 export function setRoutePreferences(request: SetRoutePreferencesRequest): Promise<PreferenceRecord>;
-export function runSetupAction(request: RunSetupOperationRequest): Promise<SetupOperation>;
+export function runSetupAction<const Revision extends number>(
+  request: { expectedSetupRevision: Revision } & RunSetupOperationRequest<Revision>
+): Promise<SetupOperation>;
 export function runSetupAction(request: RunSetupActionRequest): Promise<SetupActionResult>;
 /** Ask for the ephemeral handoff only when opening it in an authorized interactive host. */
 export function readSetupOperation<Interactive extends boolean | undefined = undefined>(

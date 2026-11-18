@@ -293,3 +293,179 @@ test('setup journal projection rejects unsafe removal and secret-bearing evidenc
     ...operation, evidence: { ...operation.evidence, secretHandle: 'fixture-secret-handle' },
   }).length, 0);
 });
+
+const setupProjectionFixture = () => {
+  const step = { actor: 'owner', permission: { id: 'authorize', label: 'Authorize' },
+    verification: 'provider', purpose: 'authorize',
+    browser: { expiresAt: '2030-01-01T00:00:00Z', pollAfterMs: 1000 } };
+  const action = { id: 'authorize', kind: 'open-url', label: 'Authorize', digest: 'digest',
+    disclosure: { revision: 'revision', text: 'Fixture', links: [] }, step };
+  const scope = { kind: 'setup', registryId: 'registry', scopeId: 'scope', providerId: 'provider',
+    configurationRevision: 'revision', draftId: null, actionId: action.id,
+    disclosureRevision: 'revision', actionDigest: action.digest };
+  const consent = { scope, consentFactsDigest: 'consent-v1:fixture', facts: [], disclosures: { action } };
+  const operation = { schemaVersion: 1, operationId: 'operation', revision: 1,
+    scope: { registryId: 'registry', scopeId: 'scope', providerId: 'provider', configurationRevision: 'revision', draftId: null },
+    state: 'authorization-required', evidence: { known: false, reason: 'not-observed' },
+    nextAction: { ...action, consent }, resources: [] };
+  return { action, consent, operation };
+};
+
+test('setup projection closes nested consent, not just the operation action', () => {
+  const { action, consent, operation } = setupProjectionFixture();
+  const href = 'https://provider.invalid/transient-fixture';
+  const review = { canonicalInput: { fixture: 'private-review' } };
+  const valid = (shape, value) => assert.deepEqual(check('route-catalog', shape, value), [], shape);
+  const invalid = (shape, value) => assert.notDeepEqual(check('route-catalog', shape, value), [], shape);
+  for (const shape of ['SetupOperation', 'InteractiveSetupOperation']) {
+    valid(shape, operation);
+    invalid(shape, { ...operation, nextAction: { ...operation.nextAction, review } });
+    for (const leak of [{ review }, { href }, { consent }]) {
+      const nested = { ...consent, disclosures: { action: { ...action, ...leak } } };
+      invalid(shape, { ...operation, nextAction: { ...operation.nextAction, consent: nested } });
+      invalid('SetupConsentSnapshot', nested);
+      invalid('ConsentSnapshot', nested);
+      invalid('ConsentDisclosures', nested.disclosures);
+      invalid('ConsentAction', nested.disclosures.action);
+    }
+  }
+  const interactive = { ...operation, nextAction: { ...operation.nextAction, href } };
+  invalid('SetupOperation', interactive);
+  valid('InteractiveSetupOperation', interactive);
+  // Interactive permission never propagates into consent.
+  invalid('InteractiveSetupOperation', { ...interactive, nextAction: { ...interactive.nextAction,
+    consent: { ...consent, disclosures: { action: { ...action, href } } } } });
+  const { browser, ...documentationStep } = action.step;
+  const documentation = { ...action, step: documentationStep, href: 'https://provider.invalid/docs' };
+  valid('ConsentAction', documentation);
+  valid('ConsentDisclosures', { action: documentation });
+  valid('SetupConsentSnapshot', { ...consent, disclosures: { action: documentation } });
+  valid('SetupOperation', { ...operation, nextAction: { ...documentation,
+    consent: { ...consent, disclosures: { action: documentation } } } });
+  // Legacy Action remains unrestricted; only public operation/consent projections close it.
+  valid('Action', { ...action, href, review });
+});
+
+test('setup reservation forbids each input independently, positive commands remain admitted', () => {
+  const reservation = { home: '/fixture', owner: 'owner', providerId: 'provider', operationId: 'operation',
+    actionId: 'action', expectedConfigurationRevision: 'revision', expectedSetupRevision: 0 };
+  assert.deepEqual(check('route-catalog', 'RunSetupOperationRequest', reservation), []);
+  const approval = { kind: 'setup', digest: 'digest', disclosureRevision: 'revision', consentFactsDigest: 'consent-v1:fixture' };
+  for (const input of [{ approval }, { value: 'fixture-value' }, { secretHandle: 'fixture-handle' }]) {
+    assert.notDeepEqual(check('route-catalog', 'RunSetupOperationRequest', { ...reservation, ...input }), []);
+    assert.deepEqual(check('route-catalog', 'RunSetupOperationRequest', { ...reservation, expectedSetupRevision: 1, ...input }), []);
+  }
+  for (const expectedSetupRevision of [-1, 0.5])
+    assert.notDeepEqual(check('route-catalog', 'RunSetupOperationRequest', { ...reservation, expectedSetupRevision }), []);
+});
+
+// Reusable strict fixture for the host's REAL INSTALLED public package, not copied declarations.
+// No compiler skip is acceptance. The host must invoke checkSetupProjectionTypes below with its
+// installed TypeScript API and a consumer directory resolving @tnunamak/gozar.
+export const setupProjectionTypes = String.raw`
+import { runSetupAction, readSetupOperation, cancelSetupOperation, createGozar } from '@tnunamak/gozar';
+import type { Action, SafeSetupAction, SetupStep, SetupOperation, InteractiveSetupOperation,
+  SetupConsentSnapshot, SetupConsentDisclosures, RunSetupOperationRequest,
+  RunSetupActionRequest, SetupActionResult } from '@tnunamak/gozar';
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+type LegacyParameters = Expect<Equal<Parameters<typeof runSetupAction>, [request: RunSetupActionRequest]>>;
+type LegacyReturn = Expect<Equal<ReturnType<typeof runSetupAction>, Promise<SetupActionResult>>>;
+declare const legacy: RunSetupActionRequest;
+const legacyResult: Promise<SetupActionResult> = runSetupAction(legacy);
+const ref = { home: '/fixture', owner: 'owner', providerId: 'provider', operationId: 'operation' };
+const command = { ...ref, actionId: 'action', expectedConfigurationRevision: 'revision' };
+const approval = { kind: 'setup' as const, digest: 'digest', disclosureRevision: 'revision', consentFactsDigest: 'consent-v1:fixture' };
+const reservation: RunSetupOperationRequest<0> = { ...command, expectedSetupRevision: 0 };
+const positive: RunSetupOperationRequest<1> = { ...command, expectedSetupRevision: 1, approval, value: 'value', secretHandle: 'handle' };
+runSetupAction(reservation);
+runSetupAction(positive);
+runSetupAction({ ...command, expectedSetupRevision: 0 });
+runSetupAction({ ...command, expectedSetupRevision: 1, approval });
+runSetupAction({ ...command, expectedSetupRevision: 2, value: 'value' });
+runSetupAction({ ...command, expectedSetupRevision: 3, secretHandle: 'handle' });
+// @ts-expect-error Literal zero cannot carry approval.
+runSetupAction({ ...command, expectedSetupRevision: 0, approval });
+// @ts-expect-error Literal zero cannot carry value.
+runSetupAction({ ...command, expectedSetupRevision: 0, value: 'value' });
+// @ts-expect-error Literal zero cannot carry secretHandle.
+runSetupAction({ ...command, expectedSetupRevision: 0, secretHandle: 'handle' });
+// @ts-expect-error Explicit request type has the same zero boundary.
+const badReservation: RunSetupOperationRequest<0> = { ...command, expectedSetupRevision: 0, value: 'value' };
+const zeroVariable = { ...command, expectedSetupRevision: 0 as const, value: 'value' };
+// @ts-expect-error A non-fresh variable must not bypass the literal-zero check.
+runSetupAction(zeroVariable);
+declare const dynamicRevision: number;
+runSetupAction({ ...command, expectedSetupRevision: dynamicRevision, value: 'value' }); // runtime validates
+declare const flag: boolean;
+const safe = readSetupOperation(ref);
+const safeFalse = readSetupOperation({ ...ref, includeBrowserHandoff: false });
+const interactive = readSetupOperation({ ...ref, includeBrowserHandoff: true });
+const dynamic = readSetupOperation({ ...ref, includeBrowserHandoff: flag });
+type Safe = Expect<Equal<Awaited<typeof safe>, SetupOperation>>;
+type SafeFalse = Expect<Equal<Awaited<typeof safeFalse>, SetupOperation>>;
+type Interactive = Expect<Equal<Awaited<typeof interactive>, InteractiveSetupOperation>>;
+type Dynamic = Expect<Equal<Awaited<typeof dynamic>, SetupOperation | InteractiveSetupOperation>>;
+const cancelled: Promise<SetupOperation> = cancelSetupOperation(ref);
+const api = createGozar();
+const factorySafe: Promise<SetupOperation> = api.readSetupOperation(ref);
+const factoryInteractive: Promise<InteractiveSetupOperation> = api.readSetupOperation({ ...ref, includeBrowserHandoff: true });
+// @ts-expect-error The factory must preserve zero-input exclusion too.
+api.runSetupAction(zeroVariable);
+declare const base: Omit<Action, 'step' | 'href' | 'review' | 'consent'>;
+declare const step: Omit<SetupStep, 'browser'>;
+const browserStep = { ...step, browser: { expiresAt: '2030-01-01', pollAfterMs: 1000 } };
+const browser = { ...base, step: browserStep, href: 'https://provider.invalid/transient' };
+const raw = { ...base, review: { canonicalInput: { private: 'fixture' } } };
+const recursive = { ...base, consent: {} as SetupConsentSnapshot };
+const legacyBrowser: Action = browser;
+const legacyReview: Action = raw;
+const docs: SafeSetupAction = { ...base, href: 'https://provider.invalid/docs' };
+const safeBrowser: SafeSetupAction = { ...base, step: browserStep };
+// @ts-expect-error Safe action cannot structurally carry raw review.
+const rawSafe: SafeSetupAction = raw;
+// @ts-expect-error Safe action cannot recursively hide unrestricted consent.
+const recursiveSafe: SafeSetupAction = recursive;
+// @ts-expect-error Browser handoff is not safe even through a variable.
+const leakedSafe: SafeSetupAction = browser;
+declare const consent: SetupConsentSnapshot;
+declare const operation: SetupOperation;
+const offer = { ...base, step: browserStep, consent };
+const safeOperation: SetupOperation = { ...operation, nextAction: offer };
+const interactiveOperation: InteractiveSetupOperation = { ...operation, nextAction: { ...offer, href: browser.href } };
+// @ts-expect-error Root operation review must not leak structurally.
+const leakedRoot: SetupOperation = { ...operation, nextAction: { ...offer, review: raw.review } };
+// @ts-expect-error Interactive root also forbids raw review.
+const leakedInteractiveRoot: InteractiveSetupOperation = { ...operation, nextAction: { ...offer, review: raw.review } };
+// @ts-expect-error Ordinary operation cannot expose browser href.
+const leakedOperation: SetupOperation = { ...operation, nextAction: { ...offer, href: browser.href } };
+// @ts-expect-error Nested snapshot browser href never inherits interactive permission.
+const leakedConsent: SetupConsentSnapshot = { ...consent, disclosures: { action: browser } };
+// @ts-expect-error Nested raw review must fail through a non-fresh variable.
+const rawConsent: SetupConsentDisclosures = { action: raw };
+// @ts-expect-error Interactive consent has the same closed action.
+const leakedInteractiveConsent: InteractiveSetupOperation = { ...operation, nextAction: { ...offer, consent: { ...consent, disclosures: { action: browser } } } };
+`;
+
+export function checkSetupProjectionTypes(ts, consumerDirectory) {
+  assert.ok(ts?.createProgram, 'An installed TypeScript compiler is required; absence is NOT type acceptance');
+  assert.ok(consumerDirectory, 'Supply the real installed-package consumer directory');
+  const fileName = join(consumerDirectory, 'setup-projection.fixture.mts');
+  const options = { strict: true, exactOptionalPropertyTypes: true, skipLibCheck: false, noEmit: true,
+    target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext };
+  const host = ts.createCompilerHost(options);
+  const read = host.readFile.bind(host), exists = host.fileExists.bind(host), source = host.getSourceFile.bind(host);
+  host.fileExists = path => path === fileName || exists(path);
+  host.readFile = path => path === fileName ? setupProjectionTypes : read(path);
+  host.getSourceFile = (path, languageVersion, onError, shouldCreateNewSourceFile) =>
+    path === fileName ? ts.createSourceFile(path, setupProjectionTypes, languageVersion, true)
+      : source(path, languageVersion, onError, shouldCreateNewSourceFile);
+  const resolved = ts.resolveModuleName('@tnunamak/gozar', fileName, options, host).resolvedModule;
+  assert.ok(resolved?.isExternalLibraryImport && /node_modules[\\/]/.test(resolved.resolvedFileName),
+    'The fixture must resolve the real installed package, not repository declaration copies');
+  const program = ts.createProgram([fileName], options, host);
+  const diagnostics = ts.getPreEmitDiagnostics(program);
+  assert.equal(diagnostics.length, 0, ts.formatDiagnosticsWithColorAndContext(diagnostics, {
+    getCurrentDirectory: () => consumerDirectory, getCanonicalFileName: name => name, getNewLine: () => '\n',
+  }));
+}
