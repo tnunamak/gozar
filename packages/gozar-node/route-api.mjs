@@ -4,6 +4,7 @@
 //
 // `createRouteApi(deps)` exists so a test can replace the adapter registry, platform or state loaders; the
 // package root exports the instance with real dependencies. Nothing here names a provider.
+import { ownershipFor } from './adapter-runtime.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { catalogRoutes as buildCatalog, readContextFor } from './route-catalog.mjs';
 import { routeStatus as viewStatus, closeRoute as viewClose, suspendRoute as viewSuspend, projectDurable, propertiesFor } from './route-view.mjs';
@@ -83,7 +84,7 @@ export function createRouteApi(deps = {}) {
     let grant;
     try { grant = await peekConsentGrant({ home: request.home, token: request.approval.candidateToken }); } catch { return undefined; }
     const adapter = grant && (await adapters()).find(item => item.id === grant.adapterId);
-    if (adapter?.definition.ownership !== 'external-owned') return undefined;
+    if (ownershipFor(adapter?.definition) !== 'external-owned') return undefined;
     if (!['durable', 'session'].includes(request.usage?.kind) || (request.intent !== undefined && request.intent !== 'create')) throw gozarError('invalid_input', 'An owner-run route is created with usage durable or session and intent create');
     const redeemed = await redeemApproval(request, await shared(request));
     const service = deps.service?.addService ?? (await import('./service.mjs')).addService;

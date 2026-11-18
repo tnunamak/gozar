@@ -546,6 +546,7 @@
       "value": {
         "providerId": "example-96",
         "name": "cand_synthetic_1",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
         "eligible": true,
@@ -670,6 +671,7 @@
           "consentFactsDigest": "consent-v1:fd89d64637aa75d369afdf1feef7a94f0b671a7e43dad14e063032361a52e5c9",
           "facts": [],
           "disclosures": {
+            "ownership": "gozar-owned",
             "address": {
               "conditions": [
                 "reserved name kept by the account"
@@ -737,6 +739,7 @@
       "value": {
         "providerId": "example-32",
         "name": "cand_synthetic_2",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_2",
         "rank": 2,
         "eligible": false,
@@ -864,6 +867,7 @@
           "consentFactsDigest": "consent-v1:b537950474ff35b2240fec89e6b7a41a6a03eadc5e08b5df0fac10f9cbdef06c",
           "facts": [],
           "disclosures": {
+            "ownership": "gozar-owned",
             "address": {
               "conditions": [
                 "address changes on restart"
@@ -928,6 +932,7 @@
       "value": {
         "providerId": "example-51",
         "name": "cand_synthetic_3",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_3",
         "rank": 3,
         "eligible": false,
@@ -1055,6 +1060,7 @@
           "consentFactsDigest": "consent-v1:1e85f4c24f35410a321009e9e5d930534ac574246f68280f5c20e4180ea722ad",
           "facts": [],
           "disclosures": {
+            "ownership": "gozar-owned",
             "address": {
               "conditions": [
                 "reserved name kept by the account"
@@ -1119,6 +1125,7 @@
       "value": {
         "providerId": "example-39",
         "name": "cand_synthetic_4",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_4",
         "rank": 4,
         "eligible": true,
@@ -1264,6 +1271,7 @@
           "consentFactsDigest": "consent-v1:65758a2e0ea83b77ced769dff36c65272f0c10af507ef055f217651f1cb9ba95",
           "facts": [],
           "disclosures": {
+            "ownership": "gozar-owned",
             "address": {
               "conditions": [
                 "reserved name kept by the account"
@@ -1328,6 +1336,7 @@
       "value": {
         "providerId": "example-82",
         "name": "cand_synthetic_5",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_5",
         "rank": 5,
         "eligible": false,
@@ -1449,6 +1458,7 @@
           "consentFactsDigest": "consent-v1:50b15d0fad44e30a670e5ae6d9582b8dd6d8355d881cdcaf21e598e5111a638d",
           "facts": [],
           "disclosures": {
+            "ownership": "gozar-owned",
             "address": {
               "conditions": [],
               "ports": null,
@@ -1513,6 +1523,7 @@
           {
             "providerId": "example-96",
             "name": "cand_synthetic_1",
+            "ownership": "gozar-owned",
             "preferenceRef": "pref_synthetic_1",
             "rank": 1,
             "eligible": true,
@@ -1634,6 +1645,7 @@
               "consentFactsDigest": "consent-v1:201d0217a47beb55c0159c73f905c230b4a2dc67561ea806ed21caab71a8b84b",
               "facts": [],
               "disclosures": {
+                "ownership": "gozar-owned",
                 "address": {
                   "conditions": [
                     "reserved name kept by the account"
@@ -1693,6 +1705,7 @@
           {
             "providerId": "example-32",
             "name": "cand_synthetic_2",
+            "ownership": "gozar-owned",
             "preferenceRef": "pref_synthetic_2",
             "rank": 2,
             "eligible": false,
@@ -1820,6 +1833,7 @@
               "consentFactsDigest": "consent-v1:b537950474ff35b2240fec89e6b7a41a6a03eadc5e08b5df0fac10f9cbdef06c",
               "facts": [],
               "disclosures": {
+                "ownership": "gozar-owned",
                 "address": {
                   "conditions": [
                     "address changes on restart"
@@ -1879,6 +1893,7 @@
           {
             "providerId": "example-51",
             "name": "cand_synthetic_3",
+            "ownership": "gozar-owned",
             "preferenceRef": "pref_synthetic_3",
             "rank": 3,
             "eligible": false,
@@ -2006,6 +2021,7 @@
               "consentFactsDigest": "consent-v1:1e85f4c24f35410a321009e9e5d930534ac574246f68280f5c20e4180ea722ad",
               "facts": [],
               "disclosures": {
+                "ownership": "gozar-owned",
                 "address": {
                   "conditions": [
                     "reserved name kept by the account"
@@ -2065,6 +2081,7 @@
           {
             "providerId": "example-39",
             "name": "cand_synthetic_4",
+            "ownership": "gozar-owned",
             "preferenceRef": "pref_synthetic_4",
             "rank": 4,
             "eligible": true,
@@ -2210,6 +2227,7 @@
               "consentFactsDigest": "consent-v1:65758a2e0ea83b77ced769dff36c65272f0c10af507ef055f217651f1cb9ba95",
               "facts": [],
               "disclosures": {
+                "ownership": "gozar-owned",
                 "address": {
                   "conditions": [
                     "reserved name kept by the account"
@@ -2269,6 +2287,7 @@
           {
             "providerId": "example-82",
             "name": "cand_synthetic_5",
+            "ownership": "gozar-owned",
             "preferenceRef": "pref_synthetic_5",
             "rank": 5,
             "eligible": false,
@@ -2390,6 +2409,7 @@
               "consentFactsDigest": "consent-v1:50b15d0fad44e30a670e5ae6d9582b8dd6d8355d881cdcaf21e598e5111a638d",
               "facts": [],
               "disclosures": {
+                "ownership": "gozar-owned",
                 "address": {
                   "conditions": [],
                   "ports": null,
@@ -5081,6 +5101,7 @@
       "value": {
         "providerId": "example-96",
         "name": "cand_synthetic_detect_only",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
         "eligible": false,
@@ -5211,6 +5232,7 @@
           "consentFactsDigest": "consent-v1:fd89d64637aa75d369afdf1feef7a94f0b671a7e43dad14e063032361a52e5c9",
           "facts": [],
           "disclosures": {
+            "ownership": "gozar-owned",
             "address": {
               "conditions": [
                 "reserved name kept by the account"
@@ -5500,6 +5522,7 @@
           {
             "providerId": "example-96",
             "name": "cand_synthetic_1",
+            "ownership": "gozar-owned",
             "preferenceRef": "pref_synthetic_1",
             "rank": 1,
             "eligible": true,
@@ -5621,6 +5644,7 @@
               "consentFactsDigest": "consent-v1:201d0217a47beb55c0159c73f905c230b4a2dc67561ea806ed21caab71a8b84b",
               "facts": [],
               "disclosures": {
+                "ownership": "gozar-owned",
                 "address": {
                   "conditions": [
                     "reserved name kept by the account"
@@ -5680,6 +5704,7 @@
           {
             "providerId": "example-32",
             "name": "cand_synthetic_2",
+            "ownership": "gozar-owned",
             "preferenceRef": "pref_synthetic_2",
             "rank": 2,
             "eligible": false,
@@ -5807,6 +5832,7 @@
               "consentFactsDigest": "consent-v1:b537950474ff35b2240fec89e6b7a41a6a03eadc5e08b5df0fac10f9cbdef06c",
               "facts": [],
               "disclosures": {
+                "ownership": "gozar-owned",
                 "address": {
                   "conditions": [
                     "address changes on restart"
@@ -5866,6 +5892,7 @@
           {
             "providerId": "example-51",
             "name": "cand_synthetic_3",
+            "ownership": "gozar-owned",
             "preferenceRef": "pref_synthetic_3",
             "rank": 3,
             "eligible": false,
@@ -5993,6 +6020,7 @@
               "consentFactsDigest": "consent-v1:1e85f4c24f35410a321009e9e5d930534ac574246f68280f5c20e4180ea722ad",
               "facts": [],
               "disclosures": {
+                "ownership": "gozar-owned",
                 "address": {
                   "conditions": [
                     "reserved name kept by the account"
@@ -6052,6 +6080,7 @@
           {
             "providerId": "example-39",
             "name": "cand_synthetic_4",
+            "ownership": "gozar-owned",
             "preferenceRef": "pref_synthetic_4",
             "rank": 4,
             "eligible": true,
@@ -6197,6 +6226,7 @@
               "consentFactsDigest": "consent-v1:65758a2e0ea83b77ced769dff36c65272f0c10af507ef055f217651f1cb9ba95",
               "facts": [],
               "disclosures": {
+                "ownership": "gozar-owned",
                 "address": {
                   "conditions": [
                     "reserved name kept by the account"
@@ -6256,6 +6286,7 @@
           {
             "providerId": "example-82",
             "name": "cand_synthetic_5",
+            "ownership": "gozar-owned",
             "preferenceRef": "pref_synthetic_5",
             "rank": 5,
             "eligible": false,
@@ -6377,6 +6408,7 @@
               "consentFactsDigest": "consent-v1:50b15d0fad44e30a670e5ae6d9582b8dd6d8355d881cdcaf21e598e5111a638d",
               "facts": [],
               "disclosures": {
+                "ownership": "gozar-owned",
                 "address": {
                   "conditions": [],
                   "ports": null,
@@ -6995,6 +7027,7 @@
       "value": {
         "providerId": "example-19",
         "name": "cand_synthetic_1",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
         "eligible": true,
@@ -7272,6 +7305,7 @@
       "value": {
         "providerId": "example-65",
         "name": "cand_synthetic_2",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_2",
         "rank": 2,
         "eligible": false,
@@ -7365,6 +7399,7 @@
       "value": {
         "providerId": "example-6",
         "name": "cand_synthetic_1",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
         "eligible": true,
@@ -7436,6 +7471,7 @@
       "value": {
         "providerId": "example-96",
         "name": "cand_synthetic_1",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
         "eligible": true,
@@ -8704,6 +8740,7 @@
       "value": {
         "providerId": "example-56",
         "name": "cand_synthetic_4",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_4",
         "rank": 4,
         "eligible": true,
@@ -8815,6 +8852,7 @@
       "value": {
         "providerId": "example-68",
         "name": "cand_synthetic_3",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_3",
         "rank": 3,
         "eligible": false,
@@ -8908,6 +8946,7 @@
       "value": {
         "providerId": "example-44",
         "name": "cand_synthetic_1",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
         "eligible": false,
@@ -9001,6 +9040,7 @@
       "value": {
         "providerId": "example-63",
         "name": "cand_synthetic_1",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
         "eligible": false,
@@ -9094,6 +9134,7 @@
       "value": {
         "providerId": "example-29",
         "name": "cand_synthetic_1",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
         "eligible": false,
@@ -9504,6 +9545,7 @@
       "why": "an app selects and stores a candidate by providerId, so it is required",
       "value": {
         "name": "cand_synthetic_1",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
         "eligible": true,
@@ -9594,6 +9636,7 @@
       "value": {
         "providerId": "example-96",
         "name": "cand_synthetic_1",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
         "eligible": true,
@@ -9683,6 +9726,7 @@
       "value": {
         "providerId": "example-96",
         "name": "cand_synthetic_1",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
         "eligible": true,
@@ -9773,6 +9817,7 @@
       "value": {
         "providerId": "example-96",
         "name": "cand_synthetic_1",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
         "eligible": true,
@@ -9863,6 +9908,7 @@
       "value": {
         "providerId": "example-96",
         "name": "cand_synthetic_1",
+        "ownership": "gozar-owned",
         "preferenceRef": "pref_synthetic_1",
         "rank": 1,
         "eligible": true,

@@ -748,6 +748,7 @@
       "type": "object",
       "required": [
         "providerId",
+        "ownership",
         "name",
         "preferenceRef",
         "rank",
@@ -767,6 +768,7 @@
         "consentFactsDigest"
       ],
       "properties": {
+        "ownership": { "$ref": "#/$defs/RouteOwnership" },
         "providerId": {
           "type": "string"
         },
@@ -1294,13 +1296,7 @@
             "handing-back"
           ]
         },
-        "ownership": {
-          "type": "string",
-          "enum": [
-            "gozar-owned",
-            "external-owned"
-          ]
-        },
+        "ownership": { "$ref": "#/$defs/RouteOwnership" },
         "properties": {
           "$ref": "#/$defs/Properties"
         },
@@ -3146,6 +3142,7 @@
               },
               "additionalProperties": false
             },
+            "ownership": { "$ref": "#/$defs/RouteOwnership" },
             "cost": {
               "$ref": "#/$defs/Cost"
             },
@@ -3197,6 +3194,7 @@
             "transport",
             "traffic",
             "address",
+            "ownership",
             "cost",
             "lifetimes",
             "supervision",
@@ -3598,6 +3596,7 @@
               },
               "additionalProperties": false
             },
+            "ownership": { "$ref": "#/$defs/RouteOwnership" },
             "cost": {
               "$ref": "#/$defs/Cost"
             },
@@ -3649,6 +3648,7 @@
             "transport",
             "traffic",
             "address",
+            "ownership",
             "cost",
             "lifetimes",
             "supervision",
@@ -3666,6 +3666,7 @@
       ],
       "additionalProperties": false
     },
+    "RouteOwnership": { "enum": ["gozar-owned", "external-owned"] },
     "Cost": {
       "oneOf": [
         {

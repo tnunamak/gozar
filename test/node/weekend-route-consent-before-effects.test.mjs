@@ -8,7 +8,7 @@ const {routeConsentReview,consentSnapshot,setupConsentReview} =
 function offer(){
  return {registryId:randomUUID(),providerId:randomUUID(),usage:{kind:'session',lifetimeMs:60000},
   configuration:{scopeId:randomUUID(),revision:randomUUID()},target:'http://127.0.0.1:32100',
-  origin:null,disclosure:{revision:'fixture-v1',text:'Fixture route',links:[]},
+  origin:null,ownership:'gozar-owned',disclosure:{revision:'fixture-v1',text:'Fixture route',links:[]},
   properties:{reach:'this-device',transport:'http',
    traffic:{tlsTermination:'endpoint',providerCanReadPayload:false,readers:[],metadataVisibleTo:[],evidenceRef:null},
    address:{stability:'ephemeral',scope:'fixture',conditions:[],ports:null},
@@ -46,7 +46,7 @@ test('canonical boundary: scoped route changes bind the digest',()=>{
   x=>x.origin='http://localhost:32102',x=>x.usage.lifetimeMs=120000,
   x=>x.registryId=randomUUID(),x=>x.configuration.scopeId=randomUUID(),
   x=>x.configuration.revision=randomUUID(),x=>x.properties.traffic.readers.push('new-reader'),
-  x=>x.facts[0].value=1]){
+  x=>x.facts[0].value=1,x=>x.ownership='external-owned']){
   const changed=structuredClone(base);mutate(changed);
   assert.notEqual(digest(changed),digest(base));
  }

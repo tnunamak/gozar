@@ -18,7 +18,7 @@ export function renderScreen(catalog, routes = [], host = { password: 'host-owne
   for (const choice of catalog.candidates) {
     const { cost } = choice.properties;
     const price = cost.kind === 'paid' ? ` (${cost.amount} ${cost.currency} per ${cost.period})` : '';
-    lines.push(`Choice: ${choice.display.label}`, `Reach: ${choice.properties.reach}`, `Payload readers: ${choice.properties.traffic.providerCanReadPayload === null ? 'unknown' : JSON.stringify(choice.properties.traffic.readers)}`,
+    lines.push(`Choice: ${choice.display.label}`, `Ownership: ${choice.ownership}`, `Reach: ${choice.properties.reach}`, `Payload readers: ${choice.properties.traffic.providerCanReadPayload === null ? 'unknown' : JSON.stringify(choice.properties.traffic.readers)}`,
       `Address: ${choice.properties.address.stability}; ports=${JSON.stringify(choice.properties.address.ports)}`, `Cost: ${cost.kind}${price} · ${cost.summary}`,
       `Availability: ${JSON.stringify(choice.availability)}`, `Setup: ${choice.setup.state}`);
     for (const item of choice.prerequisites) lines.push(`Prerequisite: ${item.label}: ${item.state}; observed=${item.observedAt}; version=${show(item.version)}; fix=${item.remedy?.label ?? 'no automatic fix'}`);

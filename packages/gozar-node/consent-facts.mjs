@@ -51,12 +51,12 @@ export function consentReview({ scope, typedDisclosures, facts }) {
 }
 
 // Keep the selected fields explicit: observations and polling dates do not grant authority.
-export function routeConsentReview({ registryId, providerId, usage, configuration, target, origin, properties, disclosure, facts }) {
+export function routeConsentReview({ registryId, providerId, usage, configuration, target, origin, ownership, properties, disclosure, facts }) {
   const cost = canonicalConsentValue(properties.cost);
   if (validateShape('Cost', cost).length) return invalid();
   return consentReview({ scope: { kind: 'route', registryId, providerId, configurationRevision: configuration.revision,
     scopeId: configuration.scopeId, query: { usage, reach: properties.reach, transport: properties.transport, target, expectedOrigin: origin ?? null } },
-  typedDisclosures: { reach: properties.reach, transport: properties.transport, traffic: properties.traffic,
+  typedDisclosures: { ownership, reach: properties.reach, transport: properties.transport, traffic: properties.traffic,
     address: properties.address, cost, lifetimes: properties.lifetimes,
     supervision: properties.supervision, protocols: properties.protocols, disclosure },
     facts });

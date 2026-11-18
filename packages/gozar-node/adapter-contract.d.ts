@@ -55,6 +55,7 @@ export type AdapterDefinition = {
   /** URL schemes accepted from this adapter, including the colon; default derives from transport. */
   originSchemes?: string[];
   needs?:string;
+  /** Defaults to Gozar. Owner-kept plans have no effects and return cleanup.kind 'external-owned'. */
   ownership?:'gozar-owned'|'external-owned';
   inputRequirements?:InputRequirement[];
   requiredCapabilities?:HostCapabilityId[];

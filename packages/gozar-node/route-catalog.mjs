@@ -12,6 +12,7 @@ import { loopbackTarget } from './durable-route.mjs';
 import { checksFor, completeProperties, needsFor } from './route-view.mjs';
 import { adoptDisclosureRevision, consentDisclosureRevision } from './adopt-disclosure.mjs';
 import { routeConsentReview, setupConsentReview,consentSnapshot,safeSetupAction,needsSetupOperation } from './consent-facts.mjs';
+import { ownershipFor, planMatchesOwnership } from './adapter-runtime.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
 import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
 
@@ -153,7 +154,7 @@ export async function inspectAdapter(adapter, context, platform) {
 
 /** One revision for the provider-side state: it changes when a setup state, an action or a property changes. */
 export function catalogRevisionOf(inspections, platform) {
-  const view = inspections.map(item => ({ id: item.adapter.id, state: item.state, properties: item.properties,
+  const view = inspections.map(item => ({ id: item.adapter.id, state: item.state, ownership: ownershipFor(item.adapter.definition), properties: item.properties,
     facts: [...catalogFactsFor(item), ...failureFacts(item.failure)], availability: availabilityFor(item.adapter.definition),
     actions: item.actions.map(action => [action.id, action.digest, action.disclosure.revision]), disclosure: item.adapter.definition.disclosure.revision }));
   return `catrev_${sha(JSON.stringify([platform, view])).slice(0, 32)}`;
@@ -204,6 +205,7 @@ async function collect(query, deps) {
 
   const candidates = await Promise.all(inspections.map(async inspection => {
     const { adapter, state, actions } = inspection, definition = adapter.definition;
+    const ownership = ownershipFor(definition);
     // The ports and needs are those of the usage kind asked for. The proof lists the checks Gozar makes for this request,
     // so the stream check appears only when the request needs SSE.
     const declared = completeProperties(inspection.properties, definition, query.usage.kind);
@@ -215,6 +217,10 @@ async function collect(query, deps) {
     const unmet = [];
     if (supportedPlatform(platform)) {
       unmet.push(...unmetRequirements({ requirements: query.requirements, usage: query.usage, definition, properties, setupState }));
+      if (ownership === 'external-owned' && query.usage.kind === 'attached') {
+        if (!unmet.some(item => item.requirement === 'usage')) unmet.push({ requirement: 'usage', actual: query.usage.kind, reasonCode: 'not_met' });
+        setupState = 'unsupported';
+      }
       const origin = reviewedOrigin(query.origin, inspection);
       if (inspection.facts?.invalidOrigin !== undefined || (query.origin !== undefined && origin === null)) {
         const authority = displayAuthority(query.origin);
@@ -228,7 +234,7 @@ async function collect(query, deps) {
       if (!unmet.length && setupState === 'ready' && definition.supportedKinds.includes(query.usage.kind)) {
         try {
           // A durable plan comes from the durable engine, except for a route its owner keeps: that adapter plans for itself.
-          if (query.usage.kind === 'durable' && definition.ownership !== 'external-owned') {
+          if (query.usage.kind === 'durable' && ownership === 'gozar-owned') {
             const plan = await durablePlanFacts({ home, adapterId: adapter.id, target: query.target, origin: query.origin ?? null, adapters });
             if (query.intent !== 'adopt' && plan.creatableOrigin === false)
               unmet.push({ requirement: 'address', actual: { origin }, reasonCode: 'not_met' });
@@ -237,6 +243,9 @@ async function collect(query, deps) {
             const request = adapterRequest(query);
             const own = bindConfiguration(context, adapter.id);
             const plan = await adapter.plan(own, request);
+            if (!planMatchesOwnership(plan, ownership)) throw gozarError('unsupported', 'The route plan does not match its declared ownership');
+            if (ownership === 'external-owned' && origin !== null && plan.origin !== URL.parse(origin).origin)
+              throw gozarError('unsupported', 'The owner-kept plan names a different origin');
             const observed = await adapter.observe(own, request);
             grant = { adapterId: adapter.id, planDigest: plan.digest, observedResource: observed.resourceKey,...(plan.origin?{origin:plan.origin}:{}) };
           }
@@ -268,7 +277,7 @@ async function collect(query, deps) {
     };
     const decorated = offered.map(decorate);
     const configuration = configurationFor(decorated, saved,definition.inputRequirements);
-    const candidate = { providerId: adapter.id, name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
+    const candidate = { providerId: adapter.id, ownership, name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
       display: { label: definition.label, description: describe(definition, properties), needs: needsFor(definition, query.usage.kind) }, properties,
       availability, prerequisites: [...prerequisitesFor(inspection, observedAt).map(item => needsSetupOperation(item.remedy) ? { ...item, remedy: decorate(item.remedy) } : item),...hostPrerequisites,
         ...(failure ? [{id: 'catalog-observation', label: 'Route availability observation', state: failure.state,
@@ -283,7 +292,7 @@ async function collect(query, deps) {
         text: `${definition.disclosure.text} ${takeover}` };
     }
     if (deps.registryId && saved.revision) {
-      const review=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration:saved,target:query.target,origin:reviewedOrigin(query.origin,inspection),properties,disclosure:candidate.disclosure,facts:candidate.facts});
+      const review=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration:saved,target:query.target,origin:reviewedOrigin(query.origin,inspection),ownership,properties,disclosure:candidate.disclosure,facts:candidate.facts});
       candidate.consentFactsDigest=review.consentFactsDigest;
       candidate.consent=consentSnapshot(review);
       candidate.review={canonicalInput:review.canonicalInput};

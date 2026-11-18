@@ -55,7 +55,7 @@ function config({ origin, target, verifyCmd = null,embedding,generation }) {
   if (verifyCmd !== null && (typeof verifyCmd !== 'string' || !verifyCmd.trim() || verifyCmd.includes('\0')))
     throw refuse('invalid_input', 'Invalid verification command');
   const route = { schemaVersion: 1, origin: originValue(origin), target: targetValue(target),
-    adapterId: externalOwnerId(), ownership: 'external-owned', verifyCmd,...(embedding?{embedding}: {}),...(generation!==undefined?{generation}: {}) };
+    adapterId: embedding?.consentReview?.canonicalInput?.scope?.providerId ?? externalOwnerId(), ownership: 'external-owned', verifyCmd,...(embedding?{embedding}: {}),...(generation!==undefined?{generation}: {}) };
   if (Buffer.byteLength(JSON.stringify(route)) > 65536) throw refuse('invalid_input', 'Service record exceeds size limit');
   return route;
 }
@@ -162,6 +162,7 @@ async function removeServiceUnguarded({ origin, home = defaultHome(),expectedGen
 async function externalReview(route,handle){
  if(route.generation!==1||handle.generation!==route.generation)throw refuse('route_conflict','Legacy or mismatched external tracking cannot receive current consent');
  const current=await currentExternal(route);if(!current)throw refuse('unsupported','This owner route has no current consent authority');
+ if(current.review.canonicalInput.typedDisclosures.ownership!==route.ownership)throw refuse('consent_mismatch','The provider no longer offers the recorded ownership');
  const runtime=serviceContext.getStore(),identity=await runtime.embeddingServices.resolveIdentity({home:route.embedding.request.home});
  const subject={origin:route.origin,target:route.target,...identity,handleGeneration:handle.generation};
  const review=consentReview({scope:{...current.review.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation},typedDisclosures:current.review.canonicalInput.typedDisclosures,facts:current.review.canonicalInput.facts});

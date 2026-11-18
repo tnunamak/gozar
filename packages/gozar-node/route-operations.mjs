@@ -6,6 +6,7 @@ import {canonicalHome,trustedDirectory,privateDirectory,readRecord,withExclusive
 import {atomicWrite} from './journal.mjs';
 import {canonicalDigest,peekConsentGrant} from './consent-token.mjs';
 import {unknownProperties,projectSession,projectDurable,projectExternal,recoveryHistory,propertiesFor} from './route-view.mjs';
+import {ownershipFor} from './adapter-runtime.mjs';
 import {enrichRoute} from './embedding-state.mjs';
 import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
 import {gozarError,instructionAction} from './error-normalizer.mjs';
@@ -17,7 +18,7 @@ const checkRecord=record=>{
  return record;
 };
 export function startingRoute(handle,target,operationId){
- return {...enrichRoute({handle,origin:null,published:null,state:'creating',ownership:'gozar-owned',properties:unknownProperties(),ingress:null,
+ return {...enrichRoute({handle,origin:null,published:null,state:'creating',ownership:handle.kind==='external'?'external-owned':'gozar-owned',properties:unknownProperties(),ingress:null,
   verification:{status:'unverified',checkedAt:null,vantage:'none',checks:[]},limits:{recommendedPollIntervalMs:1000,idleTimeoutMs:null},cleanup:{state:'none'}},{target}),operationId};
 }
 function newHandle(request){
@@ -43,7 +44,7 @@ export async function withRouteOperation(request,{registryId,embeddingServices,a
     consentFactsDigest:request.approval?.consentFactsDigest??grant?.consentFactsDigest??prior?.intent.consentFactsDigest??null};
   const intentDigest=canonicalDigest(intent);
   if(prior){if(prior.intentDigest!==intentDigest)throw gozarError('operation_conflict','This operationId already names a different route intent');return prior;}
-  const external=adapters?.find(a=>a.id===providerId)?.definition.ownership==='external-owned';
+  const external=ownershipFor(adapters?.find(a=>a.id===providerId)?.definition)==='external-owned';
   const origin=request.origin??grant?.origin??(prior?.view.handle.kind==='external'?prior.view.handle.id:null);
   if(external&&!origin)throw gozarError('consent_required','An owner route needs the approved exact origin');
   const handle=external?{kind:'external',id:origin,generation:1}:newHandle(request);

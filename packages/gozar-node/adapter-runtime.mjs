@@ -97,6 +97,15 @@ export function definitionErrors(definition) {
   return errors;
 }
 
+// Definitions that omit ownership use Gozar's managed lifecycle.
+export const ownershipFor = definition => definition?.ownership ?? 'gozar-owned';
+
+// An owner-kept plan has no provider effects and declares that its resource stays with the owner.
+export function planMatchesOwnership(plan, ownership) {
+  const external = plan.cleanup?.kind === 'external-owned';
+  return ownership === 'external-owned' ? external && Array.isArray(plan.effects) && plan.effects.length === 0 : !external;
+}
+
 // --- Loading -------------------------------------------------------------------------------------------
 
 /**

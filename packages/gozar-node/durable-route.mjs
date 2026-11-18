@@ -17,7 +17,7 @@ import { atomicWrite, processIdentity } from './journal.mjs';
 import { trustedDirectory, canonicalHome, privateDirectory, readRecord, withExclusiveLock, verification, readChallenge,
   challengePath, canonicalAuthority } from './service-state.mjs';
 import { durableCapability, admitRouteEffect, routeAuthority } from './plan.mjs';
-import { loadAdapters } from './adapter-runtime.mjs';
+import { loadAdapters, ownershipFor } from './adapter-runtime.mjs';
 import { issueConsentToken,redeemConsentToken, consentBinding, canonicalDigest } from './consent-token.mjs';
 import { defaultHome } from './default-home.mjs';
 import { adoptDisclosureRevision, consentDisclosureRevision } from './adopt-disclosure.mjs';
@@ -85,6 +85,7 @@ async function consentCurrent(record){
 }
 async function authorizeRecord(record,request,adapter,grant){
   const runtime=scopedRuntime.getStore();if(!runtime?.embeddingServices)return record;
+  if(ownershipFor(adapter.definition)!=='gozar-owned')throw refuse('candidate_stale','The durable plan no longer matches its reviewed ownership');
   const denied=capabilityPrerequisites(adapter.definition,runtime.hostCapabilities??{}).find(p=>p.state!=='present');if(denied)throw refuse(denied.state==='denied'?'host_policy_denied':'unsupported','The host has not authorized a required capability');
   const current=await currentRouteReview(request,adapter,runtime);
   if(request.approval?.kind!=='route'||request.approval.consentFactsDigest!==current.review.consentFactsDigest||grant.consentFactsDigest!==current.review.consentFactsDigest)throw refuse('consent_mismatch','Route consent changed before provider effects');
@@ -94,6 +95,7 @@ async function authorizeRecord(record,request,adapter,grant){
 }
 
 function reviewBinding(record,current,handle){
+ if(current.review.canonicalInput.typedDisclosures.ownership!==record.ownership)throw refuse('consent_mismatch','The provider no longer offers the recorded ownership');
  const review=consentReview({scope:{...current.review.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation},typedDisclosures:current.review.canonicalInput.typedDisclosures,facts:current.review.canonicalInput.facts});
  return {review,binding:{...consentBinding(record.reviewQuery,record.reviewQuery.home,`runtime-review:${review.consentFactsDigest}`,review.consentFactsDigest),handle,subject:record.verification?.subject??null}};
 }

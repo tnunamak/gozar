@@ -8,6 +8,8 @@
 - Review and approve routes again after upgrading from 0.4, including free and
   unknown-cost routes. The consent digest changes because it covers the cost
   disclosure shown to the owner. The CLI returns exit 3 when approval is stale.
+- Apps that track an existing public address can select an `external-owned`
+  candidate with the exact origin and target. Route consent binds ownership.
 
 ## 0.4.0
 

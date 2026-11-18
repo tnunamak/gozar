@@ -23,6 +23,8 @@ function assertSnapshot(review,candidate,route) {
   const rows=review.facts;
   assert.ok(Array.isArray(rows));
   assert.deepEqual(review.disclosures.cost,candidate.properties.cost);
+  assert.equal(review.disclosures.ownership,candidate.ownership);
+  assert.equal(route.ownership,candidate.ownership);
   assert.equal(new Set(rows.map(row=>row.id)).size,rows.length,'no duplicate fact IDs');
   assert.ok(rows.every(row=>!row.id.startsWith('gozar.route-cost.')));
   const expectedRows=candidate.consent.facts;

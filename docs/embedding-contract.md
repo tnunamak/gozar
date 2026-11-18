@@ -145,6 +145,13 @@ have different inputs, including free and unknown offers. Ask the catalog for a
 fresh approval before starting a route. For a retained route, use its current
 runtime review when available.
 
+For an existing origin, select a candidate whose `ownership` is
+`external-owned` and whose consent scope names the exact origin and target.
+If none matches, stop before running setup or starting a route. The ownership
+comes from the validated adapter definition and defaults to `gozar-owned`.
+Consent binds it together with the route properties. A matching candidate is
+an offer. Check the returned route and its proof before publishing.
+
 ## Public draft workflow (same owner and revision)
 
 Use the current configuration returned by inventory or catalog. This example is

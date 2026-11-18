@@ -136,7 +136,7 @@ export type SetupConsentScope={kind:'setup';registryId:string;scopeId:string;pro
 export type RouteConsentScope={kind:'route';registryId:string;scopeId:string;providerId:string;configurationRevision:string;query:{usage:Usage;reach:Reach;transport:Properties['transport'];target:string;expectedOrigin:string|null};reviewHandle?:string;handleGeneration?:number};
 /** The actual typed canonical input. Setup includes the full trusted action, including artifact/effect disclosures. */
 export type SetupConsentDisclosures={action:SafeSetupAction};
-export type RouteConsentDisclosures={reach:Reach;transport:Properties['transport'];traffic:Properties['traffic'];address:Properties['address'];cost:Cost;lifetimes:Properties['lifetimes'];supervision:Properties['supervision'];protocols:Properties['protocols'];disclosure:Disclosure};
+export type RouteConsentDisclosures={ownership:RouteView['ownership'];reach:Reach;transport:Properties['transport'];traffic:Properties['traffic'];address:Properties['address'];cost:Cost;lifetimes:Properties['lifetimes'];supervision:Properties['supervision'];protocols:Properties['protocols'];disclosure:Disclosure};
 export type ConsentDisclosures=SetupConsentDisclosures|RouteConsentDisclosures;
 export type SetupConsentSnapshot={scope:SetupConsentScope;consentFactsDigest:string;facts:Fact[];disclosures:SetupConsentDisclosures};
 export type RouteConsentSnapshot={scope:RouteConsentScope;consentFactsDigest:string;facts:Fact[];disclosures:RouteConsentDisclosures};
@@ -171,6 +171,8 @@ export type Candidate = {
     /** One static sentence: what a route of the queried usage kind needs on this computer, naming its ports. Shown whether or not setup is ready. */
     needs: string;
   };
+  /** The route owner from the validated adapter definition. Unspecified ownership defaults to Gozar. */
+  ownership: RouteView['ownership'];
   properties: Properties;
   /**
    * On a platform Gozar does not support (anything but Linux and macOS in 0.2.0), every candidate has

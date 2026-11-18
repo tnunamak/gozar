@@ -137,6 +137,8 @@ async function consume(){
  const candidate=catalog.candidates[0];
  const consent:RouteConsentSnapshot=candidate.consent;
  price(consent.disclosures.cost);
+ const routeOwner: RouteView['ownership'] = candidate.ownership;
+ const approvedOwner: RouteView['ownership'] = consent.disclosures.ownership;
  const draft=await api.beginConfigurationDraft(begin);
  const current=await api.readConfigurationDraft(read);
  const configured=await api.commitConfigurationDraft(commit);
