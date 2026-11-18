@@ -2,9 +2,38 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { plainCaveat } from '../../packages/gozar-node/plain-copy.mjs';
-import { ways, trafficFacts } from '../../packages/gozar-node/expose-copy.mjs';
+import { ways, trafficFacts, resolveVia } from '../../packages/gozar-node/expose-copy.mjs';
 const root = new URL('../../', import.meta.url);
 const read = path => readFile(new URL(path, root), 'utf8');
+function withWays(entries, check) {
+  const saved = { ...ways };
+  try {
+    for (const id of Object.keys(ways)) delete ways[id];
+    Object.assign(ways, entries);
+    check();
+  } finally {
+    for (const id of Object.keys(ways)) delete ways[id];
+    Object.assign(ways, saved);
+  }
+}
+test('unknown caveats do not resolve inherited object properties', () => {
+  for (const text of ['toString', 'constructor', '__proto__']) assert.deepEqual(plainCaveat(text), {});
+});
+test('an exact adapter ID takes precedence over another adapter display name', () => {
+  withWays({ alpha: { name: 'beta' }, beta: { name: 'Other' } }, () => {
+    assert.equal(resolveVia('beta'), 'beta');
+    assert.equal(resolveVia('Other'), 'beta');
+    assert.equal(resolveVia('alpha'), 'alpha');
+  });
+});
+test('an ambiguous adapter display name requires an explicit ID', () => {
+  withWays({ alpha: { name: 'Shared' }, beta: { name: 'Shared' } }, () => {
+    assert.throws(() => resolveVia('Shared'), /ambiguous/i);
+    assert.equal(resolveVia('alpha'), 'alpha');
+    assert.equal(resolveVia('beta'), 'beta');
+    assert.throws(() => resolveVia('missing'), /unknown/i);
+  });
+});
 const banned = /intended-vantage|source-shaped|cleanup debt|immutable process identity|instance proof|capability-port|readback|fail safely|fails closed|precondition|admitted|unknown\.|\bready\b|Ctrl-C/i;
 export async function presentationStrings() {
   const strings = new Set();

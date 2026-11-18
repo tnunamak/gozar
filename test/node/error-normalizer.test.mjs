@@ -32,6 +32,35 @@ test('a frozen code passes through and gains a null nextAction', () => {
   }
 });
 
+test('immutable known errors with a null or existing action retain their identity', () => {
+  const action = { id: 'existing-action' };
+  for (const code of fixture.frozenErrorCodes) {
+    for (const nextAction of [null, action]) {
+      const error = Object.freeze(gozarError(code, 'fixture message', nextAction));
+      assert.equal(normalizeError(error), error);
+      assert.equal(error.nextAction, nextAction);
+    }
+  }
+});
+
+test('immutable known errors with no action normalize without mutating the original', () => {
+  for (const code of fixture.frozenErrorCodes) {
+    const readOnly = coded(code);
+    Object.defineProperty(readOnly, 'nextAction', { value: undefined, writable: false });
+    for (const original of [Object.freeze(coded(code)), Object.preventExtensions(coded(code)), readOnly]) {
+      const error = normalizeError(original);
+      assert.equal(error.code, code);
+      assert.equal(error.message, original.message);
+      assert.equal(error.nextAction, null);
+      assert.equal(error.cause, original);
+      assert.equal(original.nextAction, undefined);
+    }
+    const mutable = coded(code);
+    assert.equal(normalizeError(mutable), mutable);
+    assert.equal(mutable.nextAction, null);
+  }
+});
+
 test('red: an unmapped code is internal_error, and the original stays on cause, not in the message', () => {
   const original = coded('definitely_unmapped', '/home/someone/secret-path leaked');
   const error = normalizeError(original);

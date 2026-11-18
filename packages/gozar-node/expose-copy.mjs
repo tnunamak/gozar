@@ -7,9 +7,11 @@ const definitions = await Promise.all(manifest.normalizedDefinitions.map(async r
 export const ways = Object.fromEntries(definitions.filter(a => a.copy?.human).map(a => [a.id, a.copy.human]));
 
 export function resolveVia(name) {
-  const id = Object.keys(ways).find(id => id === name || ways[id].name === name);
-  if (!id) throw new Error(`Unknown way: ${name}. Valid names: ${Object.values(ways).map(way => way.name).join(', ')}`);
-  return id;
+  if (typeof name === 'string' && Object.hasOwn(ways, name)) return name;
+  const ids = Object.keys(ways).filter(id => ways[id].name === name);
+  if (ids.length > 1) throw new Error(`Ambiguous way: ${name}. Use an adapter ID: ${ids.join(', ')}`);
+  if (ids.length === 1) return ids[0];
+  throw new Error(`Unknown way: ${name}. Valid names: ${Object.values(ways).map(way => way.name).join(', ')}`);
 }
 
 // Read the existing trust declarations without adding facts to session replies.
