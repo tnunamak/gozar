@@ -376,10 +376,7 @@
         },
         "cost": {
           "kind": "free",
-          "summary": "No charge",
-          "currency": null,
-          "amount": null,
-          "period": null
+          "summary": "No charge"
         },
         "needsAccount": true,
         "lifetimes": [
@@ -424,10 +421,7 @@
         },
         "cost": {
           "kind": "free",
-          "summary": "No charge",
-          "currency": null,
-          "amount": null,
-          "period": null
+          "summary": "No charge"
         },
         "needsAccount": false,
         "lifetimes": [
@@ -468,10 +462,7 @@
         },
         "cost": {
           "kind": "unknown",
-          "summary": "Unknown",
-          "currency": null,
-          "amount": null,
-          "period": null
+          "summary": "Unknown"
         },
         "needsAccount": null,
         "lifetimes": [
@@ -591,10 +582,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -694,7 +682,8 @@
               "stability": "stable"
             },
             "cost": {
-              "kind": "free"
+              "kind": "free",
+              "summary": "No charge"
             },
             "disclosure": {
               "links": [
@@ -787,10 +776,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -887,7 +873,8 @@
               "stability": "ephemeral"
             },
             "cost": {
-              "kind": "free"
+              "kind": "free",
+              "summary": "No charge"
             },
             "disclosure": {
               "links": [
@@ -980,10 +967,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -1080,7 +1064,8 @@
               "stability": "stable"
             },
             "cost": {
-              "kind": "free"
+              "kind": "free",
+              "summary": "No charge"
             },
             "disclosure": {
               "links": [
@@ -1167,10 +1152,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -1291,7 +1273,8 @@
               "stability": "stable"
             },
             "cost": {
-              "kind": "free"
+              "kind": "free",
+              "summary": "No charge"
             },
             "disclosure": {
               "links": [
@@ -1378,10 +1361,7 @@
           },
           "cost": {
             "kind": "unknown",
-            "summary": "Unknown",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "Unknown"
           },
           "needsAccount": null,
           "lifetimes": [
@@ -1476,7 +1456,8 @@
               "stability": "unknown"
             },
             "cost": {
-              "kind": "unknown"
+              "kind": "unknown",
+              "summary": "Unknown"
             },
             "disclosure": {
               "links": [
@@ -1565,10 +1546,7 @@
               },
               "cost": {
                 "kind": "free",
-                "summary": "No charge",
-                "currency": null,
-                "amount": null,
-                "period": null
+                "summary": "No charge"
               },
               "needsAccount": true,
               "lifetimes": [
@@ -1665,7 +1643,8 @@
                   "stability": "stable"
                 },
                 "cost": {
-                  "kind": "free"
+                  "kind": "free",
+                  "summary": "No charge"
                 },
                 "disclosure": {
                   "links": [
@@ -1753,10 +1732,7 @@
               },
               "cost": {
                 "kind": "free",
-                "summary": "No charge",
-                "currency": null,
-                "amount": null,
-                "period": null
+                "summary": "No charge"
               },
               "needsAccount": true,
               "lifetimes": [
@@ -1853,7 +1829,8 @@
                   "stability": "ephemeral"
                 },
                 "cost": {
-                  "kind": "free"
+                  "kind": "free",
+                  "summary": "No charge"
                 },
                 "disclosure": {
                   "links": [
@@ -1941,10 +1918,7 @@
               },
               "cost": {
                 "kind": "free",
-                "summary": "No charge",
-                "currency": null,
-                "amount": null,
-                "period": null
+                "summary": "No charge"
               },
               "needsAccount": true,
               "lifetimes": [
@@ -2041,7 +2015,8 @@
                   "stability": "stable"
                 },
                 "cost": {
-                  "kind": "free"
+                  "kind": "free",
+                  "summary": "No charge"
                 },
                 "disclosure": {
                   "links": [
@@ -2123,10 +2098,7 @@
               },
               "cost": {
                 "kind": "free",
-                "summary": "No charge",
-                "currency": null,
-                "amount": null,
-                "period": null
+                "summary": "No charge"
               },
               "needsAccount": true,
               "lifetimes": [
@@ -2247,7 +2219,8 @@
                   "stability": "stable"
                 },
                 "cost": {
-                  "kind": "free"
+                  "kind": "free",
+                  "summary": "No charge"
                 },
                 "disclosure": {
                   "links": [
@@ -2329,10 +2302,7 @@
               },
               "cost": {
                 "kind": "unknown",
-                "summary": "Unknown",
-                "currency": null,
-                "amount": null,
-                "period": null
+                "summary": "Unknown"
               },
               "needsAccount": null,
               "lifetimes": [
@@ -2427,7 +2397,8 @@
                   "stability": "unknown"
                 },
                 "cost": {
-                  "kind": "unknown"
+                  "kind": "unknown",
+                  "summary": "Unknown"
                 },
                 "disclosure": {
                   "links": [
@@ -2708,10 +2679,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -2861,10 +2829,7 @@
           },
           "cost": {
             "kind": "unknown",
-            "summary": "Unknown",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "Unknown"
           },
           "needsAccount": null,
           "lifetimes": [
@@ -2987,10 +2952,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -3121,10 +3083,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -3410,10 +3369,7 @@
             },
             "cost": {
               "kind": "free",
-              "summary": "No charge",
-              "currency": null,
-              "amount": null,
-              "period": null
+              "summary": "No charge"
             },
             "needsAccount": true,
             "lifetimes": [
@@ -3549,10 +3505,7 @@
             },
             "cost": {
               "kind": "free",
-              "summary": "No charge",
-              "currency": null,
-              "amount": null,
-              "period": null
+              "summary": "No charge"
             },
             "needsAccount": true,
             "lifetimes": [
@@ -3688,10 +3641,7 @@
             },
             "cost": {
               "kind": "free",
-              "summary": "No charge",
-              "currency": null,
-              "amount": null,
-              "period": null
+              "summary": "No charge"
             },
             "needsAccount": true,
             "lifetimes": [
@@ -4174,10 +4124,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -4253,10 +4200,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -4725,10 +4669,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -4859,10 +4800,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -5185,10 +5123,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -5288,7 +5223,8 @@
               "stability": "stable"
             },
             "cost": {
-              "kind": "free"
+              "kind": "free",
+              "summary": "No charge"
             },
             "disclosure": {
               "links": [
@@ -5378,10 +5314,7 @@
             },
             "cost": {
               "kind": "free",
-              "summary": "No charge",
-              "currency": null,
-              "amount": null,
-              "period": null
+              "summary": "No charge"
             },
             "needsAccount": true,
             "lifetimes": [
@@ -5600,10 +5533,7 @@
               },
               "cost": {
                 "kind": "free",
-                "summary": "No charge",
-                "currency": null,
-                "amount": null,
-                "period": null
+                "summary": "No charge"
               },
               "needsAccount": true,
               "lifetimes": [
@@ -5700,7 +5630,8 @@
                   "stability": "stable"
                 },
                 "cost": {
-                  "kind": "free"
+                  "kind": "free",
+                  "summary": "No charge"
                 },
                 "disclosure": {
                   "links": [
@@ -5788,10 +5719,7 @@
               },
               "cost": {
                 "kind": "free",
-                "summary": "No charge",
-                "currency": null,
-                "amount": null,
-                "period": null
+                "summary": "No charge"
               },
               "needsAccount": true,
               "lifetimes": [
@@ -5888,7 +5816,8 @@
                   "stability": "ephemeral"
                 },
                 "cost": {
-                  "kind": "free"
+                  "kind": "free",
+                  "summary": "No charge"
                 },
                 "disclosure": {
                   "links": [
@@ -5976,10 +5905,7 @@
               },
               "cost": {
                 "kind": "free",
-                "summary": "No charge",
-                "currency": null,
-                "amount": null,
-                "period": null
+                "summary": "No charge"
               },
               "needsAccount": true,
               "lifetimes": [
@@ -6076,7 +6002,8 @@
                   "stability": "stable"
                 },
                 "cost": {
-                  "kind": "free"
+                  "kind": "free",
+                  "summary": "No charge"
                 },
                 "disclosure": {
                   "links": [
@@ -6158,10 +6085,7 @@
               },
               "cost": {
                 "kind": "free",
-                "summary": "No charge",
-                "currency": null,
-                "amount": null,
-                "period": null
+                "summary": "No charge"
               },
               "needsAccount": true,
               "lifetimes": [
@@ -6282,7 +6206,8 @@
                   "stability": "stable"
                 },
                 "cost": {
-                  "kind": "free"
+                  "kind": "free",
+                  "summary": "No charge"
                 },
                 "disclosure": {
                   "links": [
@@ -6364,10 +6289,7 @@
               },
               "cost": {
                 "kind": "unknown",
-                "summary": "Unknown",
-                "currency": null,
-                "amount": null,
-                "period": null
+                "summary": "Unknown"
               },
               "needsAccount": null,
               "lifetimes": [
@@ -6462,7 +6384,8 @@
                   "stability": "unknown"
                 },
                 "cost": {
-                  "kind": "unknown"
+                  "kind": "unknown",
+                  "summary": "Unknown"
                 },
                 "disclosure": {
                   "links": [
@@ -6583,10 +6506,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -6736,10 +6656,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -6860,10 +6777,7 @@
         },
         "cost": {
           "kind": "free",
-          "summary": "No charge",
-          "currency": null,
-          "amount": null,
-          "period": null
+          "summary": "No charge"
         },
         "lifetimes": [
           "session",
@@ -6902,10 +6816,7 @@
         },
         "cost": {
           "kind": "free",
-          "summary": "No charge",
-          "currency": null,
-          "amount": null,
-          "period": null
+          "summary": "No charge"
         },
         "needsAccount": true,
         "lifetimes": [
@@ -6949,10 +6860,7 @@
         },
         "cost": {
           "kind": "free",
-          "summary": "No charge",
-          "currency": null,
-          "amount": null,
-          "period": null
+          "summary": "No charge"
         },
         "needsAccount": true,
         "lifetimes": [
@@ -7003,10 +6911,7 @@
         },
         "cost": {
           "kind": "free",
-          "summary": "No charge",
-          "currency": null,
-          "amount": null,
-          "period": null
+          "summary": "No charge"
         },
         "needsAccount": true,
         "lifetimes": [
@@ -7058,10 +6963,7 @@
         },
         "cost": {
           "kind": "free",
-          "summary": "No charge",
-          "currency": null,
-          "amount": null,
-          "period": null
+          "summary": "No charge"
         },
         "needsAccount": true,
         "lifetimes": [
@@ -7126,10 +7028,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -7412,10 +7311,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -7502,10 +7398,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -7576,10 +7469,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -7832,10 +7722,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -7914,10 +7801,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -8077,10 +7961,7 @@
             },
             "cost": {
               "kind": "free",
-              "summary": "No charge",
-              "currency": null,
-              "amount": null,
-              "period": null
+              "summary": "No charge"
             },
             "needsAccount": true,
             "lifetimes": [
@@ -8526,10 +8407,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -8675,10 +8553,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -8754,10 +8629,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -8865,10 +8737,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -8985,10 +8854,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -9081,10 +8947,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -9177,10 +9040,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -9272,10 +9132,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -9683,10 +9540,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -9775,10 +9629,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -9868,10 +9719,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -9961,10 +9809,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -10053,10 +9898,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [
@@ -10142,10 +9984,7 @@
           },
           "cost": {
             "kind": "free",
-            "summary": "No charge",
-            "currency": null,
-            "amount": null,
-            "period": null
+            "summary": "No charge"
           },
           "needsAccount": true,
           "lifetimes": [

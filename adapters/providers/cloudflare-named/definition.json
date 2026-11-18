@@ -30,10 +30,7 @@
       },
       "cost": {
         "kind": "unknown",
-        "summary": "Cloudflare lists a $0 Free Zero Trust plan with connector software included, but no page names Cloudflare Tunnel.",
-        "currency": null,
-        "amount": null,
-        "period": null
+        "summary": "Cloudflare lists a $0 Free Zero Trust plan with connector software included, but no page names Cloudflare Tunnel."
       },
       "needsAccount": true,
       "lifetimes": [

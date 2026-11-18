@@ -44,10 +44,7 @@
       },
       "cost": {
         "kind": "unknown",
-        "summary": "Tailscale pricing is documented, but the Serve page does not say which plans include Serve.",
-        "currency": null,
-        "amount": null,
-        "period": null
+        "summary": "Tailscale pricing is documented, but the Serve page does not say which plans include Serve."
       },
       "needsAccount": true,
       "lifetimes": [

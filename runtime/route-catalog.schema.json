@@ -663,46 +663,7 @@
           "additionalProperties": false
         },
         "cost": {
-          "type": "object",
-          "required": [
-            "kind",
-            "summary",
-            "currency",
-            "amount",
-            "period"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "free",
-                "paid",
-                "unknown"
-              ]
-            },
-            "summary": {
-              "type": "string"
-            },
-            "currency": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "amount": {
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "period": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "additionalProperties": false
+          "$ref": "#/$defs/Cost"
         },
         "needsAccount": {
           "type": [
@@ -3186,20 +3147,7 @@
               "additionalProperties": false
             },
             "cost": {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "enum": [
-                    "free",
-                    "paid",
-                    "unknown"
-                  ]
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "additionalProperties": false
+              "$ref": "#/$defs/Cost"
             },
             "lifetimes": {
               "type": "array",
@@ -3651,20 +3599,7 @@
               "additionalProperties": false
             },
             "cost": {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "enum": [
-                    "free",
-                    "paid",
-                    "unknown"
-                  ]
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "additionalProperties": false
+              "$ref": "#/$defs/Cost"
             },
             "lifetimes": {
               "type": "array",
@@ -3730,6 +3665,57 @@
         "disclosures"
       ],
       "additionalProperties": false
+    },
+    "Cost": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "summary"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "free",
+                "unknown"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "summary",
+            "amount",
+            "currency",
+            "period"
+          ],
+          "properties": {
+            "kind": {
+              "const": "paid"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "amount": {
+              "type": "number"
+            },
+            "currency": {
+              "type": "string"
+            },
+            "period": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     }
   }
 }

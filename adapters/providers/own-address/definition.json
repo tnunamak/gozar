@@ -30,10 +30,7 @@
       },
       "cost": {
         "kind": "free",
-        "summary": "Gozar charges nothing; your own domain, hosting and certificate cost whatever you pay for them.",
-        "currency": null,
-        "amount": null,
-        "period": null
+        "summary": "Gozar charges nothing; your own domain, hosting and certificate cost whatever you pay for them."
       },
       "needsAccount": null,
       "lifetimes": [

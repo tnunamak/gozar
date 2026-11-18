@@ -26,9 +26,9 @@ function validate(node, value, defs, path = '$') {
       case 'enum': if (!node.enum.some(item => same(item, value))) errors.push(`${path}: not in enum`); break;
       case 'minimum': if (typeof value === 'number' && value < node.minimum) errors.push(`${path}: below minimum`); break;
       case 'pattern': if (typeof value === 'string' && !new RegExp(node.pattern).test(value)) errors.push(`${path}: pattern mismatch`); break;
-      case 'required': if (kinds.object(value)) for (const name of node.required) if (!(name in value)) errors.push(`${path}: missing ${name}`); break;
-      case 'properties': if (kinds.object(value)) for (const [name, sub] of Object.entries(node.properties)) if (name in value) errors.push(...validate(sub, value[name], defs, `${path}.${name}`)); break;
-      case 'additionalProperties': if (kinds.object(value)) for (const name of Object.keys(value)) if (!(name in (node.properties ?? {}))) { if (node.additionalProperties === false) errors.push(`${path}: unknown property ${name}`); else errors.push(...validate(node.additionalProperties, value[name], defs, `${path}.${name}`)); } break;
+      case 'required': if (kinds.object(value)) for (const name of node.required) if (!Object.hasOwn(value, name)) errors.push(`${path}: missing ${name}`); break;
+      case 'properties': if (kinds.object(value)) for (const [name, sub] of Object.entries(node.properties)) if (Object.hasOwn(value, name)) errors.push(...validate(sub, value[name], defs, `${path}.${name}`)); break;
+      case 'additionalProperties': if (kinds.object(value)) for (const name of Object.keys(value)) if (!Object.hasOwn(node.properties ?? {}, name)) { if (node.additionalProperties === false) errors.push(`${path}: unknown property ${name}`); else errors.push(...validate(node.additionalProperties, value[name], defs, `${path}.${name}`)); } break;
       case 'items': if (Array.isArray(value)) value.forEach((item, i) => errors.push(...validate(node.items, item, defs, `${path}[${i}]`))); break;
       case 'oneOf': { const hits = node.oneOf.filter(sub => validate(sub, value, defs, path).length === 0).length; if (hits !== 1) errors.push(`${path}: matches ${hits} oneOf branches`); break; }
       case 'anyOf': if (!node.anyOf.some(sub => validate(sub, value, defs, path).length === 0)) errors.push(`${path}: matches no anyOf branch`); break;
@@ -114,7 +114,7 @@ async function retireAttachedControllers(home, {
 export const properties = (over = {}) => ({
   reach: 'internet', transport: 'https',
   traffic: { tlsTermination: 'endpoint', providerCanReadPayload: false, readers: [], metadataVisibleTo: ['provider'], evidenceRef: 'evidence-synthetic-1' },
-  address: { stability: 'stable', scope: 'account', conditions: [] }, cost: { kind: 'free', summary: 'No charge', currency: null, amount: null, period: null },
+  address: { stability: 'stable', scope: 'account', conditions: [] }, cost: { kind: 'free', summary: 'No charge' },
   needsAccount: false, lifetimes: ['session', 'attached', 'durable'], supervision: 'controller',
   protocols: { sse: true, streamableHttp: true, oauthDcr: true }, ...over });
 export const disclosure = id => ({ revision: `disc-${id}`, text: `Synthetic disclosure for ${id}.`, links: [] });

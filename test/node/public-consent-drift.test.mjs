@@ -18,7 +18,7 @@ async function fixture(t,options={}){
  const costFile=join(folder,'runtime-cost.json');
  if(options.runtimeCost){
    const dataPath=join(folder,'definition.json'),data=JSON.parse(await readFile(dataPath,'utf8'));
-   data.adapter.capabilities.cost={kind:'paid',summary:'Fixture price',amount:0,currency:null,period:null};
+   data.adapter.capabilities.cost={kind:'paid',summary:'Fixture price',amount:0,currency:'USD',period:'hour'};
    await writeFile(dataPath,JSON.stringify(data));
    await writeFile(costFile,JSON.stringify(data.adapter.capabilities.cost));
    let source=await readFile(module,'utf8');
@@ -79,7 +79,6 @@ test('persisted draft read offers the current action-scoped observed facts and s
  assert.equal(result.configuration.actions[0].consent.scope.configurationRevision,result.configurationRevision);
 });
 
-const intrinsicIds=['gozar.route-cost.amount','gozar.route-cost.currency','gozar.route-cost.period'];
 const exactRows=(actual,expected)=>{
  assert.equal(new Set(actual.map(row=>row.id)).size,actual.length);
  assert.equal(new Set(expected.map(row=>row.id)).size,expected.length);
@@ -87,27 +86,26 @@ const exactRows=(actual,expected)=>{
  assert.deepEqual(sorted(actual),sorted(expected));
 };
 const startCount=async f=>(await f.events()).split('\n').filter(Boolean).map(line=>JSON.parse(line)).filter(row=>row.event==='start').length;
-test('unknown attached provider preserves zero/null facts through actual runtime price and decision drift',async t=>{
+test('unknown attached provider preserves typed cost and provider facts through actual runtime price and decision drift',async t=>{
  const f=await fixture(t,{owner:'runtime-facts-owner',runtimeCost:true});
  const choice=(await f.api.catalogRoutes(f.q)).candidates[0];
  const seed=structuredClone(choice.consent.facts);
- assert.ok(seed.filter(row=>!intrinsicIds.includes(row.id)&&row.affectsConsent).length,'explicit provider consent seed');
- assert.equal(seed.find(row=>row.id===intrinsicIds[0]).value,0);
- for(const id of intrinsicIds.slice(1)){
-   const row=seed.find(row=>row.id===id);assert.ok(row);assert.equal(row.value,null);assert.equal(row.known,false);
- }
+ assert.ok(seed.some(row=>row.affectsConsent),'explicit provider consent seed');
+ assert.ok(seed.every(row=>!row.id.startsWith('gozar.route-cost.')));
+ assert.deepEqual(choice.consent.disclosures.cost,{kind:'paid',summary:'Fixture price',amount:0,currency:'USD',period:'hour'});
  const identity=await f.identity(),route=await f.start(choice);
  assert.equal(route.verification.status,'verified');assert.equal(await startCount(f),1);
  const prior=await f.api.reviewRouteConsent({home:f.home,handle:route.handle});
+ assert.deepEqual(prior.disclosures.cost,choice.consent.disclosures.cost);
  exactRows(prior.facts,seed);assert.deepEqual(prior.subject,route.verification.subject);
  await f.api.approveRouteConsent({home:f.home,handle:route.handle,approvalToken:prior.approvalToken,consentFactsDigest:prior.consentFactsDigest});
- await f.setCost({kind:'paid',summary:'Fixture price',amount:7,currency:null,period:null});
+ await f.setCost({kind:'paid',summary:'Fixture price',amount:7,currency:'USD',period:'hour'});
  await f.observe({decision:'new-reader',display:'changed'});
  assert.deepEqual(await f.identity(),identity,'runtime drift changes neither module nor definition identity');
  const status=await f.api.routeStatus({home:f.home,handle:route.handle});
  assert.equal(status.published,null);assert.ok(status.consentChange);
  const old=await f.api.reviewRouteConsent({home:f.home,handle:route.handle});
- await f.setCost({kind:'paid',summary:'Fixture price',amount:8,currency:null,period:null});
+ await f.setCost({kind:'paid',summary:'Fixture price',amount:8,currency:'USD',period:'hour'});
  await f.observe({decision:'current-reader',display:'changed-again'});
  assert.deepEqual(await f.identity(),identity);
  await assert.rejects(f.api.approveRouteConsent({home:f.home,handle:route.handle,approvalToken:old.approvalToken,consentFactsDigest:old.consentFactsDigest}),{code:'consent_mismatch'});
@@ -116,8 +114,8 @@ test('unknown attached provider preserves zero/null facts through actual runtime
  const fresh=await f.api.reviewRouteConsent({home:f.home,handle:route.handle});
  exactRows(fresh.facts,current.consent.facts);
  assert.equal(fresh.facts.find(row=>row.id==='decision').value,'current-reader');
- assert.equal(fresh.facts.find(row=>row.id===intrinsicIds[0]).value,8);
- for(const id of intrinsicIds.slice(1))assert.equal(fresh.facts.find(row=>row.id===id).value,null);
+ assert.deepEqual(fresh.disclosures.cost,{kind:'paid',summary:'Fixture price',amount:8,currency:'USD',period:'hour'});
+ assert.deepEqual(fresh.disclosures.cost,current.consent.disclosures.cost);
  assert.deepEqual(fresh.subject,route.verification.subject);
  assert.equal(fresh.scope.reviewHandle,route.handle.id);assert.equal(fresh.scope.handleGeneration,route.handle.generation);
  const restored=await f.api.approveRouteConsent({home:f.home,handle:route.handle,approvalToken:fresh.approvalToken,consentFactsDigest:fresh.consentFactsDigest});

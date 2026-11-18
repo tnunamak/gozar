@@ -63,12 +63,17 @@ function validate(schema, value, defs, path = '$') {
     if (['$schema', '$id', 'title', 'description', '$defs'].includes(key)) continue;
     switch (key) {
       case '$ref': errors.push(...validate(defs[schema.$ref.replace('#/$defs/', '')], value, defs, path)); break;
+      case 'oneOf': {
+        const matches = schema.oneOf.filter(branch => validate(branch, value, defs, path).length === 0);
+        if (matches.length !== 1) errors.push(`${path}: expected exactly one matching shape`);
+        break;
+      }
       case 'type': if (![].concat(schema.type).some(type => kinds[type](value))) errors.push(`${path}: expected ${[].concat(schema.type).join('|')}`); break;
       case 'const': if (!isDeepStrictEqual(value, schema.const)) errors.push(`${path}: expected const`); break;
       case 'enum': if (!schema.enum.some(item => isDeepStrictEqual(item, value))) errors.push(`${path}: not in enum`); break;
-      case 'required': if (kinds.object(value)) for (const name of schema.required) if (!(name in value)) errors.push(`${path}: missing ${name}`); break;
-      case 'properties': if (kinds.object(value)) for (const [name, sub] of Object.entries(schema.properties)) if (name in value) errors.push(...validate(sub, value[name], defs, `${path}.${name}`)); break;
-      case 'additionalProperties': if (kinds.object(value)) for (const name of Object.keys(value)) if (!(name in (schema.properties ?? {}))) errors.push(`${path}: unknown property ${name}`); break;
+      case 'required': if (kinds.object(value)) for (const name of schema.required) if (!Object.hasOwn(value, name)) errors.push(`${path}: missing ${name}`); break;
+      case 'properties': if (kinds.object(value)) for (const [name, sub] of Object.entries(schema.properties)) if (Object.hasOwn(value, name)) errors.push(...validate(sub, value[name], defs, `${path}.${name}`)); break;
+      case 'additionalProperties': if (kinds.object(value)) for (const name of Object.keys(value)) if (!Object.hasOwn(schema.properties ?? {}, name)) errors.push(`${path}: unknown property ${name}`); break;
       case 'items': if (Array.isArray(value)) value.forEach((item, index) => errors.push(...validate(schema.items, item, defs, `${path}[${index}]`))); break;
       case 'minimum': if (typeof value === 'number' && value < schema.minimum) errors.push(`${path}: below minimum`); break;
       case 'pattern': if (typeof value === 'string' && !new RegExp(schema.pattern).test(value)) errors.push(`${path}: pattern mismatch`); break;

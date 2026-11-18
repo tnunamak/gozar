@@ -27,10 +27,7 @@
       },
       "cost": {
         "kind": "unknown",
-        "summary": "synthetic",
-        "currency": null,
-        "amount": null,
-        "period": null
+        "summary": "synthetic"
       },
       "needsAccount": false,
       "lifetimes": [

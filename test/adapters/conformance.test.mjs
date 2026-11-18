@@ -193,9 +193,10 @@ test('every adapter directory has exactly one registry entry and the ten load in
   assert.deepEqual(adapters.map(adapter => adapter.id), manifest.providers.map(entry => entry.id));
 });
 
-test('all ten registered adapters conform', async () => {
-  const adapters = await loadAdapters({ manifest: tenManifest, root: adaptersRoot });
-  assert.equal(adapters.length, 10);
+test('every shipped registry definition conforms', async () => {
+  const manifest = JSON.parse(await readFile(join(adaptersRoot, 'manifest.json'), 'utf8'));
+  const adapters = await loadAdapters();
+  assert.deepEqual(adapters.map(adapter => adapter.id), manifest.providers.map(entry => entry.id));
   const stubSdk = { forward: async () => ({ url: () => `https://${reserved}`, close: async () => {} }) };
   for (const adapter of adapters) {
     await conform(adapter.id === 'ngrok-https-edge' ? createNgrokAdapter({ loadSdk: async () => stubSdk }) : adapter);
@@ -263,6 +264,31 @@ test('red: a definition missing cost, account or trust facts is a load error', a
   lifetimes.adapter.supportedKinds = ['session', 'durable'];
   const second = await manifestWith([{ id: 'lifetimes', index: 'export default {}', definition: lifetimes }]);
   await assert.rejects(loadAdapters({ manifest: second.manifest, root: second.dir }), /lifetimes must equal supportedKinds/);
+});
+
+test('cost shapes are checked before importing any adapter module', async () => {
+  const paid = { kind: 'paid', summary: 'Fixture rate', amount: 0, currency: 'USD', period: 'hour' };
+  const invalid = [{ kind: 'other', summary: 'Other' }, { kind: 'unknown' }, { kind: 'free', summary: 0 }, null, []];
+  for (const kind of ['free', 'unknown']) {
+    const cost = { kind, summary: 'Fixture' };
+    assert.deepEqual(validateShape('Cost', cost), []);
+    for (const field of ['amount', 'currency', 'period']) {
+      invalid.push({ ...cost, [field]: null }, { ...cost, [field]: paid[field] });
+    }
+  }
+  assert.deepEqual(validateShape('Cost', paid), []);
+  for (const [field, wrongType] of [['amount', '0'], ['currency', 1], ['period', false]]) {
+    const { [field]: omitted, ...partial } = paid;
+    invalid.push(partial, { ...paid, [field]: null }, { ...paid, [field]: wrongType });
+  }
+  invalid.push({ ...paid, extra: true }, { ...paid, constructor: true });
+  for (const cost of invalid) {
+    const definition = await goodDefinition('invalid-price');
+    definition.adapter.capabilities.cost = cost;
+    const { dir, manifest } = await manifestWith([{ id: 'invalid-price', index: 'throw new Error("loaded")', definition }]);
+    await assert.rejects(loadAdapters({ manifest, root: dir }), /invalid definition: .*\.cost:/, JSON.stringify(cost));
+  }
+  for (const amount of [NaN, Infinity, -Infinity]) assert.notEqual(validateShape('Cost', { ...paid, amount }).length, 0);
 });
 
 test('red: an adapter whose module id disagrees with its registry entry is a load error', async () => {

@@ -31,10 +31,7 @@
       },
       "cost": {
         "kind": "free",
-        "summary": "The free tier costs nothing and needs no signup; its domains change regularly and have a speed limit.",
-        "currency": "USD",
-        "amount": 0,
-        "period": null
+        "summary": "The free tier costs nothing and needs no signup; its domains change regularly and have a speed limit."
       },
       "needsAccount": false,
       "lifetimes": [

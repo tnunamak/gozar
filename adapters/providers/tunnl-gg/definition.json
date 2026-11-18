@@ -31,10 +31,7 @@
       },
       "cost": {
         "kind": "free",
-        "summary": "The free tier costs nothing and needs no account; Pro is $6 a month or $60 a year and removes time limits and the warning page.",
-        "currency": "USD",
-        "amount": 0,
-        "period": null
+        "summary": "The free tier costs nothing and needs no account; Pro is $6 a month or $60 a year and removes time limits and the warning page."
       },
       "needsAccount": false,
       "lifetimes": [

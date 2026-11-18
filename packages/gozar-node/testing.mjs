@@ -56,7 +56,7 @@ export async function createTestingGozar({effects,...options}={}){
 /** Deterministic lifecycle projections for every admitted usage kind; no provider or process is started. */
 export function fakeRouteScenarios({ target = '127.0.0.1:18765', now = Date.parse('2026-11-13T12:00:00Z') } = {}) {
   const properties = { reach: 'internet', transport: 'https', traffic: { tlsTermination: 'endpoint', providerCanReadPayload: false, readers: [], metadataVisibleTo: [], evidenceRef: 'testing' },
-    address: { stability: 'stable', scope: 'fixture', conditions: [], ports: null }, cost: { kind: 'free', summary: 'Fixture', currency: null, amount: null, period: null },
+    address: { stability: 'stable', scope: 'fixture', conditions: [], ports: null }, cost: { kind: 'free', summary: 'Fixture' },
     needsAccount: false, lifetimes: ['session', 'attached', 'durable'], supervision: 'controller', protocols: { sse: true, streamableHttp: true, oauthDcr: true }, proof: { vantage: 'this-device', checks: ['nonce', 'tls'] } };
   const origin = 'https://screen.example.invalid', checkedAt = new Date(now).toISOString(), future = new Date(now + 60_000).toISOString();
   return ['session', 'attached', 'durable'].flatMap(kind => ['detected', 'verified', 'expired', 'cleanup-unconfirmed'].map(state => {
@@ -280,7 +280,7 @@ export async function fakeRegistry({ id, label, kinds, reach, transport = 'https
       reach, transport,
       traffic: { tlsTermination: transport === 'https' ? 'provider' : 'unknown', providerCanReadPayload: ['tcp','tls'].includes(transport) ? null : false, readers: [], metadataVisibleTo: [], evidenceRef: 'testing' },
       address: { stability: 'unknown', scope: 'a fake address that exists only in memory', conditions: [], ports: null },
-      cost: { kind: 'free', summary: 'A fake costs nothing.', currency: null, amount: null, period: null },
+      cost: { kind: 'free', summary: 'A fake costs nothing.' },
       needsAccount: false, lifetimes: [...kinds], supervision: 'controller',
       protocols: { sse: protocols.includes('sse'), streamableHttp: protocols.includes('streamable-http'), oauthDcr: protocols.includes('oauth-dcr') },
       proof: { vantage: 'this-device', checks: ['nonce'] },

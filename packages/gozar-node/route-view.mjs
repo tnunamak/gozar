@@ -25,7 +25,7 @@ export const unknownProperties = () => ({
   reach: 'unknown', transport: 'https',
   traffic: { tlsTermination: 'unknown', providerCanReadPayload: null, readers: [], metadataVisibleTo: [], evidenceRef: null },
   address: { stability: 'unknown', scope: 'owner-managed', conditions: [], ports: null },
-  cost: { kind: 'unknown', summary: 'Cost is not known to Gozar', currency: null, amount: null, period: null },
+  cost: { kind: 'unknown', summary: 'Cost is not known to Gozar' },
   needsAccount: null, lifetimes: ['durable'], supervision: 'host-supervised',
   protocols: { sse: false, streamableHttp: false, oauthDcr: false },
   proof: { vantage: 'none', checks: [] },

@@ -87,6 +87,11 @@ export type Action = {
   effects?:{writes:string[];networkOrigins:string[];requiresPrivilege:boolean;restartRequired:boolean};
 };
 
+export type Cost =
+  | { kind: 'free'; summary: string }
+  | { kind: 'unknown'; summary: string }
+  | { kind: 'paid'; summary: string; amount: number; currency: string; period: string };
+
 export type Properties = {
   reach: Reach;
   transport: 'http' | 'https' | 'tcp' | 'tls';
@@ -102,7 +107,7 @@ export type Properties = {
     /** The public ports a route of the queried (or viewed) usage kind may use, in the order Gozar tries them; null when the provider assigns the port. */
     ports: number[] | null;
   };
-  cost: { kind: 'free' | 'paid' | 'unknown'; summary: string; currency: string | null; amount: number | null; period: string | null };
+  cost: Cost;
   needsAccount: boolean | null;
   lifetimes: ('session' | 'attached' | 'durable')[];
   supervision: 'controller' | 'provider-persistent' | 'host-supervised';
@@ -131,7 +136,7 @@ export type SetupConsentScope={kind:'setup';registryId:string;scopeId:string;pro
 export type RouteConsentScope={kind:'route';registryId:string;scopeId:string;providerId:string;configurationRevision:string;query:{usage:Usage;reach:Reach;transport:Properties['transport'];target:string;expectedOrigin:string|null};reviewHandle?:string;handleGeneration?:number};
 /** The actual typed canonical input. Setup includes the full trusted action, including artifact/effect disclosures. */
 export type SetupConsentDisclosures={action:SafeSetupAction};
-export type RouteConsentDisclosures={reach:Reach;transport:Properties['transport'];traffic:Properties['traffic'];address:Properties['address'];cost:{kind:Properties['cost']['kind']};lifetimes:Properties['lifetimes'];supervision:Properties['supervision'];protocols:Properties['protocols'];disclosure:Disclosure};
+export type RouteConsentDisclosures={reach:Reach;transport:Properties['transport'];traffic:Properties['traffic'];address:Properties['address'];cost:Cost;lifetimes:Properties['lifetimes'];supervision:Properties['supervision'];protocols:Properties['protocols'];disclosure:Disclosure};
 export type ConsentDisclosures=SetupConsentDisclosures|RouteConsentDisclosures;
 export type SetupConsentSnapshot={scope:SetupConsentScope;consentFactsDigest:string;facts:Fact[];disclosures:SetupConsentDisclosures};
 export type RouteConsentSnapshot={scope:RouteConsentScope;consentFactsDigest:string;facts:Fact[];disclosures:RouteConsentDisclosures};

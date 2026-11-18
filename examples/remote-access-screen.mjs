@@ -16,8 +16,10 @@ export function renderFacts(facts) {
 export function renderScreen(catalog, routes = [], host = { password: 'host-owned', restart: 'host-owned' }) {
   const lines = ['Remote access', `Host inputs: ${JSON.stringify(host)}`];
   for (const choice of catalog.candidates) {
+    const { cost } = choice.properties;
+    const price = cost.kind === 'paid' ? ` (${cost.amount} ${cost.currency} per ${cost.period})` : '';
     lines.push(`Choice: ${choice.display.label}`, `Reach: ${choice.properties.reach}`, `Payload readers: ${choice.properties.traffic.providerCanReadPayload === null ? 'unknown' : JSON.stringify(choice.properties.traffic.readers)}`,
-      `Address: ${choice.properties.address.stability}; ports=${JSON.stringify(choice.properties.address.ports)}`, `Cost: ${choice.properties.cost.kind}`,
+      `Address: ${choice.properties.address.stability}; ports=${JSON.stringify(choice.properties.address.ports)}`, `Cost: ${cost.kind}${price} · ${cost.summary}`,
       `Availability: ${JSON.stringify(choice.availability)}`, `Setup: ${choice.setup.state}`);
     for (const item of choice.prerequisites) lines.push(`Prerequisite: ${item.label}: ${item.state}; observed=${item.observedAt}; version=${show(item.version)}; fix=${item.remedy?.label ?? 'no automatic fix'}`);
     for (const field of choice.configuration.inputRequirements) lines.push(`Input requirement: ${field.label}; kind=${field.kind}; secret=${field.secret}; help=${field.help}; validation=${field.validation}; obtain=${field.obtainUrl ?? 'not supplied'}`);

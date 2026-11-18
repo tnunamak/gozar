@@ -28,10 +28,7 @@
       },
       "cost": {
         "kind": "free",
-        "summary": "Gozar charges nothing and there is no provider; the owned local forwarder uses your own network.",
-        "currency": null,
-        "amount": null,
-        "period": null
+        "summary": "Gozar charges nothing and there is no provider; the owned local forwarder uses your own network."
       },
       "needsAccount": false,
       "lifetimes": [

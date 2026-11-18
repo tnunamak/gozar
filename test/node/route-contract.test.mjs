@@ -45,13 +45,13 @@ function validate(schema, value, defs, path = '$') {
       case 'minimum': if (typeof value === 'number' && value < schema.minimum) errors.push(`${path}: below minimum`); break;
       case 'pattern': if (typeof value === 'string' && !new RegExp(schema.pattern).test(value)) errors.push(`${path}: pattern mismatch`); break;
       case 'required':
-        if (kinds.object(value)) for (const name of schema.required) if (!(name in value)) errors.push(`${path}: missing ${name}`);
+        if (kinds.object(value)) for (const name of schema.required) if (!Object.hasOwn(value, name)) errors.push(`${path}: missing ${name}`);
         break;
       case 'properties':
-        if (kinds.object(value)) for (const [name, sub] of Object.entries(schema.properties)) if (name in value) errors.push(...validate(sub, value[name], defs, `${path}.${name}`));
+        if (kinds.object(value)) for (const [name, sub] of Object.entries(schema.properties)) if (Object.hasOwn(value, name)) errors.push(...validate(sub, value[name], defs, `${path}.${name}`));
         break;
       case 'additionalProperties':
-        if (kinds.object(value)) for (const name of Object.keys(value)) if (!(name in (schema.properties ?? {}))) {
+        if (kinds.object(value)) for (const name of Object.keys(value)) if (!Object.hasOwn(schema.properties ?? {}, name)) {
           if (schema.additionalProperties === false) errors.push(`${path}: unknown property ${name}`);
           else errors.push(...validate(schema.additionalProperties, value[name], defs, `${path}.${name}`));
         }
@@ -96,8 +96,8 @@ test('route-catalog.schema.json has a $defs entry per consumer shape', () => {
   for (const shape of consumerShapes) assert.ok(catalogSchema.$defs[shape], shape);
 });
 
-test('adapter.schema.json shares Properties, Reach and Disclosure with the catalog schema verbatim', () => {
-  for (const shape of ['Properties', 'Reach', 'Disclosure']) assert.deepEqual(adapterSchema.$defs[shape], catalogSchema.$defs[shape], shape);
+test('adapter.schema.json shares Cost, Properties, Reach and Disclosure with the catalog schema verbatim', () => {
+  for (const shape of ['Cost', 'Properties', 'Reach', 'Disclosure']) assert.deepEqual(adapterSchema.$defs[shape], catalogSchema.$defs[shape], shape);
 });
 
 test('closed shapes reject unknown properties', () => {

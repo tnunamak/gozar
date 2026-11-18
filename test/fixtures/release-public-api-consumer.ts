@@ -1,6 +1,6 @@
 // Compile only, never execute. Bare imports must resolve the materialized installed package.
 import {
- createGozar, type GozarOptions, type Query, type Requirements, type Fact,
+ createGozar, type GozarOptions, type Query, type Requirements, type Fact, type Cost,
  type SetupConsentSnapshot, type RouteConsentSnapshot, type GozarThrownError,
  type RouteView, type SecretBackend, type HostIdentity,
  type RunSetupOperationRequest, type SetupOperation,
@@ -10,6 +10,24 @@ import {
  type NetworkEffectResult, type SpawnEffectRequest, type SpawnEffectResult,
  type ArtifactEffectRequest, type ArtifactEffectResult, type TestingHarness,
 } from '@tnunamak/gozar/testing';
+
+const freeCost: Cost = { kind: 'free', summary: 'Included' };
+const unknownCost: Cost = { kind: 'unknown', summary: 'Ask the owner' };
+const paidCost: Cost = { kind: 'paid', summary: 'Fixture price', amount: 0, currency: 'USD', period: 'hour' };
+// @ts-expect-error Free cost carries no pricing fields.
+const pricedFree: Cost = { kind: 'free', summary: 'Included', amount: null };
+// @ts-expect-error Unknown cost carries no pricing fields.
+const pricedUnknown: Cost = { kind: 'unknown', summary: 'Ask the owner', currency: 'USD' };
+// @ts-expect-error Paid cost requires all three price fields.
+const partialPaid: Cost = { kind: 'paid', summary: 'Fixture price', amount: 0, currency: 'USD' };
+// @ts-expect-error Paid cost price fields are nonnullable.
+const nullablePaid: Cost = { ...paidCost, period: null };
+function price(cost: Cost): [number, string, string] | null {
+  if (cost.kind === 'paid') return [cost.amount, cost.currency, cost.period];
+  // @ts-expect-error Price fields require narrowing to paid.
+  cost.amount;
+  return null;
+}
 
 type IsAny<T> = 0 extends (1 & T) ? true : false;
 type AssertFalse<T extends false> = T;
@@ -118,6 +136,7 @@ async function consume(){
  const catalog=await api.catalogRoutes(query);
  const candidate=catalog.candidates[0];
  const consent:RouteConsentSnapshot=candidate.consent;
+ price(consent.disclosures.cost);
  const draft=await api.beginConfigurationDraft(begin);
  const current=await api.readConfigurationDraft(read);
  const configured=await api.commitConfigurationDraft(commit);
