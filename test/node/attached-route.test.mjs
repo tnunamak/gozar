@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { readFile, readdir, writeFile, access } from 'node:fs/promises';
+import { readFile, readdir, writeFile, access, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
@@ -188,7 +188,24 @@ test('red: a controller that never starts is stopped when the open times out, so
   assert.equal(failure?.code, 'provider_unavailable');
   assert.ok(['stopped', 'killed'].includes(failure.controllerCleanup?.state), JSON.stringify(failure.controllerCleanup && { state: failure.controllerCleanup.state }));
   // A killed child of this test process can stay a zombie until Node reaps it, so ask the identity function, not kill(0).
+  assert.ok(Number.isSafeInteger(failure.controllerCleanup.pid) && failure.controllerCleanup.pid > 0);
   assert.equal(await processIdentity(failure.controllerCleanup.pid), null);
+  // This isolated home has exactly one attempted open. Its bootstrap binds the
+  // directory to this loader and home; the returned cleanup plus independent
+  // process absence above retires that attempt, not arbitrary recordless homes.
+  const root = join(home, 'attached');
+  const attempts = (await readdir(root)).filter(name => /^att_[0-9a-f]{16}$/.test(name));
+  assert.equal(attempts.length, 1);
+  const directory = join(root, attempts[0]);
+  const bootstrap = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
+  assert.equal(bootstrap.id, attempts[0]);
+  assert.equal(bootstrap.home, await realpath(home));
+  assert.equal(bootstrap.controllerModule, module);
+  assert.equal(bootstrap.adapterId, 'stub-a');
+  assert.equal(bootstrap.request.target, attachedQuery(home).target);
+  await assert.rejects(access(join(directory, 'control.json')), { code: 'ENOENT' });
+  await rm(directory, { recursive: true });
+  await assert.rejects(access(directory), { code: 'ENOENT' });
 });
 
 test('openSessionRoute redeems the grant, takes the adapter from it, and projects the session machinery reply', async t => {

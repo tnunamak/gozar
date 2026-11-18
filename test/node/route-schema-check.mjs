@@ -86,28 +86,35 @@ async function retireAttachedControllers(home, {
   let names;
   try { names = await readdir(root); }
   catch (error) { if (error.code === 'ENOENT') return; throw error; }
-  for (const id of names.filter(name => /^att_[0-9a-f]{16}$/.test(name))) {
-    let record;
-    try { record = JSON.parse(await readFile(join(root, id, 'control.json'), 'utf8')); }
-    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-    if (!Number.isSafeInteger(record?.pid) || record.pid <= 0 ||
-        typeof record.startIdentity !== 'string' || !record.startIdentity) {
-      throw new Error('invalid controller identity; retaining attached test home');
-    }
-    // No await between this lifetime check and the positive-PID signal.
-    const current = await identity(record.pid);
-    if (current === null) continue;
-    if (current !== record.startIdentity) throw new Error('controller identity changed; retaining attached test home');
-    try { signal(record.pid, 'SIGKILL'); }
-    catch (error) { if (error.code !== 'ESRCH') throw error; }
-    const deadline = now() + timeoutMs;
-    for (;;) {
-      const remaining = await identity(record.pid);
-      if (remaining === null || remaining !== record.startIdentity) break;
-      if (now() >= deadline) throw new Error('controller did not retire; retaining attached test home');
-      await wait(25);
+  const failures = [];
+  for (const id of names.filter(name => /^att_[0-9a-f]{16}$/.test(name)).sort()) {
+    try {
+      // A present attempt without its control record is unresolved, not absent.
+      const record = JSON.parse(await readFile(join(root, id, 'control.json'), 'utf8'));
+      if (!Number.isSafeInteger(record?.pid) || record.pid <= 0 ||
+          typeof record.startIdentity !== 'string' || !record.startIdentity) {
+        throw new Error('invalid controller identity; retaining attached test home');
+      }
+      // No await between this lifetime check and the positive-PID signal.
+      const current = await identity(record.pid);
+      if (current === null) continue;
+      if (current !== record.startIdentity) throw new Error('controller identity changed; retaining attached test home');
+      try { signal(record.pid, 'SIGKILL'); }
+      catch (error) { if (error.code !== 'ESRCH') throw error; }
+      const deadline = now() + timeoutMs;
+      for (;;) {
+        const remaining = await identity(record.pid);
+        if (remaining === null) break;
+        if (remaining !== record.startIdentity) throw new Error('controller identity changed; retaining attached test home');
+        if (now() >= deadline) throw new Error('controller did not retire; retaining attached test home');
+        await wait(25);
+      }
+    } catch (error) {
+      failures.push(error);
     }
   }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, 'attached controllers unresolved; retaining attached test home');
 }
 
 // --- Synthetic adapters ---------------------------------------------------------------------------
