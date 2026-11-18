@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { setupProjectionTypes } from './route-contract.test.mjs';
 
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -28,6 +29,21 @@ test('installed package: root and /service import, exports equal the contract, c
   // The optional ngrok SDK is never installed here: attached ngrok routes load it lazily and no probe reaches it.
   await exec('npm', ['install', '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund', join(pack, packed.filename)], { cwd: project, timeout: 120_000 });
   const installed = join(project, 'node_modules', '@tnunamak', 'gozar');
+
+  // Use the actual compiler executable on PATH, not a presumed TypeScript JS API.
+  // The fixture imports the real package in this one owned consumer installation.
+  // A missing/broken compiler, invalid positive call or unused @ts-expect-error
+  // rejects the test; there is no install, fallback, skip or swallowed exit code.
+  await writeFile(join(project, 'setup-projection.fixture.mts'), setupProjectionTypes);
+  const projectionConfig = join(project, 'tsconfig.setup-projection.json');
+  await writeFile(projectionConfig, JSON.stringify({
+    compilerOptions: {
+      target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext',
+      strict: true, exactOptionalPropertyTypes: true, skipLibCheck: false, noEmit: true,
+    },
+    files: ['setup-projection.fixture.mts'],
+  }));
+  await exec('tsc', ['--project', projectionConfig, '--pretty', 'false'], { cwd: project, timeout: 30_000 });
 
   const probe = join(project, 'probe.mjs');
   await writeFile(probe, `import * as root from '@tnunamak/gozar';
