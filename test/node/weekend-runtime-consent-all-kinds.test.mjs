@@ -8,7 +8,6 @@ import {createTestingGozar} from '@tnunamak/gozar/testing';
 import {scratch,query} from './route-schema-check.mjs';
 
 // Public behavior controls. These do not qualify all runtime drift/lifecycle paths.
-const costIds = ['gozar.route-cost.amount','gozar.route-cost.currency','gozar.route-cost.period'];
 const approvalFor = candidate => ({
   kind:'route', candidateToken:candidate.candidateToken,
   disclosureRevision:candidate.disclosure.revision,
@@ -23,16 +22,11 @@ function assertSnapshot(review,candidate,route) {
   assert.deepEqual(review.disclosures,candidate.consent.disclosures);
   const rows=review.facts;
   assert.ok(Array.isArray(rows));
-  assert.equal(new Set(rows.map(row=>row.id)).size,rows.length,'no duplicate intrinsic/provider IDs');
-  for(const id of costIds) {
-    const expected=candidate.consent.facts.find(row=>row.id===id);
-    assert.ok(expected,'catalog must expose intrinsic row '+id);
-    const actual=rows.find(row=>row.id===id);
-    assert.ok(actual,'runtime review must retain intrinsic row '+id);
-    assert.deepEqual(actual,expected);
-    if(!actual.known)assert.equal(actual.value,null);
-    if(expected.value===0)assert.equal(actual.value,0);
-  }
+  assert.deepEqual(review.disclosures.cost,candidate.properties.cost);
+  assert.equal(review.disclosures.ownership,candidate.ownership);
+  assert.equal(route.ownership,candidate.ownership);
+  assert.equal(new Set(rows.map(row=>row.id)).size,rows.length,'no duplicate fact IDs');
+  assert.ok(rows.every(row=>!row.id.startsWith('gozar.route-cost.')));
   const expectedRows=candidate.consent.facts;
   assert.equal(new Set(expectedRows.map(row=>row.id)).size,expectedRows.length);
   // Compare the complete canonical set, including providers with no extra rows.
@@ -145,7 +139,7 @@ test('public durable runtime review preserves all rows and refreshes proof witho
   assert.equal(await (await fetch('http://'+target)).text(),'foreign-app');
 });
 
-test('public session review preserves intrinsic facts with one process and actual gate proof',async t=>{
+test('public session review preserves disclosures with one process and actual gate proof',async t=>{
   const home=await scratch(t),owner='weekend-session',resources=new Map();
   let target,serial=0,proofs=0,harness,retained;
   t.after(async()=>{
@@ -182,7 +176,7 @@ test('public session review preserves intrinsic facts with one process and actua
   assert.equal((await api.closeRoute({home,handle:retained,mode:'remove'})).cleanup.state,'confirmed');retained=null;
   for(const {child}of resources.values())assert.ok(child.exitCode!==null||child.signalCode!==null);
 });
-test('public attached review preserves intrinsic facts without another SDK allocation',async t=>{
+test('public attached review preserves disclosures without another SDK allocation',async t=>{
   const home=await scratch(t),owner='weekend-attached',resources=new Map();
   let serial=0,proofs=0,harness,retained;
   t.after(async()=>{try{if(retained)await harness.gozar.closeRoute({home,handle:retained,mode:'remove'});}finally{await harness?.close();}});

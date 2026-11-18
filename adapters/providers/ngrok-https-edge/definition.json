@@ -30,10 +30,7 @@
       },
       "cost": {
         "kind": "unknown",
-        "summary": "The Free plan accepts the assigned development domain. Reserved ngrok-branded domains and bring-your-own domains have separate account entitlements; current prices and account-specific charges are not verified.",
-        "currency": null,
-        "amount": null,
-        "period": null
+        "summary": "The Free plan accepts the assigned development domain. Reserved ngrok-branded domains and bring-your-own domains have separate account entitlements; current prices and account-specific charges are not verified."
       },
       "needsAccount": true,
       "lifetimes": [
@@ -89,6 +86,12 @@
       }
     },
     "prerequisites": [
+      {
+        "id": "guided-setup",
+        "label": "Guided account and listener setup",
+        "observation": "configured",
+        "actionId": "ngrok-setup"
+      },
       {
         "id": "runtime",
         "label": "Runtime module",

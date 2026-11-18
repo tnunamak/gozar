@@ -41,7 +41,7 @@ async function world(t,{interfaces=inventory(row(SYNTHETIC))}={}){
  };
  const candidate=async()=>(await api.catalogRoutes(q())).candidates[0];
  const expose=async c=>api.expose({...q(),operationId:randomUUID(),wait:'verified',approval:{kind:'route',candidateToken:c.candidateToken,disclosureRevision:c.disclosure.revision,consentFactsDigest:c.consentFactsDigest}});
- return {api,home,owner,ledger,opens,fetched,provider,provide,candidate,expose,q,observe:value=>{current=value;}};
+ return {api,home,owner,ledger,opens,fetched,provider,provide,candidate,expose,q,forward,observe:value=>{current=value;}};
 }
 
 test('the LAN adapter declares its interface and firewall choices as generic inputs and offers the observed interfaces',async t=>{
@@ -73,10 +73,20 @@ test('a chosen interface and exact firewall confirmation reach the real owned tr
  assert.notEqual(origin.port,'');assert.notEqual(origin.port,'0');
  assert.equal(new URL(w.opens[0].origin).origin,route.origin);
  assert.ok(!['0.0.0.0','127.0.0.1','::'].includes(origin.hostname));
+ assert.match(w.opens[0].target,/^127\.0\.0\.1:\d+$/);
+ assert.notEqual(w.opens[0].target,w.q().target,'the forwarder targets the gate, not the app port');
  assert.ok(w.fetched.every(item=>item===route.origin));
+ assert.equal(route.verification.subject.origin,route.origin);
+ assert.equal(route.verification.subject.target,w.q().target);
+ assert.equal(route.verification.vantage,'this-device','the fixture transport is not remote LAN evidence');
+ const bytes=await w.forward(w.opens[0].target,origin,{});
+ assert.equal(Buffer.from(bytes.chunks[0].data,'base64').toString(),'app');
+ const foreign={origin:route.origin,target:w.q().target,present:true};
+ w.ledger.set('same-origin-foreign-forwarder',foreign);
  const closed=await w.api.closeRoute({home:w.home,handle:route.handle,mode:'remove'});
  assert.equal(closed.cleanup.state,'confirmed');
- assert.equal([...w.ledger.values()].every(item=>item.present===false),true);
+ assert.equal([...w.ledger.values()].find(item=>item!==foreign).present,false);
+ assert.equal(foreign.present,true,'cleanup addresses the exact owned fixture handle');
 });
 
 test('a changed choice after approval refuses with the old token and creates nothing',async t=>{

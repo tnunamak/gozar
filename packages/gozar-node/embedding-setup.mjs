@@ -1,3 +1,4 @@
+import {needsSetupOperation,safeSetupAction} from './consent-facts.mjs';
 import {configurationFor} from './embedding-state.mjs';
 import {createHash} from 'node:crypto';
 import {inspectAdapter,readContextFor, catalogRevisionOf} from './route-catalog.mjs';
@@ -15,11 +16,13 @@ export async function runEmbeddingSetup(request,deps){
  const platform=deps.platform??process.platform;const read=await readContextFor(deps,request.home,platform);
  const preview=await inspectAdapter(adapter,{...read,providerConfiguration:providerId=>services.resolveConfiguration({...request,providerId})},platform);
  const offered=preview.actions.find(a=>a.id===request.actionId);
+ if(needsSetupOperation(offered))fail('setup_required');
  const nonMutating=['open-url','instructions','install-artifact'].includes(offered?.kind);
  const outcome=await services.mutateConfiguration(request,async tx=>{
   const own=bindConfiguration({...read,providerConfiguration:()=>tx.resolveConfiguration()},adapter.id);
   const item=await inspectAdapter(adapter,own,platform);
   const action=item.actions.find(a=>a.id===request.actionId);
+  if(needsSetupOperation(action))fail('setup_required');
   if(action?.kind!==offered?.kind)fail('candidate_stale');
   if(!action||action.digest!==request.approval.digest||action.disclosure.revision!==request.approval.disclosureRevision)fail('candidate_stale');
   await deps.validateSetupApproval?.({request,action,adapter,inspection:item,readContext:own,configuration:await tx.configuration()});
@@ -41,7 +44,7 @@ export async function runEmbeddingSetup(request,deps){
   if(!['complete','pending','blocked'].includes(result?.state))fail('internal_error');
   if(result.state==='complete'){if(action.kind==='provide-secret')await tx.bindSecret(inputId,request.secretHandle);else tx.markChanged();}return result;
  },{mutatesConfiguration:!nonMutating});
- return {schemaVersion:1,state:outcome.result.state,nextAction:outcome.result.nextAction??null,configuration:await offeredConfiguration(request,outcome.configuration,deps),configurationRevision:outcome.configuration.revision,scopeId:outcome.configuration.scopeId,catalogRevision:catalogRevisionOf(await Promise.all(deps.adapters.map(a=>inspectAdapter(a,{...read,providerConfiguration:providerId=>services.resolveConfiguration({...request,providerId,draftId:providerId===request.providerId?request.draftId:undefined})},platform))),platform)};
+ return {schemaVersion:1,state:outcome.result.state,nextAction:needsSetupOperation(outcome.result.nextAction)?safeSetupAction(outcome.result.nextAction):outcome.result.nextAction??null,configuration:await offeredConfiguration(request,outcome.configuration,deps),configurationRevision:outcome.configuration.revision,scopeId:outcome.configuration.scopeId,catalogRevision:catalogRevisionOf(await Promise.all(deps.adapters.map(a=>inspectAdapter(a,{...read,providerConfiguration:providerId=>services.resolveConfiguration({...request,providerId,draftId:providerId===request.providerId?request.draftId:undefined})},platform))),platform)};
 }
 
 export function clearInputActions(configuration){

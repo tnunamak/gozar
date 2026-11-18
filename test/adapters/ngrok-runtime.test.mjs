@@ -124,7 +124,8 @@ test('setup actions follow the facts: the token is a provide-secret action and t
   const fresh = await adapter.detect(context({ configuration: async () => null }));
   assert.equal(fresh.state, 'action-required');
   const actions = adapter.setupActions(fresh.facts);
-  assert.deepEqual(actions.map(action => action.id), ['auth', 'reserved-domain']);
+  assert.deepEqual(actions.map(action => action.id), ['auth', 'reserved-domain', 'ngrok-setup']);
+  assert.equal(actions[2].step.purpose, 'authorize');
   const [auth, domain] = actions;
   assert.equal(auth.kind, 'provide-secret'); assert.ok(auth.secretLabel);
   assert.equal(domain.kind, 'provide-value'); assert.equal(domain.valueFormat, 'domain'); assert.equal(domain.required, true); assert.ok(domain.valueLabel);

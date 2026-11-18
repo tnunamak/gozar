@@ -4,7 +4,7 @@
     "schemaVersion": 1,
     "id": "cloudflare-named",
     "label": "Cloudflare named tunnel",
-    "needs": "Needs a saved run token for an existing remotely managed named tunnel, its published HTTPS origin, the dashboard service mapping to the configured local gate port, and the connector executable with Bash.",
+    "needs": "Needs cloudflared with Bash. Managed setup needs a scoped API token and an active Cloudflare zone. Existing-tunnel setup needs its run token, HTTPS origin and matching gate port.",
     "capabilities": {
       "reach": "internet",
       "transport": "https",
@@ -24,16 +24,13 @@
         "scope": "hostname route in the owner\u2019s Cloudflare account",
         "conditions": [
           "the existing tunnel service mapping must point to the configured local gate port",
-          "DNS and the tunnel are owner-managed prerequisites"
+          "DNS and the tunnel come from managed setup or an existing owner-managed configuration"
         ],
         "ports": null
       },
       "cost": {
         "kind": "unknown",
-        "summary": "Cloudflare lists a $0 Free Zero Trust plan with connector software included, but no page names Cloudflare Tunnel.",
-        "currency": null,
-        "amount": null,
-        "period": null
+        "summary": "Cloudflare lists a $0 Free Zero Trust plan with connector software included, but no page names Cloudflare Tunnel."
       },
       "needsAccount": true,
       "lifetimes": [
@@ -58,8 +55,8 @@
       "attached"
     ],
     "disclosure": {
-      "revision": "disc-8dcc5142aae6",
-      "text": "The Cloudflare edge terminates TLS and can read payloads. Gozar starts and stops its connector and local gate. The owner keeps the tunnel registration, DNS route, Access policy and token revocation.",
+      "revision": "disc-1feeeecb3810",
+      "text": "The Cloudflare edge terminates TLS and can read payloads. Gozar starts and stops its connector and local gate. Managed setup uses separate approvals for tunnel and DNS changes. An existing tunnel, its DNS and its Access policy stay under the owner’s control.",
       "links": [
         {
           "rel": "terms",
@@ -197,7 +194,7 @@
       {
         "id": "address-condition-1",
         "label": "Address condition",
-        "value": "DNS and the tunnel are owner-managed prerequisites",
+        "value": "DNS and the tunnel come from managed setup or an existing owner-managed configuration",
         "known": true,
         "group": "address",
         "affectsConsent": false,
@@ -250,7 +247,7 @@
       {
         "id": "cleanup-ownership",
         "label": "Cleanup ownership",
-        "value": "Stopping removes the Gozar connector and gate only. The owner keeps tunnel registration, DNS and token revocation.",
+        "value": "Stopping removes the local connector and gate. Managed setup lists its separately removable tunnel and DNS resources. The owner keeps existing tunnel registrations and DNS records.",
         "known": true,
         "group": "ownership",
         "affectsConsent": true,
@@ -667,6 +664,10 @@
       }
     ],
     "effectOperations": [
+      {
+        "kind": "cloudflare-api",
+        "operation": "request"
+      },
       {
         "kind": "process-runtime",
         "operation": "detect"

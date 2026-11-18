@@ -45,13 +45,13 @@ function validate(schema, value, defs, path = '$') {
       case 'minimum': if (typeof value === 'number' && value < schema.minimum) errors.push(`${path}: below minimum`); break;
       case 'pattern': if (typeof value === 'string' && !new RegExp(schema.pattern).test(value)) errors.push(`${path}: pattern mismatch`); break;
       case 'required':
-        if (kinds.object(value)) for (const name of schema.required) if (!(name in value)) errors.push(`${path}: missing ${name}`);
+        if (kinds.object(value)) for (const name of schema.required) if (!Object.hasOwn(value, name)) errors.push(`${path}: missing ${name}`);
         break;
       case 'properties':
-        if (kinds.object(value)) for (const [name, sub] of Object.entries(schema.properties)) if (name in value) errors.push(...validate(sub, value[name], defs, `${path}.${name}`));
+        if (kinds.object(value)) for (const [name, sub] of Object.entries(schema.properties)) if (Object.hasOwn(value, name)) errors.push(...validate(sub, value[name], defs, `${path}.${name}`));
         break;
       case 'additionalProperties':
-        if (kinds.object(value)) for (const name of Object.keys(value)) if (!(name in (schema.properties ?? {}))) {
+        if (kinds.object(value)) for (const name of Object.keys(value)) if (!Object.hasOwn(schema.properties ?? {}, name)) {
           if (schema.additionalProperties === false) errors.push(`${path}: unknown property ${name}`);
           else errors.push(...validate(schema.additionalProperties, value[name], defs, `${path}.${name}`));
         }
@@ -63,6 +63,7 @@ function validate(schema, value, defs, path = '$') {
         break;
       }
       case 'anyOf': if (!schema.anyOf.some(sub => validate(sub, value, defs, path).length === 0)) errors.push(`${path}: matches no anyOf branch`); break;
+      case 'not': if (!validate(schema.not, value, defs, path).length) errors.push(`${path}: matches forbidden schema`); break;
       default: throw new Error(`Unsupported schema keyword ${key} at ${path}`);
     }
   }
@@ -95,8 +96,8 @@ test('route-catalog.schema.json has a $defs entry per consumer shape', () => {
   for (const shape of consumerShapes) assert.ok(catalogSchema.$defs[shape], shape);
 });
 
-test('adapter.schema.json shares Properties, Reach and Disclosure with the catalog schema verbatim', () => {
-  for (const shape of ['Properties', 'Reach', 'Disclosure']) assert.deepEqual(adapterSchema.$defs[shape], catalogSchema.$defs[shape], shape);
+test('adapter.schema.json shares Cost, Properties, Reach and Disclosure with the catalog schema verbatim', () => {
+  for (const shape of ['Cost', 'Properties', 'Reach', 'Disclosure']) assert.deepEqual(adapterSchema.$defs[shape], catalogSchema.$defs[shape], shape);
 });
 
 test('closed shapes reject unknown properties', () => {
@@ -267,4 +268,28 @@ test('new direct observation shapes remain closed to unknown fields', () => {
     assert.deepEqual(check('route-catalog', shape, item.value), []);
     assert.notDeepEqual(check('route-catalog', shape, { ...item.value, unexpectedFixtureField: true }), []);
   }
+});
+
+test('setup journal projection rejects unsafe removal and secret-bearing evidence', () => {
+  const resource = {
+    handle: 'entry-1', kind: 'dns', label: 'Exact DNS record',
+    ownership: 'owned', removal: 'confirmed', presence: { known: true, value: false },
+  };
+  const operation = {
+    schemaVersion: 1, operationId: 'fixture-operation', revision: 1,
+    scope: { registryId: 'registry', scopeId: 'scope', providerId: 'provider', configurationRevision: 'revision', draftId: null },
+    state: 'cancelled', evidence: { known: false, reason: 'response-lost' }, nextAction: null,
+    resources: [resource],
+  };
+  assert.deepEqual(check('route-catalog', 'SetupOperation', operation), []);
+  for (const replacement of [
+    { ...resource, ownership: 'foreign' },
+    { ...resource, ownership: 'adopted' },
+    { ...resource, presence: { known: false, reason: 'read-denied' } },
+  ]) {
+    assert.notEqual(check('route-catalog', 'SetupOperation', { ...operation, resources: [replacement] }).length, 0);
+  }
+  assert.notEqual(check('route-catalog', 'SetupOperation', {
+    ...operation, evidence: { ...operation.evidence, secretHandle: 'fixture-secret-handle' },
+  }).length, 0);
 });

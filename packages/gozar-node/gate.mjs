@@ -9,7 +9,7 @@ export function validateLifetimeMs(value) {
 
 // Forwarding headers an inbound request may carry. The gate never passes them on: whatever a client or an
 // intermediary wrote there is not evidence. It writes one normalised header of its own instead.
-export const STRIPPED_FORWARDING_HEADERS = Object.freeze(['x-forwarded-for', 'forwarded', 'x-real-ip']);
+export const STRIPPED_FORWARDING_HEADERS = Object.freeze(['x-forwarded-for', 'forwarded', 'x-real-ip', 'x-forwarded-host']);
 export const NORMALISED_HEADER = 'x-forwarded-for';
 
 export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = () => {}, listenPort = 0 } = {}) {
@@ -21,6 +21,8 @@ export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = 
   let open = true, closePromise;
   const server = http.createServer((request, response) => {
     if (!open) { response.writeHead(503); response.end(); return; }
+    // Node keeps only the first Host in request.headers, and its client can synthesize a missing Host.
+    if (!request.headers.host || request.headersDistinct.host?.length !== 1) { response.writeHead(400); response.end(); return; }
     if (request.url === `${secretPath}/identity`) {
       response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       response.end(JSON.stringify({ nonce })); return;
@@ -36,7 +38,8 @@ export async function createGate(targetPort, { lifetimeMs = 900_000, onExpire = 
       const timer = setInterval(send, 1000); send(); // Stay above short batching intervals; full-response buffering still fails verification.
       response.on('close', () => clearInterval(timer)); return;
     }
-    const headers = { ...request.headers, host: `127.0.0.1:${targetPort}` };
+    // The upstream socket is loopback. Host still names the authority the client requested.
+    const headers = { ...request.headers };
     for (const name of STRIPPED_FORWARDING_HEADERS) delete headers[name];
     // The only address the gate knows is its own peer; the app learns that one value and nothing a client wrote.
     headers[NORMALISED_HEADER] = String(request.socket.remoteAddress ?? '').replace(/^::ffff:/i, '');

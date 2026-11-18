@@ -23,12 +23,13 @@ import { validateQuery, adapterRequest, readContextFor, loadRuntime, consentDisc
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { recordController, controllerAlive, stopController, withCleanupOutcome } from './controller-start.mjs';
-import { routeConsentReview,consentSnapshot } from './consent-facts.mjs';
+import { routeConsentReview,consentSnapshot,canonicalConsentValue } from './consent-facts.mjs';
 import { completeProperties, checksFor } from './route-view.mjs';
 import { registryIdentity } from './registry-identity.mjs';
 import { startEmbeddingBroker, connectEmbeddingBroker } from './embedding-broker.mjs';
 import {testingFetch} from './testing-network.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
+import {ownershipFor,planMatchesOwnership,validateShape} from './adapter-runtime.mjs';
 import {currentRouteReview} from './route-consent.mjs';
 import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
 import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
@@ -95,6 +96,8 @@ export async function redeemApproval(request, deps) {
   if(adapter.definition.availability?.[request.usage.kind]?.state==='detect-only'||adapter.definition.availability?.[request.usage.kind]?.state==='unsupported')throw gozarError('unsupported','This usage is not admitted for execution in this release');
   const denied=capabilityPrerequisites(adapter.definition,deps.hostCapabilities??{}).find(p=>p.state!=='present');
   if(denied)throw gozarError(denied.state==='denied'?'host_policy_denied':'unsupported','The host has not authorized a required capability');
+  const ownership = ownershipFor(adapter.definition);
+  if (ownership === 'external-owned' && query.usage.kind === 'attached') throw gozarError('candidate_stale', 'An attached controller needs a Gozar-owned plan');
   const context = bindConfiguration({...await readContextFor(deps, home, deps.platform ?? process.platform,query.owner),origin:query.origin??null}, adapter.id);
   let consentReview;
   if(deps.embeddingServices){
@@ -102,14 +105,15 @@ export async function redeemApproval(request, deps) {
     const detected=await adapter.detect(context);
     const declared=completeProperties(adapter.properties(detected.facts),adapter.definition,query.usage.kind);
     const properties={...declared,proof:{...declared.proof,checks:checksFor(declared.proof.checks,{sse:query.requirements.protocols.includes('sse')})}};
-    consentReview=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration,target:query.target,origin:query.origin,properties,
+    consentReview=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration,target:query.target,origin:query.origin,ownership,properties,
       disclosure:{...adapter.definition.disclosure,revision:approval.disclosureRevision},facts:catalogFactsFor({adapter,facts:detected.facts})});
     if(approval.kind!=='route'||approval.consentFactsDigest!==consentReview.consentFactsDigest||grant.consentFactsDigest!==consentReview.consentFactsDigest)throw gozarError('consent_mismatch','Route consent changed; review the current candidate again');
   }
   const adapterAsk = adapterRequest(query);
   const plan = await adapter.plan(context, adapterAsk);
   const observed = await adapter.observe(context, adapterAsk);
-  if (plan.digest !== grant.planDigest || observed.resourceKey !== grant.observedResource)
+  if (!planMatchesOwnership(plan, ownership) || (ownership === 'external-owned' && plan.origin !== grant.origin) ||
+      plan.digest !== grant.planDigest || observed.resourceKey !== grant.observedResource)
     throw gozarError('candidate_stale', 'The provider changed after the user approved; nothing was changed, ask the catalog again');
   return { home, adapter, grant, plan, request: adapterAsk, context, consentReview };
 }
@@ -583,17 +587,19 @@ export async function runAttachedController(directory, runtime = {}) {
   lease.approvedReview=bootstrap.consentReview??null;
   const reviewTokens=new Map();
   const safeRefresh=()=>!proofSession||typeof proofSession.refresh==='function';
-  async function currentConsent(){
+  async function currentConsent(runtimeFacts={properties:lease.properties,facts:[...(lease.runtimeFacts??[]),...(lease.proof?.facts??[])]}){
     if(!lease.approvedReview)return null;
     const original=lease.approvedReview.canonicalInput;
     const current=await currentRouteReview({...bootstrap.request,home:bootstrap.home,owner:bootstrap.owner,origin:original.scope.query.expectedOrigin},adapter,
       {...runtime,embeddingServices:resolver,registryId:bootstrap.registryId,platform:bootstrap.platform},
-      {runtimeFacts:{properties:lease.properties,facts:[...(lease.runtimeFacts??[]),...(lease.proof?.facts??[])]}});
+      {runtimeFacts});
     lease.facts=current.facts;return current.review;
   }
   async function enforceConsent(){
     if(resolverLost){lease.state='unverified';return false;}
-    const current=await currentConsent();
+    let current;
+    try { current=await currentConsent(); }
+    catch (error) { await withdrawInvalidObservation();throw error; }
     if(current&&current.consentFactsDigest!==lease.approvedReview.consentFactsDigest){
       lease.state='unverified';lease.consentChange={oldDigest:lease.approvedReview.consentFactsDigest,newDigest:current.consentFactsDigest,
         nextAction:safeRefresh()?instructionAction('review-route-consent','Review changed route consent','Call reviewRouteConsent with this route handle, show the returned review and approveRouteConsent after approval.'):null,
@@ -623,16 +629,32 @@ export async function runAttachedController(directory, runtime = {}) {
     return checked;
   }
 
+  async function withdrawInvalidObservation(){
+    lease.state='unverified';lease.consentChange={reason:'runtime-observation-invalid',
+      oldDigest:lease.approvedReview?.consentFactsDigest??'',newDigest:'',
+      nextAction:safeRefresh()?instructionAction('review-route-consent','Review route consent','Obtain valid current provider observations, then review and approve route consent before publication can resume.'):null};
+    reviewTokens.clear();await save();
+  }
   // What the provider reports now: a consent review shows this, not what the last proof saw.
   async function refreshRuntimeFacts(){
-    const facts=await adapter.runtimeFacts(read,receipt);
-    Object.assign(lease,{properties:facts.properties,binding:facts.binding,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
+    try {
+      const facts=await adapter.runtimeFacts(read,receipt);
+      const properties=canonicalConsentValue(facts.properties);
+      if(validateShape('Properties',properties).length)throw gozarError('invalid_input','Invalid runtime properties');
+      await currentConsent({properties,facts:[...(facts.facts??[]),...(lease.proof?.facts??[])]});
+      Object.assign(lease,{properties,binding:facts.binding,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
+    } catch (error) {
+      // Keep the last valid disclosures as history, but withdraw authority before refusing the observation.
+      await withdrawInvalidObservation();throw error;
+    }
   }
   let verification;
   function verify(){if(verification)return verification;verification=refreshProof().finally(()=>{verification=null;});return verification;}
   async function refreshProof() {
     if (expired()) { await release(); return; }
     if (!receipt || resourceRemoval || releasing || !initialSettled || failure || lease.cleanup.state==='confirmed') return;
+    // Without the host resolver, retain a withdrawn recovery view instead of asking for fresh authority.
+    if (resolverLost) { lease.state='unverified'; await save(); return; }
     await refreshRuntimeFacts();
     if(!await enforceConsent())return;
     if (proofSession && !proofSession.refresh) return;

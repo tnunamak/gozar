@@ -6,12 +6,14 @@ This table lists what the registry ships. Each row is read from the provider's d
 what `catalogRoutes` reports. The Id column is the value `Query.providerId` takes. Ports are the public
 ports Gozar tries, in order; where a durable route tries other ports, they follow `durable:`, and the
 catalog reports them, with the durable Needs line, for a durable query.
+Usage kinds describe the declared interfaces. A non-executing availability state appears in parentheses;
+for example, `attached (detect-only)` does not offer route execution. Use the catalog for current eligibility.
 Proof is what Gozar checks before it publishes. The catalog lists the sse check only when the app asks for SSE.
 What a check actually runs depends on the route: a generic attached route's first publication check follows
 the provider's declared SSE capability, an adapter that supplies `prepareProof` (for example the Cloudflare named adapter) follows
 the request, and a later refresh can differ. These rows are declarations, not evidence from a real deployment.
 
-Gozar 0.2.0 supports Linux and macOS. On any other platform (for example Windows) every candidate answers
+Gozar supports Linux and macOS. On any other platform (for example Windows) every candidate answers
 `unsupported`.
 
 | Id | Name | Needs | Usage kinds | Reach | Address | Ports | Proof (vantage: checks) | Payload | SSE / streamable HTTP / OAuth DCR | Cost |
@@ -22,7 +24,7 @@ Gozar 0.2.0 supports Linux and macOS. On any other platform (for example Windows
 | `lan` | Local network | Needs a network address on this computer that other devices on the same network can reach. Traffic is not encrypted. | session | lan | unknown | provider assigns | lan: nonce, sse | endpoint only | yes / yes / no | Gozar charges nothing and there is no provider; the owned local forwarder uses your own network. |
 | `own-address` | Your own HTTPS address | Needs an HTTPS address that you run yourself and that forwards to this service. | session, durable | unknown | stable | provider assigns | public: tls, nonce, sse | unknown | yes / yes / yes | Gozar charges nothing; your own domain, hosting and certificate cost whatever you pay for them. |
 | `ngrok-https-edge` | ngrok HTTPS edge | Needs an ngrok agent authtoken and the assigned development or an already permitted reserved domain. | attached | internet | stable | provider assigns | public: tls, nonce, sse | provider can read | yes / yes / yes | The Free plan accepts the assigned development domain. Reserved ngrok-branded domains and bring-your-own domains have separate account entitlements; current prices and account-specific charges are not verified. |
-| `ngrok-tls-passthrough` | ngrok TLS passthrough | Needs the optional ngrok SDK, saved auth token, reserved domain and OpenSSL proof-certificate tool. | attached | internet | stable | provider assigns | public: tls, nonce | endpoint only | no / no / no | The ngrok pricing page does not settle the cost of TLS passthrough. |
-| `ngrok-tcp-passthrough` | ngrok TCP passthrough | Needs the optional ngrok SDK, saved auth token. | attached | internet | ephemeral | provider assigns | public: nonce | unknown | no / no / no | The ngrok pricing page does not settle the cost of TCP passthrough. |
-| `cloudflare-named` | Cloudflare named tunnel | Needs a saved run token for an existing remotely managed named tunnel, its published HTTPS origin, the dashboard service mapping to the configured local gate port, and the connector executable with Bash. | attached | internet | stable | provider assigns | this-device: tls, nonce, sse | provider can read | yes / yes / no | Cloudflare lists a $0 Free Zero Trust plan with connector software included, but no page names Cloudflare Tunnel. |
+| `ngrok-tls-passthrough` | ngrok TLS passthrough | Needs the optional ngrok SDK, saved auth token, reserved domain and OpenSSL proof-certificate tool. | attached (detect-only) | internet | stable | provider assigns | public: tls, nonce | endpoint only | no / no / no | The ngrok pricing page does not settle the cost of TLS passthrough. |
+| `ngrok-tcp-passthrough` | ngrok TCP passthrough | Needs the optional ngrok SDK, saved auth token. | attached (detect-only) | internet | ephemeral | provider assigns | public: nonce | unknown | no / no / no | The ngrok pricing page does not settle the cost of TCP passthrough. |
+| `cloudflare-named` | Cloudflare named tunnel | Needs cloudflared with Bash. Managed setup needs a scoped API token and an active Cloudflare zone. Existing-tunnel setup needs its run token, HTTPS origin and matching gate port. | attached | internet | stable | provider assigns | this-device: tls, nonce, sse | provider can read | yes / yes / no | Cloudflare lists a $0 Free Zero Trust plan with connector software included, but no page names Cloudflare Tunnel. |
 | `tunnl-gg` | tunnl.gg trial | Needs the ssh command on this computer and outbound internet access. No account is needed. | session | internet | stable | provider assigns | public: tls, nonce, sse | provider can read | yes / yes / yes | The free tier costs nothing and needs no account; Pro is $6 a month or $60 a year and removes time limits and the warning page. |

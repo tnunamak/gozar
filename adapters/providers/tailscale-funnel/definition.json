@@ -44,10 +44,7 @@
       },
       "cost": {
         "kind": "free",
-        "summary": "Free on the Personal plan (up to 6 users); Funnel is available on all plans, with non-configurable bandwidth limits.",
-        "currency": "USD",
-        "amount": 0,
-        "period": null
+        "summary": "Free on the Personal plan (up to 6 users); Funnel is available on all plans, with non-configurable bandwidth limits."
       },
       "needsAccount": true,
       "lifetimes": [
@@ -108,7 +105,14 @@
       {
         "id": "local-setup",
         "label": "Local prerequisites",
-        "observation": "detected"
+        "observation": "detected",
+        "actionId": "tailscale-setup"
+      },
+      {
+        "id": "client-proof",
+        "label": "Independent client proof",
+        "observation": "independentClientProof",
+        "actionId": "tailscale-client-proof"
       }
     ],
     "facts": [

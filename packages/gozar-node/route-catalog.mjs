@@ -11,7 +11,8 @@ import { bindConfiguration } from './adapter-configuration.mjs';
 import { loopbackTarget } from './durable-route.mjs';
 import { checksFor, completeProperties, needsFor } from './route-view.mjs';
 import { adoptDisclosureRevision, consentDisclosureRevision } from './adopt-disclosure.mjs';
-import { routeConsentReview, setupConsentReview,consentSnapshot } from './consent-facts.mjs';
+import { routeConsentReview, setupConsentReview,consentSnapshot,safeSetupAction,needsSetupOperation } from './consent-facts.mjs';
+import { ownershipFor, planMatchesOwnership } from './adapter-runtime.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
 import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
 
@@ -47,6 +48,18 @@ export function validateQuery(query) {
   for (const key of ['route', 'origin', 'migrationRef', 'providerId']) if (query[key] !== undefined && !text(query[key])) bad(`${key} must be a non-empty string`);
   if (query.providerId !== undefined && query.route !== undefined) bad('providerId and route are two ways to select; send one');
   return query;
+}
+
+// Inputs can include credentials or signed paths. Only the authority is safe diagnostic data.
+function displayAuthority(value) {
+  const url = typeof value === 'string' ? URL.parse(value) : null;
+  return url?.hostname && !url.username && !url.password ? url : null;
+}
+
+export function reviewedOrigin(value, inspection) {
+  if (inspection.facts?.invalidOrigin !== undefined) return null;
+  const url = displayAuthority(value);
+  return url && ['', '/'].includes(url.pathname) && !url.search && !url.hash ? value : null;
 }
 
 // --- Runtime pieces that other modules own, loaded lazily so this module stands alone ------------
@@ -141,7 +154,7 @@ export async function inspectAdapter(adapter, context, platform) {
 
 /** One revision for the provider-side state: it changes when a setup state, an action or a property changes. */
 export function catalogRevisionOf(inspections, platform) {
-  const view = inspections.map(item => ({ id: item.adapter.id, state: item.state, properties: item.properties,
+  const view = inspections.map(item => ({ id: item.adapter.id, state: item.state, ownership: ownershipFor(item.adapter.definition), properties: item.properties,
     facts: [...catalogFactsFor(item), ...failureFacts(item.failure)], availability: availabilityFor(item.adapter.definition),
     actions: item.actions.map(action => [action.id, action.digest, action.disclosure.revision]), disclosure: item.adapter.definition.disclosure.revision }));
   return `catrev_${sha(JSON.stringify([platform, view])).slice(0, 32)}`;
@@ -192,6 +205,7 @@ async function collect(query, deps) {
 
   const candidates = await Promise.all(inspections.map(async inspection => {
     const { adapter, state, actions } = inspection, definition = adapter.definition;
+    const ownership = ownershipFor(definition);
     // The ports and needs are those of the usage kind asked for. The proof lists the checks Gozar makes for this request,
     // so the stream check appears only when the request needs SSE.
     const declared = completeProperties(inspection.properties, definition, query.usage.kind);
@@ -203,23 +217,35 @@ async function collect(query, deps) {
     const unmet = [];
     if (supportedPlatform(platform)) {
       unmet.push(...unmetRequirements({ requirements: query.requirements, usage: query.usage, definition, properties, setupState }));
-      if (inspection.facts?.invalidOrigin !== undefined) {
+      if (ownership === 'external-owned' && query.usage.kind === 'attached') {
+        if (!unmet.some(item => item.requirement === 'usage')) unmet.push({ requirement: 'usage', actual: query.usage.kind, reasonCode: 'not_met' });
+        setupState = 'unsupported';
+      }
+      const origin = reviewedOrigin(query.origin, inspection);
+      if (inspection.facts?.invalidOrigin !== undefined || (query.origin !== undefined && origin === null)) {
+        const authority = displayAuthority(query.origin);
+        const actual = { origin: authority?.origin === 'null' ? null : authority?.origin ?? null, reason: 'invalid_origin' };
         const setup = unmet.find(item => item.requirement === 'setup');
-        if (setup) setup.actual = { origin: inspection.facts.invalidOrigin, reason: 'invalid_origin' };
+        if (setup) setup.actual = actual;
+        else unmet.push({ requirement: 'setup', actual, reasonCode: 'not_met' });
+        setupState = 'unsupported';
       }
       // A plan exists only for a candidate that could be used now; its digest and resource go into the token.
       if (!unmet.length && setupState === 'ready' && definition.supportedKinds.includes(query.usage.kind)) {
         try {
           // A durable plan comes from the durable engine, except for a route its owner keeps: that adapter plans for itself.
-          if (query.usage.kind === 'durable' && definition.ownership !== 'external-owned') {
+          if (query.usage.kind === 'durable' && ownership === 'gozar-owned') {
             const plan = await durablePlanFacts({ home, adapterId: adapter.id, target: query.target, origin: query.origin ?? null, adapters });
             if (query.intent !== 'adopt' && plan.creatableOrigin === false)
-              unmet.push({ requirement: 'address', actual: { origin: query.origin }, reasonCode: 'not_met' });
+              unmet.push({ requirement: 'address', actual: { origin }, reasonCode: 'not_met' });
             else grant = { adapterId: adapter.id, planDigest: plan.planDigest, observedResource: plan.observedResource };
           } else {
             const request = adapterRequest(query);
             const own = bindConfiguration(context, adapter.id);
             const plan = await adapter.plan(own, request);
+            if (!planMatchesOwnership(plan, ownership)) throw gozarError('unsupported', 'The route plan does not match its declared ownership');
+            if (ownership === 'external-owned' && origin !== null && plan.origin !== URL.parse(origin).origin)
+              throw gozarError('unsupported', 'The owner-kept plan names a different origin');
             const observed = await adapter.observe(own, request);
             grant = { adapterId: adapter.id, planDigest: plan.digest, observedResource: observed.resourceKey,...(plan.origin?{origin:plan.origin}:{}) };
           }
@@ -247,13 +273,13 @@ async function collect(query, deps) {
     const decorate = action => {
       if (!deps.registryId || !saved.revision) return action;
       const review = setupConsentReview({registryId:deps.registryId,providerId:adapter.id,configuration:saved,draftId:query.draftId??null,action,facts:catalogFactsFor(inspection)});
-      return {...action,consent:consentSnapshot(review),review:{canonicalInput:review.canonicalInput}};
+      return {...safeSetupAction(action),consent:consentSnapshot(review),...(!needsSetupOperation(action)&&{review:{canonicalInput:review.canonicalInput}})};
     };
     const decorated = offered.map(decorate);
     const configuration = configurationFor(decorated, saved,definition.inputRequirements);
-    const candidate = { providerId: adapter.id, name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
+    const candidate = { providerId: adapter.id, ownership, name: candidateNameFor(adapter.id), preferenceRef: preferenceRefFor(adapter.id), rank: 0, eligible, unmet,
       display: { label: definition.label, description: describe(definition, properties), needs: needsFor(definition, query.usage.kind) }, properties,
-      availability, prerequisites: [...prerequisitesFor(inspection, observedAt),...hostPrerequisites,
+      availability, prerequisites: [...prerequisitesFor(inspection, observedAt).map(item => needsSetupOperation(item.remedy) ? { ...item, remedy: decorate(item.remedy) } : item),...hostPrerequisites,
         ...(failure ? [{id: 'catalog-observation', label: 'Route availability observation', state: failure.state,
           observation: failure.observation, observedAt, version: {known: false, reason: 'not_observed'}, remedy: failure.remedy}] : [])],
       configuration, facts: [...catalogFactsFor(inspection), ...failureFacts(failure)],
@@ -266,7 +292,7 @@ async function collect(query, deps) {
         text: `${definition.disclosure.text} ${takeover}` };
     }
     if (deps.registryId && saved.revision) {
-      const review=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration:saved,target:query.target,origin:query.origin,properties,disclosure:candidate.disclosure,facts:candidate.facts});
+      const review=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration:saved,target:query.target,origin:reviewedOrigin(query.origin,inspection),ownership,properties,disclosure:candidate.disclosure,facts:candidate.facts});
       candidate.consentFactsDigest=review.consentFactsDigest;
       candidate.consent=consentSnapshot(review);
       candidate.review={canonicalInput:review.canonicalInput};

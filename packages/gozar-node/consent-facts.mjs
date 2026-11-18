@@ -1,5 +1,6 @@
 // consent-v1 is an encoding contract. Changing its meaning requires a new version.
 import { createHash } from 'node:crypto';
+import { validateShape } from './adapter-runtime.mjs';
 const invalid = () => { throw Object.assign(new Error('Consent data must be unambiguous JSON'), { code: 'invalid_input' }); };
 
 export function canonicalConsentValue(value, ancestors = new Set()) {
@@ -49,40 +50,31 @@ export function consentReview({ scope, typedDisclosures, facts }) {
   return { canonicalInput, canonicalJson, consentFactsDigest: `consent-v1:${createHash('sha256').update(canonicalJson, 'utf8').digest('hex')}` };
 }
 
-// Intrinsic visible route facts, not a new consent-v1 encoding.
-function declaredRouteCostFacts(cost,facts) {
-  if(!Array.isArray(facts)||!cost||typeof cost!=='object')return invalid();
-  const dimensions=[['amount','Declared amount','number'],['currency','Declared currency','string'],['period','Declared billing period','string']];
-  const ids=new Set(dimensions.map(([field])=>'gozar.route-cost.'+field));
-  if(facts.some(fact=>ids.has(fact?.id)))return invalid();
-  return dimensions.map(([field,label,type])=>{
-    const descriptor=Object.getOwnPropertyDescriptor(cost,field);
-    if(descriptor&&!('value' in descriptor))return invalid();
-    const value=descriptor?.value;
-    const known=value!==undefined&&value!==null;
-    if(known&&(typeof value!==type||(type==='number'&&!Number.isFinite(value))))return invalid();
-    return {id:'gozar.route-cost.'+field,label,group:'cost',affectsConsent:true,
-      source:'declared-route-properties',asOf:null,known,value:known?value:null,
-      reason:known?null:'cost-not-disclosed'};
-  });
-}
-
 // Keep the selected fields explicit: observations and polling dates do not grant authority.
-export function routeConsentReview({ registryId, providerId, usage, configuration, target, origin, properties, disclosure, facts }) {
-  const priceFacts=declaredRouteCostFacts(properties.cost,facts);
+export function routeConsentReview({ registryId, providerId, usage, configuration, target, origin, ownership, properties, disclosure, facts }) {
+  const cost = canonicalConsentValue(properties.cost);
+  if (validateShape('Cost', cost).length) return invalid();
   return consentReview({ scope: { kind: 'route', registryId, providerId, configurationRevision: configuration.revision,
     scopeId: configuration.scopeId, query: { usage, reach: properties.reach, transport: properties.transport, target, expectedOrigin: origin ?? null } },
-  typedDisclosures: { reach: properties.reach, transport: properties.transport, traffic: properties.traffic,
-    address: properties.address, cost: { kind: properties.cost.kind }, lifetimes: properties.lifetimes,
+  typedDisclosures: { ownership, reach: properties.reach, transport: properties.transport, traffic: properties.traffic,
+    address: properties.address, cost, lifetimes: properties.lifetimes,
     supervision: properties.supervision, protocols: properties.protocols, disclosure },
-    facts:[...facts,...priceFacts] });
+    facts });
 }
 
-export function setupConsentReview({ registryId, providerId, configuration, draftId = null, action, facts }) {
+// A browser handoff is live authorization data, even when its action is public.
+export function safeSetupAction(action) {
+  const { consent, review, ...safe } = canonicalConsentValue(action);
+  if (safe.step?.browser) delete safe.href;
+  return safe;
+}
+export const needsSetupOperation = action => !!action?.step;
+
+export function setupConsentReview({ registryId, providerId, configuration, draftId = null, action, facts, operation }) {
   return consentReview({ scope: { kind: 'setup', registryId, scopeId: configuration.scopeId, providerId,
     configurationRevision: configuration.revision, draftId, actionId: action.id,
-    disclosureRevision: action.disclosure.revision, actionDigest: action.digest },
-    typedDisclosures: { action }, facts });
+    disclosureRevision: action.disclosure.revision, actionDigest: action.digest, ...(operation && {operation}) },
+    typedDisclosures: { action: safeSetupAction(action) }, facts });
 }
 
 /** Display exactly the redacted authority-bearing values; timestamps carry no approval. */

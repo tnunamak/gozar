@@ -29,10 +29,7 @@
       },
       "cost": {
         "kind": "unknown",
-        "summary": "The ngrok pricing page does not settle the cost of TCP passthrough.",
-        "currency": null,
-        "amount": null,
-        "period": null
+        "summary": "The ngrok pricing page does not settle the cost of TCP passthrough."
       },
       "needsAccount": true,
       "lifetimes": [

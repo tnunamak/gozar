@@ -11,7 +11,7 @@ import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { defaultHome } from './default-home.mjs';
 import { promptInputRequirement } from './input-requirements.mjs';
 
-export const ROUTE_COMMANDS = ['catalog', 'ensure', 'adopt', 'setup', 'configure', 'preference', 'watch', 'suspend','routes','route-status','close','review-consent','approve-consent'];
+export const ROUTE_COMMANDS = ['catalog', 'ensure', 'adopt', 'setup', 'setup-operation', 'configure', 'preference', 'watch', 'suspend','routes','route-status','close','review-consent','approve-consent'];
 const MAX_FILE_BYTES = 1 << 20;
 const REQUIREMENT_CODES = new Set(['requirements_unsatisfied', 'setup_required', 'unsupported']);
 const APPROVAL_CODES = new Set(['consent_required', 'consent_unknown', 'consent_expired', 'consent_mismatch', 'candidate_stale', 'route_not_found']);
@@ -25,6 +25,7 @@ const specs = {
   adopt: { values: ['query-file', 'approval-file', 'handover-file', 'route', 'provider-id', 'home'], flags: ['json', 'reconsent'] },
   expose: { values: ['query-file', 'approval-file', 'wait', 'route', 'provider-id', 'home'], flags: ['json'] },
   setup: { values: ['approval-file', 'secret-file', 'value', 'home', 'query-file', 'provider-id'], flags: ['json', 'prompt'], positional: 'action id' },
+  'setup-operation': { values: ['request-file', 'secret-file'], flags: ['json', 'browser-handoff'], positional: 'reserve, read, run or cancel' },
   configure: { values: ['query-file', 'provider-id', 'home'], flags: ['json'] },
   preference: { values: ['profile-home', 'expected-revision', 'on-unavailable'], multi: ['prefer'], flags: ['json'], positional: 'show or set' },
   suspend: { values: ['handle-file', 'route', 'home'], flags: ['json'] },
@@ -206,6 +207,55 @@ const commandsRun = {
     const result=await api.runSetupAction({...scope,actionId:action.id,approval,...(secretHandle?{secretHandle}:{}),...(value===undefined?{}:{value})});
     out(result);
     return result.state === 'complete' ? 0 : 2;
+  },
+
+  async 'setup-operation'({ options, positional, api, out, err, storeSecret }) {
+    if (!['reserve', 'read', 'run', 'cancel'].includes(positional)) throw gozarError('invalid_input', 'Choose reserve, read, run or cancel');
+    if (options['browser-handoff'] && positional !== 'read') throw gozarError('invalid_input', 'Browser handoff is available only on read');
+    if (options['secret-file'] && positional !== 'run') throw gozarError('invalid_input', 'Secret input is available only on run');
+    const request = await readJson(required(options, 'request-file'), 'The setup operation request', { privateFile: true });
+    if (!request || typeof request !== 'object' || Array.isArray(request)) throw gozarError('invalid_input', 'The request file must hold one object');
+    const { home, owner, providerId, operationId } = request;
+    const ref = { home, owner, providerId, operationId };
+    let view;
+    if (positional === 'read') view = await api.readSetupOperation({ ...ref, includeBrowserHandoff: options['browser-handoff'] === true });
+    else if (positional === 'cancel') view = await api.cancelSetupOperation(ref);
+    else {
+      if ((request.expectedSetupRevision === 0) !== (positional === 'reserve')) throw gozarError('invalid_input', 'Use reserve at revision zero and run at a positive revision');
+      if (options['secret-file']) {
+        if (request.secretHandle !== undefined || request.value !== undefined) throw gozarError('invalid_input', 'Supply one setup input');
+        const current = await api.readSetupOperation(ref);
+        const action = current.nextAction;
+        if (action?.kind !== 'provide-secret' || current.revision !== request.expectedSetupRevision ||
+            current.scope.draftId !== (request.draftId ?? null) || current.scope.configurationRevision !== request.expectedConfigurationRevision ||
+            action.id !== request.actionId || request.approval?.kind !== 'setup' || request.approval.digest !== action.digest ||
+            request.approval.disclosureRevision !== action.disclosure.revision ||
+            request.approval.consentFactsDigest !== action.consent.consentFactsDigest) {
+          throw gozarError('consent_mismatch', 'Review the current operation offer before entering a secret');
+        }
+        const descriptor = action.inputId ?? action.id;
+        const bytes = new TextEncoder().encode((await readFileChecked(options['secret-file'], 'The secret file', { privateFile: true })).replace(/\r?\n$/, ''));
+        try {
+          const intake = await storeSecret({ ...ref, inputId: descriptor, draftId: request.draftId,
+            expectedConfigurationRevision: request.expectedConfigurationRevision, scopeId: current.scope.scopeId, bytes });
+          request.secretHandle = intake.handle;
+        } finally { bytes.fill(0); }
+      }
+      view = await api.runSetupAction(request);
+    }
+    if (options.json) out(view);
+    else {
+      const action = view.nextAction;
+      err(`Setup ${view.operationId} · revision ${view.revision} · ${view.state}`);
+      if (action) {
+        err(`${action.label} (${action.kind}, ${action.step.actor})`);
+        for (const line of [action.instructions, action.help, action.href, action.obtainUrl]) if (line) err(line);
+        for (const choice of action.step.options ?? []) err(`  ${choice.value}  ${choice.label}`);
+        if (action.step.browser && !action.href) err('Use an explicit interactive read to open the browser handoff.');
+      }
+      for (const resource of view.resources) err(`${resource.label} · ${resource.ownership} · removal ${resource.removal}`);
+    }
+    return 0;
   },
 
   async preference({ options, positional, api, out }) {

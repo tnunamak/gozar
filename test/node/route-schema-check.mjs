@@ -2,7 +2,7 @@
 // against runtime/route-catalog.schema.json, plus synthetic adapters. Not a test file.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm, mkdir, chmod } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, chmod, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -26,12 +26,13 @@ function validate(node, value, defs, path = '$') {
       case 'enum': if (!node.enum.some(item => same(item, value))) errors.push(`${path}: not in enum`); break;
       case 'minimum': if (typeof value === 'number' && value < node.minimum) errors.push(`${path}: below minimum`); break;
       case 'pattern': if (typeof value === 'string' && !new RegExp(node.pattern).test(value)) errors.push(`${path}: pattern mismatch`); break;
-      case 'required': if (kinds.object(value)) for (const name of node.required) if (!(name in value)) errors.push(`${path}: missing ${name}`); break;
-      case 'properties': if (kinds.object(value)) for (const [name, sub] of Object.entries(node.properties)) if (name in value) errors.push(...validate(sub, value[name], defs, `${path}.${name}`)); break;
-      case 'additionalProperties': if (kinds.object(value)) for (const name of Object.keys(value)) if (!(name in (node.properties ?? {}))) { if (node.additionalProperties === false) errors.push(`${path}: unknown property ${name}`); else errors.push(...validate(node.additionalProperties, value[name], defs, `${path}.${name}`)); } break;
+      case 'required': if (kinds.object(value)) for (const name of node.required) if (!Object.hasOwn(value, name)) errors.push(`${path}: missing ${name}`); break;
+      case 'properties': if (kinds.object(value)) for (const [name, sub] of Object.entries(node.properties)) if (Object.hasOwn(value, name)) errors.push(...validate(sub, value[name], defs, `${path}.${name}`)); break;
+      case 'additionalProperties': if (kinds.object(value)) for (const name of Object.keys(value)) if (!Object.hasOwn(node.properties ?? {}, name)) { if (node.additionalProperties === false) errors.push(`${path}: unknown property ${name}`); else errors.push(...validate(node.additionalProperties, value[name], defs, `${path}.${name}`)); } break;
       case 'items': if (Array.isArray(value)) value.forEach((item, i) => errors.push(...validate(node.items, item, defs, `${path}[${i}]`))); break;
       case 'oneOf': { const hits = node.oneOf.filter(sub => validate(sub, value, defs, path).length === 0).length; if (hits !== 1) errors.push(`${path}: matches ${hits} oneOf branches`); break; }
       case 'anyOf': if (!node.anyOf.some(sub => validate(sub, value, defs, path).length === 0)) errors.push(`${path}: matches no anyOf branch`); break;
+      case 'not': if (!validate(node.not, value, defs, path).length) errors.push(`${path}: matches forbidden schema`); break;
       default: throw new Error(`Unsupported schema keyword ${key}`);
     }
   }
@@ -60,11 +61,60 @@ export async function scratch(t) {
   return directory;
 }
 
+
+/** Attached-test homes retain control evidence until exact controller retirement.
+ * Ordinary scratch() callers keep their existing cleanup behavior.
+ * deps is solely a deterministic cleanup-test seam, never provider authority.
+ */
+export async function attachedScratch(t, deps = {}) {
+  let dispose;
+  const home = await scratch({ after: hook => { dispose = hook; } });
+  t.after(async () => {
+    const identity = deps.identity ?? (await import('../../packages/gozar-node/process-identity.mjs')).processIdentity;
+    await retireAttachedControllers(home, { ...deps, identity });
+    await dispose();
+  });
+  return home;
+}
+
+async function retireAttachedControllers(home, {
+  identity, signal = (pid, value) => process.kill(pid, value),
+  now = Date.now, wait = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  timeoutMs = 5000,
+} = {}) {
+  const root = join(home, 'attached');
+  let names;
+  try { names = await readdir(root); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  for (const id of names.filter(name => /^att_[0-9a-f]{16}$/.test(name))) {
+    let record;
+    try { record = JSON.parse(await readFile(join(root, id, 'control.json'), 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    if (!Number.isSafeInteger(record?.pid) || record.pid <= 0 ||
+        typeof record.startIdentity !== 'string' || !record.startIdentity) {
+      throw new Error('invalid controller identity; retaining attached test home');
+    }
+    // No await between this lifetime check and the positive-PID signal.
+    const current = await identity(record.pid);
+    if (current === null) continue;
+    if (current !== record.startIdentity) throw new Error('controller identity changed; retaining attached test home');
+    try { signal(record.pid, 'SIGKILL'); }
+    catch (error) { if (error.code !== 'ESRCH') throw error; }
+    const deadline = now() + timeoutMs;
+    for (;;) {
+      const remaining = await identity(record.pid);
+      if (remaining === null || remaining !== record.startIdentity) break;
+      if (now() >= deadline) throw new Error('controller did not retire; retaining attached test home');
+      await wait(25);
+    }
+  }
+}
+
 // --- Synthetic adapters ---------------------------------------------------------------------------
 export const properties = (over = {}) => ({
   reach: 'internet', transport: 'https',
   traffic: { tlsTermination: 'endpoint', providerCanReadPayload: false, readers: [], metadataVisibleTo: ['provider'], evidenceRef: 'evidence-synthetic-1' },
-  address: { stability: 'stable', scope: 'account', conditions: [] }, cost: { kind: 'free', summary: 'No charge', currency: null, amount: null, period: null },
+  address: { stability: 'stable', scope: 'account', conditions: [] }, cost: { kind: 'free', summary: 'No charge' },
   needsAccount: false, lifetimes: ['session', 'attached', 'durable'], supervision: 'controller',
   protocols: { sse: true, streamableHttp: true, oauthDcr: true }, ...over });
 export const disclosure = id => ({ revision: `disc-${id}`, text: `Synthetic disclosure for ${id}.`, links: [] });

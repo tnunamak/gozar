@@ -9,7 +9,7 @@ const routes = createRouteApi();
 /** Load a trusted provider registry. Modules execute with the host process authority. */
 export function createGozar({ manifest, root, secretBackend, hostCapabilities, identity } = {}) { return createRouteApi({ manifest, root, secretBackend, hostCapabilities, identity }); }
 export const { catalogRoutes, inspectLegacyRoute, ensureRoute, adoptRoute, routeStatus, closeRoute, suspendRoute, watchRoutes,
-  getRoutePreferences, setRoutePreferences, runSetupAction, resolveClientAddress, listProviders, storeSecret, discardSecret,
+  getRoutePreferences, setRoutePreferences, runSetupAction, readSetupOperation, cancelSetupOperation, resolveClientAddress, listProviders, storeSecret, discardSecret,
   beginConfigurationDraft,commitConfigurationDraft,discardConfigurationDraft,readConfigurationDraft,clearConfigurationInput,reviewRouteConsent,approveRouteConsent,listRoutes } = routes;
 /** Alias of catalogRoutes. */
 export const detect = catalogRoutes;

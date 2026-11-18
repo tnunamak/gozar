@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0
+
+- Route consent now shows the whole cost disclosure. Free and unknown costs carry
+  a summary. Paid costs also require an amount, currency and billing period.
+  Adapter definitions with a partial price must report unknown cost.
+- Review and approve routes again after upgrading from 0.4, including free and
+  unknown-cost routes. The consent digest changes because it covers the cost
+  disclosure shown to the owner. The CLI returns exit 3 when approval is stale.
+- Apps that track an existing public address can select an `external-owned`
+  candidate with the exact origin and target. Route consent binds ownership.
+- The localhost.run trial accepts the `<id>.app.lhr.life` addresses the relay now
+  announces, as well as `<id>.lhr.life`. The provider note shown at consent
+  changed, so a localhost.run route needs a fresh approval. Other hosts, depths,
+  credentials, paths and several distinct addresses are still refused.
+
 ## 0.4.0
 
 ### Breaking changes

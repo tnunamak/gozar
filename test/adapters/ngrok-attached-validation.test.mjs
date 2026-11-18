@@ -113,7 +113,7 @@ test('ngrok edge metadata distinguishes domain choices and conditional app OAuth
     assert.doesNotMatch(text, /\$\d|Pay-as-you-go \(/);
   }
   assert.equal(adapter.capabilities.cost.kind, 'unknown');
-  assert.equal(adapter.capabilities.cost.amount, null);
+  assert.deepEqual(Object.keys(adapter.capabilities.cost).sort(), ['kind', 'summary']);
   assert.deepEqual(adapter.capabilities.proof, {vantage:'public', checks:['tls','nonce','sse']});
   assert.equal(adapter.capabilities.protocols.oauthDcr, true);
   assert.match(evidence.protocols.oauthDcr, /configured app/);

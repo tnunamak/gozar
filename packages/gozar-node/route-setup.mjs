@@ -3,6 +3,7 @@
 // what an adapter's own `setup` does (kinds gozar-runs and provide-secret); open-url and instructions are steps
 // for the user, and Gozar never runs an installer. A provide-value action carries a plain, non-secret `value`
 // (a domain, an address): Gozar checks it against the action's `valueFormat` and keeps it as configuration.
+import { needsSetupOperation, safeSetupAction } from './consent-facts.mjs';
 import { canonicalHome } from './service-state.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { inspectAdapter, catalogRevisionOf, readContextFor, loadRuntime } from './route-catalog.mjs';
@@ -60,6 +61,7 @@ export async function runSetupAction(request, deps = {}) {
     const found = offered.find(entry => entry.action.digest === request.approval.digest) ?? offered[0];
     if (!found) throw gozarError('candidate_stale', 'That setup action is no longer offered; ask the catalog again');
     const { item: { adapter }, action } = found;
+    if (needsSetupOperation(action)) throw gozarError('setup_required', 'Reserve a setup operation for this action');
     if (action.digest !== request.approval.digest || action.disclosure.revision !== request.approval.disclosureRevision)
       throw gozarError('candidate_stale', 'The setup action changed after it was approved; nothing was run, show the user the new action');
     let result;
@@ -90,7 +92,7 @@ export async function runSetupAction(request, deps = {}) {
       await bindSetupValue({ home, adapterId: adapter.id, actionId: request.actionId, handle: request.secretHandle });
       bound = true;
     }
-    return { schemaVersion: 1, state: result.state, nextAction: result.nextAction ?? null, catalogRevision: catalogRevisionOf(await inspect(), platform) };
+    return { schemaVersion: 1, state: result.state, nextAction: needsSetupOperation(result.nextAction) ? safeSetupAction(result.nextAction) : result.nextAction ?? null, catalogRevision: catalogRevisionOf(await inspect(), platform) };
   } catch (error) { throw normalizeError(error); }
   finally { if (provided && !bound) await discardUnboundSecret({ home: request.home, handle: provided }).catch(() => {}); }
 }

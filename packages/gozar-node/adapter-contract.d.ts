@@ -28,6 +28,12 @@ export interface Adapter {
   /** Prepares this attempt's protocol-specific challenge before provider creation. */
   prepareProof?(ctx: ReadContext, request: AdapterRequest, attempt: ProofAttempt): Promise<AdapterProofSession>;
   setup(ctx: SetupContext, actionId: string, secretHandle?: string): Promise<SetupResult>;
+  /** Read-only guidance for the current scoped route. The binding remedy is descriptive and carries no setup approval. */
+  routeGuidance?(ctx: ReadContext & { route: RouteView; origin: string | null; localPort?: number }): Promise<Action | null>;
+  /** Observe an exact operation and its admitted resource intents without provider writes. */
+  observeSetup?(ctx: SetupObservationContext, operation: AdapterSetupOperation): Promise<AdapterSetupObservation>;
+  /** Execute the admitted action once. Reconcile uncertain responses through observeSetup. */
+  executeSetup?(ctx: SetupExecutionContext, command: AdapterSetupCommand): Promise<AdapterSetupResult>;
   plan(ctx: ReadContext, request: AdapterRequest): Promise<AdapterPlan>;
   create(ctx: AdmittedEffectContext, plan: AdapterPlan): Promise<Receipt>;
   observe(ctx: ReadContext, request: AdapterRequest): Promise<Observation>;
@@ -49,6 +55,7 @@ export type AdapterDefinition = {
   /** URL schemes accepted from this adapter, including the colon; default derives from transport. */
   originSchemes?: string[];
   needs?:string;
+  /** Defaults to Gozar. Owner-kept plans have no effects and return cleanup.kind 'external-owned'. */
   ownership?:'gozar-owned'|'external-owned';
   inputRequirements?:InputRequirement[];
   requiredCapabilities?:HostCapabilityId[];
@@ -143,6 +150,63 @@ export type SetupContext = ReadContext & {
   executeApprovedAction: (id: string) => Promise<SetupResult>;
   withSecret: <T>(handle: string, use: (secret: Uint8Array) => Promise<T>) => Promise<T>;
 };
+
+export type SetupIdentity = Readonly<Record<string, string | boolean | number | null>>;
+export type SetupIntent = { kind: import('./provider-setup-contract.js').SetupResource['kind']; label: string; subject: SetupIdentity };
+export type SetupJournalResource = SetupIntent & {
+  id: string;
+  admittedAt: string;
+  receiptIdentity?: SetupIdentity;
+  identity?: SetupIdentity;
+  presence: import('./route-contract.js').Observation<boolean>;
+  settledAbsent?: boolean;
+  observedAt?: string;
+};
+export type AdapterSetupOperation = {
+  id: string;
+  cancelled: boolean;
+  resources: readonly SetupJournalResource[];
+  connectorInputs: readonly string[];
+  lastActionId: string | null;
+};
+export type AdapterSetupObservation = {
+  state: import('./provider-setup-contract.js').SetupOperation['state'];
+  nextAction: (Action & { step: import('./provider-setup-contract.js').SetupStep }) | null;
+  evidence?: Extract<import('./provider-setup-contract.js').SetupEvidence, { known: true }>['value'] & { operationId: string };
+  intent?: SetupIntent;
+  observations?: ({
+    intentId: string; subject: SetupIdentity; observedAt: string;
+  } & (
+    | { status: 'pending' }
+    | { status: 'present'; identity: SetupIdentity }
+    | { status: 'absent'; identity?: SetupIdentity }
+  ))[];
+};
+export type SetupObservationContext = ReadContext & {
+  configurationInUse(): boolean;
+  configurationPresence(): Promise<Pick<import('./route-contract.js').Configuration, 'scopeId' | 'revision' | 'values' | 'credentials'> | null>;
+  /** Whether this operation retains a reference in the slot. Does not read the secret backend. */
+  hasManagementSecret(slot: string): boolean;
+  withManagementSecret<T>(slot: string, use: (bytes: Uint8Array) => Promise<T>): Promise<T | null>;
+  dispatchEffect?: (request: { kind: string; operation: string; input: unknown }) => Promise<unknown>;
+};
+export type SetupExecutionContext = SetupObservationContext & {
+  withInputSecret<T>(use: (bytes: Uint8Array) => Promise<T>): Promise<T>;
+  retainManagementSecret(slot: string): Promise<void>;
+  disconnectManagementSecret(slot: string): Promise<void>;
+  bindConnectorSecret(inputId: string, bytes: Uint8Array): Promise<void>;
+  disconnectConnectorSecret(inputId: string): Promise<void>;
+  bindConfigurationValue(inputId: string, value: string): void;
+  executeApprovedAction(id: string): Promise<SetupResult>;
+  recordAllocation(identity: SetupIdentity): Promise<void>;
+};
+export type AdapterSetupCommand = {
+  action: Action;
+  value?: string;
+  intent: SetupJournalResource | null;
+  resource: SetupJournalResource | null;
+};
+export type AdapterSetupResult = { state: 'complete' | 'blocked' | 'pending'; bindInputSecret?: boolean };
 
 /**
  * Adds only plan-engine-admitted create and conditional-remove operations plus generation checking.

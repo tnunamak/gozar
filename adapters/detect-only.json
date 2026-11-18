@@ -101,7 +101,7 @@
       "Current capability requires a successful probe from the intended client network.",
       "Trial uptime and URL lifetime are not guaranteed.",
       "Trust-on-first-use applies only to isolated known_hosts; changed key fails closed.",
-      "The trial accepts single-label HTTPS origins under lhr.life and validates their instance identity and timed streaming.",
+      "The trial accepts HTTPS origins with one label under lhr.life or under app.lhr.life and validates their instance identity and timed streaming.",
       "Operational recipe is active only after core/host feature admission."
     ],
     "recipes": {

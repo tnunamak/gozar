@@ -276,6 +276,7 @@
         "disclosure"
       ],
       "properties": {
+        "step": { "$ref": "#/$defs/SetupStep" },
         "id": {
           "type": "string"
         },
@@ -407,6 +408,151 @@
       },
       "additionalProperties": false
     },
+    "SetupStep": {
+      "type": "object",
+      "required": ["actor", "permission", "verification", "purpose"],
+      "properties": {
+        "actor": { "enum": ["machine", "owner", "administrator", "trusted-client"] },
+        "permission": {
+          "type": "object",
+          "required": ["id", "label"],
+          "properties": { "id": { "type": "string" }, "label": { "type": "string" } },
+          "additionalProperties": false
+        },
+        "verification": { "enum": ["provider", "host", "trusted-client"] },
+        "purpose": {
+          "enum": ["authorize", "configure", "provision", "reconcile", "stop-connector", "remove-resource", "revoke-credential", "disconnect"]
+        },
+        "prerequisites": { "type": "array", "items": { "type": "string" } },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["value", "label"],
+            "properties": { "value": { "type": "string" }, "label": { "type": "string" } },
+            "additionalProperties": false
+          }
+        },
+        "browser": {
+          "type": "object",
+          "required": ["expiresAt", "pollAfterMs"],
+          "properties": {
+            "expiresAt": { "type": "string" },
+            "pollAfterMs": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        "resourceHandle": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "SetupResource": {
+      "type": "object",
+      "required": ["handle", "kind", "label", "ownership", "removal", "presence"],
+      "properties": {
+        "handle": { "type": "string" },
+        "kind": { "enum": ["connector", "tunnel", "dns", "credential", "other"] },
+        "label": { "type": "string" },
+        "ownership": { "enum": ["owned", "adopted", "foreign", "unknown"] },
+        "removal": { "enum": ["required", "unconfirmed", "confirmed", "retained"] },
+        "presence": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["known", "value"],
+              "properties": { "known": { "const": true }, "value": { "type": "boolean" } },
+              "additionalProperties": false
+            },
+            { "$ref": "#/$defs/UnknownSetupObservation" }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": { "ownership": { "const": "owned" }, "removal": { "enum": ["required", "unconfirmed"] } }
+        },
+        {
+          "properties": {
+            "ownership": { "const": "owned" },
+            "removal": { "const": "confirmed" },
+            "presence": { "properties": { "known": { "const": true }, "value": { "const": false } } }
+          }
+        },
+        { "properties": { "ownership": { "enum": ["adopted", "foreign"] }, "removal": { "const": "retained" } } },
+        { "properties": { "ownership": { "const": "unknown" }, "removal": { "const": "unconfirmed" } } }
+      ],
+      "additionalProperties": false
+    },
+    "UnknownSetupObservation": {
+      "type": "object",
+      "required": ["known", "reason"],
+      "properties": { "known": { "const": false }, "reason": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "NoBrowserHref": {
+      "not": {
+        "required": ["step", "href"],
+        "properties": { "step": { "required": ["browser"] } }
+      }
+    },
+    "SetupOperation": {
+      "$ref": "#/$defs/InteractiveSetupOperation",
+      "properties": { "nextAction": { "oneOf": [{ "type": "null" }, { "type": "object", "$ref": "#/$defs/NoBrowserHref" }] } }
+    },
+    "InteractiveSetupOperation": {
+      "type": "object",
+      "required": ["schemaVersion", "operationId", "revision", "scope", "state", "evidence", "nextAction", "resources"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "operationId": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "scope": {
+          "type": "object",
+          "required": ["registryId", "scopeId", "providerId", "configurationRevision", "draftId"],
+          "properties": {
+            "registryId": { "type": "string" },
+            "scopeId": { "type": "string" },
+            "providerId": { "type": "string" },
+            "configurationRevision": { "type": "string" },
+            "draftId": { "type": ["string", "null"] }
+          },
+          "additionalProperties": false
+        },
+        "state": { "enum": ["authorization-required", "pending", "denied", "expired", "blocked", "reconciling", "complete", "cancelled"] },
+        "evidence": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["known", "value"],
+              "properties": {
+                "known": { "const": true },
+                "value": {
+                  "type": "object",
+                  "required": ["stepId", "source", "observedAt", "summary"],
+                  "properties": {
+                    "stepId": { "type": "string" },
+                    "source": { "enum": ["provider", "host", "trusted-client"] },
+                    "observedAt": { "type": "string" },
+                    "summary": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            { "$ref": "#/$defs/UnknownSetupObservation" }
+          ]
+        },
+        "nextAction": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/Action", "type": "object", "required": ["step", "consent"], "not": { "required": ["review"] } }
+          ]
+        },
+        "resources": { "type": "array", "items": { "$ref": "#/$defs/SetupResource" } }
+      },
+      "additionalProperties": false
+    },
     "Properties": {
       "type": "object",
       "required": [
@@ -517,46 +663,7 @@
           "additionalProperties": false
         },
         "cost": {
-          "type": "object",
-          "required": [
-            "kind",
-            "summary",
-            "currency",
-            "amount",
-            "period"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "free",
-                "paid",
-                "unknown"
-              ]
-            },
-            "summary": {
-              "type": "string"
-            },
-            "currency": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "amount": {
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "period": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "additionalProperties": false
+          "$ref": "#/$defs/Cost"
         },
         "needsAccount": {
           "type": [
@@ -641,6 +748,7 @@
       "type": "object",
       "required": [
         "providerId",
+        "ownership",
         "name",
         "preferenceRef",
         "rank",
@@ -660,6 +768,7 @@
         "consentFactsDigest"
       ],
       "properties": {
+        "ownership": { "$ref": "#/$defs/RouteOwnership" },
         "providerId": {
           "type": "string"
         },
@@ -1187,13 +1296,7 @@
             "handing-back"
           ]
         },
-        "ownership": {
-          "type": "string",
-          "enum": [
-            "gozar-owned",
-            "external-owned"
-          ]
-        },
+        "ownership": { "$ref": "#/$defs/RouteOwnership" },
         "properties": {
           "$ref": "#/$defs/Properties"
         },
@@ -2310,30 +2413,7 @@
         "actionId": {
           "type": "string"
         },
-        "approval": {
-          "type": "object",
-          "required": [
-            "digest",
-            "disclosureRevision",
-            "kind",
-            "consentFactsDigest"
-          ],
-          "properties": {
-            "digest": {
-              "type": "string"
-            },
-            "disclosureRevision": {
-              "type": "string"
-            },
-            "kind": {
-              "const": "setup"
-            },
-            "consentFactsDigest": {
-              "type": "string"
-            }
-          },
-          "additionalProperties": false
-        },
+        "approval": { "$ref": "#/$defs/SetupApproval" },
         "secretHandle": {
           "type": "string"
         },
@@ -2353,6 +2433,55 @@
           "type": "string"
         }
       },
+      "additionalProperties": false
+    },
+    "SetupApproval": {
+      "type": "object",
+      "required": [
+        "digest",
+        "disclosureRevision",
+        "kind",
+        "consentFactsDigest"
+      ],
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "disclosureRevision": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "setup"
+        },
+        "consentFactsDigest": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunSetupOperationRequest": {
+      "type": "object",
+      "required": ["home", "owner", "providerId", "operationId", "expectedConfigurationRevision", "expectedSetupRevision", "actionId"],
+      "properties": {
+        "home": { "type": "string" },
+        "owner": { "type": "string" },
+        "providerId": { "type": "string" },
+        "operationId": { "type": "string" },
+        "expectedConfigurationRevision": { "type": "string" },
+        "expectedSetupRevision": { "type": "integer", "minimum": 0 },
+        "draftId": { "type": "string" },
+        "actionId": { "type": "string" },
+        "approval": { "$ref": "#/$defs/SetupApproval" },
+        "secretHandle": { "type": "string" },
+        "value": { "type": "string" }
+      },
+      "oneOf": [
+        {
+          "properties": { "expectedSetupRevision": { "const": 0 } },
+          "not": { "anyOf": [{ "required": ["approval"] }, { "required": ["secretHandle"] }, { "required": ["value"] }] }
+        },
+        { "properties": { "expectedSetupRevision": { "minimum": 1 } } }
+      ],
       "additionalProperties": false
     },
     "Fact": {
@@ -2782,6 +2911,15 @@
     "SetupConsentScope": {
       "type": "object",
       "properties": {
+        "operation": {
+          "type": "object",
+          "required": ["id", "revision"],
+          "properties": {
+            "id": { "type": "string" },
+            "revision": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
         "registryId": {
           "type": "string"
         },
@@ -3004,21 +3142,9 @@
               },
               "additionalProperties": false
             },
+            "ownership": { "$ref": "#/$defs/RouteOwnership" },
             "cost": {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "enum": [
-                    "free",
-                    "paid",
-                    "unknown"
-                  ]
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "additionalProperties": false
+              "$ref": "#/$defs/Cost"
             },
             "lifetimes": {
               "type": "array",
@@ -3068,6 +3194,7 @@
             "transport",
             "traffic",
             "address",
+            "ownership",
             "cost",
             "lifetimes",
             "supervision",
@@ -3190,6 +3317,7 @@
         "disclosure"
       ],
       "properties": {
+        "step": { "$ref": "#/$defs/SetupStep" },
         "id": {
           "type": "string"
         },
@@ -3306,6 +3434,19 @@
       },
       "additionalProperties": false
     },
+    "SafeSetupConsentAction": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ConsentAction",
+          "not": { "required": ["href"] }
+        },
+        {
+          "$ref": "#/$defs/ConsentAction",
+          "required": ["href"],
+          "not": { "required": ["step"], "properties": { "step": { "required": ["browser"] } } }
+        }
+      ]
+    },
     "SetupConsentSnapshot": {
       "type": "object",
       "properties": {
@@ -3325,7 +3466,7 @@
           "type": "object",
           "properties": {
             "action": {
-              "$ref": "#/$defs/ConsentAction"
+              "$ref": "#/$defs/SafeSetupConsentAction"
             }
           },
           "required": [
@@ -3455,21 +3596,9 @@
               },
               "additionalProperties": false
             },
+            "ownership": { "$ref": "#/$defs/RouteOwnership" },
             "cost": {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "enum": [
-                    "free",
-                    "paid",
-                    "unknown"
-                  ]
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "additionalProperties": false
+              "$ref": "#/$defs/Cost"
             },
             "lifetimes": {
               "type": "array",
@@ -3519,6 +3648,7 @@
             "transport",
             "traffic",
             "address",
+            "ownership",
             "cost",
             "lifetimes",
             "supervision",
@@ -3535,6 +3665,58 @@
         "disclosures"
       ],
       "additionalProperties": false
+    },
+    "RouteOwnership": { "enum": ["gozar-owned", "external-owned"] },
+    "Cost": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "summary"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "free",
+                "unknown"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "summary",
+            "amount",
+            "currency",
+            "period"
+          ],
+          "properties": {
+            "kind": {
+              "const": "paid"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "amount": {
+              "type": "number"
+            },
+            "currency": {
+              "type": "string"
+            },
+            "period": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     }
   }
 }

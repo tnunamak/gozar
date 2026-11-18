@@ -1085,7 +1085,7 @@
       "decision": false,
       "kind": "setup"
     },
-    "The trial accepts single-label HTTPS origins under lhr.life and validates their instance identity and timed streaming.": {
+    "The trial accepts HTTPS origins with one label under lhr.life or under app.lhr.life and validates their instance identity and timed streaming.": {
       "plain": "Gozar accepts only the trial HTTPS addresses and checks that they reach your server and carry streams.",
       "decision": false,
       "kind": "note"

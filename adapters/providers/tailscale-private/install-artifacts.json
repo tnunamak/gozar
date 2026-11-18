@@ -1,0 +1,16 @@
+{
+  "linux": {
+    "x64": {
+      "url": "https://pkgs.tailscale.com/stable/tailscale_1.104.7_amd64.tgz",
+      "sha256": "e56693ff74a64f2591b7e819c280635a100aae1ddfb0ef058fcd052b7cd8d16c"
+    },
+    "arm64": {
+      "url": "https://pkgs.tailscale.com/stable/tailscale_1.104.7_arm64.tgz",
+      "sha256": "d6bed2720310b328b861f943d7b4016c5358a9bad60575eb51e8143b79068484"
+    }
+  },
+  "darwin": {
+    "url": "https://pkgs.tailscale.com/stable/Tailscale-1.104.7-macos.pkg",
+    "sha256": "0ecab60e098d31f9cbd334867474293dc08978154665da75c3f3fe1f8215d6e76"
+  }
+}
