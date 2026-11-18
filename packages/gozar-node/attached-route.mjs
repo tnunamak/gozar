@@ -653,6 +653,8 @@ export async function runAttachedController(directory, runtime = {}) {
   async function refreshProof() {
     if (expired()) { await release(); return; }
     if (!receipt || resourceRemoval || releasing || !initialSettled || failure || lease.cleanup.state==='confirmed') return;
+    // Without the host resolver, retain a withdrawn recovery view instead of asking for fresh authority.
+    if (resolverLost) { lease.state='unverified'; await save(); return; }
     await refreshRuntimeFacts();
     if(!await enforceConsent())return;
     if (proofSession && !proofSession.refresh) return;
