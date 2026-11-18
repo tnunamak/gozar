@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { createServer, get } from 'node:http';
 import { deriveProof } from '../../scripts/sync-adapter-registry.mjs';
 import { createNamedAdapter } from '../../adapters/providers/cloudflare-named/index.mjs';
 
@@ -54,6 +54,83 @@ test('named advertised transport matches the attached proof boundary and generat
   assert.ok(row);
   assert.match(row, /\| this-device: tls, nonce, sse \|/);
   assert.match(row, /\| yes \/ yes \/ no \|/);
+});
+
+async function assertConnectionRefused(url, signal = AbortSignal.timeout(1000)) {
+  // A fresh connection, never undici's pooled socket from the proof request.
+  // A stale pooled socket can report "other side closed" without a new dial.
+  let request, closed;
+  const probe = new Promise((resolve, reject) => {
+    request = get(url, {agent:false, signal}, response => {
+      response.destroy();
+      resolve();
+    });
+    closed = new Promise(resolveClose => request.once('close', resolveClose));
+    request.once('error', reject);
+  });
+  try {
+    await assert.rejects(probe, error =>
+      error?.code === 'ECONNREFUSED' &&
+      error?.name !== 'AbortError' && error?.name !== 'TimeoutError',
+    );
+  } finally {
+    request?.destroy();
+    await closed;
+  }
+}
+
+test('gate absence rejects an aborted live listener and accepts a closed port', {timeout:5000}, async () => {
+  const sockets = new Set();
+  let observedRequest;
+  const requested = new Promise(resolve => { observedRequest = resolve; });
+  const server = createServer(() => observedRequest());
+  server.on('connection', socket => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  });
+  const stop = new AbortController();
+  let watchdog, url, absence;
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    url = 'http://127.0.0.1:'+server.address().port;
+    absence = assertConnectionRefused(url, stop.signal).then(
+      () => ({passed:true}),
+      error => ({passed:false,error}),
+    );
+    await Promise.race([
+      requested,
+      new Promise((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error('live-listener request deadline')), 2000);
+      }),
+    ]);
+    clearTimeout(watchdog);
+    assert.equal(server.listening, true);
+    assert.ok(sockets.size > 0, 'the absence probe must reach the owned listener');
+    stop.abort(new DOMException('fixture abort after observed request', 'AbortError'));
+    const outcome = await absence;
+    assert.equal(outcome.passed, false, 'client abort must not prove listener absence');
+    assert.ok(outcome.error instanceof assert.AssertionError);
+  } finally {
+    clearTimeout(watchdog);
+    stop.abort();
+    const socketCloses = [...sockets].map(socket => new Promise(resolve => {
+      socket.once('close', resolve);
+      socket.destroy();
+    }));
+    await Promise.all([
+      ...socketCloses,
+      new Promise((resolve, reject) => {
+        server.close(error => error && error.code !== 'ERR_SERVER_NOT_RUNNING' ? reject(error) : resolve());
+      }),
+    ]);
+    await absence;
+  }
+  assert.equal(server.listening, false);
+  // The exact same port has an independently awaited server/socket close.
+  await assertConnectionRefused(url);
 });
 
 for (const protocols of [['sse'], ['streamable-http'], ['sse', 'streamable-http']]) {
@@ -113,7 +190,7 @@ for (const buffered of [false, true]) {
     if (rejected) assert.notEqual(result.status, 'verified', 'failed timed proof must not authorize publication');
     // Exercise exact local gate teardown, without stopping the independent app.
     await closeProof();
-    await assert.rejects(realFetch('http://127.0.0.1:'+gatePort, {signal:AbortSignal.timeout(1000)}));
+    await assertConnectionRefused('http://127.0.0.1:'+gatePort);
     assert.equal(await (await realFetch('http://127.0.0.1:'+app.address().port)).text(), 'fixture app');
     // No connector is allocated here. This is proof/gate coverage, not a
     // controller publication/withdrawal or remote Cloudflare TLS/client receipt.
