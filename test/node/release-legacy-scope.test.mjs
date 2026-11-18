@@ -262,3 +262,60 @@ test('exact fallback never signals a PID that a different process now owns', asy
   assert.equal(calls.includes('kill'), false);
   assert.deepEqual(calls, ['stop', 'remove']);
 });
+
+test('late retirement failures preserve timeout and require an immediate exact identity check', async () => {
+  for (const phase of ['kill-denied', 'inspection-unreadable', 'foreign-identity']) {
+    const identity = { pid: 12345, startIdentity: 'fixture-start', nonce: 'fixture-nonce' };
+    const marker = new Error('late ' + phase);
+    const calls = [], signals = [], inspected = [];
+    let reads = 0, stops = 0, sockets = 0, removals = 0;
+    const error = await retireFixture({
+      home: '/fixture', directory: '/fixture/session', sessionId: 'fixture-session', identity,
+    }, {
+      waitMs: 0,
+      identify: async pid => {
+        inspected.push(pid);
+        calls.push('identify:' + ++reads);
+        if (reads <= 2 || phase === 'kill-denied') return identity.startIdentity;
+        if (phase === 'inspection-unreadable') throw marker;
+        return 'foreign-start';
+      },
+      stop: async () => { stops++; calls.push('stop'); },
+      kill: (pid, signal) => {
+        signals.push([pid, signal]);
+        calls.push('kill');
+        throw marker;
+      },
+      socketRetired: async () => { sockets++; calls.push('socket'); return true; },
+      remove: async () => { removals++; calls.push('remove'); },
+    }).then(() => null, failure => failure);
+
+    // Inspect outside the seams: a helper swallowing a callback assertion must not pass.
+    assert.ok(error instanceof Error, phase + ': must retain the original timeout');
+    const errors = error instanceof AggregateError ? error.errors : [error];
+    assert.equal(errors[0].message, 'Fixture process did not retire; recovery home: /fixture', phase);
+    assert.equal(stops, 1, phase);
+    assert.equal(reads, 4, phase);
+    assert.deepEqual(inspected, [identity.pid, identity.pid, identity.pid, identity.pid], phase);
+    assert.equal(removals, 0, phase + ': recovery home must remain');
+    assert.deepEqual(signals, phase === 'kill-denied' ? [[12345, 'SIGKILL']] : [], phase);
+
+    if (phase === 'kill-denied') {
+      assert.equal(errors.length, 3);
+      assert.equal(errors[1], marker);
+      assert.equal(errors[2].message, 'Fixture process survived exact retirement; recovery home: /fixture');
+      assert.equal(sockets, 1);
+      assert.deepEqual(calls, ['identify:1', 'stop', 'identify:2', 'identify:3', 'kill', 'identify:4', 'socket']);
+    } else if (phase === 'inspection-unreadable') {
+      assert.equal(errors.length, 3);
+      assert.equal(errors[1], marker);
+      assert.equal(errors[2], marker);
+      assert.equal(sockets, 0, 'unreadable identity cannot become absence');
+      assert.deepEqual(calls, ['identify:1', 'stop', 'identify:2', 'identify:3', 'identify:4']);
+    } else {
+      assert.equal(errors.length, 1);
+      assert.equal(sockets, 1);
+      assert.deepEqual(calls, ['identify:1', 'stop', 'identify:2', 'identify:3', 'identify:4', 'socket']);
+    }
+  }
+});
