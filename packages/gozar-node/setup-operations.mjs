@@ -244,7 +244,8 @@ export async function runSetupOperation(request, deps) {
       record = { scopeId: storage.scopeId, draftId: request.draftId ?? null, configurationRevision: configuration.revision,
         revision: 0, startedAt: new Date().toISOString(), cancelled: false, management: {}, replays: { 0: fingerprint }, resources: [] };
       const { view } = await refresh(request, deps, storage, adapter, context, record);
-      if (view.nextAction?.id !== request.actionId) fail('candidate_stale');
+      // Reservation admits no action: setup may have completed since the host's offer.
+      if (view.nextAction?.id !== request.actionId && !(view.state === 'complete' && view.nextAction === null)) fail('candidate_stale');
       storage.reserve(record);
       return view;
     }

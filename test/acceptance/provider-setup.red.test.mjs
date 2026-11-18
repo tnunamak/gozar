@@ -17,7 +17,7 @@ const approvalFor = action => ({
   consentFactsDigest: action.consent.consentFactsDigest,
 });
 
-async function fixture(t, mode) {
+async function fixture(t, mode, initial = {}) {
   const home = await scratch(t);
   const providerId = 'setup-' + randomUUID();
   const registry = await fakeRegistry({
@@ -38,6 +38,7 @@ async function fixture(t, mode) {
     browserReturned: false, admin: false, connectorCredential: false, price: 0,
     readable: mode !== 'loss', loseResponse: mode === 'loss', creates: 0, calls: [],
     resources: { adopted: 'adopted-dns-sentinel', foreign: 'foreign-tunnel-sentinel' },
+    ...initial,
   });
   const options = { root: registry.root, manifest: registry.manifest };
   const api = createGozar(options);
@@ -342,4 +343,48 @@ test('an unknown adapter can report workflow completion with missing or foreign 
     await assert.rejects(fx.api.expose({ ...fx.q, operationId: fx.ref.operationId, wait: 'verified' }), { code: 'consent_required' });
     assert.deepEqual((await fx.world()).calls, []);
   }
+});
+
+for (const timing of ['initially complete', 'complete between offer and reservation']) test(
+  `fresh reservation returns ${timing} without admitting the old action`, async t => {
+    const fx = await fixture(t, 'complete', timing === 'initially complete' ? { completion: 'missing' } : {});
+    if (timing !== 'initially complete') await fx.update({ completion: 'missing' });
+    const before = await fx.world();
+    const reserved = await fx.api.runSetupAction(fx.start);
+    assertShape('SetupOperation', reserved);
+    assert.equal(reserved.state, 'complete');
+    assert.equal(reserved.nextAction, null);
+    assert.deepEqual(reserved.evidence, { known: false, reason: 'setup-evidence-unavailable' });
+    assert.deepEqual(reserved.resources, []);
+    assert.equal(reserved.scope.providerId, fx.ref.providerId);
+    assert.equal(reserved.scope.configurationRevision, fx.start.expectedConfigurationRevision);
+    assert.equal(reserved.scope.scopeId, fx.first.consent.scope.scopeId);
+    assert.deepEqual(await fx.api.runSetupAction(fx.start), reserved);
+    assert.deepEqual(await fx.restartRead(), reserved);
+    await assert.rejects(fx.api.runSetupAction({ ...fx.start, actionId: 'other-action' }), { code: 'consent_mismatch' });
+    await assert.rejects(fx.api.runSetupAction({ ...fx.start, approval: approvalFor(fx.first) }), { code: 'invalid_input' });
+    const [candidate] = (await fx.api.catalogRoutes(fx.q)).candidates;
+    assert.equal(candidate.candidateToken, null, 'workflow completion does not make the route ready');
+    assert.deepEqual(candidate.configuration.credentials, {});
+    await assert.rejects(fx.api.expose({ ...fx.q, operationId: fx.ref.operationId, wait: 'verified' }), { code: 'consent_required' });
+    assert.deepEqual(await fx.world(), before, 'reservation, replay and reads execute no provider command');
+    assert.equal((await fx.api.cancelSetupOperation(fx.ref)).state, 'cancelled');
+    assert.equal((await fx.restartRead()).state, 'cancelled');
+    assert.equal((await fx.api.runSetupAction(fx.start)).state, 'cancelled');
+    assert.deepEqual(await fx.world(), before);
+  });
+
+test('fresh completion does not bypass stale configuration or admit a noncomplete wrong action', async t => {
+  const fx = await fixture(t, 'owned');
+  await assert.rejects(fx.api.runSetupAction({ ...fx.start, actionId: 'unoffered' }), { code: 'candidate_stale' });
+  await assert.rejects(fx.api.readSetupOperation(fx.ref), { code: 'route_not_found' });
+  await fx.update({ completion: 'missing' });
+  await assert.rejects(fx.api.runSetupAction({ ...fx.start, expectedConfigurationRevision: 'stale' }), { code: 'configuration_stale' });
+  await assert.rejects(fx.api.readSetupOperation(fx.ref), { code: 'route_not_found' });
+  const draft = await fx.api.beginConfigurationDraft({ ...fx.ref, expectedConfigurationRevision: fx.start.expectedConfigurationRevision });
+  const draftRequest = { ...fx.start, draftId: draft.draftId, expectedConfigurationRevision: draft.configuration.revision };
+  await fx.api.discardConfigurationDraft({ ...fx.ref, draftId: draft.draftId });
+  await assert.rejects(fx.api.runSetupAction(draftRequest), { code: 'configuration_stale' });
+  assert.deepEqual((await fx.world()).calls, []);
+  assert.equal((await fx.world()).creates, 0);
 });

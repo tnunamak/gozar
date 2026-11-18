@@ -23,13 +23,13 @@ import { validateQuery, adapterRequest, readContextFor, loadRuntime, consentDisc
 import { supportedPlatform } from './platform.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { recordController, controllerAlive, stopController, withCleanupOutcome } from './controller-start.mjs';
-import { routeConsentReview,consentSnapshot } from './consent-facts.mjs';
+import { routeConsentReview,consentSnapshot,canonicalConsentValue } from './consent-facts.mjs';
 import { completeProperties, checksFor } from './route-view.mjs';
 import { registryIdentity } from './registry-identity.mjs';
 import { startEmbeddingBroker, connectEmbeddingBroker } from './embedding-broker.mjs';
 import {testingFetch} from './testing-network.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
-import {ownershipFor,planMatchesOwnership} from './adapter-runtime.mjs';
+import {ownershipFor,planMatchesOwnership,validateShape} from './adapter-runtime.mjs';
 import {currentRouteReview} from './route-consent.mjs';
 import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
 import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
@@ -587,17 +587,19 @@ export async function runAttachedController(directory, runtime = {}) {
   lease.approvedReview=bootstrap.consentReview??null;
   const reviewTokens=new Map();
   const safeRefresh=()=>!proofSession||typeof proofSession.refresh==='function';
-  async function currentConsent(){
+  async function currentConsent(runtimeFacts={properties:lease.properties,facts:[...(lease.runtimeFacts??[]),...(lease.proof?.facts??[])]}){
     if(!lease.approvedReview)return null;
     const original=lease.approvedReview.canonicalInput;
     const current=await currentRouteReview({...bootstrap.request,home:bootstrap.home,owner:bootstrap.owner,origin:original.scope.query.expectedOrigin},adapter,
       {...runtime,embeddingServices:resolver,registryId:bootstrap.registryId,platform:bootstrap.platform},
-      {runtimeFacts:{properties:lease.properties,facts:[...(lease.runtimeFacts??[]),...(lease.proof?.facts??[])]}});
+      {runtimeFacts});
     lease.facts=current.facts;return current.review;
   }
   async function enforceConsent(){
     if(resolverLost){lease.state='unverified';return false;}
-    const current=await currentConsent();
+    let current;
+    try { current=await currentConsent(); }
+    catch (error) { await withdrawInvalidObservation();throw error; }
     if(current&&current.consentFactsDigest!==lease.approvedReview.consentFactsDigest){
       lease.state='unverified';lease.consentChange={oldDigest:lease.approvedReview.consentFactsDigest,newDigest:current.consentFactsDigest,
         nextAction:safeRefresh()?instructionAction('review-route-consent','Review changed route consent','Call reviewRouteConsent with this route handle, show the returned review and approveRouteConsent after approval.'):null,
@@ -627,10 +629,24 @@ export async function runAttachedController(directory, runtime = {}) {
     return checked;
   }
 
+  async function withdrawInvalidObservation(){
+    lease.state='unverified';lease.consentChange={reason:'runtime-observation-invalid',
+      oldDigest:lease.approvedReview?.consentFactsDigest??'',newDigest:'',
+      nextAction:safeRefresh()?instructionAction('review-route-consent','Review route consent','Obtain valid current provider observations, then review and approve route consent before publication can resume.'):null};
+    reviewTokens.clear();await save();
+  }
   // What the provider reports now: a consent review shows this, not what the last proof saw.
   async function refreshRuntimeFacts(){
-    const facts=await adapter.runtimeFacts(read,receipt);
-    Object.assign(lease,{properties:facts.properties,binding:facts.binding,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
+    try {
+      const facts=await adapter.runtimeFacts(read,receipt);
+      const properties=canonicalConsentValue(facts.properties);
+      if(validateShape('Properties',properties).length)throw gozarError('invalid_input','Invalid runtime properties');
+      await currentConsent({properties,facts:[...(facts.facts??[]),...(lease.proof?.facts??[])]});
+      Object.assign(lease,{properties,binding:facts.binding,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
+    } catch (error) {
+      // Keep the last valid disclosures as history, but withdraw authority before refusing the observation.
+      await withdrawInvalidObservation();throw error;
+    }
   }
   let verification;
   function verify(){if(verification)return verification;verification=refreshProof().finally(()=>{verification=null;});return verification;}
