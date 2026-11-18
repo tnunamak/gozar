@@ -16,7 +16,7 @@
       "predicate": {
         "op": "origin-tokens",
         "scheme": "https",
-        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
         "unique": true,
         "stripAnsi": true
       },
@@ -33,7 +33,7 @@
       "predicate": {
         "op": "origin-tokens",
         "scheme": "https",
-        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
         "unique": true,
         "stripAnsi": true
       },
@@ -50,7 +50,7 @@
       "predicate": {
         "op": "origin-tokens",
         "scheme": "https",
-        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
         "unique": true,
         "stripAnsi": true
       },
@@ -67,7 +67,7 @@
       "predicate": {
         "op": "origin-tokens",
         "scheme": "https",
-        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
         "unique": true,
         "stripAnsi": true
       },
@@ -84,7 +84,7 @@
       "predicate": {
         "op": "origin-tokens",
         "scheme": "https",
-        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
         "unique": true,
         "stripAnsi": true
       },
@@ -101,7 +101,7 @@
       "predicate": {
         "op": "origin-tokens",
         "scheme": "https",
-        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
         "unique": true,
         "stripAnsi": true
       },
@@ -118,11 +118,113 @@
       "predicate": {
         "op": "origin-tokens",
         "scheme": "https",
-        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
         "unique": true,
         "stripAnsi": true
       },
       "expected": true
+    },
+    {
+      "id": "observed-app-subdomain-banner",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "\u001b[1mWelcome to localhost.run!\u001b[0m\r\nhttps://admin.localhost.run/\r\nfixture-trial.app.lhr.life tunneled with tls termination, https://fixture-trial.app.lhr.life\r\ncreate an account ... see https://localhost.run/docs/forever-free/ for more\r\n",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": true
+    },
+    {
+      "id": "app-subdomain-fake-suffix",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "https://fixture-trial.app.lhr.life.attacker.example",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": false
+    },
+    {
+      "id": "app-subdomain-wrong-middle-label",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "https://fixture-trial.evil.lhr.life",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": false
+    },
+    {
+      "id": "app-subdomain-too-deep",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "https://x.fixture-trial.app.lhr.life",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": false
+    },
+    {
+      "id": "app-subdomain-userinfo",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "https://user@fixture-trial.app.lhr.life",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": false
+    },
+    {
+      "id": "app-subdomain-ambiguous",
+      "completion": {
+        "exitCode": 0,
+        "stdout": "https://fixture-one.app.lhr.life https://fixture-two.lhr.life",
+        "stderr": "",
+        "truncated": false
+      },
+      "predicate": {
+        "op": "origin-tokens",
+        "scheme": "https",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
+        "unique": true,
+        "stripAnsi": true
+      },
+      "expected": false
     },
     {
       "id": "remote-forward-denied",
@@ -135,7 +237,7 @@
       "predicate": {
         "op": "origin-tokens",
         "scheme": "https",
-        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
         "unique": true,
         "stripAnsi": true
       },
@@ -152,7 +254,7 @@
       "predicate": {
         "op": "origin-tokens",
         "scheme": "https",
-        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lhr\\.life$",
+        "hostnamePattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.app)?\\.lhr\\.life$",
         "unique": true,
         "stripAnsi": true
       },
