@@ -1,0 +1,92 @@
+# npm trusted publishing: next-release preparation
+
+This workflow prepares repository qualification and npm authentication, not a declaration
+that the next release is accepted. No release version is changed by this patch.
+
+## One-time owner setup
+
+Merge .github/workflows/npm-publish.yml first. In the existing public
+@tnunamak/gozar package's npm trusted-publisher settings, configure GitHub Actions:
+owner/user tnunamak, repository gozar, workflow filename npm-publish.yml
+(the repository path is .github/workflows/npm-publish.yml), environment npm-publish.
+Allow direct publishing for this configuration. Initial npm setup may require 2FA.
+Keep existing protections; this patch neither creates an approval round nor changes
+account, token, environment, or trust settings. Do not revoke anything as part of setup.
+
+[Primary npm trusted-publisher documentation](https://docs.npmjs.com/trusted-publishers/)
+covers GitHub-hosted runners, OIDC, supported npm/Node versions and automatic provenance.
+npm documentation has conflicting configuration-count guidance across pages;
+this design needs exactly one configuration and makes no multi-config assumption.
+The existing public personal-scope package does not require migration to an organization.
+Live OIDC exchange remains unverified. A publish=false run cannot verify it.
+
+## Operation
+
+Commit a new release version on main before publication. Version 0.5.0 is already
+released and is explicitly refused by publish. Dispatch on main only; publish defaults
+to false. Qualification and publication stay in one Ubuntu-hosted job to preserve
+the existing helpers' absolute evidence paths. The event SHA and workflow SHA must
+match the checked-out clean source. There is no arbitrary ref input, token fallback,
+npm whoami gate, tag/PR/push publication trigger, or account mutation.
+
+Online setup installs concrete tool versions and populates Cargo's dependency cache.
+The qualification phase builds fresh WASM in a new target directory, recursively
+discovers sorted Node/adapters tests, runs them serially with TAP, and runs the
+locked offline Cargo workspace tests serially. Missing/empty/failed/skipped/cancelled
+results refuse qualification; do not change assertions or convert skips into passes.
+A private short disk-backed HOME/TMPDIR avoids socket-path and host-home dependence.
+
+prepareReleaseHandoff performs the single ordinary npm pack, including prepack.
+runInstalledJourney installs those exact archive bytes offline and measures the
+SDK screen/lifecycle fixture. Its measured report is translated to the existing
+consumer schema and finalizeReleaseHandoff qualifies that archive. Package name,
+version and repository are cross-checked against archived package.json.
+No laptop-built artifact is uploaded for npm provenance.
+
+Publication revalidates the original prepared snapshot, qualified manifest, gate,
+raw installed report, translated consumer receipt and tarball. Only a genuine
+registry HTTP 404 permits the attempt. Existing versions, redirects, auth errors,
+network failures and unknown responses stop. The command publishes the checked
+tarball with public access and scripts disabled, never repacking. OIDC is required;
+npm credential/config environment overrides and repository .npmrc are refused.
+The trusted runner and checked-out code are the trust boundary, not hostile concurrent
+local writers. Receipts are evidence, not independent cryptographic attestations.
+
+An attempt marker is recorded before npm publish. After success, registry integrity
+is polled for approximately three minutes (individual HTTP calls have ten-second
+bounds). Wrong visible integrity fails immediately; delayed absence eventually
+fails. No second publish is attempted. On ambiguous command failure or visibility
+timeout, inspect npm and retained evidence before any new manual run: do not
+blindly retry. Reusing the same evidence directory is refused. The workflow retains
+archive/evidence even for qualification-only runs and failures after setup.
+
+## Acceptance still owed by the release owner
+
+The installed consumer here is the repository SDK screen/lifecycle fixture ONLY.
+It is not DataConnect, Faravan or Dalan suite acceptance, a live account/provider
+check, cellular testing, or full release acceptance. Those independent obligations
+remain with the release owner; there are no fabricated three-app receipts.
+No real publish, dry-run publish, workflow dispatch or OIDC exchange was performed
+while authoring this patch.
+
+Before a PR is approved, run the new focused tests and both adjacent release tests:
+node --test --test-concurrency=1 test/node/trusted-release.test.mjs test/node/release-handoff.test.mjs test/node/release-installed-journey.test.mjs
+Validate the workflow with a YAML parser/actionlint. To reproduce the red baseline,
+retain only the new test file at the pinned base (the missing module should fail).
+Authoring evidence for red, green, adjacent tests and YAML validation is NOT_RUN;
+the bridge exposed no focused execution seam. Then run a manual publish=false
+qualification in hosted CI and review its measured receipts before considering
+a later separately chosen publish=true run.
+
+## Pinned tool and action sources
+
+Pins are concrete releases, not claims that this authoring run exercised them:
+[Node 22.16.0](https://nodejs.org/en/blog/release/v22.16.0),
+[npm 11.15.0](https://github.com/npm/cli/releases/tag/v11.15.0),
+[Rust 1.90.0](https://blog.rust-lang.org/2025/09/18/Rust-1.90.0/).
+wasm-bindgen CLI 0.2.105 matches the existing crate/build script requirement.
+Action full SHAs resolve to official release commits:
+[checkout v4.2.2](https://github.com/actions/checkout/commit/11bd71901bbe5b1630ceea73d27597364c9af683),
+[setup-node v4.4.0](https://github.com/actions/setup-node/commit/49933ea5288caeca8642d1e84afbd3f7d6820020),
+[upload-artifact v4.6.2](https://github.com/actions/upload-artifact/commit/ea165f8d65b6e75b540449e92b4886f43607fa02).
+Review/update these pins explicitly as part of maintenance, not via floating tags.

@@ -1,0 +1,83 @@
+name: npm trusted release
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the qualified CI archive (false only qualifies)
+        type: boolean
+        required: false
+        default: false
+concurrency:
+  group: gozar-npm-publish
+  cancel-in-progress: false
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: npm-publish
+    steps:
+      - name: Refuse unexpected event or source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REPOSITORY" = tnunamak/gozar
+          test "$GITHUB_REF" = refs/heads/main
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$GITHUB_WORKFLOW_REF" = tnunamak/gozar/.github/workflows/npm-publish.yml@refs/heads/main
+          test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA"
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.16.0
+          # No registry-url: do not create a NODE_AUTH_TOKEN-backed .npmrc.
+      - name: Install pinned tools and dependency cache (online setup only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(node --version)" = v22.16.0
+          npm install --global npm@11.15.0 --ignore-scripts --no-audit --no-fund
+          test "$(npm --version)" = 11.15.0
+          work="$(mktemp -d /tmp/gzr.XXXXXX)"
+          chmod 700 "$work"
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+          export CARGO_HOME="$work/cargo"
+          mkdir -m 700 "$CARGO_HOME" "$work/home" "$work/tmp"
+          export HOME="$work/home" TMPDIR="$work/tmp"
+          touch "$HOME/empty.npmrc" "$HOME/empty-global.npmrc"
+          export RUSTUP_TOOLCHAIN=1.90.0
+          rustup toolchain install 1.90.0 --profile minimal --target wasm32-unknown-unknown
+          cargo install wasm-bindgen-cli --version 0.2.105 --locked --root "$work/tools" --target-dir "$work/tool-target"
+          test "$("$work/tools/bin/wasm-bindgen" --version)" = "wasm-bindgen 0.2.105"
+          cargo fetch --locked
+          {
+            echo "HOME=$HOME"
+            echo "TMPDIR=$TMPDIR"
+            echo "CARGO_HOME=$CARGO_HOME"
+            echo "RUSTUP_HOME=$RUSTUP_HOME"
+            echo "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN"
+            echo "CARGO_TARGET_DIR=$work/target"
+            echo "WASM_BINDGEN=$work/tools/bin/wasm-bindgen"
+            echo "GOZAR_RELEASE_OUTPUT=$work/evidence"
+          } >> "$GITHUB_ENV"
+      - name: Qualify one freshly built CI archive (offline)
+        run: node scripts/trusted-release.mjs qualify
+      - name: Publish exact qualified archive using OIDC
+        if: ${{ inputs.publish == true }}
+        run: node scripts/trusted-release.mjs publish
+      - name: Retain archive and measured evidence, including failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gozar-release-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ env.GOZAR_RELEASE_OUTPUT }}
+          if-no-files-found: warn
+          retention-days: 14
