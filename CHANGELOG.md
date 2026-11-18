@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.1
+
+- Resolve exact adapter IDs before display names, and reject ambiguous display
+  names instead of choosing the first match.
+- Normalize frozen or sealed errors without throwing when `nextAction` is absent.
+  The normalized error retains the original error as its cause.
+- Treat caveat names as own properties so inherited JavaScript names cannot
+  appear as disclosure values.
+- Add attached and session regression coverage for withdrawing publication when
+  runtime cost becomes invalid, and for requiring fresh approval after recovery.
+
 ## 0.5.0
 
 - Route consent now shows the whole cost disclosure. Free and unknown costs carry
