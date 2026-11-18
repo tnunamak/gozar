@@ -31,6 +31,21 @@ function allocationOracle(ledger) {
   assert.equal(ledger.allocations, 1, 'exactly one physical fixture allocation');
   assert.equal(ledger.removals, 0, 'pending allocation must not have been removed');
 }
+function completionOracle(view, origin, proofs) {
+  assert.equal(view.verification.status, 'verified', 'verified wait completes proof');
+  assert.equal(typeof view.published, 'string', 'verified wait publishes an origin');
+  assert.equal(view.published, origin, 'both callers publish the same origin');
+  assert.equal(view.published, view.origin, 'publication matches the proved origin');
+  assert.ok(proofs > 0, 'fixture verifier served a successful proof response');
+}
+test('verified completion oracle rejects unpublished views and missing proof traversal', () => {
+  const origin = 'https://completion.fixture.invalid';
+  const view = {origin, published: origin, verification: {status: 'verified'}};
+  completionOracle(view, origin, 1);
+  assert.throws(() => completionOracle({...view, published: null}, origin, 1), {code: 'ERR_ASSERTION'});
+  assert.throws(() => completionOracle({...view, verification: {status: 'unverified'}}, origin, 1), {code: 'ERR_ASSERTION'});
+  assert.throws(() => completionOracle(view, origin, 0), {code: 'ERR_ASSERTION'});
+});
 test('in-process allocation oracle rejects a deliberately extra physical fixture allocation', () => {
   const ledger = {allocations: 0, removals: 0};
   const physical = new Map();
@@ -47,7 +62,7 @@ for (const kind of ['attached', 'durable']) {
   test('in-process ' + kind + ' pending-effect replay retains one allocation and exact cleanup', {timeout: 90000}, async t => {
     const home = await mkdtemp(join(tmpdir(), 'gozar-in-process-cut-'));
     const committed = deferred(), release = deferred();
-    const pending = [], handles = new Map(), ledger = {allocations: 0, removals: 0};
+    const pending = [], handles = new Map(), ledger = {allocations: 0, removals: 0, proofs: 0};
     const foreign = {TCP: {'9000': {TCPForward: '127.0.0.1:9001'}}};
     const neighbor = {target: '127.0.0.1:9001', owner: 'foreign'};
     const transports = new Map([['foreign-neighbor', structuredClone(neighbor)]]);
@@ -88,7 +103,12 @@ for (const kind of ['attached', 'durable']) {
     };
     try {
       const verifier = createServiceVerifier();
-      app = http.createServer((req, res) => { if (!verifier(req, res)) res.end('synthetic app'); });
+      app = http.createServer((req, res) => {
+        let proof = false;
+        res.once('finish', () => { if (proof && res.statusCode === 200) ledger.proofs++; });
+        proof = verifier(req, res);
+        if (!proof) res.end('synthetic app');
+      });
       await bounded(new Promise((resolve, reject) => {
         app.once('error', reject); app.listen(0, '127.0.0.1', resolve);
       }), 'app listening');
@@ -186,6 +206,7 @@ for (const kind of ['attached', 'durable']) {
       const results = await bounded(Promise.allSettled([first, second]), 'both public calls settle');
       for (const result of results) {
         assert.equal(result.status, 'fulfilled', result.reason?.stack);
+        completionOracle(result.value, results[0].value.origin, ledger.proofs);
         assert.equal(result.value.operationId, operationId);
         assert.deepEqual(result.value.handle, retained.handle);
       }
