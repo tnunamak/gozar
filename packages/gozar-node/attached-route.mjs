@@ -46,7 +46,7 @@ export const LEASE_EXPIRY_MS = 20_000;
 // After the owner is lost, owned removal gets this long, and each local forwarding close gets LOCAL_CLOSE_MS.
 // The controller then exits whatever is still owed; the debt stays in its journal.
 const OWNER_LOSS_TEARDOWN_MS = 30_000, LOCAL_CLOSE_MS = 5_000;
-const within = (ms, work) => { let timer; return Promise.race([Promise.resolve(work).catch(() => {}), new Promise(resolve => { timer = setTimeout(resolve, ms); })]).finally(() => clearTimeout(timer)); };
+const within = (ms, work) => { let timer; return Promise.race([Promise.resolve().then(work).then(() => true, () => false), new Promise(resolve => { timer = setTimeout(resolve, ms, false); })]).finally(() => clearTimeout(timer)); };
 const idPattern = /^att_[0-9a-f]{16}$/;
 const here = fileURLToPath(import.meta.url);
 
@@ -558,7 +558,7 @@ export async function runAttachedController(directory, runtime = {}) {
   const lease = { ...(session?{expiresAtMs:bootstrap.expiresAtMs}:{}), target: bootstrap.request.target, state: 'creating', origin: null, properties: adapter.definition.capabilities, ingress: null, identity:bootstrap.identity??null,
     limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
   let receipt = null, lastBeat = now(), releasing = null, releasingAt = 0, failure = null, gate = null, proofSession = null,initialSettled=false;
-  let ownerLost = false, proofClosed = false;
+  let ownerLost = false, gateClosing = null, proofClosing = null;
   const nonce = randomBytes(32).toString('hex');
   const lastView = () => ({...projectAttached(expired()&&lease.state==='usable'?{...lease,state:'unverified'}:lease, { handle, now: now() }),operationId:bootstrap.operationId??null,...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
   let resourceRemoval=null;
@@ -779,24 +779,30 @@ export async function runAttachedController(directory, runtime = {}) {
   // or from the configuration reference. Idempotent.
   async function closeForwarding(){
     proofAbort.abort();
-    await within(LOCAL_CLOSE_MS,gate?.close());
-    if(proofSession&&!proofClosed){proofClosed=true;await within(LOCAL_CLOSE_MS,proofSession.close());}
+    const bound = runtime.ownerLossLocalCloseMs ?? LOCAL_CLOSE_MS;
+    if(gate)gateClosing ??= within(bound, () => gate.close());
+    if(proofSession)proofClosing ??= within(bound, () => proofSession.close());
+    return (await Promise.all([gateClosing ?? true, proofClosing ?? true])).every(Boolean);
   }
-  // The owner (heartbeat expiry, or stdin EOF) is gone. Irreversible: no verification or consent refresh can reopen forwarding.
-  // Forwarding closes first, then the one owned removal runs under a bound (a racing close shares it), then the controller exits.
-  // What is still owed stays in state.json for a later owner; it is never reported confirmed and the retained handle is never dropped.
+  // Owner loss ends forwarding even when remote removal or reference reconciliation remains uncertain.
+  // Failed journal writes retain the previous record and cannot prevent the detached controller from exiting.
   async function abandonOwnerless(){
     if(ownerLost)return;
     ownerLost=true;
-    await closeForwarding();
-    const removed=release().then(()=>true,()=>true);
-    if(!await Promise.race([removed,new Promise(resolve=>setTimeout(resolve,runtime.ownerLossTeardownMs??OWNER_LOSS_TEARDOWN_MS,false).unref())])){
+    try {
+      const localClosed = await closeForwarding();
+      const removed = await within(runtime.ownerLossTeardownMs ?? OWNER_LOSS_TEARDOWN_MS, () => release());
+      if(!removed || !localClosed){
+        lease.state='uncertain';
+        lease.cleanup={state:'unconfirmed',message:!localClosed?'Local forwarding closure remains unconfirmed; retain this recovery handle'
+          :resourceRemoval?'Resource removed; configuration reference release remains unconfirmed'
+          :receipt?'The owner was lost and removal or its journal did not complete; retain this recovery handle':'Startup outcome remains unknown; retain this recovery handle'};
+        await save();
+      }
+    } catch {
       lease.state='uncertain';
-      lease.cleanup={state:'unconfirmed',message:resourceRemoval?'Resource removed; configuration reference release remains unconfirmed'
-        :receipt?'The owner was lost and the route removal did not finish in time; retain this recovery handle':'Startup outcome remains unknown; retain this recovery handle'};
-      await save().catch(()=>{});
-    }
-    finish();
+      lease.cleanup={state:'unconfirmed',message:'Owner-loss cleanup could not be journaled; the previous recovery record was retained'};
+    } finally { finish(); }
   }
 
   let finish;

@@ -3,7 +3,8 @@
 // Deterministic: fake adapter, fake clock, no provider, no child process.
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -30,10 +31,10 @@ async function listener(t) {
 }
 
 // One owner-loss scenario. `forwarding` is how the controller fronts the app: its own gate, or the adapter's proof session.
-async function scenario(t, { forwarding, removal, hangCreate = false }) {
+async function scenario(t, { forwarding, removal, hangCreate = false, closeFailure = null, journalFailure = false }) {
   await mkdir(join(homedir(), '.tmp'), { recursive: true, mode: 0o700 });
   const root = await mkdtemp(join(homedir(), '.tmp', 'gz-ownerloss-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(async () => { await chmod(directory, 0o700).catch(() => {}); await rm(root, { recursive: true, force: true }); });
   const home = join(root, 'h'), directory = join(home, 'attached', 'att_0123456789abcdef');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const appPort = await listener(t), foreignPort = await listener(t);
@@ -59,7 +60,13 @@ async function scenario(t, { forwarding, removal, hangCreate = false }) {
     adapter.prepareProof = async () => ({
       target: `127.0.0.1:${seen.gatePort}`,
       verify: async ({ origin, attempt }) => ({ attemptId: attempt.id, endpoint: origin, status: 'verified', checkedAt: iso(), vantage: 'this-device', checks: ['nonce'], validUntil: new Date(clock.t + 15_000).toISOString(), facts: [] }),
-      close: async () => { seen.closes++; await new Promise(resolve => proofServer.close(resolve)); },
+      close: () => {
+        seen.closes++;
+        if (closeFailure === 'throw') throw new Error('synchronous close refusal');
+        if (closeFailure === 'reject') return Promise.reject(new Error('asynchronous close refusal'));
+        if (closeFailure === 'hang') return new Promise(() => {});
+        return new Promise(resolve => proofServer.close(resolve));
+      },
     });
   }
   adapter.remove = async (_ctx, receipt) => {
@@ -68,6 +75,7 @@ async function scenario(t, { forwarding, removal, hangCreate = false }) {
     if (adapter.mode === 'hang') await hang;
     if (adapter.mode === 'throw') throw new Error('provider refused');
     if (adapter.mode === 'debt') return { removed: false, debt: { message: 'provider still holds the resource' } };
+    if (journalFailure) await chmod(directory, 0o500);
     return { removed: true, debt: null };
   };
   const target = `127.0.0.1:${appPort}`;
@@ -78,13 +86,13 @@ async function scenario(t, { forwarding, removal, hangCreate = false }) {
   await writeFile(join(directory, 'bootstrap.json'), JSON.stringify(bootstrap));
   const handle = { kind: 'attached', id: bootstrap.id, generation: 1 };
   const runtime = { adapters: [adapter], effectContext: () => ({}), readContext: { now: () => clock.t, configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified' }) },
-    now: () => clock.t, ownerLossTeardownMs: TEARDOWN_MS };
+    now: () => clock.t, ownerLossTeardownMs: TEARDOWN_MS, ownerLossLocalCloseMs: 30 };
   let settled = false;
   const run = runAttachedController(directory, runtime).finally(() => { settled = true; });
   run.catch(() => {});
   const cleanup = async () => { // only a failing run gets here with a live controller: make it finishable
     if (settled) return;
-    adapter.mode = 'ok'; release();
+    adapter.mode = 'ok'; closeFailure = null; release();
     await controlAttached(directory, { type: 'close', handleId: handle.id, generation: 1 }, 2_000).catch(() => {});
     await controlAttached(directory, { type: 'finalize-removal', handleKind: 'attached', handleId: handle.id, generation: 1 }, 2_000).catch(() => {});
     await Promise.race([run.catch(() => {}), sleep(2_000)]);
@@ -173,4 +181,81 @@ test('owner loss while the provider create never returns: forwarding closes, not
   assert.equal(state.receipt, null);
   assert.deepEqual(state.handle, s.handle);
   s.release();
+});
+
+for (const closeFailure of ['throw', 'reject', 'hang']) {
+  test(`owner loss: proof-session close ${closeFailure} cannot skip removal or controller exit`, async t => {
+    const s = await scenario(t, { forwarding: 'proof-session', removal: 'ok', closeFailure });
+    s.expire();
+    const view = await exitBounded(s.run);
+    assert.equal(s.seen.closes, 1, 'local close attempted exactly once');
+    assert.equal(s.seen.removes.length, 1, 'failed local close cannot skip owned removal');
+    assert.equal(view.cleanup.state, 'unconfirmed');
+    assert.match(view.cleanup.message, /local forwarding/i);
+    const state = await json(join(s.directory, 'state.json'));
+    assert.equal(state.lastView.cleanup.state, 'unconfirmed');
+    assert.match(state.lastView.cleanup.message, /local forwarding/i);
+    assert.deepEqual(state.resourceRemoval.handle, s.handle);
+    assert.ok(state.receipt);
+    assert.equal(await accepts(s.foreignPort), true);
+  });
+}
+
+test('owner loss: a failed journal write cannot prevent exit or erase the previous recovery record', async t => {
+  const s = await scenario(t, { forwarding: 'gate', removal: 'ok', journalFailure: true });
+  s.expire();
+  const view = await exitBounded(s.run);
+  assert.equal(view.cleanup.state, 'unconfirmed');
+  assert.match(view.cleanup.message, /could not be journaled/);
+  assert.equal(s.seen.removes.length, 1);
+  assert.equal(await accepts(s.seen.gatePort), false);
+  const state = await json(join(s.directory, 'state.json'));
+  assert.ok(state.receipt, 'previous owned receipt remains readable');
+  assert.deepEqual(state.handle, s.handle);
+  assert.equal(state.resourceRemoval, null, 'a failed write did not persist a removal milestone');
+});
+
+test('detached controller exits normally after a synchronous proof close failure', async t => {
+  const root = await mkdtemp(join(homedir(), '.tmp', 'gz-exit-'));
+  const directory = join(root, 'h', 'attached', 'att_0123456789abcdef');
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const module = join(root, 'runtime.mjs');
+  await writeFile(module, `
+    import net from 'node:net';
+    import { properties, stubAdapter } from ${JSON.stringify(new URL('./route-schema-check.mjs', import.meta.url).href)};
+    export default async () => {
+      const adapter = stubAdapter('fake-owner-loss', { caps: properties() });
+      adapter.prepareProof = async () => {
+        const server = net.createServer(s => s.end('proof'));
+        await new Promise(r => server.listen(0, '127.0.0.1', r));
+        console.log(JSON.stringify({ port: server.address().port }));
+        return { target: '127.0.0.1:' + server.address().port,
+          verify: async ({origin,attempt}) => ({attemptId:attempt.id,endpoint:origin,status:'verified',checkedAt:new Date().toISOString(),vantage:'this-device',checks:['nonce'],validUntil:new Date(Date.now()+15000).toISOString(),facts:[]}),
+          close() { throw new Error('close refused'); } };
+      };
+      adapter.create = async (ctx,plan) => ({schemaVersion:1,adapterId:adapter.id,resourceKey:plan.resourceKey,generation:ctx.generation,identity:{},readback:null,origin:'https://example.invalid'});
+      adapter.verify = async () => ({status:'verified',checkedAt:new Date().toISOString()});
+      adapter.remove = async () => ({removed:true,debt:null});
+      return { adapters:[adapter], effectContext:()=>({}), ownerLossTeardownMs:300,ownerLossLocalCloseMs:30,
+        readContext:{now:Date.now,configuration:async()=>null,probe:async()=>({ok:true}),verifyChallenge:async()=>({status:'verified'})} };
+    };
+  `);
+  const target = '127.0.0.1:18789';
+  await writeFile(join(directory, 'bootstrap.json'), JSON.stringify({schemaVersion:1,id:'att_0123456789abcdef',home:join(root,'h'),platform:'linux',adapterId:'fake-owner-loss',request:{target},
+    plan:{digest:'plan',origin:null,resourceKey:'res-fake-owner-loss',effects:[{target}],readback:null,cleanup:null,precondition:null},owner:'fixture-owner',leaseExpiryMs:100,controllerModule:module}));
+  const child = spawn(process.execPath, [new URL('../../packages/gozar-node/attached-route.mjs', import.meta.url).pathname, '--controller', directory], {stdio:['ignore','pipe','pipe']});
+  const exited = new Promise((resolve,reject) => { child.once('error',reject);child.once('exit',(code,signal)=>resolve({code,signal})); });
+  t.after(async () => { if(child.exitCode===null&&child.signalCode===null)child.kill('SIGTERM');await exited; });
+  let output='',errors='';
+  child.stdout.on('data',chunk=>{output+=chunk;});
+  child.stderr.on('data',chunk=>{errors+=chunk;});
+  const result = await exitBounded(exited);
+  assert.deepEqual(result, {code:0,signal:null}, errors);
+  const port = JSON.parse(output.trim()).port;
+  assert.equal(await accepts(port), false, 'process-owned forwarding is gone after actual child exit');
+  const state = await json(join(directory, 'state.json'));
+  assert.equal(state.lastView.cleanup.state, 'unconfirmed');
+  assert.match(state.lastView.cleanup.message, /local forwarding/i);
+  assert.ok(state.receipt);
 });
