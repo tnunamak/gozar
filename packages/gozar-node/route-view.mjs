@@ -175,9 +175,9 @@ export async function propertiesFor(adapterId, deps, kind) {
 
 const defaults = {
   durable: {
-    async status({ home, handle }, { adapters } = {}) {
+    async status({ home, handle }, { adapters, observe } = {}) {
       const { statusRoutes } = await import('./durable-route.mjs');
-      const route = (await statusRoutes({ routeId: handle.id, home }, { adapters })).routes[0];
+      const route = (await statusRoutes({ routeId: handle.id, home }, { adapters, observe })).routes[0];
       if (!route) throw gozarError('route_not_found', `No durable route ${handle.id}`);
       return route;
     },
@@ -220,14 +220,18 @@ const defaults = {
 export const splitSession = id => { const at = id.indexOf(':'); return at < 0 ? [id, null] : [id.slice(0, at), id.slice(at + 1)]; };
 function checkedSession(id){const parts=splitSession(id);if(!/^port-[0-9]+$/.test(parts[0])||!parts[1]||!/^[A-Za-z0-9_-]+$/.test(parts[1]))throw gozarError('invalid_input','Invalid session handle');return parts;}
 
-/** Fresh proof for one handle. An external service is read with handle {kind:'external', id:<origin>}. */
+/**
+ * Fresh proof for one handle. An external service is read with handle {kind:'external', id:<origin>}.
+ * `deps.observe` is the watch's and close's read: a durable route under a declared host acknowledgment is observed,
+ * never proven, so that no acknowledgment is asked outside a call the host opened (durable-route.mjs, lastProofs).
+ */
 export async function routeStatus(request, deps = {}) {
   const handle = checkRef(request);
   const now = deps.now?.() ?? Date.now();
   try {
     switch (handle.kind) {
       case 'durable': {
-        const reply = await (deps.durable ?? defaults.durable).status(request, { adapters: deps.adapters });
+        const reply = await (deps.durable ?? defaults.durable).status(request, { adapters: deps.adapters, observe: deps.observe });
         if (Number.isInteger(reply.generation) && reply.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
         return projectDurable(reply, { handle, now, ...await propertiesFor(reply.adapterId, deps, 'durable') });
       }
@@ -252,7 +256,7 @@ export async function closeRoute(request, deps = {}) {
     switch (handle.kind) {
       case 'durable': {
         let before;
-        try { before = await routeStatus({ home: request.home, handle }, deps); }
+        try { before = await routeStatus({ home: request.home, handle }, { ...deps, observe: true }); }
         catch { /* Exact retained ownership is checked again by release; fresh proof is not cleanup authority. */ }
         const reply = await (deps.durable ?? defaults.durable).close(request, { adapters: deps.adapters });
         const debt = reply?.cleanupDebt ?? null;

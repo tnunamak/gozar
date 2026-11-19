@@ -140,8 +140,24 @@ A host that declares no handler keeps the pre-0.5.2 behavior: verification start
 immediately after allocation. Hosts that widen a service verifier's Host
 allowance during start should adopt this boundary instead; Gozar never requires
 or implies a wildcard Host allowance. The legacy daemon session controller does
-not implement the boundary: a declared handler plus a recipe-session provider is
-refused `unsupported`, never silently verified without acknowledgment.
+not implement the boundary, so under a declared handler a provider that runs sessions
+on it is advertised `unsupported` with reason `origin-acknowledgment-unsupported` for
+the `session` usage kind only (in `listProviders` and `catalogRoutes`, so no candidate
+token exists and the owner cannot consent to it). `expose` refuses it `unsupported`
+before any approval is redeemed or any effect runs, never silently verified without
+acknowledgment. Generic-runtime sessions, attached and durable routes, and every host
+that declares no handler are unchanged.
+
+Observation versus proof. With a declared handler, `routeStatus`, `startRoute`/`ensureRoute`
+and adoption are the proofs: each asks the host to acknowledge a fresh attempt, inside the
+call the host opened. `watchRoutes` is an observation: it reads the recorded state and
+the latest proof this process obtained for that exact route generation while that
+proof's own validity window lasts, and after it reports the route unverified until the
+host checks again. It asks no acknowledgment, starts no proof or challenge request,
+publishes nothing and renews no lease, so it can never take the attempt of an explicit
+check that overlaps it. A host that declares a handler therefore schedules its own
+explicit checks, which also renew a leased rule. Hosts that declare no handler keep
+the earlier polling watch, which proves, publishes and renews.
 
 ## Packaged runtime modules (0.5.2)
 

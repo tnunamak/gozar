@@ -140,13 +140,13 @@ export function createRouteApi(deps = {}) {
     }
   }
 
-  const routeStatus = request => verified(async () => {
+  const statusOf = (request, observe) => verified(async () => {
     const retained=await cleanupReferenceRecord(request,await services());
     if(retained){
       if(retained.phase!=='prepared')return retained.view;
       // Preparation is intent, not proof of removal. Consult the actual controller.
       let observed;
-      try{observed=await viewStatus(request,{adapters:await adapters(),...deps.view});}
+      try{observed=await viewStatus(request,{adapters:await adapters(),...deps.view,...(observe?{observe}:{})});}
       catch(error){if(error.code!=='route_not_found')throw error;}
       const current=await cleanupReferenceRecord(request,await services());
       if(current?.phase!=='prepared')return current?.view??retained.view;
@@ -155,8 +155,9 @@ export function createRouteApi(deps = {}) {
         throw gozarError('route_conflict','Current observation belongs to another handle');
       return observed;
     }
-    return viewStatus(request,{adapters:await adapters(),...deps.view});
+    return viewStatus(request,{adapters:await adapters(),...deps.view,...(observe?{observe}:{})});
   },request);
+  const routeStatus = request => statusOf(request, false);
 
   const api = {
     catalogRoutes: query => guard(()=>verified(async () => buildCatalog(query, { ...await shared(query), profileHome: deps.profileHome,
@@ -178,6 +179,8 @@ export function createRouteApi(deps = {}) {
     }),
 
     routeStatus: request => guard(async () => withRouteGuidance(request, await routeStatus(request))),
+    // The watch's read: the same view, observed rather than proven when a host acknowledgment is declared.
+    observeRoute: request => guard(async () => withRouteGuidance(request, await statusOf(request, true))),
     closeRoute: request => guard(async () => {
       let reference;
       const view = await verified(async () => {
@@ -262,7 +265,7 @@ export function createRouteApi(deps = {}) {
       return withRouteGuidance(request,view,reference);
     }),
     suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }),request)),
-    watchRoutes:async function*(request){try{for await(const event of pollRoutes(request,{routeStatus:api.routeStatus,...deps.watch}))yield structuredClone(event);}catch(error){throw publicError(error);}},
+    watchRoutes:async function*(request){try{for await(const event of pollRoutes(request,{routeStatus:api.observeRoute,...deps.watch}))yield structuredClone(event);}catch(error){throw publicError(error);}},
     getRoutePreferences, setRoutePreferences,
     runSetupAction: request => guard(async () => {
       const context=await setupDeps(request);

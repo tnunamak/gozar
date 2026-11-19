@@ -7,10 +7,24 @@ export const features = ['structured-state', 'open-facts', 'input-requirements',
   'configuration-revisions', 'consent-facts-digest', 'proof-subject', 'host-secret-backend',
   'prerequisite-actions', 'provider-inventory', 'route-binding', 'cleanup-recovery'];
 
-export function availabilityFor(definition) {
-  return Object.fromEntries(['session', 'attached', 'durable'].map(kind => [kind,
+/**
+ * What the host's declared boundary means for one adapter. A host that declared `acknowledgeOrigin` is told, before any
+ * consent, which usage cannot run through that boundary: the legacy recipe session controller never asks the host to
+ * acknowledge its allocated origin, so a session on it is refused at execution (openSessionRoute). Advertising it as
+ * available would let the owner consent to a start that can only fail. Generic-runtime sessions, attached and durable
+ * routes all ask, and stay available. One rule, read by the catalog, the provider inventory and the execution preflight.
+ */
+export const ORIGIN_ACKNOWLEDGMENT_UNSUPPORTED = 'origin-acknowledgment-unsupported';
+export const hostBoundaryOf = deps => ({ acknowledgesOrigin: typeof deps?.acknowledgeOrigin === 'function' });
+export const sessionBlockedByBoundary = (adapter, host) => host?.acknowledgesOrigin === true && adapter?.sessionExecution === 'recipe';
+
+export function availabilityFor(definition, { adapter, host } = {}) {
+  const availability = Object.fromEntries(['session', 'attached', 'durable'].map(kind => [kind,
     definition.availability?.[kind] ?? (definition.supportedKinds.includes(kind)
       ? { state: 'available', reason: 'admitted' } : { state: 'unsupported', reason: 'usage-not-supported' })]));
+  if (availability.session.state === 'available' && sessionBlockedByBoundary(adapter, host))
+    availability.session = { state: 'unsupported', reason: ORIGIN_ACKNOWLEDGMENT_UNSUPPORTED };
+  return availability;
 }
 
 export function prerequisitesFor(inspection, observedAt) {
