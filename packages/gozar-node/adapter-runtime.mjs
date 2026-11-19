@@ -97,6 +97,32 @@ export function definitionErrors(definition) {
   return errors;
 }
 
+// Only declared provider copy and effective inspected properties belong on this surface.
+export function providerPresentation(adapter, properties) {
+  const declared = adapter.definition;
+  const wrapped = adapter.operationalDefinition;
+  const known = value => ({ known: true, value });
+  const unknown = reason => ({ known: false, reason });
+  const text = value => typeof value === 'string' && value.trim() !== '' ? value : undefined;
+  const observeText = value => value === undefined ? unknown('not-declared') : known(value);
+  const human = {};
+  for (const key of ['name', 'address', 'summary', 'setup']) {
+    human[key] = observeText(text(declared.copy?.human?.[key]) ?? text(wrapped?.copy?.human?.[key]));
+  }
+  const idle = Object.hasOwn(declared, 'idleTimeoutMs') ? declared.idleTimeoutMs : wrapped?.idleTimeoutMs;
+  const stability = properties?.address?.stability;
+  const account = properties?.needsAccount;
+  return {
+    displayName: observeText(text(wrapped?.displayName) ?? text(declared.label)),
+    human,
+    idleTimeoutMs: idle === null || (Number.isSafeInteger(idle) && idle >= 0)
+      ? known(idle) : unknown('not-declared'),
+    addressStability: stability === 'stable' || stability === 'ephemeral'
+      ? known(stability) : unknown('not-observed'),
+    needsAccount: typeof account === 'boolean' ? known(account) : unknown('not-observed'),
+  };
+}
+
 // Definitions that omit ownership use Gozar's managed lifecycle.
 export const ownershipFor = definition => definition?.ownership ?? 'gozar-owned';
 

@@ -24,6 +24,27 @@
         "label": {
           "type": "string"
         },
+        "copy": {
+          "type": "object",
+          "required": ["human"],
+          "properties": {
+            "human": {
+              "type": "object",
+              "properties": {
+                "name": {"type": "string"},
+                "address": {"type": "string"},
+                "summary": {"type": "string"},
+                "setup": {"type": "string"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "idleTimeoutMs": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
         "capabilities": {
           "$ref": "#/$defs/Properties"
         },

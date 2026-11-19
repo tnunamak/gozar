@@ -46,6 +46,10 @@ export type AdapterDefinition = {
   schemaVersion: 1;
   id: string;
   label: string;
+  /** Human-facing declaration only; not an admission or availability claim. */
+  copy?: { human: { name?: string; address?: string; summary?: string; setup?: string } };
+  /** Null is an explicit declaration; omission makes no claim. */
+  idleTimeoutMs?: number | null;
   capabilities: Properties;
   facts?: Fact[];
   availability?: Availability;
