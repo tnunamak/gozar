@@ -69,4 +69,32 @@ test('serialized inventory carries typed presentation from shipped and unfamilia
   assert.equal(required?.observation.reason,'host-capability-undeclared');
   assert.equal(plain.availability.attached.state,'unsupported');
   assert.equal(JSON.stringify(plain.copy).includes('synthetic-marker'),false);
+
+  const supportedKind=admitted.definition.supportedKinds[0];
+  assert.ok(supportedKind,'the loader-admitted declaration supports a usage');
+  const readOffer=async observation=>{
+    const result=JSON.parse(JSON.stringify(await listProviders({
+      home,hostCapabilities:{'runtime.attached':observation},
+    },deps)));
+    return result.providers.find(provider=>provider.providerId===id);
+  };
+  const allowed=await readOffer(known(true));
+  assert.equal(allowed?.availability[supportedKind]?.state,'available');
+
+  for(const [observation,state] of [
+    [known(false),'denied'],
+    [known('synthetic-nonboolean'),'unsupported'],
+    [{known:false,reason:'fixture-unobserved'},'unknown'],
+  ]){
+    const offer=await readOffer(observation);
+    const prerequisite=offer?.prerequisites.find(row=>row.id==='runtime.attached');
+    assert.equal(prerequisite?.state,state);
+    assert.deepEqual(prerequisite?.observation,observation);
+    assert.deepEqual(offer?.availability[supportedKind],{
+      state:'unsupported',reason:`host-capability-${state}`,
+    });
+    for(const key of ['displayName','copy','addressStability','idleTimeoutMs','needsAccount']){
+      assert.deepEqual(offer?.[key],plain[key],key);
+    }
+  }
 });
