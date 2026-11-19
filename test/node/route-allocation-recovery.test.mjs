@@ -595,3 +595,35 @@ for(const part of ['record','view'])for(const field of ['kind','id','generation'
    assert.equal(await accepts(w.foreignPort),true);
   }finally{if(directory)await chmod(directory,0o700);}
  });
+
+
+test('wait-loop recovery refusal still retires the owned controller',async t=>{
+ let directory,control,original;
+ const w=await world(t,null,{identityRecorder:async pid=>{
+  const [id]=await entries(w.home);assert.ok(id);directory=join(w.home,'attached',id);
+  for(let i=0;i<1000;i++){
+   const state=await json(join(directory,'state.json')).catch(()=>null);
+   control=await json(join(directory,'control.json')).catch(()=>null);
+   if(state?.receipt&&control){original=state;break;}
+   await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  assert.ok(original?.receipt);assert.equal(control.pid,pid);
+  const bad=structuredClone(original);bad.lastView.handle.generation++;
+  bad.lastView.cleanup={state:'unconfirmed'};
+  await writeFile(join(directory,'state.json'),JSON.stringify(bad),{mode:0o600});
+  // The real controller stays alive, but cannot authenticate status or close through this corrupted endpoint record.
+  await writeFile(join(directory,'control.json'),JSON.stringify({...control,nonce:'refused-fixture-nonce'}),{mode:0o600});
+  await chmod(directory,0o500);
+  const identity=await processIdentity(pid);assert.ok(identity);return identity;
+ }});
+ try{
+  const {error}=await w.exposed;assert.ok(error);
+  assert.equal(await processIdentity(control.pid),null,'a saved-record refusal cannot bypass owned-controller teardown');
+  assert.equal(error.code,'route_conflict');assert.deepEqual(error.route.handle,original.handle);
+  assert.equal(error.route.published,null);assert.equal(error.route.cleanup.state,'unconfirmed');
+  assert.equal(w.ledger.size,1);assert.equal(w.counts().closes,0);
+  assert.equal(await accepts(w.foreignPort),true);
+ }finally{
+  if(directory){await chmod(directory,0o700);if(control)await writeFile(join(directory,'control.json'),JSON.stringify(control),{mode:0o600});}
+ }
+});

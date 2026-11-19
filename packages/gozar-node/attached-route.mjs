@@ -346,12 +346,18 @@ export async function openAttachedRoute(request, deps = {}) {
         error.route=cleanup.view;
         throw error;
       }
-      const recorded=await readJson(join(directory,'state.json'));
-      if (!cleanup && recorded?.handle?.id===handle.id && recorded.handle.generation===handle.generation) error.route=startupHistory(recorded, handle, 'Controller unavailable during startup; historical evidence only, retain this handle for cleanup');
-      if(!cleanup&&recorded?.lastView?.cleanup.state==='unconfirmed'){
-        error.route=startupHistory(recorded, handle, 'Controller unavailable during startup; historical evidence only, retain this handle for cleanup');
-        throw error;
-      }
+      let retainedDebt=false;
+      try {
+        if(!cleanup){
+          const recorded=await readJson(join(directory,'state.json'));
+          if(recorded?.lastView){
+            error.route=startupHistory(recorded, handle, 'Controller unavailable during startup; historical evidence only, retain this handle for cleanup');
+            retainedDebt=recorded.lastView.cleanup?.state==='unconfirmed';
+          }
+        }
+      } catch(recoveryError) { error=recoveryError; }
+      // Only validated cleanup debt may retain the controller. A saved-record refusal still owes owned teardown.
+      if(retainedDebt)throw error;
       const stopped=await stopController(controller);await dropBroker(id);
       throw withCleanupOutcome(error, stopped);
     }
