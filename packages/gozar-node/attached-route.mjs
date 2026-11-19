@@ -315,7 +315,7 @@ export async function openAttachedRoute(request, deps = {}) {
       // Normalize before attaching, so the frozen surface error carries the teardown outcome and the
       // controller's saved view as historical recovery; teardown attests neither current proof nor provider absence.
       const carried = withCleanupOutcome(normalizeError(error), stopped);
-      if (record?.lastView && !carried.route) carried.route = recoveryHistory(record.lastView, 'Controller startup identity failed; historical evidence only, retain this handle for cleanup');
+      if (record?.lastView && !carried.route) carried.route = startupHistory(record, handle, 'Controller startup identity failed; historical evidence only, retain this handle for cleanup');
       throw carried;
     }
     if (!session) holdLease(directory, id, deps.heartbeatMs ?? HEARTBEAT_MS);
@@ -347,15 +347,25 @@ export async function openAttachedRoute(request, deps = {}) {
         throw error;
       }
       const recorded=await readJson(join(directory,'state.json'));
-      if (!cleanup && recorded?.handle?.id===handle.id && recorded.handle.generation===handle.generation) error.route=recoveryHistory(recorded.lastView, 'Controller unavailable during startup; historical evidence only, retain this handle for cleanup');
+      if (!cleanup && recorded?.handle?.id===handle.id && recorded.handle.generation===handle.generation) error.route=startupHistory(recorded, handle, 'Controller unavailable during startup; historical evidence only, retain this handle for cleanup');
       if(!cleanup&&recorded?.lastView?.cleanup.state==='unconfirmed'){
-        error.route=recoveryHistory(recorded.lastView, 'Controller unavailable during startup; historical evidence only, retain this handle for cleanup');
+        error.route=startupHistory(recorded, handle, 'Controller unavailable during startup; historical evidence only, retain this handle for cleanup');
         throw error;
       }
       const stopped=await stopController(controller);await dropBroker(id);
       throw withCleanupOutcome(error, stopped);
     }
   } catch (error) { throw normalizeError(error); }
+}
+
+/**
+ * Saved view after the controller was lost during startup. Stale publication, ingress and proof always clear; the controller's own
+ * journaled cleanup confirmation for this exact handle survives, because it is evidence about the resource, not about the process.
+ */
+function startupHistory(record, handle, message) {
+  const last = record.lastView;
+  return last.cleanup?.state === 'confirmed' && record.handle?.id === handle.id && record.handle.generation === handle.generation
+    ? releasedView(last, handle) : recoveryHistory(last, message);
 }
 
 async function viewFromRecord(directory, handle) {
