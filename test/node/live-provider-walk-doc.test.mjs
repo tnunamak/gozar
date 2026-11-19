@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { routeMain } from '../../packages/gozar-node/route-cli.mjs';
 
-test('operator walk installs the package version and dispatches documented setup-operation commands', async t => {
+// This fixture checks CLI dispatch and refused secret intake, not successful managed setup or cleanup.
+test('operator walk checks package version, setup command dispatch and refused secret intake', async t => {
   const guide = await readFile(new URL('../../docs/live-provider-walk.md', import.meta.url), 'utf8');
   const pkg = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
   const version = guide.match(/^npm install @tnunamak\/gozar@(\S+)$/m)?.[1];
@@ -66,4 +67,15 @@ test('operator walk installs the package version and dispatches documented setup
     ['cancel', ref],
     ['read', { ...ref, includeBrowserHandoff: false }],
   ]);
+});
+
+test('managed cancellation and reconciliation precede general dashboard cleanup and state deletion', async () => {
+  const guide = await readFile(new URL('../../docs/live-provider-walk.md', import.meta.url), 'utf8');
+  const choose = guide.indexOf('Choose the cleanup path');
+  const cancel = guide.indexOf('gozar setup-operation cancel');
+  const offers = guide.indexOf('Follow the returned cleanup offers.');
+  const sequence = guide.indexOf('After the applicable setup cleanup is settled');
+  const deletion = guide.indexOf("delete this walk's local state");
+  assert.ok(choose >= 0 && choose < cancel && cancel < offers && offers < sequence && sequence < deletion,
+    'operators must retain managed custody through cancellation and reconciliation before general cleanup');
 });
