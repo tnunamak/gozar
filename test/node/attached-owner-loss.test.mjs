@@ -31,7 +31,7 @@ async function listener(t) {
 }
 
 // One owner-loss scenario. `forwarding` is how the controller fronts the app: its own gate, or the adapter's proof session.
-async function scenario(t, { forwarding, removal, hangCreate = false, closeFailure = null, journalFailure = false }) {
+async function scenario(t, { forwarding, removal, hangCreate = false, closeFailure = null, journalFailure = false, managedReference = true, lateProof = false }) {
   await mkdir(join(homedir(), '.tmp'), { recursive: true, mode: 0o700 });
   const root = await mkdtemp(join(homedir(), '.tmp', 'gz-ownerloss-'));
   t.after(async () => { await chmod(directory, 0o700).catch(() => {}); await rm(root, { recursive: true, force: true }); });
@@ -57,7 +57,7 @@ async function scenario(t, { forwarding, removal, hangCreate = false, closeFailu
     await new Promise(resolve => proofServer.listen(0, '127.0.0.1', resolve));
     seen.gatePort = proofServer.address().port;
     t.after(() => new Promise(resolve => { if (!proofServer.listening) return resolve(); proofServer.close(resolve); }));
-    adapter.prepareProof = async () => ({
+    adapter.prepareProof = async () => { seen.prepares = (seen.prepares ?? 0) + 1; if(lateProof)await hang; return ({
       target: `127.0.0.1:${seen.gatePort}`,
       verify: async ({ origin, attempt }) => ({ attemptId: attempt.id, endpoint: origin, status: 'verified', checkedAt: iso(), vantage: 'this-device', checks: ['nonce'], validUntil: new Date(clock.t + 15_000).toISOString(), facts: [] }),
       close: () => {
@@ -67,7 +67,7 @@ async function scenario(t, { forwarding, removal, hangCreate = false, closeFailu
         if (closeFailure === 'hang') return new Promise(() => {});
         return new Promise(resolve => proofServer.close(resolve));
       },
-    });
+    }); };
   }
   adapter.remove = async (_ctx, receipt) => {
     seen.removes.push(receipt);
@@ -81,7 +81,7 @@ async function scenario(t, { forwarding, removal, hangCreate = false, closeFailu
   const target = `127.0.0.1:${appPort}`;
   const bootstrap = { schemaVersion: 1, id: 'att_0123456789abcdef', home, platform: 'linux', adapterId: adapter.id,
     request: { target }, plan: { digest: 'plan', origin: null, resourceKey: `res-${adapter.id}`, effects: [{ target }], readback: null, cleanup: null, precondition: null },
-    operationId: null, owner: 'fixture-owner', // an owner with no registryId/resolver: the configuration reference cannot be released
+    operationId: null, ...(managedReference ? { owner: 'fixture-owner' } : {}), // managed fixtures retain reference debt
     leaseExpiryMs: EXPIRY_MS };
   await writeFile(join(directory, 'bootstrap.json'), JSON.stringify(bootstrap));
   const handle = { kind: 'attached', id: bootstrap.id, generation: 1 };
@@ -98,7 +98,8 @@ async function scenario(t, { forwarding, removal, hangCreate = false, closeFailu
     await Promise.race([run.catch(() => {}), sleep(2_000)]);
   };
   t.after(cleanup);
-  if (hangCreate) await until(async () => seen.creates, count => count === 1);
+  if (lateProof) await until(async () => seen.prepares, count => count === 1);
+  else if (hangCreate) await until(async () => seen.creates, count => count === 1);
   else await until(async () => (await json(join(directory, 'state.json')).catch(() => null))?.phase, phase => phase === 'usable');
   assert.equal(await accepts(seen.gatePort), true, 'forwarding is open while the owner holds the lease');
   const foreignBefore = await accepts(foreignPort);
@@ -258,4 +259,40 @@ test('detached controller exits normally after a synchronous proof close failure
   assert.equal(state.lastView.cleanup.state, 'unconfirmed');
   assert.match(state.lastView.cleanup.message, /local forwarding/i);
   assert.ok(state.receipt);
+});
+
+test('owner loss: late removal success cannot erase unconfirmed local forwarding', async t => {
+  const s = await scenario(t, { forwarding: 'proof-session', removal: 'hang', closeFailure: 'throw', managedReference: false });
+  s.expire();
+  await until(async () => (await json(join(s.directory, 'state.json'))).lastView.cleanup.message,
+    message => /local forwarding/i.test(message ?? ''));
+  // On the old source this snapshot appeared only after the removal wait timed out.
+  // Settle the same pending removal after local uncertainty has already been journaled.
+  s.release();
+  const view = await exitBounded(s.run);
+  assert.equal(s.seen.removes.length, 1);
+  assert.equal(view.cleanup.state, 'unconfirmed');
+  assert.match(view.cleanup.message, /local forwarding/i);
+  const state = await json(join(s.directory, 'state.json'));
+  assert.equal(state.lastView.cleanup.state, 'unconfirmed');
+  assert.equal(state.phase, 'uncertain');
+  assert.match(state.lastView.cleanup.message, /local forwarding/i);
+  assert.deepEqual(state.resourceRemoval.handle, s.handle, 'remote removal milestone remains separate');
+});
+
+test('owner loss: a late proof session records its failed close without inventing a removal', async t => {
+  const s = await scenario(t, { forwarding: 'proof-session', removal: 'ok', closeFailure: 'throw', lateProof: true });
+  s.expire();
+  const initial = await exitBounded(s.run);
+  assert.equal(initial.cleanup.state, 'unconfirmed');
+  s.release();
+  const state = await until(async () => json(join(s.directory, 'state.json')),
+    state => /local forwarding/i.test(state.lastView.cleanup.message ?? ''));
+  assert.equal(state.lastView.cleanup.state, 'unconfirmed');
+  assert.equal(state.phase, 'uncertain');
+  assert.equal(s.seen.closes, 1);
+  assert.equal(s.seen.creates ?? 0, 0, 'owner-loss latch prevents the late session from allocating');
+  assert.equal(s.seen.removes.length, 0, 'no receipt, so no resource removal is invented');
+  assert.equal(state.receipt, null);
+  assert.deepEqual(state.handle, s.handle);
 });

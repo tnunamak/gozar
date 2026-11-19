@@ -558,12 +558,14 @@ export async function runAttachedController(directory, runtime = {}) {
   const lease = { ...(session?{expiresAtMs:bootstrap.expiresAtMs}:{}), target: bootstrap.request.target, state: 'creating', origin: null, properties: adapter.definition.capabilities, ingress: null, identity:bootstrap.identity??null,
     limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
   let receipt = null, lastBeat = now(), releasing = null, releasingAt = 0, failure = null, gate = null, proofSession = null,initialSettled=false;
-  let ownerLost = false, gateClosing = null, proofClosing = null;
+  let ownerLost = false, gateClosing = null, proofClosing = null, localCloseUnconfirmed = false;
+  const visibleLease = () => ownerLost && localCloseUnconfirmed ? { ...lease, state: 'uncertain', cleanup: { state: 'unconfirmed', message: 'Local forwarding closure remains unconfirmed; retain this recovery handle' } } : lease;
   const nonce = randomBytes(32).toString('hex');
-  const lastView = () => ({...projectAttached(expired()&&lease.state==='usable'?{...lease,state:'unverified'}:lease, { handle, now: now() }),operationId:bootstrap.operationId??null,...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
+  const lastView = () => ({...projectAttached(expired()&&visibleLease().state==='usable'?{...visibleLease(),state:'unverified'}:visibleLease(), { handle, now: now() }),operationId:bootstrap.operationId??null,...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
   let resourceRemoval=null;
-  const save = () => atomicWrite(join(directory, 'state.json'), { schemaVersion: 1, adapterId: adapter.id, request: bootstrap.request, plan: bootstrap.plan,
-    receipt, handle, phase: lease.state, lastView: lastView(), resourceRemoval });
+  let saving = Promise.resolve();
+  const save = () => saving = saving.catch(() => {}).then(() => atomicWrite(join(directory, 'state.json'), { schemaVersion: 1, adapterId: adapter.id, request: bootstrap.request, plan: bootstrap.plan,
+    receipt, handle, phase: visibleLease().state, lastView: lastView(), resourceRemoval }));
   async function recordRemoval(){
     resourceRemoval={schemaVersion:1,registryId:bootstrap.registryId,owner:bootstrap.owner,providerId:adapter.id,handle:structuredClone(handle)};
     lease.state='uncertain';lease.cleanup={state:'unconfirmed',message:'Resource removed; configuration reference release remains unconfirmed'};
@@ -782,7 +784,9 @@ export async function runAttachedController(directory, runtime = {}) {
     const bound = runtime.ownerLossLocalCloseMs ?? LOCAL_CLOSE_MS;
     if(gate)gateClosing ??= within(bound, () => gate.close());
     if(proofSession)proofClosing ??= within(bound, () => proofSession.close());
-    return (await Promise.all([gateClosing ?? true, proofClosing ?? true])).every(Boolean);
+    const confirmed = (await Promise.all([gateClosing ?? true, proofClosing ?? true])).every(Boolean);
+    if(!confirmed)localCloseUnconfirmed=true;
+    return confirmed;
   }
   // Owner loss ends forwarding even when remote removal or reference reconciliation remains uncertain.
   // Failed journal writes retain the previous record and cannot prevent the detached controller from exiting.
@@ -797,7 +801,7 @@ export async function runAttachedController(directory, runtime = {}) {
         lease.cleanup={state:'unconfirmed',message:!localClosed?'Local forwarding closure remains unconfirmed; retain this recovery handle'
           :resourceRemoval?'Resource removed; configuration reference release remains unconfirmed'
           :receipt?'The owner was lost and removal or its journal did not complete; retain this recovery handle':'Startup outcome remains unknown; retain this recovery handle'};
-        await save();
+        if(!await within(LOCAL_CLOSE_MS, save))throw new Error('Owner-loss journal unavailable');
       }
     } catch {
       lease.state='uncertain';
@@ -902,6 +906,7 @@ export async function runAttachedController(directory, runtime = {}) {
   // Let the reply to the last command leave before the socket goes away.
   await new Promise(resolve => setTimeout(resolve, 50));
   await closeForwarding();
+  if(ownerLost && localCloseUnconfirmed)await within(LOCAL_CLOSE_MS, save);
   resolver?.close();
   for (const socket of sockets) socket.destroy();
   await new Promise(resolve => server.close(resolve));
