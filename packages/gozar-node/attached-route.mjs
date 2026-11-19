@@ -347,9 +347,9 @@ export async function openAttachedRoute(request, deps = {}) {
         throw error;
       }
       const recorded=await readJson(join(directory,'state.json'));
-      if (!cleanup && recorded?.handle?.id===handle.id && recorded.handle.generation===handle.generation) error.route=recorded.lastView;
+      if (!cleanup && recorded?.handle?.id===handle.id && recorded.handle.generation===handle.generation) error.route=recoveryHistory(recorded.lastView, 'Controller unavailable during startup; historical evidence only, retain this handle for cleanup');
       if(!cleanup&&recorded?.lastView?.cleanup.state==='unconfirmed'){
-        error.route=recorded.lastView;
+        error.route=recoveryHistory(recorded.lastView, 'Controller unavailable during startup; historical evidence only, retain this handle for cleanup');
         throw error;
       }
       const stopped=await stopController(controller);await dropBroker(id);

@@ -526,3 +526,39 @@ test('an identity failure after usable proof returns historical recovery, not a 
   assert.equal(await accepts(w.foreignPort),true);
  }finally{if(directory)await chmod(directory,0o700);}
 });
+
+
+test('controller death after saved usable proof returns only historical recovery',async t=>{
+ let directory,usableBefore,controllerPid;
+ const w=await world(t,null,{identityRecorder:async pid=>{
+  controllerPid=pid;
+  const identity=await processIdentity(pid);assert.ok(identity);
+  const [id]=await entries(w.home);assert.ok(id);
+  directory=join(w.home,'attached',id);
+  for(let i=0;i<1000;i++){
+   const state=await json(join(directory,'state.json')).catch(()=>null);
+   if(state?.lastView?.state==='usable'&&state.lastView.published){usableBefore=state;break;}
+   await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  assert.ok(usableBefore?.receipt,'usable proof and the receipt were saved before controller death');
+  assert.equal(await processIdentity(pid),identity,'only this fixture controller may be signalled');
+  process.kill(pid,'SIGKILL');
+  for(let i=0;i<1000&&await processIdentity(pid)!==null;i++)await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(await processIdentity(pid),null,'controller death is observed before the startup status poll');
+  return identity;
+ }});
+ const {error}=await w.exposed;assert.ok(error);
+ const saved=await json(join(directory,'state.json'));
+ assert.equal(saved.lastView.state,'usable','the dead controller cannot refresh its saved proof');
+ assert.deepEqual(saved.receipt,usableBefore.receipt);
+ assert.deepEqual(error.route.handle,usableBefore.handle);assert.equal(error.route.operationId,w.q.operationId);
+ assert.equal(error.route.state,'uncertain');assert.equal(error.route.published,null);assert.equal(error.route.ingress,null);
+ assert.equal(error.route.verification.status,'unverified');assert.deepEqual(error.route.verification.checks,[]);
+ assert.equal(error.route.cleanup.state,'unconfirmed');
+ const records=await readdir(join(w.home,'operations'));
+ const operation=await json(join(w.home,'operations',records.find(name=>name.endsWith('.json'))));
+ assert.equal(operation.phase,'recovery');assert.equal(operation.view.published,null);
+ assert.equal(operation.view.verification.status,'unverified');assert.deepEqual(operation.view.handle,usableBefore.handle);
+ assert.equal(w.ledger.size,1);assert.equal(w.counts().closes,0,'controller death is not provider removal');
+ assert.equal(await processIdentity(controllerPid),null);assert.equal(await accepts(w.foreignPort),true);
+});
