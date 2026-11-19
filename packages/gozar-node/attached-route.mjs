@@ -364,14 +364,16 @@ export async function openAttachedRoute(request, deps = {}) {
  */
 function startupHistory(record, handle, message) {
   const last = record.lastView;
-  return last.cleanup?.state === 'confirmed' && record.handle?.id === handle.id && record.handle.generation === handle.generation
-    ? releasedView(last, handle) : recoveryHistory(last, message);
+  if (![record.handle, last?.handle].every(saved => saved?.kind === handle.kind && saved.id === handle.id && saved.generation === handle.generation))
+    throw gozarError('route_conflict', 'Saved startup recovery does not match this route handle');
+  return last.cleanup?.state === 'confirmed' ? releasedView(last, handle) : recoveryHistory(last, message);
 }
 
 async function viewFromRecord(directory, handle) {
   const state = await readJson(join(directory, 'state.json'));
   if (!state) throw gozarError('route_not_found', `No attached route ${handle.id}`);
-  if (state.handle.id !== handle.id || state.handle.kind !== handle.kind || state.handle.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
+  if (![state.handle, state.lastView?.handle].every(saved => saved?.kind === handle.kind && saved.id === handle.id && saved.generation === handle.generation))
+    throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
   return state;
 }
 

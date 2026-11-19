@@ -562,3 +562,36 @@ test('controller death after saved usable proof returns only historical recovery
  assert.equal(w.ledger.size,1);assert.equal(w.counts().closes,0,'controller death is not provider removal');
  assert.equal(await processIdentity(controllerPid),null);assert.equal(await accepts(w.foreignPort),true);
 });
+
+
+for(const part of ['record','view'])for(const field of ['kind','id','generation'])
+ test(`startup refuses ${part} ${field} mismatch instead of transferring cleanup authority`,async t=>{
+  let directory,original;
+  const w=await world(t,null,{identityRecorder:async()=>{
+   const [id]=await entries(w.home);assert.ok(id);
+   directory=join(w.home,'attached',id);
+   for(let i=0;i<1000;i++){
+    const state=await json(join(directory,'state.json')).catch(()=>null);
+    if(state?.receipt){original=state;break;}
+    await new Promise(resolve=>setTimeout(resolve,10));
+   }
+   assert.ok(original?.receipt);
+   const bad=structuredClone(original);
+   const handle=part==='record'?bad.handle:bad.lastView.handle;
+   handle[field]=field==='kind'?'session':field==='id'?'att_ffffffffffffffff':2;
+   // Deliberately inconsistent fixture evidence must never establish resource absence.
+   bad.lastView.cleanup={state:'confirmed'};
+   await writeFile(join(directory,'state.json'),JSON.stringify(bad),{mode:0o600});
+   await chmod(directory,0o500);
+   throw new Error('fixture identity lookup failure with mismatched saved evidence');
+  }});
+  try{
+   const {error}=await w.exposed;assert.ok(error);
+   assert.equal(error.code,'route_conflict');
+   assert.deepEqual(error.route.handle,original.handle,'operation recovery retains only the originally reserved handle');
+   assert.equal(error.route.published,null);assert.equal(error.route.cleanup.state,'unconfirmed');
+   assert.equal(error.route.verification.status,'unverified');
+   assert.equal(w.ledger.size,1);assert.equal(w.counts().closes,0,'mismatched confirmation cannot invent provider removal');
+   assert.equal(await accepts(w.foreignPort),true);
+  }finally{if(directory)await chmod(directory,0o700);}
+ });
