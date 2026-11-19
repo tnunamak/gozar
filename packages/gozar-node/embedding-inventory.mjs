@@ -4,6 +4,7 @@ import {availabilityFor,prerequisitesFor,configurationFor} from './embedding-sta
 import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
 import {embeddingError} from './embedding-services.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
+import {providerPresentation} from './adapter-runtime.mjs';
 export async function listProviders(request,deps={}){
  if(!Array.isArray(deps.adapters))throw embeddingError('provider_unavailable');
  const platform=deps.platform??process.platform;const observedAt=new Date().toISOString();
@@ -25,7 +26,9 @@ export async function listProviders(request,deps={}){
    if(denied)availability[kind]={state:'unsupported',reason:`host-capability-${denied.state}`};
    else if(item.state!=='ready')availability[kind]={state:item.state,reason:`provider-${item.state}`};
   }
-  return {providerId:adapter.id,label:adapter.definition.label??adapter.id,reach:properties.reach,transport:properties.transport,availability,prerequisites,configuration,facts:catalogFactsFor(item)};
+  const {displayName,human,addressStability,idleTimeoutMs,needsAccount}=providerPresentation(adapter,properties);
+  return {providerId:adapter.id,label:adapter.definition.label??adapter.id,reach:properties.reach,transport:properties.transport,
+   displayName,copy:{human},addressStability,idleTimeoutMs,needsAccount,availability,prerequisites,configuration,facts:catalogFactsFor(item)};
  }));
  return {schemaVersion:1,catalogRevision:catalogRevisionOf(inspections,platform),observedAt,providers};
 }
