@@ -427,3 +427,112 @@ test('durable: a later reconcile proof (ensure on an existing route) passes the 
   assert.equal(world.verifies.count, proofs, 'a refused acknowledgment ran no challenge');
   await world.api.closeRoute({ home: world.home, handle: view.handle, mode: 'remove' });
 });
+
+// --- Durable ADOPT: the actual public adoptRoute path over the real tailscale adapter ----------------------
+// ensureRoute/reconcile above is not adoption: adoptRoute proves a rule Gozar did not write, under its own
+// reservation, and claims it only after the proof. The provider here is the real adapter behind explicit
+// fixture effects (a stored serve config with an adoptable rule); the `verify` stub only counts challenges.
+// The host acknowledgment callback shape is the boundary; DataConnect's own handler stays the Host authority.
+
+async function adoptWorld(t, { ack, originAckTimeoutMs = 300 } = {}) {
+  const home = await scratch(t), owner = 'fixture-owner', target = '127.0.0.1:8799';
+  const rule = { TCP: { 9000: { TCPForward: '127.0.0.1:9001' }, 443: { HTTPS: true } },
+    Web: { 'fixture.node.invalid:443': { Handlers: { '/': { Proxy: `http://${target}` } } } }, AllowFunnel: { 'fixture.node.invalid:443': true } };
+  const provider = { config: structuredClone(rule), version: 1, writes: 0 };
+  const node = { BackendState: 'Running', Self: { DNSName: 'fixture.node.invalid.', ID: 'fixture-node', CapMap: { https: [], funnel: [], 'https://tailscale.com/cap/funnel-ports?ports=443,8443,10000': [] } },
+    CurrentTailnet: { MagicDNSEnabled: true, MagicDNSSuffix: 'node.invalid' }, CertDomains: ['fixture.node.invalid'] };
+  const handlers = new Map(Object.entries({
+    '["recipe","probe"]': async ({ recipe }) => ({ stdout: JSON.stringify(recipe.args[0] === 'serve' ? provider.config : node), stderr: '', exitCode: 0 }),
+    '["local-api","request"]': async request => {
+      if (request.path.includes('status?')) return { status: 200, headers: {}, body: JSON.stringify(node) };
+      if (request.method === 'GET') return { status: 200, headers: { etag: `"${provider.version}"` }, body: JSON.stringify(provider.config) };
+      // Only the exact owned removal after a claim may write; every test that never claims asserts writes === 0.
+      if (request.headers['If-Match'] !== `"${provider.version}"`) return { status: 412, headers: {}, body: '' };
+      provider.config = structuredClone(request.body); provider.version++; provider.writes++;
+      return { status: 200, headers: {}, body: '' };
+    },
+  }));
+  const dispatchEffect = async ({ kind, operation, input }) => {
+    const handler = handlers.get(JSON.stringify([kind, operation]));
+    if (!handler) throw new Error('no fixture effect for ' + kind + '/' + operation);
+    return structuredClone(await handler(structuredClone(input)));
+  };
+  const acks = [], verifies = { count: 0 };
+  const api = createRouteApi({ dispatchEffect, originAckTimeoutMs,
+    ...(ack ? { acknowledgeOrigin: async request => { acks.push(structuredClone(request)); return ack(request, acks.length); } } : {}),
+    verify: () => { verifies.count++; return { status: 'verified', checkedAt: new Date().toISOString() }; } });
+  const choice = (await api.listProviders({ home, owner, refresh: true })).providers.find(p => p.availability.durable.state === 'available');
+  assert.ok(choice, 'a durable provider is offered');
+  const q = query({ home, owner, providerId: choice.providerId, operationId: 'adopt-ack-op', target, origin: 'https://fixture.node.invalid', intent: 'adopt',
+    usage: { kind: 'durable', routeId: 'adopt-route' }, requirements: { reach: choice.reach, transport: 'https', payloadAccess: 'allow-provider', address: 'stable', setup: 'allow', protocols: [] } });
+  const candidate = (await api.catalogRoutes(q)).candidates[0];
+  assert.equal(candidate.eligible, true, JSON.stringify(candidate.unmet));
+  const request = { ...q, handover: { from: 'fixture-owner', generation: 1 },
+    approval: { kind: 'route', candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision, consentFactsDigest: candidate.consentFactsDigest } };
+  const configurationUses = async () => {
+    let state; try { state = JSON.parse(await readFile(join(home, 'embedding-state.json'), 'utf8')); } catch { return []; }
+    const found = []; (function walk(node) { if (node && typeof node === 'object') for (const [key, value] of Object.entries(node)) { if (key === 'uses' && Array.isArray(value)) found.push(...value); else walk(value); } })(state);
+    return found;
+  };
+  const untouched = () => { assert.deepEqual(provider.config, rule, 'the existing provider rule is exactly as the foreign owner left it'); assert.equal(provider.writes, 0, 'adoption wrote nothing to the provider'); };
+  return { api, home, owner, request, acks, verifies, provider, configurationUses, untouched };
+}
+const matchingReply = request => ({ acknowledged: true, origin: request.origin, handle: { id: request.handle.id, generation: request.handle.generation }, attemptId: request.attemptId });
+
+test('durable adopt: a correct acknowledgment is awaited first, then the proof runs once and the rule is claimed without a write', async t => {
+  const world = await adoptWorld(t, { ack: matchingReply });
+  const route = await world.api.adoptRoute(world.request);
+  assert.equal(route.state, 'usable');
+  assert.equal(world.acks.length, 1);
+  assert.deepEqual(world.acks[0].handle, { kind: 'durable', id: 'adopt-route', generation: 1 });
+  assert.equal(world.acks[0].origin, 'https://fixture.node.invalid');
+  assert.equal(world.acks[0].operationId, 'adopt-ack-op');
+  assert.equal(world.verifies.count, 1, 'one challenge, after the acknowledgment');
+  world.untouched();
+  assert.equal((await world.api.closeRoute({ home: world.home, handle: route.handle, mode: 'remove' })).cleanup.state, 'confirmed');
+  assert.deepEqual(world.provider.config, { TCP: { 9000: { TCPForward: '127.0.0.1:9001' } } }, 'closing removes exactly the claimed rule and keeps the foreign one');
+});
+
+test('red: a held adopt acknowledgment that times out, then a normal close and a late matching reply, never proves, claims or revives', async t => {
+  const late = deferred(); let first;
+  const world = await adoptWorld(t, { ack: (request, n) => { if (n === 1) { first = request; return late.promise; } return matchingReply(request); }, originAckTimeoutMs: 400 });
+  const adopting = settle(world.api.adoptRoute(world.request));
+  assert.ok(await waitFor(() => world.acks.length === 1, 10_000), 'the host was asked to acknowledge the exact adopted origin');
+  assert.equal(world.verifies.count, 0, 'no challenge while the acknowledgment is held');
+  assert.equal((await world.configurationUses()).length, 1, 'the claim holds exactly one recorded configuration use while it waits');
+  // A normal close of the not-yet-claimed handle while the acknowledgment is held.
+  const closing = settle(world.api.closeRoute({ home: world.home, handle: { kind: 'durable', id: 'adopt-route', generation: 1 }, mode: 'remove' }));
+  const outcome = await adopting;
+  assert.equal(outcome.error?.code, 'verification_failed', 'the held acknowledgment fails the adoption closed');
+  // The late acknowledgment now arrives, matching the ORIGINAL attempt exactly. It must revive nothing.
+  late.resolve(matchingReply(first));
+  await closing; await sleep(150);
+  assert.equal(world.verifies.count, 0, 'a late matching acknowledgment starts no proof');
+  assert.deepEqual((await world.api.listRoutes({ home: world.home, owner: world.owner })).routes, [], 'no route record exists: nothing was claimed or revived');
+  assert.deepEqual(await world.configurationUses(), [], 'the recorded configuration use was released exactly');
+  world.untouched();
+  // The retained foreign rule is still adoptable; a replayed reply for the dead attempt never satisfies a NEW attempt.
+  const replay = await adoptWorld(t, { ack: request => ({ ...matchingReply(request), attemptId: first.attemptId }) });
+  assert.equal((await settle(replay.api.adoptRoute(replay.request))).error?.code, 'verification_failed', 'a stale attempt id is refused');
+  assert.equal(replay.verifies.count, 0);
+  const fresh = await adoptWorld(t, { ack: matchingReply });
+  assert.equal((await fresh.api.adoptRoute(fresh.request)).state, 'usable', 'the same rule is adoptable once acknowledged for its own attempt');
+  assert.equal(fresh.verifies.count, 1);
+  await fresh.api.closeRoute({ home: fresh.home, handle: { kind: 'durable', id: 'adopt-route', generation: 1 }, mode: 'remove' });
+});
+
+test('red: a refused, foreign-origin or throwing adopt acknowledgment runs zero challenges and leaves the provider rule and configuration untouched', async t => {
+  for (const ack of [
+    () => ({ acknowledged: false }),
+    request => ({ ...matchingReply(request), origin: 'https://foreign.example' }),
+    () => { throw new Error('host refused'); },
+  ]) {
+    const world = await adoptWorld(t, { ack });
+    assert.equal((await settle(world.api.adoptRoute(world.request))).error?.code, 'verification_failed');
+    assert.equal(world.acks.length, 1);
+    assert.equal(world.verifies.count, 0, 'zero challenges');
+    assert.deepEqual((await world.api.listRoutes({ home: world.home, owner: world.owner })).routes, []);
+    assert.deepEqual(await world.configurationUses(), []);
+    world.untouched();
+  }
+});

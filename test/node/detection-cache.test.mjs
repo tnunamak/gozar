@@ -189,3 +189,48 @@ test('setup consent: a retained poll never carries probe facts; the refresh read
   assert.equal((await setup(retained.consentFactsDigest)).error?.code, 'consent_mismatch', 'setup validates against live facts, never the retained presentation');
   assert.equal((await setup(refreshed.consentFactsDigest)).value?.state, 'complete', 'the refresh read\'s consent is the live one');
 });
+
+// Actual configured factory (not the cache unit): an explicit refresh is in flight and deferred at the provider
+// while a legitimate saved-scope mutation moves the configuration revision through the public API. When the
+// deferred old observation is then released it is neither stored nor served; the next reads answer
+// declared unknown and the next explicit refresh observes the moved scope fresh.
+const deferredGate = () => { let release; const promise = new Promise(resolve => { release = resolve; }); return { promise, release }; };
+const waitUntil = async (check, ms = 5_000) => { const end = Date.now() + ms; while (!check()) { if (Date.now() > end) throw new Error('timed out'); await new Promise(resolve => setTimeout(resolve, 5)); } };
+
+test('red: a deferred explicit refresh displaced by an API mutation of the saved scope is never stored nor served; the next read is fresh', async t => {
+  const bravo = stubAdapter('cache-bravo', { actions: [action('set-note', 'provide-value', { valueFormat: 'text', required: true, valueLabel: 'Note' })] });
+  const gate = deferredGate(); let started = 0;
+  // Probe 1 is the deferred OLD observation (provider says ready); every later probe observes the moved scope.
+  bravo.detect = async () => { bravo.calls.detect++; const call = ++started; if (call === 1) { await gate.promise; return { state: 'ready', facts: { id: 'old' } }; } return { state: 'action-required', facts: { id: 'new' } }; };
+  const world = await cacheWorld(t, { adapters: [bravo] });
+  const row = reply => reply.providers.find(item => item.providerId === 'cache-bravo');
+  const cold = row(await read(world));
+  assert.equal(started, 0, 'a cold poll probed nothing');
+  const pending = read(world, { refresh: true });
+  await waitUntil(() => started === 1);
+  assert.equal(started, 1, 'the explicit refresh is deferred inside the provider probe');
+  // The saved scope moves through the public API while the old observation is still in flight.
+  const offered = cold.configuration.actions[0];
+  const setup = await world.api.runSetupAction({ home: world.home, owner: 'poll-owner', providerId: 'cache-bravo', expectedConfigurationRevision: cold.configuration.revision,
+    actionId: offered.id, value: 'moved-note', approval: { kind: 'setup', digest: offered.digest, disclosureRevision: offered.disclosure.revision, consentFactsDigest: offered.consent.consentFactsDigest } });
+  assert.equal(setup.state, 'complete');
+  const probesBeforeRelease = started;
+  gate.release();
+  const displaced = row(await pending);
+  assert.deepEqual(displaced.detection, { checkedAt: null, fresh: false, refreshing: false }, 'the displaced refresh is not served as an observation');
+  assert.equal(displaced.availability.attached.state, 'unknown', 'no old "ready" observation reaches the caller');
+  assert.equal(displaced.facts.every(fact => fact.value !== 'old'), true, 'no old fact reaches the caller');
+  // Nothing was stored: a poll answers declared unknown with zero probes, at the moved revision.
+  const polled = row(await read(world));
+  assert.equal(started, probesBeforeRelease, 'releasing the old observation started no probe and the poll ran none');
+  assert.deepEqual(polled.detection, { checkedAt: null, fresh: false, refreshing: false }, 'the old observation was not stored under any scope');
+  assert.equal(polled.availability.attached.state, 'unknown');
+  assert.notEqual(polled.configuration.revision, cold.configuration.revision, 'the poll reads the moved saved revision');
+  // The next explicit refresh observes the moved scope fresh, with the moved revision and actions.
+  const fresh = row(await read(world, { refresh: true }));
+  assert.equal(started, probesBeforeRelease + 1, 'exactly one new probe observed the moved scope');
+  assert.equal(fresh.detection.fresh, true);
+  assert.equal(fresh.configuration.revision, polled.configuration.revision);
+  assert.equal(fresh.availability.attached.state, 'action-required', 'the observation is the new one, not the displaced old one');
+  assert.ok(fresh.configuration.actions.some(offeredAction => offeredAction.id === 'set-note'));
+});
