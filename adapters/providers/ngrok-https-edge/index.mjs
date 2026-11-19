@@ -20,8 +20,8 @@ const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('
 // against. A host that cannot install peers at runtime (a packaged read-only installation) declares a
 // tested bundle through createGozar's `runtimeModules`; a host that explicitly says its install location
 // is writable declares `{ kind: 'runtime-install' }`; a host that provides its own dependencies declares
-// `{ kind: 'host-managed' }` and gets a fixed plain reason with no install step. Without any declaration
-// the documented npm peer-install flow is unchanged. The ngrok CLI is NOT a supported substitute for the
+// `{ kind: 'host-managed' }`. With host-managed or no declaration a missing SDK is unavailable with a fixed
+// plain reason and NO install step: omission never authorizes an install. The ngrok CLI is NOT a supported substitute for the
 // SDK listener on this adapter: the CLI and the embedded SDK are different agent forms, and the CLI's
 // default local API (127.0.0.1:4040) is unauthenticated.
 const SDK_PACKAGE = '@ngrok/ngrok';
@@ -35,18 +35,17 @@ const declaredRuntime = ctx => ctx?.runtimeModules?.[SDK_PACKAGE] ?? null;
 const sdkLoaderFor = loadSdk => ctx => {
   const declared = declaredRuntime(ctx);
   return declared?.kind === 'bundled'
-    ? () => loadBundledModule({ package: SDK_PACKAGE, version: declared.version, path: declared.path }, { expectedVersion: SDK_VERSION })
+    ? () => loadBundledModule({ package: SDK_PACKAGE, version: declared.version, path: declared.path }, { expectedVersion: SDK_VERSION, requiredFunctions: ['forward'] })
     : loadSdk;
 };
-const runtimeInstallable = ctx => {
-  const declared = declaredRuntime(ctx);
-  return declared === null || declared?.kind === 'runtime-install';
-};
+// Installing is offered ONLY when the host explicitly declared its install location writable. Omitting the
+// declaration never authorizes an install (the host may be a read-only package).
+const runtimeInstallable = ctx => declaredRuntime(ctx)?.kind === 'runtime-install';
 const sdkUnavailableReason = declared => declared?.kind === 'bundled'
   ? 'The declared bundled ngrok SDK is unavailable in this host installation'
-  : declared?.kind === 'host-managed'
-    ? 'The ngrok SDK is unavailable in this host installation. The host application provides the tested SDK; Gozar cannot install it here'
-    : 'The optional ngrok SDK is missing. Confirm installation and refresh after the host can load it';
+  : declared?.kind === 'runtime-install'
+    ? 'The optional ngrok SDK is missing. Confirm installation and refresh after the host can load it'
+    : 'The ngrok SDK is unavailable in this host installation. The host application provides the tested SDK; Gozar cannot install it here';
 
 // The setup values, trimmed as the setup action validated them; each is null until it is set.
 const read = config => {
@@ -107,7 +106,7 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok'), fet
             if (!sdk) sdkReason = 'The available ngrok SDK does not expose the tested listener interface';
           } catch (error) {
             sdk = false;
-            if (declared?.kind === 'bundled' || declared?.kind === 'host-managed') sdkReason = sdkUnavailableReason(declared);
+            sdkReason = sdkUnavailableReason(declared);
           }
           const values = read(await ctx.configuration(null).catch(() => null));
           const configured = values.authToken !== null && values.reservedDomain !== null, ready = sdk && configured;

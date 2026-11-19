@@ -30,7 +30,9 @@
   a packaged read-only host no longer sees an impossible install step: a
   missing, unloadable, wrong-version or wrong-interface bundle leaves the
   provider unavailable with a fixed plain reason and no install action. Without
-  a declaration the documented npm optional-peer flow is unchanged. The ngrok
+  a declaration the SDK is still detected by the ordinary installed check, but
+  omission never authorizes an install (a missing module is unavailable with no
+  install action; declare `runtime-install` for the install step). The ngrok
   CLI is not a substitute for the embedded SDK on this adapter; a CLI
   transport is a pending proposal and is not implemented.
 - **Polling reads never probe.** `listProviders`, `beginConfigurationDraft` and

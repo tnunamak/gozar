@@ -540,7 +540,7 @@ export type OriginAcknowledgmentHandler =
  * - `{ kind: 'host-managed' }`: the host provides its own dependencies and Gozar offers no install step;
  *   a missing module is a fixed plain unavailability, never an impossible install action.
  *
- * No declaration: the documented npm optional-peer flow is unchanged. Declarations are trusted factory
+ * No declaration: the SDK is loaded the ordinary way (installed check), but omission NEVER authorizes an install: a missing module is unavailable with a fixed plain reason and no install action; declare `runtime-install` to offer one. Declarations are trusted factory
  * options, never request data, and cross to a detached controller only as validated data in Gozar's
  * private bootstrap. Satisfying the prerequisite never claims account, route or address readiness, and
  * a provider's own CLI is never silently treated as a substitute for the embedded module it declared.

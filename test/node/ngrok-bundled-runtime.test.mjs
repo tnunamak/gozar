@@ -72,6 +72,7 @@ test('red: a declared valid bundle satisfies the ngrok SDK prerequisite in catal
   // The declaration is a trusted factory option: an invalid one is refused before any provider runs.
   assert.throws(() => createRouteApi({ runtimeModules: { '@ngrok/ngrok': { kind: 'bundled', path: bundle.path } } }), { code: 'invalid_input' });
   assert.throws(() => createRouteApi({ runtimeModules: { '@ngrok/ngrok': { kind: 'wrong' } } }), { code: 'invalid_input' });
+  assert.doesNotThrow(() => createRouteApi({ runtimeModules: { '@ngrok/ngrok': { kind: 'host-managed' } } }), 'host-managed is an advertised declaration');
 });
 
 test('red: a wrong-version or missing bundle leaves the provider unavailable with a fixed plain reason and no install action', async t => {
@@ -98,7 +99,7 @@ test('red: a wrong-version or missing bundle leaves the provider unavailable wit
   const shapeless = await cannedBundle(t, { withShape: false });
   const detected = await ngrok.detect(setupContext({ '@ngrok/ngrok': { kind: 'bundled', version: '1.7.0', path: shapeless.path } }));
   assert.equal(detected.facts.sdk, false);
-  assert.equal(detected.facts.sdkReason, 'The available ngrok SDK does not expose the tested listener interface');
+  assert.equal(detected.facts.sdkReason, 'The declared bundled ngrok SDK is unavailable in this host installation', 'the interface is validated at load, refused with the fixed reason');
 });
 
 test('red: a host-managed host gets the fixed plain reason with no install action; a runtime-install host keeps the approved install step', async t => {
@@ -125,14 +126,23 @@ test('red: a host-managed host gets the fixed plain reason with no install actio
   assert.match(offered.nextAction.artifact.sha256, /^[0-9a-f]{64}$/);
 });
 
-test('without any declaration the documented npm optional-peer flow is unchanged', async () => {
+test('omission or a host-managed declaration never authorizes an install; only an explicit writable declaration does', async () => {
   const adapter = createNgrokAdapter({ loadSdk: async () => { throw Object.assign(new Error('module missing'), { code: 'ERR_MODULE_NOT_FOUND' }); } });
-  const ctx = setupContext(null);
-  const detected = await adapter.detect(ctx);
-  assert.equal(detected.facts.sdk, false);
-  assert.equal(detected.facts.runtimeInstall, true, 'an npm host may still install the peer itself');
-  assert.ok(adapter.setupActions(detected.facts).some(action => action.id === 'install-sdk'));
-  const setup = await observeSetup(adapter, ctx);
+  for (const declaration of [null, { '@ngrok/ngrok': { kind: 'host-managed', package: '@ngrok/ngrok' } }]) {
+    const ctx = setupContext(declaration);
+    const detected = await adapter.detect(ctx);
+    assert.equal(detected.facts.sdk, false);
+    assert.equal(detected.facts.runtimeInstall, false, 'no explicit writable declaration');
+    assert.ok(!adapter.setupActions(detected.facts).some(action => action.id === 'install-sdk'), 'no impossible install action');
+    const setup = await observeSetup(adapter, ctx);
+    assert.equal(setup.state, 'blocked');
+    assert.equal(setup.nextAction, null);
+  }
+  const writable = setupContext({ '@ngrok/ngrok': { kind: 'runtime-install', package: '@ngrok/ngrok' } });
+  const detected = await adapter.detect(writable);
+  assert.equal(detected.facts.runtimeInstall, true);
+  assert.ok(adapter.setupActions(detected.facts).some(action => action.id === 'install-sdk'), 'the existing writable install path is preserved');
+  const setup = await observeSetup(adapter, writable);
   assert.equal(setup.nextAction.id, 'install-sdk');
   assert.equal(setup.nextAction.kind, 'install-artifact');
 });
@@ -181,4 +191,29 @@ test('red: a real detached controller loads the host-declared bundle: the alloca
   assert.notEqual(marks.at(-1).pid, process.pid, 'the bundle was loaded by the detached controller process, not this one');
   assert.equal(marks.at(-1).domain, 'canned.example');
   await api.closeRoute({ home, handle: outcome.error.route.handle, mode: 'remove' }).catch(() => {});
+});
+
+import { symlink } from 'node:fs/promises';
+import { loadBundledModule } from '../../packages/gozar-node/runtime-modules.mjs';
+
+test('red: the version is validated before any cached module is reused, and the entry stays inside the bundle directory', async t => {
+  const bundle = await cannedBundle(t);
+  const declaration = { package: '@ngrok/ngrok', version: '1.7.0', path: bundle.path };
+  const loaded = await loadBundledModule(declaration, { expectedVersion: '1.7.0', requiredFunctions: ['forward'] });
+  assert.equal(typeof loaded.forward, 'function');
+  // Same anchor and declared version, an INCOMPATIBLE consumer: its expected version is checked on every call, before reuse.
+  assert.equal((await settle(loadBundledModule(declaration, { expectedVersion: '1.6.0' }))).error?.code, 'provider_unavailable');
+  // The bundle is replaced after the first load: the cached module must not be served under the old identity.
+  await writeFile(join(bundle.path, 'package.json'), JSON.stringify({ name: '@ngrok/ngrok', version: '1.7.1', main: 'index.cjs' }));
+  assert.equal((await settle(loadBundledModule(declaration, { expectedVersion: '1.7.0' }))).error?.code, 'provider_unavailable');
+  // An entry that resolves outside the canonical bundle directory (a symlink out) is refused.
+  const outside = await cannedBundle(t);
+  const escaping = await scratch(t);
+  await mkdir(join(escaping, 'pkg'), { recursive: true });
+  await writeFile(join(escaping, 'pkg', 'package.json'), JSON.stringify({ name: '@ngrok/ngrok', version: '1.7.0', main: 'link.cjs' }));
+  await symlink(join(outside.path, 'index.cjs'), join(escaping, 'pkg', 'link.cjs'));
+  assert.equal((await settle(loadBundledModule({ ...declaration, path: join(escaping, 'pkg') }, { expectedVersion: '1.7.0' }))).error?.code, 'provider_unavailable');
+  // A shapeless module (native layer not usable) is refused when the adapter's interface is required.
+  const shapeless = await cannedBundle(t, { withShape: false });
+  assert.equal((await settle(loadBundledModule({ ...declaration, path: shapeless.path }, { expectedVersion: '1.7.0', requiredFunctions: ['forward'] }))).error?.code, 'provider_unavailable');
 });

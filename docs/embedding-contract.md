@@ -153,7 +153,10 @@ factory declarations, in order:
    missing module is a fixed plain unavailability and no install step is
    offered.
 
-Without any declaration the documented npm optional-peer flow is unchanged.
+Without any declaration the SDK is still detected by the ordinary installed
+check, but omission never authorizes an install: a missing module is
+unavailable with a fixed plain reason and no install action. Declare
+`runtime-install` to offer the install step.
 Satisfying the prerequisite never claims account, route or address readiness.
 The ngrok CLI is NOT supported as a substitute for the embedded SDK on this
 adapter: the CLI and the embedded SDK are different agent forms with different
