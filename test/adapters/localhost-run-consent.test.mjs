@@ -26,6 +26,18 @@ test('consent copy names the requested lifetime and states no default number of 
   }
 });
 
+test('localhost.run does not declare a fixed provider cap', async () => {
+  const { adapter: declared } = JSON.parse(await readFile(join(root, 'adapters/providers/localhost-run/definition.json'), 'utf8'));
+  const { definition: plan } = JSON.parse(await readFile(join(root, 'adapters/localhost-run.definition.json'), 'utf8'));
+  const unsupportedCap = 'the plan limits a session to 15 minutes';
+  assert.ok(!declared.capabilities.address.conditions.includes(unsupportedCap));
+  assert.ok(!declared.facts.some(fact => fact.known && fact.group === 'address' && fact.value === unsupportedCap));
+  assert.ok(declared.capabilities.address.conditions.includes('trial: uptime and URL lifetime are not guaranteed'));
+  assert.match(plan.copy.consent, /for the requested lifetime\./);
+  // The plan's owned-process duration is not a statement about the remote provider's limit.
+  assert.equal(plan.recipes.create.process.lifetimeMs, 900000);
+});
+
 test('a one-hour request is offered consent with no conflicting 15-minute default and a refreshed revision', async t => {
   const tokens = tokenStubs();
   const catalog = await catalogRoutes(hourRequest(await scratch(t)), { adapters, platform: 'linux', readContext, issue: tokens.issue, consentBinding: tokens.consentBinding, now: () => 0 });
