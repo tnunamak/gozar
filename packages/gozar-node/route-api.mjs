@@ -63,7 +63,7 @@ export function createRouteApi(deps = {}) {
     ...(Number.isFinite(deps.originAckTimeoutMs) ? { originAckTimeoutMs: deps.originAckTimeoutMs } : {}),
     ...(deps.readContext ? { readContext: deps.readContext } : {}),
     decorateSetupAction:({action,adapter,configuration,draftId=null,inspection})=>{
-      const review=setupConsentReview({registryId:resolved.registryId,providerId:adapter.id,configuration,draftId,action,facts:catalogFactsFor(inspection??{adapter})});
+      const review=setupConsentReview({registryId:resolved.registryId,providerId:adapter.id,configuration,draftId,action,facts:catalogFactsFor(inspection&&inspection.live!==false?inspection:{adapter})});
       return {...safeSetupAction(action),consent:consentSnapshot(review),...(!needsSetupOperation(action)&&{review:{canonicalInput:review.canonicalInput}})};
     } }); };
   const publicError=cause=>{const normalized=normalizeError(cause),error=gozarError(normalized.code,normalized.message,normalized.nextAction?(needsSetupOperation(normalized.nextAction)?safeSetupAction(normalized.nextAction):structuredClone(normalized.nextAction)):null);if(normalized.route)error.route=structuredClone(normalized.route);return error;};
@@ -266,7 +266,7 @@ export function createRouteApi(deps = {}) {
       const outcome = request && typeof request === 'object' && ('operationId' in request || 'expectedSetupRevision' in request)
         ? await runSetupOperation(request,context) : await runSetup(request,context);
       // A completed setup or artifact action changed what detection observes: the scope's next read
-      // awaits one fresh detection instead of serving retained state.
+      // answers declared unknown until an explicit refresh.
       detection.invalidate({ registryId: context.registryId, home: request.home, owner: request.owner, providerId: request.providerId });
       return outcome;
     }),
@@ -289,17 +289,19 @@ export function createRouteApi(deps = {}) {
       }
       return {routes:[...views.values()]};
     }),
-    ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft'].map(method=>[method,request=>guard(async()=> (await services()).embeddingServices[method](request))])),
+    ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft'].map(method=>[method,request=>guard(async()=>{const resolved=await services();const result=await resolved.embeddingServices[method](request);
+      // A stored or discarded secret or draft changes what a scope offers: its retained detection is dropped.
+      detection.invalidate({registryId:resolved.registryId,home:request.home,owner:request.owner,providerId:request.providerId});return result;})])),
     beginConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const draft=await context.embeddingServices.beginConfigurationDraft(request);
       const offered=await offeredConfiguration({...request,draftId:draft.draftId},draft.configuration,context);
       return {...draft,configuration:offered.configuration,...(offered.detection?{detection:offered.detection}:{})};}),
     readConfigurationDraft:request=>guard(async()=>readConfigurationDraft(request,await shared(request))),
     commitConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const snapshot=await context.embeddingServices.commitConfigurationDraft(request);
-      // The applied configuration moved: the scope's next read awaits one fresh detection.
+      // The applied configuration moved: the scope's next read answers declared unknown until an explicit refresh.
       detection.invalidate({ registryId: context.registryId, home: request.home, owner: request.owner, providerId: request.providerId });
       const offered=await offeredConfiguration({...request,draftId:undefined},snapshot,context);
       return {...offered.configuration,...(offered.detection?{detection:offered.detection}:{})};}),
-    clearConfigurationInput:request=>guard(async()=>clearConfigurationInput(request,await setupDeps(request))),
+    clearConfigurationInput:request=>guard(async()=>{const context=await setupDeps(request);const result=await clearConfigurationInput(request,context);detection.invalidate({registryId:context.registryId,home:request.home,owner:request.owner,providerId:request.providerId});return result;}),
     reviewRouteConsent:request=>guard(async()=>request.handle?.kind==='external'?verified(()=>reviewExternalConsent(request),request):request.handle?.kind==='session'?sessionConsent(request,{adapters:await adapters()}):request.handle?.kind==='durable'?verified(async()=>(await engine()).reviewDurableConsent(request),request):reviewAttachedConsent(request)),
     approveRouteConsent:request=>guard(async()=>request.handle?.kind==='external'?verified(async()=>projectExternal(await approveExternalConsent(request),{handle:request.handle}),request):request.handle?.kind==='session'?sessionConsent(request,{approve:true,adapters:await adapters()}):request.handle?.kind==='durable'?verified(async()=>durableView(await (await engine()).approveDurableConsent(request)),request):approveAttachedConsent(request)),
     resolveClientAddress,

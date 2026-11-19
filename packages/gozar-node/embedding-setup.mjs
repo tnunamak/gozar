@@ -85,7 +85,7 @@ export async function offeredConfiguration(request,snapshot,deps){
  let inspection,detection=null;
  if(deps.detection){
   // The offered-action inspection runs on the cached detection: the draft scope keys it, a cold or
-  // expired read answers retained state while one background refresh converges it, and an explicit
+  // expired read answers retained or declared-unknown state (a poll never probes), and an explicit
   // refresh request owns the probes. The declared inputs and action decoration below stay live.
   const cached=await deps.detection.provider({scope:{registryId:deps.registryId,home:request.home,owner:request.owner,
    providerId:adapter.id,platform,adapter,draftId:request.draftId??null},

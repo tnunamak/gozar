@@ -10,12 +10,12 @@ export async function listProviders(request,deps={}){
  const owner=request.owner===undefined?deps.owner:request.owner;
  const read=await readContextFor(deps,request.home,platform,owner);
  const cache=deps.detection;
- const inspections=[];
- const providers=await Promise.all(deps.adapters.map(async adapter=>{
+ const inspections=new Array(deps.adapters.length);
+ const providers=await Promise.all(deps.adapters.map(async (adapter,index)=>{
   let item, saved, detection=null;
   if(cache){
    // The cached detection path: the scoped configuration is read live (its revision keys the detection),
-   // and a cold or expired row answers from retained state while ONE background refresh converges it.
+   // and a cold or expired row answers the retained or declared-unknown state: a poll never probes.
    const cached=await cache.provider({scope:{registryId:deps.registryId,home:request.home,owner,providerId:adapter.id,platform,adapter},
     readConfiguration:()=>deps.embeddingServices.readConfiguration({...request,owner,providerId:adapter.id}),
     detect:()=>detectAdapter(adapter,read,platform),explicit:request.refresh===true});
@@ -24,6 +24,7 @@ export async function listProviders(request,deps={}){
    item=await inspectAdapter(adapter,read,platform);
    saved=await deps.embeddingServices.readConfiguration({...request,owner,providerId:adapter.id});
   }
+  inspections[index]=item;
   const properties=item.properties;
   let actions=[...new Map([...item.actions,...(item.missingActions??[])].map(a=>[a.id,a])).values()];
   const decorate=action=>deps.decorateSetupAction?deps.decorateSetupAction({action,adapter,configuration:saved,draftId:null,inspection:item}):action;
@@ -39,7 +40,7 @@ export async function listProviders(request,deps={}){
    else if(item.state!=='ready')availability[kind]={state:item.state,reason:`provider-${item.state}`};
   }
   // The honest detection freshness this row was served from: its actual checked-at (null when nothing was
-  // observed yet), whether it is fresh, and whether one background refresh is converging it. A
+  // observed yet), whether it is fresh, and whether an explicit refresh is in flight. A
   // `refresh: true` request owns the probes and awaits them.
   const row={providerId:adapter.id,label:adapter.definition.label??adapter.id,reach:properties?.reach,transport:properties?.transport,availability,prerequisites,configuration,facts:catalogFactsFor(item)};
   if(detection)row.detection=detection;

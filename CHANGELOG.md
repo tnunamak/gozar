@@ -33,20 +33,17 @@
   a declaration the documented npm optional-peer flow is unchanged. The ngrok
   CLI is not a substitute for the embedded SDK on this adapter; a CLI
   transport is a pending proposal and is not implemented.
-- **Short-TTL cached detection for polling reads.** `listProviders` and offered
-  configuration actions answer from a per-scope cache (`detectionTtlMs`, default
-  15s) keyed by registry, home, owner, provider, platform and the configuration
-  revision it observed. A fresh hit runs zero live provider probes; a cold or
-  expired poll also runs zero probes, answering a declared unknown row or the
-  retained observation with its actual `checkedAt` (the new `detection:
-  {checkedAt, fresh, refreshing}` on inventory rows) while one same-scope
-  background refresh converges it; a `refresh: true` request awaits and owns
-  the probes. A completed setup, configuration or artifact mutation drops the
-  affected scope's entries, so the next read reflects the change immediately.
-  The route catalog is not cached — it issues single-use consent tokens bound
-  to what Gozar actually observed — and consent redemption, approved effects
-  and route allocation keep revalidating live state (a provider that moved
-  after approval still fails `candidate_stale`).
+- **Polling reads never probe.** `listProviders`, `beginConfigurationDraft` and
+  `readConfigurationDraft` answer from a short-TTL retained projection per scope
+  (`detectionTtlMs`, default 15s) keyed by registry, home, owner, provider,
+  platform, draft and the configuration revision. No poll runs a live provider
+  probe, cold or expired: a cold read answers declared unknown, an expired read
+  answers the retained projection with its actual `detection.checkedAt` and
+  `fresh: false`. Only `refresh: true` owns and awaits the probes (overlapping
+  refreshes share one). Setup, clear, commit, discard, secret and install
+  changes drop the scope. The projection holds no raw probe output and never
+  feeds setup consent. The route catalog is not cached, and consent redemption,
+  approved effects and route allocation keep revalidating live state.
 
 ### Fixed
 

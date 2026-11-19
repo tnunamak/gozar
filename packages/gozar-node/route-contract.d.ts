@@ -34,11 +34,11 @@ export type Query = {
   operationId?:string;
   hostCapabilities?:import('./embedding-contract.js').HostCapabilities;
   /**
-   * Explicit refresh request (0.5.2): this read owns the provider probes and awaits them. Without it,
-   * cached polling reads (the provider inventory and offered configuration actions) serve the short-TTL
-   * detection: a fresh hit runs zero probes, and a cold or expired row answers a declared unknown or the
-   * retained observation (with its actual checked-at) while one background refresh converges it. The
-   * route catalog always observes live: it issues consent tokens bound to current provider state.
+   * Explicit refresh request (0.5.2) on `listProviders`, `beginConfigurationDraft` and
+   * `readConfigurationDraft`: this read owns the provider probes and awaits them (concurrent refreshes of one
+   * scope share one probe). Without it a poll NEVER probes: a fresh hit serves the retained projection, an
+   * expired hit serves it with its actual `checkedAt` and `fresh: false`, and a cold read answers declared
+   * unknown (`checkedAt: null`). The route catalog and every consent, plan, redeem and effect check observe live.
    */
   refresh?:boolean;
   schemaVersion: 1;

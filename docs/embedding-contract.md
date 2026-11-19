@@ -163,29 +163,31 @@ implements it.
 
 ## Cached polling reads (0.5.2)
 
-`listProviders` and offered configuration reads answer from a short-TTL cached
-detection per full scope (registry identity, home, owner, provider, platform
-and the configuration revision it observed; `detectionTtlMs` tunes the TTL,
-default 15s). The route catalog is NOT cached: it issues single-use consent
-tokens bound to what Gozar actually observed, so its detection sweep is always
-live. The cached contract is strict:
+`listProviders`, `beginConfigurationDraft` and `readConfigurationDraft` answer
+from a short-TTL retained detection per full scope (registry identity, home,
+owner, provider, platform, draft and the configuration revision it observed;
+`detectionTtlMs` tunes the TTL, default 15s). The route catalog is NOT cached:
+it issues single-use consent tokens bound to what Gozar actually observed, so
+its detection sweep is always live. The contract is strict:
 
-- A fresh hit serves the retained observation and runs ZERO live provider
-  probes.
-- A cold or expired poll also runs ZERO probes: cold answers a declared
-  unknown row, expired answers the retained row with its ACTUAL `checkedAt`
-  (`detection.checkedAt`, `fresh`, `refreshing` on inventory rows), while ONE
-  same-scope background refresh converges it. Concurrent polls share that
-  single refresh.
-- `refresh: true` on `listProviders` (or a draft read) awaits and owns the
-  probes.
-- A completed setup or configuration mutation (including an artifact install)
-  drops the scope's retained entries: the next read awaits one fresh detection,
-  so a changed draft or configuration is reflected immediately, never served
-  stale.
-- The cache stores only the sanitized detection. Decoration, offered actions,
-  consents, plans and secret material are recomputed live, and the scoped
-  configuration itself is always read live.
+- A poll NEVER runs a live provider probe, cold or expired. A fresh hit serves
+  the retained projection. An expired hit serves it with its ACTUAL
+  `detection.checkedAt` and `fresh: false`. A cold read answers declared unknown
+  (`checkedAt: null`) and still offers the adapter's declared configuration
+  inputs. No poll starts a background refresh.
+- Only `refresh: true` (on `listProviders`, `beginConfigurationDraft` or
+  `readConfigurationDraft`) owns and awaits the probes. Overlapping refreshes of
+  one scope share one probe.
+- A completed setup, clear, commit, discard, secret store or artifact install
+  drops the scope's retained entries (every platform and draft). The next read
+  answers declared unknown until an explicit refresh; a refresh that was in
+  flight for the old state is never stored and never served.
+- The retained projection is closed: derived state, properties and the scalar
+  facts the adapter definition declares. Raw probe output is dropped. A
+  retained row never feeds setup consent: its consent decoration treats facts
+  as unknown. Consent for an adapter whose declared facts come from a probe is
+  decorated from the read that owns a fresh probe (`refresh: true`), and setup
+  approval is always re-validated live.
 - Authority never reads the cache: consent redemption, approved effects and
   route allocation revalidate live state (candidate_stale / consent_mismatch as
   before), and the catalog's plan and observation reads stay live.
