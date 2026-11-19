@@ -5,13 +5,19 @@ that the next release is accepted. No release version is changed by this patch.
 
 ## One-time owner setup
 
-Merge .github/workflows/npm-publish.yml first. In the existing public
-@tnunamak/gozar package's npm trusted-publisher settings, configure GitHub Actions:
-owner/user tnunamak, repository gozar, workflow filename npm-publish.yml
-(the repository path is .github/workflows/npm-publish.yml), environment npm-publish.
-Allow direct publishing for this configuration. Initial npm setup may require 2FA.
-Keep existing protections; this patch neither creates an approval round nor changes
-account, token, environment, or trust settings. Do not revoke anything as part of setup.
+After the trusted-publishing PR is reviewed and merged, verify the repository's
+GitHub Actions environment is named exactly `npm-publish` and retains the owner's
+intended protection rules. The workflow assigns that environment to the whole job,
+so existing environment rules apply to qualification-only runs too. Do not remove
+or bypass those rules to make the workflow run.
+
+In the existing public `@tnunamak/gozar` package's npm trusted-publisher settings,
+configure the GitHub Actions publisher with owner/user `tnunamak`, repository
+`gozar`, workflow filename `npm-publish.yml` (not the repository path), and
+environment `npm-publish`. Allow direct publishing for this configuration. Initial
+npm setup may require 2FA. Enrollment is an owner action; the workflow does not
+create the npm trust relationship or change tokens or protection rules.
+Do not revoke existing credentials as part of this setup.
 
 [Primary npm trusted-publisher documentation](https://docs.npmjs.com/trusted-publishers/)
 covers GitHub-hosted runners, OIDC, supported npm/Node versions and automatic provenance.
@@ -55,10 +61,11 @@ local writers. Receipts are evidence, not independent cryptographic attestations
 An attempt marker is recorded before npm publish. After success, registry integrity
 is polled for approximately three minutes (individual HTTP calls have ten-second
 bounds). Wrong visible integrity fails immediately; delayed absence eventually
-fails. No second publish is attempted. On ambiguous command failure or visibility
-timeout, inspect npm and retained evidence before any new manual run: do not
-blindly retry. Reusing the same evidence directory is refused. The workflow retains
-archive/evidence even for qualification-only runs and failures after setup.
+fails. There is no second publish within one evidence directory. Each hosted run
+uses a new directory, so the marker is not a cross-run lock. On ambiguous command
+failure or visibility timeout, stop and inspect npm and retained evidence before
+any new manual run; do not blindly retry. The workflow retains archive/evidence
+even for qualification-only runs and failures after setup.
 
 ## Acceptance still owed by the release owner
 
@@ -81,10 +88,14 @@ actionlint .github/workflows/npm-publish.yml
 ```
 
 The hosted tool installation, complete source gate, and live OIDC exchange are not
-yet measured for this workflow. After merge, first use publish=false to qualify in
-hosted CI and inspect the archive and receipts. A later publish=true run rebuilds and
-qualifies its own archive; it does not reuse the earlier run's provenance or bytes.
-The release owner must review that distinction when accepting consumer evidence.
+yet measured for this workflow. For the first hosted qualification, the release
+owner selects **npm trusted release** in GitHub Actions, selects `main`, and leaves
+`publish` false. Inspect `gozar-release-<sha>-<run_attempt>` for the qualified
+archive and receipts tied to that SHA; a missing publication result is expected.
+No OIDC exchange is verified by this run. A later separately authorized publish
+run rebuilds and qualifies its own archive; it does not reuse the earlier run's
+provenance or bytes. The release owner must review that distinction when accepting
+consumer evidence.
 
 ## Pinned tool and action sources
 
