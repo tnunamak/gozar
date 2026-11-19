@@ -68,6 +68,8 @@ jobs:
             echo "CARGO_TARGET_DIR=$work/target"
             echo "WASM_BINDGEN=$work/tools/bin/wasm-bindgen"
           } >> "$GITHUB_ENV"
+      - name: Fetch and pin-verify the publisher npm tool (online, unprivileged)
+        run: node scripts/trusted-release.mjs prepare-publisher-tool
       - name: Qualify one freshly built CI archive (offline)
         run: node scripts/trusted-release.mjs qualify
       - name: Upload immutable qualification artifact
@@ -114,14 +116,12 @@ jobs:
         with:
           node-version: 22.16.0
           # No registry-url: do not create a NODE_AUTH_TOKEN-backed .npmrc.
-      - name: Prepare pinned npm and empty config
+      - name: Prepare private home and empty config (no npm bootstrap)
         shell: bash
         run: |
           set -euo pipefail
           umask 077
           test "$(node --version)" = v22.16.0
-          npm install --global npm@11.15.0 --ignore-scripts --no-audit --no-fund
-          test "$(npm --version)" = 11.15.0
           work=/tmp/gozar-release
           mkdir -m 700 "$work" "$work/home" "$work/tmp"
           touch "$work/home/empty.npmrc" "$work/home/empty-global.npmrc"
