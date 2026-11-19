@@ -14,6 +14,7 @@ import {testingFetch} from '../../packages/gozar-node/testing-network.mjs';
 import {verification} from '../../packages/gozar-node/service-state.mjs';
 import {listRecordedRoutes} from '../../packages/gozar-node/route-operations.mjs';
 import {processIdentity} from '../../packages/gozar-node/process-identity.mjs';
+import {runAttachedController} from '../../packages/gozar-node/attached-route.mjs';
 import {projectAttached,unknownProperties} from '../../packages/gozar-node/route-view.mjs';
 import {attachedScratch,scratch,query,assertShape} from './route-schema-check.mjs';
 
@@ -468,3 +469,26 @@ test('a live creating allocation lists as creating only for attached routes; ses
  assert.equal(byId['port-8082:s3'].state,'uncertain');assert.equal(byId['port-8082:s3'].cleanup.state,'unconfirmed');
 });
 
+
+// A close can settle the published unstarted record while the spawned controller is
+// still waiting for the open lock. Its eventual first act must honor that settlement.
+for (const settled of ['released', 'reference-debt']) test(`a settled pending start cannot resume: ${settled}`, async t => {
+ const home=await attachedScratch(t),handle={kind:'attached',id:'att_0123456789abcdef',generation:1};
+ const directory=join(home,'attached',handle.id);
+ await mkdir(directory,{recursive:true,mode:0o700});
+ const bootstrap={schemaVersion:1,id:handle.id,home,owner:'fixture-owner',adapterId:'fixture-pending',registryId:await registryIdentity({}),
+  request:{home,owner:'fixture-owner',target:'127.0.0.1:9',usage:{kind:'attached'}},plan:{},operationId:'settled-start'};
+ const cleanup={state:settled==='released'?'confirmed':'unconfirmed'};
+ const lastView=projectAttached({target:bootstrap.request.target,state:settled==='released'?'released':'uncertain',origin:null,
+  properties:unknownProperties(),ingress:null,identity:null,limits:{recommendedPollIntervalMs:5000,idleTimeoutMs:null},checkedAtMs:null,cleanup},{handle,now:Date.now()});
+ const state={schemaVersion:1,adapterId:bootstrap.adapterId,request:bootstrap.request,plan:{},receipt:null,handle,
+  phase:lastView.state,lastView,resourceRemoval:settled==='released'?null:{schemaVersion:1,registryId:bootstrap.registryId,owner:bootstrap.owner,providerId:bootstrap.adapterId,handle}};
+ await writeFile(join(directory,'bootstrap.json'),JSON.stringify(bootstrap),{mode:0o600});
+ const bytes=JSON.stringify(state);await writeFile(join(directory,'state.json'),bytes,{mode:0o600});
+ let adapterReads=0;
+ let refusal;
+ try { await runAttachedController(directory,{registryId:bootstrap.registryId,get adapters(){adapterReads++;return [];}}); } catch(error) { refusal=error; }
+ assert.equal(adapterReads,0,'settlement refuses before loading an adapter or reaching provider effects');
+ assert.equal(refusal?.code,'route_conflict');
+ assert.equal(await readFile(join(directory,'state.json'),'utf8'),bytes,'settled custody is not overwritten');
+});

@@ -605,6 +605,9 @@ async function clearPendingStart(directory,bootstrap){
   const handle={kind:'attached',id:bootstrap.id,generation:1};
   await withExclusiveLock(join(dirname(directory),'.open.lock'),async()=>{
     const state=await readJson(join(directory,'state.json'));
+    // Close may win this lock while the spawned controller is still queued for its first act.
+    if(state?.phase==='released'||state?.lastView?.cleanup?.state==='confirmed'||state?.resourceRemoval)
+      throw gozarError('route_conflict','The pending attached start has already been closed');
     if(!state?.unstarted)return;
     if(state.handle?.kind!==handle.kind||state.handle.id!==handle.id||state.handle.generation!==handle.generation)
       throw gozarError('route_conflict','The pending start record does not match this bootstrap');
