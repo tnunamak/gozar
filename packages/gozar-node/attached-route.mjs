@@ -4,8 +4,9 @@
 //   owner (the calling process)  --heartbeat every 5 s, unref'd timer-->  controller (detached child)
 //                                                                          holds adapter.create's runtime
 // The controller removes the route 20 s after the last heartbeat, or at once on closeRoute. A crashed owner
-// therefore costs at most the expiry. A foreground CLI owner can run the controller in its own process and
-// hold the lease on stdin instead (runAttachedController with lease 'stdin'): EOF removes the route at once.
+// therefore costs at most the expiry. Owner loss is final: forwarding closes, one bounded removal is attempted,
+// and the controller exits with whatever it still owes (resource or configuration reference) in its journal.
+// A foreground CLI owner can run the controller in its own process and hold the lease on stdin instead (runAttachedController with lease 'stdin'): EOF removes the route at once.
 // openSessionRoute is the same redemption over the existing session machinery.
 import net from 'node:net';
 import { spawn } from 'node:child_process';
@@ -42,6 +43,10 @@ export function proofObservedDuring(checked, started, ended) {
   return Number.isFinite(observed) && observed >= started && observed <= ended;
 }
 export const LEASE_EXPIRY_MS = 20_000;
+// After the owner is lost, owned removal gets this long, and each local forwarding close gets LOCAL_CLOSE_MS.
+// The controller then exits whatever is still owed; the debt stays in its journal.
+const OWNER_LOSS_TEARDOWN_MS = 30_000, LOCAL_CLOSE_MS = 5_000;
+const within = (ms, work) => { let timer; return Promise.race([Promise.resolve(work).catch(() => {}), new Promise(resolve => { timer = setTimeout(resolve, ms); })]).finally(() => clearTimeout(timer)); };
 const idPattern = /^att_[0-9a-f]{16}$/;
 const here = fileURLToPath(import.meta.url);
 
@@ -552,7 +557,8 @@ export async function runAttachedController(directory, runtime = {}) {
   const expired=()=>session&&now()>=bootstrap.expiresAtMs;
   const lease = { ...(session?{expiresAtMs:bootstrap.expiresAtMs}:{}), target: bootstrap.request.target, state: 'creating', origin: null, properties: adapter.definition.capabilities, ingress: null, identity:bootstrap.identity??null,
     limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
-  let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null, proofSession = null,initialSettled=false;
+  let receipt = null, lastBeat = now(), releasing = null, releasingAt = 0, failure = null, gate = null, proofSession = null,initialSettled=false;
+  let ownerLost = false, proofClosed = false;
   const nonce = randomBytes(32).toString('hex');
   const lastView = () => ({...projectAttached(expired()&&lease.state==='usable'?{...lease,state:'unverified'}:lease, { handle, now: now() }),operationId:bootstrap.operationId??null,...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
   let resourceRemoval=null;
@@ -616,14 +622,14 @@ export async function runAttachedController(directory, runtime = {}) {
     const checked = proofSession ? await proofSession.verify({ origin: endpoint, receipt, attempt })
       : await adapter.verify(gated ? { ...read, verifyChallenge: gateChecked(sse) } : read, receipt);
     if (proofSession) {
-      if (checked.attemptId !== attempt.id || checked.endpoint !== endpoint || attempt.signal.aborted || now() >= attempt.deadlineMs || releasing) {
+      if (checked.attemptId !== attempt.id || checked.endpoint !== endpoint || attempt.signal.aborted || now() >= attempt.deadlineMs || releasing || ownerLost) {
         return { ...checked, status: 'unverified' };
       }
       lease.proof = checked;
       lease.facts = [...new Map([...(adapter.definition.facts ?? []), ...(lease.runtimeFacts ?? []), ...(checked.facts ?? [])].map(fact => [fact.id, fact])).values()];
     }
     const observed=Date.parse(checked.checkedAt);
-    if(resolverLost||activeAttempt!==attempt||attempt.signal.aborted||releasing||now()>=attempt.deadlineMs||!proofObservedDuring(checked,started,now()))return {...checked,status:'unverified'};
+    if(resolverLost||activeAttempt!==attempt||attempt.signal.aborted||releasing||ownerLost||now()>=attempt.deadlineMs||!proofObservedDuring(checked,started,now()))return {...checked,status:'unverified'};
     if(!proofSession)lease.proof={...checked,vantage:'this-device',checks:checked.status==='verified'?[...(endpoint.startsWith('https:')?['tls']:[]),'nonce',...(sse?['sse']:[])]:[],validUntil:new Date(observed+15000).toISOString()};
     lease.proofSubject=bootstrap.identity?{origin:endpoint,target:bootstrap.request.target,...bootstrap.identity,handleGeneration:handle.generation}:null;
     return checked;
@@ -652,7 +658,7 @@ export async function runAttachedController(directory, runtime = {}) {
   function verify(){if(verification)return verification;verification=refreshProof().finally(()=>{verification=null;});return verification;}
   async function refreshProof() {
     if (expired()) { await release(); return; }
-    if (!receipt || resourceRemoval || releasing || !initialSettled || failure || lease.cleanup.state==='confirmed') return;
+    if (!receipt || resourceRemoval || releasing || ownerLost || !initialSettled || failure || lease.cleanup.state==='confirmed') return;
     // Without the host resolver, retain a withdrawn recovery view instead of asking for fresh authority.
     if (resolverLost) { lease.state='unverified'; await save(); return; }
     await refreshRuntimeFacts();
@@ -702,6 +708,7 @@ export async function runAttachedController(directory, runtime = {}) {
         plan = retarget(plan, bootstrap.request.target, lease.bindTarget);
       }
       if(expired())throw gozarError('verification_failed','The session lifetime has expired');
+      if(ownerLost){await closeForwarding();throw gozarError('verification_failed','The owner released the lease before the route was created');}
       receipt = await adapter.create(context, plan);
       if(receipt?.adapterId!==adapter.id||receipt.resourceKey!==plan.resourceKey||receipt.generation!==context.generation||
         receipt.operationId!==undefined&&receipt.operationId!==(bootstrap.operationId??null))throw gozarError('provider_unavailable','The adapter returned a receipt for another allocation');
@@ -746,6 +753,7 @@ export async function runAttachedController(directory, runtime = {}) {
 
   function release() {
     proofAbort.abort();
+    if(!releasing)releasingAt=now();
     releasing ??= (async () => {
       await creation;
       if (resourceRemoval) {
@@ -761,10 +769,34 @@ export async function runAttachedController(directory, runtime = {}) {
         const removal = await removeRoute();
         if (removal.removed && !removal.debt) { lease.state = 'released'; lease.cleanup = { state: 'confirmed' };await recordRemoval();await releaseUse();lease.state='released';lease.cleanup={state:'confirmed'}; }
         else { lease.state = 'uncertain'; lease.cleanup = debtOf(removal); }
-      } catch (cause) { lease.state = 'uncertain'; lease.cleanup = { state: 'unconfirmed', message: `Removal failed (${normalizeError(cause).code})` }; }
+      } catch (cause) { lease.state = 'uncertain'; lease.cleanup = { state: 'unconfirmed', message: resourceRemoval ? 'Resource removed; configuration reference release remains unconfirmed' : `Removal failed (${normalizeError(cause).code})` }; }
       await save();
-    })().finally(()=>{if(lease.cleanup.state==='unconfirmed')releasing=null;});
+    })().finally(()=>{if(lease.cleanup.state==='unconfirmed'&&!ownerLost)releasing=null;});
     return releasing;
+  }
+
+  // Local forwarding (the gate, or the adapter's proof session) is the controller's own; closing it needs nothing from the provider
+  // or from the configuration reference. Idempotent.
+  async function closeForwarding(){
+    proofAbort.abort();
+    await within(LOCAL_CLOSE_MS,gate?.close());
+    if(proofSession&&!proofClosed){proofClosed=true;await within(LOCAL_CLOSE_MS,proofSession.close());}
+  }
+  // The owner (heartbeat expiry, or stdin EOF) is gone. Irreversible: no verification or consent refresh can reopen forwarding.
+  // Forwarding closes first, then the one owned removal runs under a bound (a racing close shares it), then the controller exits.
+  // What is still owed stays in state.json for a later owner; it is never reported confirmed and the retained handle is never dropped.
+  async function abandonOwnerless(){
+    if(ownerLost)return;
+    ownerLost=true;
+    await closeForwarding();
+    const removed=release().then(()=>true,()=>true);
+    if(!await Promise.race([removed,new Promise(resolve=>setTimeout(resolve,runtime.ownerLossTeardownMs??OWNER_LOSS_TEARDOWN_MS,false).unref())])){
+      lease.state='uncertain';
+      lease.cleanup={state:'unconfirmed',message:resourceRemoval?'Resource removed; configuration reference release remains unconfirmed'
+        :receipt?'The owner was lost and the route removal did not finish in time; retain this recovery handle':'Startup outcome remains unknown; retain this recovery handle'};
+      await save().catch(()=>{});
+    }
+    finish();
   }
 
   let finish;
@@ -848,18 +880,22 @@ export async function runAttachedController(directory, runtime = {}) {
   let monitor;
   const stdin = !session && runtime.lease?.kind === 'stdin' ? runtime.lease.stream : null;
   if (stdin) {
-    const gone = () => release().then(()=>{if(lease.cleanup.state==='confirmed')finish();});
+    const gone = () => void abandonOwnerless();
     stdin.once('end', gone); stdin.once('close', gone); stdin.resume();
   } else {
-    monitor = setInterval(() => { if (!releasing && (session?expired():now() - lastBeat > expiryMs)) {lastBeat=now();release().then(()=>{if(lease.cleanup.state==='confirmed')finish();});} }, Math.max(20, Math.min(1_000, Math.floor(expiryMs / 4))));
+    monitor = setInterval(() => {
+      if (ownerLost) return;
+      if (session) { if (!releasing && expired()) {lastBeat=now();release().then(()=>{if(lease.cleanup.state==='confirmed')finish();});} return; }
+      // An explicit close still in flight owns the removal; one that has hung past the teardown bound no longer does.
+      if (now() - lastBeat > expiryMs && (!releasing || now() - releasingAt > (runtime.ownerLossTeardownMs ?? OWNER_LOSS_TEARDOWN_MS))) void abandonOwnerless();
+    }, Math.max(20, Math.min(1_000, Math.floor(expiryMs / 4))));
   }
   creation.then(() => { if (failure&&lease.cleanup.state==='confirmed') finish(); });
   await finished;
   clearInterval(monitor);
   // Let the reply to the last command leave before the socket goes away.
   await new Promise(resolve => setTimeout(resolve, 50));
-  await gate?.close().catch(() => {});
-  await proofSession?.close().catch(() => {});
+  await closeForwarding();
   resolver?.close();
   for (const socket of sockets) socket.destroy();
   await new Promise(resolve => server.close(resolve));

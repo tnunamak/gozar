@@ -152,16 +152,19 @@ test('registered reference survives creator loss: '+retry+' operation='+operatio
     assert.equal(lost.lastView.published,null);assert.notEqual(lost.lastView.verification.status,'verified');
     assert.equal(lost.lastView.cleanup.state,'unconfirmed');
     if(retry==='lease-expiry'){
-      // Existing expiry monitor must make an observed transition, not merely survive a sleep.
-      const expired=await until(()=>json(statePath),s=>s.phase!=='unverified',
+      // Owner loss is final: the controller stops forwarding and exits instead of waiting on the reference, and its journal keeps the debt.
+      await until(async()=>alive(controller.pid),gone=>gone===false,
         lostAt+leaseExpiryMs+Math.max(20,Math.min(1000,Math.floor(leaseExpiryMs/4)))+5000);
-      assert.equal(expired.lastView.cleanup.state,'unconfirmed');
-      assert.notEqual(expired.phase,'released');
+      const parked=await json(statePath);
+      assert.equal(parked.lastView.cleanup.state,'unconfirmed');assert.notEqual(parked.phase,'released');
+      assert.equal(key(parked.resourceRemoval.handle),key(handle));assert.equal(key(parked.handle),key(handle));
+      await assert.rejects(controlAttached(directory,{type:'close',handleId:handle.id,generation:handle.generation}),error=>error.gone===true);
+    }else{
+      const retried=await controlAttached(directory,{type:'close',handleId:handle.id,generation:handle.generation});
+      assert.equal(key(retried.view.handle),key(handle));
+      assert.equal(retried.view.cleanup.state,'unconfirmed');
+      assert.equal(retried.view.published,null);assert.notEqual(retried.view.verification.status,'verified');
     }
-    const retried=await controlAttached(directory,{type:'close',handleId:handle.id,generation:handle.generation});
-    assert.equal(key(retried.view.handle),key(handle));
-    assert.equal(retried.view.cleanup.state,'unconfirmed');
-    assert.equal(retried.view.published,null);assert.notEqual(retried.view.verification.status,'verified');
     await assert.rejects(commit(scope,d),{code:'configuration_in_use'});
     assert.deepEqual(await counts(),ledger);
     assert.equal(successes,0);
