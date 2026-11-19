@@ -6,9 +6,9 @@ import {X509Certificate} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {createTestingGozar} from '@tnunamak/gozar/testing';
 import {scratch,query} from './route-schema-check.mjs';
-async function exercise(t,transport,{buffered=false,processRuntime=false,denyCode,retainOnClose=false}={}){
+async function exercise(t,transport,{buffered=false,processRuntime=false,denyCode,retainOnClose=false,acknowledge=false}={}){
  let harness;t.after(()=>harness?.close());
- const home=await scratch(t),owner='fixture-owner',ledger=new Map();let serial=0,allowClose=!retainOnClose;
+ const home=await scratch(t),owner='fixture-owner',ledger=new Map(),acknowledgments=[];let serial=0,allowClose=!retainOnClose;
  const effects=[
   {kind:'process-runtime',operation:'detect',handle:async()=>({available:true})},
   {kind:'process-runtime',operation:'open',handle:async input=>{const handle=`process-${++serial}`;ledger.set(handle,{url:input.origin,target:input.target});return {handle};}},
@@ -21,6 +21,7 @@ async function exercise(t,transport,{buffered=false,processRuntime=false,denyCod
   {kind:'sdk-listener',operation:'close',handle:async({handle})=>{if(allowClose)ledger.delete(handle);return {closed:true};}},
   {kind:'network',operation:'fetch',handle:async request=>{
     const parsed=new URL(request.url),resource=[...ledger.values()].find(r=>r.url===parsed.origin);assert.ok(resource);
+    if(acknowledge)assert.ok(acknowledgments.some(ack=>ack.origin===parsed.origin),'the testing factory must acknowledge the exact origin before proof');
     const response=await fetch('http://'+resource.target+parsed.pathname+parsed.search,{method:request.method,headers:request.headers});
     const chunks=[];let last=Date.now();for await(const chunk of response.body){const at=Date.now();chunks.push({data:Buffer.from(chunk).toString('base64'),delayMs:buffered?0:at-last});last=at;}
     return {status:response.status,headers:Object.fromEntries(response.headers),chunks};
@@ -34,7 +35,9 @@ async function exercise(t,transport,{buffered=false,processRuntime=false,denyCod
    });
   }},
  ];
- harness=await createTestingGozar({effects});const api=harness.gozar;
+ harness=await createTestingGozar({effects,...(acknowledge?{acknowledgeOrigin:async request=>{
+  acknowledgments.push(request);return {acknowledged:true,origin:request.origin,handle:{id:request.handle.id,generation:request.handle.generation},attemptId:request.attemptId};
+ }}:{})});const api=harness.gozar;
  const inventory=await api.listProviders({home,owner});const provider=inventory.providers.find(p=>p.transport===transport&&p.availability.attached.state!=='unsupported'&&p.configuration.inputRequirements.some(i=>i.kind==='https-origin')===processRuntime);assert.ok(provider);
  let config=provider.configuration;
  for(const requirement of config.inputRequirements){const action=config.actions.find(a=>a.id===requirement.actionId);let input;
@@ -48,6 +51,7 @@ async function exercise(t,transport,{buffered=false,processRuntime=false,denyCod
  if(denyCode){let error;try{await api.expose(request);}catch(cause){error=cause;}assert.ok(error);const saved=JSON.parse(await readFile(`${home}/attached/${error.route.handle.id}/state.json`,'utf8'));const evidence={phase:saved.phase,cleanup:saved.lastView.cleanup,receipt:saved.receipt!==null,state:saved.lastView.state,reported:error.route.state};t.diagnostic(JSON.stringify(evidence));assert.equal(error.code,'setup_required');assert.equal(error.nextAction.id,config.inputRequirements.find(i=>i.secret).actionId);assert.equal(error.nextAction.consent.scope.kind,'setup');assert.equal(error.route.cleanup.state,'confirmed',JSON.stringify(evidence));assert.doesNotMatch(JSON.stringify(error),/synthetic-canary/);assert.equal(error.cause,undefined);assert.equal(ledger.size,0);return;}
  if(buffered){await assert.rejects(api.expose(request),{code:'verification_failed'});assert.equal(ledger.size,0);return;}
  const route=await api.expose(request);
+ if(acknowledge){assert.ok(acknowledgments.length);assert.equal(acknowledgments[0].origin,route.origin);assert.equal(acknowledgments[0].handle.id,route.handle.id);}
  assert.equal(route.operationId,q.operationId);
  assert.deepEqual((await api.expose(request)).handle,route.handle);assert.equal(serial,1);
  await assert.rejects(api.expose({...request,target:'127.0.0.1:2'}),{code:'operation_conflict'});assert.equal(serial,1);
@@ -65,6 +69,7 @@ async function exercise(t,transport,{buffered=false,processRuntime=false,denyCod
  assert.ok(harness.events.some(e=>e.kind==='network'&&e.operation===(transport==='https'?'fetch':'exchange')));
 }
 for(const transport of ['https'])test(`public testing harness runs shipped ${transport} adapter through controller and witnessed proof`,t=>exercise(t,transport));
+test('public testing factory forwards exact-origin acknowledgment before witnessed proof',t=>exercise(t,'https',{acknowledge:true}));
 test('public initial streaming proof cannot be bypassed by fresh status while frames are buffered',t=>exercise(t,'https',{buffered:true}));
 test('public testing harness runs shipped process adapter through the same generic lifecycle',t=>exercise(t,'https',{processRuntime:true}));
 test('a wrong or revoked credential returns its scoped configure action without raw SDK error bytes',t=>exercise(t,'https',{denyCode:'ERR_NGROK_105'}));
