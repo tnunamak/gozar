@@ -24,8 +24,7 @@
         "scope": "random hostname under lhr.life for one connection",
         "conditions": [
           "trial: uptime and URL lifetime are not guaranteed",
-          "a new connection gets a new URL",
-          "the plan limits a session to 15 minutes"
+          "a new connection gets a new URL"
         ],
         "ports": null
       },
@@ -140,16 +139,6 @@
         "id": "address-condition-1",
         "label": "Address condition",
         "value": "a new connection gets a new URL",
-        "known": true,
-        "group": "address",
-        "affectsConsent": false,
-        "source": "https://localhost.run/, https://localhost.run/docs/forever-free",
-        "asOf": "2026-11-12"
-      },
-      {
-        "id": "address-condition-2",
-        "label": "Address condition",
-        "value": "the plan limits a session to 15 minutes",
         "known": true,
         "group": "address",
         "affectsConsent": false,
