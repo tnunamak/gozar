@@ -89,7 +89,7 @@ export async function offeredConfiguration(request,snapshot,deps){
   // refresh request owns the probes. The declared inputs and action decoration below stay live.
   const cached=await deps.detection.provider({scope:{registryId:deps.registryId,home:request.home,owner:request.owner,
    providerId:adapter.id,platform,adapter,draftId:request.draftId??null},
-   readConfiguration:()=>Promise.resolve(snapshot),detect:()=>detectAdapter(adapter,scopedRead,platform),explicit:request.refresh===true});
+   readConfiguration:()=>Promise.resolve(snapshot),detect:()=>detectAdapter(adapter,scopedRead,platform),explicit:request.refresh===true,refreshCohort:deps.refreshCohort});
   inspection=cached.inspection;detection=cached.detection;
  }else inspection=await inspectAdapter(adapter,scopedRead,platform);
  // A failed observation (a locked secret backend) leaves the inspection without actions, but the draft's declared inputs still exist.

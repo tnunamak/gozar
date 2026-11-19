@@ -47,6 +47,23 @@ export function createRouteApi(deps = {}) {
   // revision). Routine cold or expired polls run ZERO live provider probes; an explicit refresh request
   // and the read after a mutation own the probes. Authority paths never read it.
   const detection = deps.detectionCache ?? createDetectionCache({ ttlMs: deps.detectionTtlMs ?? 15_000, now: () => (deps.now ?? Date.now)() });
+  const refreshCohorts = new Map();
+  async function readWithRefreshCohort(kind, request, read) {
+    if (request?.refresh !== true) return read(await shared(request));
+    const key = JSON.stringify([kind, request.home ?? null, request.owner ?? null,
+      request.providerId ?? null, request.draftId ?? null]);
+    let cohort = refreshCohorts.get(key);
+    if (!cohort) refreshCohorts.set(key, cohort = { readers: 0, flights: new Map() });
+    cohort.readers++;
+    try {
+      return await read({ ...await shared(request), refreshCohort: cohort.flights });
+    } finally {
+      if (--cohort.readers === 0) {
+        cohort.flights.clear();
+        refreshCohorts.delete(key);
+      }
+    }
+  }
   let loaded;
   const adapters = async () => deps.adapters ?? (loaded ??= runtime().then(module => module.loadAdapters(deps.manifest ? { manifest: deps.manifest, root: deps.root } : undefined)).catch(error => { loaded = undefined; throw error; }));
   let servicesPromise;
@@ -272,7 +289,7 @@ export function createRouteApi(deps = {}) {
     }),
     readSetupOperation: request => guard(async () => readSetupOperation(request,await setupDeps(request))),
     cancelSetupOperation: request => guard(async () => cancelSetupOperation(request,await setupDeps(request))),
-    listProviders: request => guard(async()=>inventory(request,await shared(request))),
+    listProviders: request => guard(() => readWithRefreshCohort('inventory', request, context => inventory(request, context))),
     listRoutes:request=>guard(async()=>{
       const context=await shared(request);
       const base=await listRecordedRoutes(request,context),retained=await listCleanupReferences(request);
@@ -295,7 +312,7 @@ export function createRouteApi(deps = {}) {
     beginConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const draft=await context.embeddingServices.beginConfigurationDraft(request);
       const offered=await offeredConfiguration({...request,draftId:draft.draftId},draft.configuration,context);
       return {...draft,configuration:offered.configuration,...(offered.detection?{detection:offered.detection}:{})};}),
-    readConfigurationDraft:request=>guard(async()=>readConfigurationDraft(request,await shared(request))),
+    readConfigurationDraft: request => guard(() => readWithRefreshCohort('draft', request, context => readConfigurationDraft(request, context))),
     commitConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const snapshot=await context.embeddingServices.commitConfigurationDraft(request);
       // The applied configuration moved: the scope's next read answers declared unknown until an explicit refresh.
       detection.invalidate({ registryId: context.registryId, home: request.home, owner: request.owner, providerId: request.providerId });

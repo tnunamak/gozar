@@ -197,6 +197,61 @@ test('setup consent: a retained poll never carries probe facts; the refresh read
 const deferredGate = () => { let release; const promise = new Promise(resolve => { release = resolve; }); return { promise, release }; };
 const waitUntil = async (check, ms = 5_000) => { const end = Date.now() + ms; while (!check()) { if (Date.now() > end) throw new Error('timed out'); await new Promise(resolve => setTimeout(resolve, 5)); } };
 
+test('factory refreshes that overlap before configuration resolves share one successful probe', async t => {
+  const home = await scratch(t);
+  const adapter = stubAdapter('cache-cohort');
+  const second = deferredGate(), third = deferredGate(), priorRevision = deferredGate(), priorRead = deferredGate();
+  let reads = 0, revision = 'v1', observed = 1_000_000;
+  const api = createRouteApi({
+    adapters: [adapter],
+    now: () => observed,
+    embeddingServices: {
+      async readConfiguration() {
+        const index = ++reads, currentRevision = revision;
+        if (index === 2) await second.promise;
+        if (index === 3) await third.promise;
+        if (index === 5) { priorRead.release(); await priorRevision.promise; }
+        return { revision: currentRevision, scopeId: 'synthetic-scope', values: {}, credentials: {} };
+      },
+    },
+  });
+  const refresh = () => api.listProviders({ home, owner: 'poll-owner', refresh: true });
+  const row = reply => reply.providers[0];
+  const first = refresh(), next = refresh(), last = refresh();
+  try {
+    const firstRow = row(await first);
+    assert.equal(adapter.calls.detect, 1);
+    second.release();
+    const nextRow = row(await next);
+    third.release();
+    const lastRow = row(await last);
+    assert.equal(adapter.calls.detect, 1, 'both delayed reads share the settled cohort probe');
+    assert.equal(firstRow.detection.fresh, true);
+    assert.deepEqual(nextRow.detection, firstRow.detection);
+    assert.deepEqual(lastRow.detection, firstRow.detection);
+
+    observed += 1;
+    const later = row(await refresh());
+    assert.equal(adapter.calls.detect, 2, 'a nonoverlapping explicit read probes again within TTL');
+    assert.notEqual(later.detection.checkedAt, firstRow.detection.checkedAt);
+
+    const old = refresh();
+    await priorRead.promise;
+    revision = 'v2';
+    const moved = row(await refresh());
+    priorRevision.release();
+    assert.equal(row(await old).configuration.revision, 'v1');
+    assert.equal(adapter.calls.detect, 4, 'an overlapping refresh of another revision owns a separate probe');
+    assert.equal(moved.configuration.revision, 'v2');
+    assert.equal(moved.detection.fresh, true);
+  } finally {
+    second.release();
+    third.release();
+    priorRevision.release();
+    await Promise.allSettled([first, next, last]);
+  }
+});
+
 test('red: a deferred explicit refresh displaced by an API mutation of the saved scope is never stored nor served; the next read is fresh', async t => {
   const bravo = stubAdapter('cache-bravo', { actions: [action('set-note', 'provide-value', { valueFormat: 'text', required: true, valueLabel: 'Note' })] });
   const gate = deferredGate(); let started = 0;

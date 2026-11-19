@@ -95,7 +95,7 @@ export function createDetectionCache({ now = Date.now, ttlMs = 15_000 } = {}) {
    * entry is marked `live: false` and carries only the closed projection: setup consent decoration must
    * treat its facts as unknown. The inspection an explicit refresh just observed is `live: true`.
    */
-  async function provider({ scope, readConfiguration, detect, explicit = false }) {
+  async function provider({ scope, readConfiguration, detect, explicit = false, refreshCohort }) {
     const saved = await readConfiguration();
     const key = keyOf({ ...scope, revision: saved.revision ?? null });
     let entry = entries.get(key);
@@ -109,7 +109,14 @@ export function createDetectionCache({ now = Date.now, ttlMs = 15_000 } = {}) {
     let live = null;
     if (explicit) {
       const started = entry.generation;
-      const done = await startRefresh(entry, key, detect);
+      // API requests can overlap even when serialized configuration reads reach this scope
+      // after detection has settled. Keep the promise only in that active request cohort.
+      let flight = refreshCohort?.get(key);
+      if (flight?.entry !== entry || flight.generation !== started) {
+        flight = { entry, generation: started, result: startRefresh(entry, key, detect) };
+        refreshCohort?.set(key, flight);
+      }
+      const done = await flight.result;
       // A displaced read (a mutation dropped the entry while it awaited) is never served.
       if (entries.get(key) !== entry || entry.generation !== started)
         return { saved, detection: { checkedAt: null, fresh: false, refreshing: false }, inspection: declaredUnknown(scope.adapter) };

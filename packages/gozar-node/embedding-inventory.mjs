@@ -18,7 +18,7 @@ export async function listProviders(request,deps={}){
    // and a cold or expired row answers the retained or declared-unknown state: a poll never probes.
    const cached=await cache.provider({scope:{registryId:deps.registryId,home:request.home,owner,providerId:adapter.id,platform,adapter},
     readConfiguration:()=>deps.embeddingServices.readConfiguration({...request,owner,providerId:adapter.id}),
-    detect:()=>detectAdapter(adapter,read,platform),explicit:request.refresh===true});
+    detect:()=>detectAdapter(adapter,read,platform),explicit:request.refresh===true,refreshCohort:deps.refreshCohort});
    item=cached.inspection;saved=cached.saved;detection=cached.detection;
   }else{
    item=await inspectAdapter(adapter,read,platform);
