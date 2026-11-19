@@ -164,7 +164,34 @@ its lease, but that process exiting successfully alone is not cleanup evidence.
 If status/close cannot establish cleanup, retain unknown/unconfirmed and reconcile;
 `route_not_found` is not proof of remote absence.
 
-Perform cleanup in this order:
+Choose the cleanup path before changing dashboard resources or local state.
+For an existing connector, use the numbered sequence below. For a managed
+setup, complete cancellation and its separately approved cleanup first:
+
+For a managed setup, close the exact route first and check cleanup; cancelling
+setup is separate. Keep the setup journal, operation reference and management
+token until the returned cleanup offers and reconciliation are complete. Do not
+perform the general dashboard cleanup or delete local state before then.
+
+```sh
+./node_modules/.bin/gozar setup-operation cancel --request-file setup-ref.json --json
+./node_modules/.bin/gozar setup-operation read --request-file setup-ref.json --json
+```
+
+Follow the returned cleanup offers. The zone owner manually removes DNS only
+after matching the proxied CNAME's exact name, target, record ID and last
+modified time in the correct zone. If any detail changed, leave it in place
+and reconcile. Re-read the operation so Gozar can verify exact absence. Rotate
+the owned tunnel run token when instructed and re-read; rotation is not proof
+that existing connectors stopped. Review and separately approve the fresh
+machine offer to remove the exact owned tunnel; use the non-secret `run`
+command above. Do not force-disconnect other connectors. Follow the offers to
+forget local credential references; that is separate from revoking the imported
+API token in Cloudflare. Record unresolved states as unknown or unconfirmed,
+and retain the paired public/local controls below.
+
+
+After the applicable setup cleanup is settled, perform this sequence:
 
 1. Close only this walk's owned route/connector and gate, retaining its exact
    handle and generation. Check cleanup state. Leave the independent app running.
@@ -187,25 +214,6 @@ Perform cleanup in this order:
    delete this walk's local state. Preserve redacted evidence first. If the
    check is not run or remains unknown, do not label the walk cleaned up.
 
-For the managed path, close the exact route first and check cleanup; cancelling
-setup is separate. Keep the management token available until cleanup is proven.
-
-```sh
-./node_modules/.bin/gozar setup-operation cancel --request-file setup-ref.json --json
-./node_modules/.bin/gozar setup-operation read --request-file setup-ref.json --json
-```
-
-Follow the returned cleanup offers. The zone owner manually removes DNS only
-after matching the proxied CNAME's exact name, target, record ID and last
-modified time in the correct zone. If any detail changed, leave it in place
-and reconcile. Re-read the operation so Gozar can verify exact absence. Rotate
-the owned tunnel run token when instructed and re-read; rotation is not proof
-that existing connectors stopped. Review and separately approve the fresh
-machine offer to remove the exact owned tunnel; use the non-secret `run`
-command above. Do not force-disconnect other connectors. Follow the offers to
-forget local credential references; that is separate from revoking the imported
-API token in Cloudflare. Record unresolved states as unknown or unconfirmed,
-and retain the paired public/local controls above.
 
 For an existing named connector, stopping Gozar does **not** delete the remotely managed
 tunnel, DNS record or token. Its tunnel-specific run token is not a broad account

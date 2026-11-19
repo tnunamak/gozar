@@ -37,6 +37,12 @@ test('localhost.run definitions and generated provider row do not declare a fixe
   assert.equal(cells[5], declared.capabilities.address.stability);
   assert.equal(plan.label, declared.label);
 
+  const clocks = declared.facts.filter(fact => fact.id === 'provider-clocks');
+  assert.equal(clocks.length, 1, 'provider expiry has one stable fact identity');
+  assert.equal(clocks[0].known, false, 'the provider expiry has not been observed');
+  assert.equal(clocks[0].value, null, 'no numeric vendor expiry is asserted');
+  assert.equal(clocks[0].group, 'limits');
+
   const unsupportedCap = /the plan limits a session to 15 minutes/i;
   for (const [source, value] of [['normalized', declared], ['wrapped', plan], ['generated row', row]]) {
     assert.doesNotMatch(JSON.stringify(value), unsupportedCap, `${source} repeats the removed provider cap`);
