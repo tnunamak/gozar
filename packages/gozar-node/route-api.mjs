@@ -30,6 +30,7 @@ import {cleanupReferenceRecord,prepareCleanupReference,recordCleanupRemoval,retr
 import {attachedCleanupReference,attachedRemovalEvidence,finishCleanupController,attachedReplayProgress} from './attached-route.mjs';
 import {withServiceContext,reviewExternalConsent,approveExternalConsent} from './service.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
+import {validateSocketDirectory,withRuntimeSockets} from './runtime-sockets.mjs';
 
 const lazy = loader => { let loaded; return () => (loaded ??= loader()); };
 const engine = lazy(() => import('./durable-route.mjs'));
@@ -37,6 +38,7 @@ const legacy = lazy(() => import('./legacy-import.mjs'));
 const runtime = lazy(() => import('./adapter-runtime.mjs'));
 
 export function createRouteApi(deps = {}) {
+  const socketDirectory=validateSocketDirectory(deps.socketDirectory);
   const platform = () => deps.platform ?? process.platform;
   // Trusted host declarations of packaged runtime modules. Structural validation is synchronous; the
   // identity, version and load check happen on every load, in this process and in a detached controller.
@@ -70,7 +72,7 @@ export function createRouteApi(deps = {}) {
       return {...safeSetupAction(action),consent:consentSnapshot(review),...(!needsSetupOperation(action)&&{review:{canonicalInput:review.canonicalInput}})};
     } }); };
   const publicError=cause=>{const normalized=normalizeError(cause),error=gozarError(normalized.code,normalized.message,normalized.nextAction?(needsSetupOperation(normalized.nextAction)?safeSetupAction(normalized.nextAction):structuredClone(normalized.nextAction)):null);if(normalized.route)error.route=structuredClone(normalized.route);return error;};
-  const guard = async action => { try { return structuredClone(await action()); } catch (error) { throw publicError(error); } };
+  const guard = async action => { try { return structuredClone(await withRuntimeSockets(socketDirectory,action)); } catch (error) { throw publicError(error); } };
   const setupDeps=async request=>{
     const context=await shared(request);
     const invoke=async(operation,input)=>{const adapter=context.adapters.find(a=>a.id===request.providerId);if(!adapter?.definition.effectOperations?.some(row=>row.kind==='artifact'&&row.operation===operation))throw gozarError('unsupported','The adapter has not declared this artifact effect');return context.dispatchEffect({kind:'artifact',operation,input});};

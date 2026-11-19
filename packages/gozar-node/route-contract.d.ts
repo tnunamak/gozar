@@ -557,7 +557,9 @@ export type GozarOptions={manifest?: string | {providers: {id:string; module:str
   /** Trusted declarations of packaged runtime modules an adapter embeds; see RuntimeModuleDeclaration. */
   runtimeModules?: Record<string, RuntimeModuleDeclaration>;
   /** Short TTL for cached provider detection, in milliseconds (1000..300000; default 15000). */
-  detectionTtlMs?: number;};
+  detectionTtlMs?: number;
+  /** Trusted absolute parent for private transient Unix socket directories. The default is the real system /tmp; durable state stays at request.home. */
+  socketDirectory?: string;};
 export function createGozar(options?: GozarOptions): import('./embedding-contract.js').HostEmbeddingMethods & {
  catalogRoutes: typeof catalogRoutes; expose: (request:ExposeRequest)=>Promise<RouteView>;
  ensureRoute: typeof ensureRoute; adoptRoute: typeof adoptRoute; routeStatus: typeof routeStatus;
