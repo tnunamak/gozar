@@ -413,3 +413,17 @@ test('durable: a host that declares no boundary keeps the 0.5.1 behavior', async
   assert.equal(world.acks.length, 0);
   await world.api.closeRoute({ home: world.home, handle: view.handle, mode: 'remove' });
 });
+
+test('durable: a later reconcile proof (ensure on an existing route) passes the acknowledgment first; a refused one runs no challenge', async t => {
+  let mode = 'accept';
+  const world = await durableWorld(t, { ack: request => mode === 'accept' ? ({ acknowledged: true, origin: request.origin,
+    handle: { id: request.handle.id, generation: request.handle.generation }, attemptId: request.attemptId }) : ({ acknowledged: false }) });
+  const view = await world.api.ensureRoute(world.request);
+  assert.equal(view.state, 'usable');
+  const proofs = world.verifies.count, asked = world.acks.length;
+  mode = 'refuse';
+  const again = await world.api.ensureRoute({ ...world.request, approval: undefined }).catch(error => ({ error }));
+  assert.ok(world.acks.length > asked, 'the reconcile proof asked the host to acknowledge the exact origin first');
+  assert.equal(world.verifies.count, proofs, 'a refused acknowledgment ran no challenge');
+  await world.api.closeRoute({ home: world.home, handle: view.handle, mode: 'remove' });
+});

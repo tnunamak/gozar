@@ -61,7 +61,11 @@ async function boundProof(record,checked){
   const identity=await runtime.embeddingServices.resolveIdentity({home:runtime.home});
   return {...checked,observedAt:checked.checkedAt??null,subject:{origin:record.origin??record.intent.origin,target:record.target,...identity,handleGeneration:record.generation}};
 }
+const unprovenResult=()=>({status:'unverified',checkedAt:null,observedAt:null,subject:null,checks:[]});
+// Every durable proof (publish, reconcile, adopt, renewal) passes the awaited exact-origin host boundary
+// first: with a declared acknowledgment handler no challenge runs until the host bound THIS origin.
 const verifyRecord=async record=>{
+ if(!await acknowledgePinnedOrigin(record))return unprovenResult();
  const started=Date.now(),checked=await runVerifier({origin:record.origin??record.intent.origin,target:record.target,verifyCmd:null}),observed=Date.parse(checked.checkedAt);
  if(!Number.isFinite(observed)||observed<started||observed>Date.now()||Date.now()>started+5000)return {...checked,status:'unverified',observedAt:null,subject:null};
  return boundProof(record,{...checked,validUntil:new Date(observed+15000).toISOString()});
@@ -583,19 +587,26 @@ async function acknowledgePinnedOrigin(record) {
 }
 
 // Verify the pinned origin and durably publish it only after verification succeeds.
+// The generation fence runs before the host acknowledgment and the proof, after the proof, and before
+// every write (including the negative ones): a concurrent release or hand-back that moved the generation wins.
 async function publish(dir, record, checked) {
-  if(!await consentCurrent(record)){await save(dir,{...record,state:'unverified'});return {record,verification:{status:'unverified',checkedAt:record.verification?.checkedAt??null,observedAt:record.verification?.observedAt??null,subject:record.verification?.subject??null}};}
-  if (!await acknowledgePinnedOrigin(record)) {
+  const fence = async () => {
+    const fresh = await load(dir, record.routeId);
+    if (!fresh || fresh.generation !== record.generation || ['releasing', 'handing-back', 'suspending', 'suspended'].includes(fresh.state))
+      throw refuse('route_releasing', 'The route was released during this call; it was not published');
+  };
+  const unverified = async () => {
+    await fence();
     record = { ...record, state: 'unverified' };
     await save(dir, record);
     return { record, verification: { status: 'unverified', checkedAt: record.verification?.checkedAt ?? null, observedAt: record.verification?.observedAt ?? null, subject: record.verification?.subject ?? null } };
-  }
-  checked ??= await verifyRecord(record);
-  // Fence: a concurrent release or hand-back that moved the generation wins.
-  const fresh = await load(dir, record.routeId);
-  if (!fresh || fresh.generation !== record.generation || ['releasing', 'handing-back', 'suspending', 'suspended'].includes(fresh.state))
-    throw refuse('route_releasing', 'The route was released during this call; it was not published');
+  };
+  await fence();
+  if (!await consentCurrent(record)) return unverified();
+  checked ??= await verifyRecord(record); // the proof passes the host acknowledgment first
+  await fence();
   const state = checked.status === 'verified'&&await consentCurrent(record) ? 'usable' : 'unverified';
+  await fence();
   record = { ...record, state,verification:checked,origin: state === 'usable' ? record.origin ?? record.intent.origin : record.origin ?? null };
   await save(dir, record);
   return { record, verification: checked };
