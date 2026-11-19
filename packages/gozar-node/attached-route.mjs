@@ -220,10 +220,13 @@ export async function openAttachedRoute(request, deps = {}) {
     const controller = await withExclusiveLock(join(root, '.open.lock'), async () => {
       const redeemed = session?.redeemed ?? await redeemApproval(request, { ...deps, adapters }).catch(error => { throw refusedBeforeStart(error, handle, request); });
       // A published attached directory always holds its complete recovery pair: it is built in a private staging name no listing
-      // enumerates, then renamed into place. A session keeps its own directory and its own lifecycle.
+      // enumerates, then renamed into place. The durable host registration follows that publication, so a hidden stale staging
+      // directory owes no registered use and every registered use has exact published custody. A session keeps its own directory,
+      // its own lifecycle and its registration inside the broker setup, where the session authority model keeps it.
       const staging = session ? null : join(root, `.staging-${id}-${randomBytes(6).toString('hex')}`);
       const cut = async stage => { await deps.publicationCut?.(stage); };
       let broker, identity, bootstrap = null, published = false, hostTouched = false;
+      let hostRegistered = false;
       try {
       if (session) {
         await trustedDirectory(directory, true);
@@ -248,16 +251,19 @@ export async function openAttachedRoute(request, deps = {}) {
         const descriptor=await broker.registerController({identity:hostIdentity});
         identity={instanceId:descriptor.instanceId,bootId:descriptor.bootId};
         brokers.set(id,broker);
-        try{await deps.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle});}
-        catch(error){await dropBroker(id);throw error;}
       }
       bootstrap = { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
         operationId:request.operationId??null,
         ...(session ? {execution:'generic-session-v1',handle,expiresAtMs:session.expiresAtMs} : {}),
         ...(broker?{resolver:broker.descriptor,identity,registryId:deps.registryId,owner:request.owner,consentReview:redeemed.consentReview,fixtureEffects:!!deps.dispatchEffect}:{}),
         ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) };
-      if (session) await atomicWrite(join(directory, 'bootstrap.json'), bootstrap);
-      else {
+      if (session) {
+        if(deps.embeddingServices){
+          hostRegistered = true;
+          await deps.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle});
+        }
+        await atomicWrite(join(directory, 'bootstrap.json'), bootstrap);
+      } else {
         await cut('bootstrap');
         await atomicWrite(join(staging, 'bootstrap.json'), bootstrap);
         // The recovery identity is persisted, authenticated by the bootstrap beside it, before any controller or provider effect can exist.
@@ -268,27 +274,50 @@ export async function openAttachedRoute(request, deps = {}) {
         published = true;
         const parent = await open(root, 'r');
         try { await parent.sync(); } finally { await parent.close(); }
-        await cut('spawn');
+        // Complete durable custody is published before the first durable host registration: a use that is
+        // registered from here on is always recoverable from the final attached path.
+        if(deps.embeddingServices){
+          hostRegistered = true;
+          await deps.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle});
+        }
       }
+      await cut('spawn');
       const child = spawn(process.execPath, [here, '--controller', directory], { detached: true, stdio: 'ignore',
         env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
       child.unref();
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-      return await recordController(child);
+      // The owned ChildProcess is kept before any awaited identity lookup: once a child is spawned it is
+      // potentially effectful, and no later failure can be treated as a start that refused before any effect.
+      return { pid: child.pid, startIdentity: null, child };
       } catch (error) {
-        if (session) throw error;
-        // No controller has run, so no provider effect exists. Release what the host registered, or keep exact debt for a later owner.
-        if (brokers.get(id) === broker) await dropBroker(id); else await broker?.close().catch(() => {});
-        if (bootstrap) {
-          const view = await unwindUnstartedAttached({ directory, staging, published, bootstrap, services: deps.embeddingServices }).catch(() => null);
-          if (view && !error.route) error.route = view;
-        }
-        else if (!hostTouched) refusedBeforeStart(error, handle, request);
-        throw error;
+      if (brokers.get(id) === broker) await dropBroker(id); else await broker?.close().catch(() => {});
+      if (session) throw error;
+      // No controller has run, so no provider effect exists. Release what the host registered, or keep exact debt for a later owner.
+      if (bootstrap) {
+        const view = await unwindUnstartedAttached({ directory, staging, published, bootstrap, services: deps.embeddingServices, hostRegistered }).catch(() => null);
+        if (view && !error.route) error.route = view;
+      }
+      else if (!hostTouched) refusedBeforeStart(error, handle, request);
+      throw error;
       } finally {
         if (!session && !published) await rm(staging, { recursive: true, force: true }).catch(() => {});
       }
     }, { waitSeconds: 30 });
+    // The controller identity is recorded after the reservation ends, so the controller may already be
+    // starting when the lookup fails. That is a post-spawn failure: stop the exact owned handle, let the
+    // controller's own saved record state what exists, and never journal a refused start, a null receipt or
+    // a confirmed absence in its place.
+    try { Object.assign(controller, await recordController(controller.child, deps.identityRecorder ? { identity: deps.identityRecorder } : undefined)); }
+    catch (error) {
+      if (brokers.has(id)) await dropBroker(id);
+      const stopped = await stopController(controller);
+      const record = await readJson(join(directory, 'state.json')).catch(() => null);
+      // Normalize before attaching, so the frozen surface error carries the teardown outcome and the
+      // controller's own saved view out to the caller instead of losing them to a wrapper.
+      const carried = withCleanupOutcome(normalizeError(error), stopped);
+      if (record?.lastView && !carried.route) carried.route = record.lastView;
+      throw carried;
+    }
     if (!session) holdLease(directory, id, deps.heartbeatMs ?? HEARTBEAT_MS);
     const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
     try {
@@ -400,6 +429,13 @@ export async function closeAttachedRoute(request, deps = {}) {
     const state = await viewFromRecord(directory, handle);
     if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') return releasedView(state.lastView, handle);
     if (state.resourceRemoval) return recoveryHistory(state.lastView, 'Resource removed; exact configuration reference release remains unconfirmed');
+    if (state.unstarted === true) {
+      // A start whose controller never persisted past its first act cannot have run a provider effect: the
+      // registered configuration reference is the only custody. Settle it exactly under the open lock; a
+      // refused release stays recorded debt, never a fabricated confirmation.
+      const settled = await settleUnstartedReference(request, directory, handle, deps);
+      if (settled) return settled;
+    }
     // Without an owned receipt or recovery effects, retain debt without loading transient runtime.
     if (!state.receipt || !deps.effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
     // The controller died with the route up: remove it from the saved receipt, in this process.
@@ -545,15 +581,63 @@ function refusedBeforeStart(error, handle, request) {
 
 /**
  * The first durable state of an attached allocation: creating, no receipt, nothing published. It is written after the bootstrap
- * and before the controller starts, so a listing never sees a bootstrap without the state that binds it. If no controller
- * ever answers, the recorded view is read back as unconfirmed history, never as a removal.
+ * and before the controller starts, so a listing never sees a bootstrap without the state that binds it. `unstarted` is the
+ * explicit pre-controller phase: the controller's first durable act retires it under the open lock, before any resolver or
+ * provider effect, so while it is present no controller has ever persisted past its start and the registered configuration
+ * reference is the only custody a later owner must recover. If no controller ever answers, the recorded view is read back as
+ * unconfirmed history, never as a removal.
  */
 async function recordPendingStart(directory,bootstrap){
   const handle={kind:'attached',id:bootstrap.id,generation:1};
   const lease={target:bootstrap.request.target,state:'creating',origin:null,properties:unknownProperties(),ingress:null,identity:bootstrap.identity??null,
     limits:{recommendedPollIntervalMs:5_000,idleTimeoutMs:null},checkedAtMs:null,cleanup:{state:'none'}};
-  await atomicWrite(join(directory,'state.json'),{schemaVersion:1,adapterId:bootstrap.adapterId,request:bootstrap.request,plan:bootstrap.plan,receipt:null,handle,phase:'creating',
+  await atomicWrite(join(directory,'state.json'),{schemaVersion:1,adapterId:bootstrap.adapterId,request:bootstrap.request,plan:bootstrap.plan,receipt:null,handle,phase:'creating',unstarted:true,
     lastView:{...projectAttached(lease,{handle,now:Date.now()}),operationId:bootstrap.operationId??null,consentFactsDigest:bootstrap.consentReview?.consentFactsDigest??null},resourceRemoval:null});
+}
+
+/**
+ * A controller's first durable act: retire the owner's pre-controller marker under the open lock, before any resolver,
+ * provider or network effect. The owner's refused-start unwind and this retirement serialize on the same lock, and while
+ * the marker is present no controller has ever persisted past this point, so settling the registered reference risks
+ * no provider custody. A pending record that belongs to another bootstrap is refused, never adopted.
+ */
+async function clearPendingStart(directory,bootstrap){
+  const handle={kind:'attached',id:bootstrap.id,generation:1};
+  await withExclusiveLock(join(dirname(directory),'.open.lock'),async()=>{
+    const state=await readJson(join(directory,'state.json'));
+    if(!state?.unstarted)return;
+    if(state.handle?.kind!==handle.kind||state.handle.id!==handle.id||state.handle.generation!==handle.generation)
+      throw gozarError('route_conflict','The pending start record does not match this bootstrap');
+    await atomicWrite(join(directory,'state.json'),{...state,unstarted:undefined});
+  },{waitSeconds:30});
+}
+
+/**
+ * Fresh-owner recovery of the after-registration, before-spawn state, under the same open lock the owner's
+ * start holds. The surviving pre-controller marker proves no controller ever persisted past its first act,
+ * so the registered configuration reference is the only custody: release it exactly and journal a confirmed,
+ * resource-free settlement, or keep the refused release as recorded debt. A record that changed meanwhile, or
+ * one that no longer matches its bootstrap, is retained or refused, never adopted as evidence.
+ */
+async function settleUnstartedReference(request, directory, handle, deps) {
+  const bootstrap = await readJson(join(directory, 'bootstrap.json'));
+  if (bootstrap?.id !== handle.id || bootstrap.home !== await canonicalHome(request.home, false) ||
+      typeof bootstrap.owner !== 'string' || !bootstrap.owner || typeof bootstrap.adapterId !== 'string' || !bootstrap.adapterId ||
+      typeof bootstrap.registryId !== 'string' || !bootstrap.registryId)
+    throw gozarError('cleanup_debt', 'Cleanup authority is unavailable for the unstarted binding');
+  const resolver = { releaseConfigurationUse: use => releaseRecordedConfigurationUse({ registryId: bootstrap.registryId, home: bootstrap.home, ...use },
+    { embeddingServices: deps.embeddingServices, registryId: deps.registryId }) };
+  return await withExclusiveLock(join(dirname(directory), '.open.lock'), async () => {
+    const current = await readJson(join(directory, 'state.json'));
+    if (current?.unstarted !== true) return null;
+    if (current.handle?.kind !== handle.kind || current.handle.id !== handle.id || current.handle.generation !== handle.generation ||
+        current.receipt !== null || current.resourceRemoval)
+      throw gozarError('route_conflict', 'The pending start record does not match its bootstrap');
+    await recordRefusedStart(directory, bootstrap, resolver, () => false);
+    const settled = JSON.parse(await readFile(join(directory, 'state.json'), 'utf8'));
+    return settled.lastView.cleanup.state === 'confirmed' ? settled.lastView
+      : recoveryHistory(settled.lastView, 'Resource removal is not confirmed; retry close with the exact retained handle');
+  }, { waitSeconds: 30 });
 }
 
 /**
@@ -564,14 +648,14 @@ async function recordPendingStart(directory,bootstrap){
  * An attached start that failed before its controller existed. Nothing ran, so the host's configuration reference is the only thing
  * to settle: released once and confirmed, or kept as exact debt in a complete published pair for a later owner to retry.
  */
-async function unwindUnstartedAttached({directory,staging,published,bootstrap,services}){
+async function unwindUnstartedAttached({directory,staging,published,bootstrap,services,hostRegistered=false}){
   const resolver={releaseConfigurationUse:use=>services.releaseConfigurationUse({home:bootstrap.home,...use})};
   if(!published){
     await trustedDirectory(staging,true);await privateDirectory(staging);
     await atomicWrite(join(staging,'bootstrap.json'),bootstrap);
   }
   const target=published?directory:staging;
-  await recordRefusedStart(target,bootstrap,resolver,()=>false);
+  await recordRefusedStart(target,bootstrap,resolver,()=>false,hostRegistered);
   const state=JSON.parse(await readFile(join(target,'state.json'),'utf8'));
   // Confirmed removal of the only host reference leaves nothing to retain; an unconfirmed one is published as debt.
   if(!published&&state.lastView.cleanup.state==='confirmed')return state.lastView;
@@ -579,12 +663,15 @@ async function unwindUnstartedAttached({directory,staging,published,bootstrap,se
   return state.lastView;
 }
 
-async function recordRefusedStart(directory,bootstrap,resolver,lost){
+async function recordRefusedStart(directory,bootstrap,resolver,lost,hostRegistered=true){
   const session=bootstrap.execution==='generic-session-v1';
   const handle=session?bootstrap.handle:{kind:'attached',id:bootstrap.id,generation:1};
   const managed=['resolver','registryId','owner','consentReview'].some(name=>Object.hasOwn(bootstrap,name));
-  let released=!managed;
-  if(managed){
+  // Only a registration the owner attempted can owe a release: before it, nothing is registered and
+  // nothing is retained. A release is exact and idempotent, so an attempt after a committed registration
+  // is always safe whether or not the registration's own reply failed.
+  let released=!managed||!hostRegistered;
+  if(managed&&hostRegistered){
     try{
       if(lost()||!resolver||typeof resolver.releaseConfigurationUse!=='function'||typeof bootstrap.owner!=='string'||!bootstrap.owner||typeof bootstrap.registryId!=='string'||!bootstrap.registryId)throw new Error('reference release unavailable');
       await resolver.releaseConfigurationUse({owner:bootstrap.owner,providerId:bootstrap.adapterId,handle});released=true;
@@ -604,6 +691,8 @@ async function recordRefusedStart(directory,bootstrap,resolver,lost){
  */
 export async function runAttachedController(directory, runtime = {}) {
   const bootstrap = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
+  // First durable act, before any resolver or provider effect: retire the owner's pre-controller marker.
+  if (bootstrap.execution !== 'generic-session-v1') await clearPendingStart(directory, bootstrap);
   let resolverLost=false,onResolverLoss=()=>{};
   const resolver=bootstrap.resolver?await connectEmbeddingBroker({descriptor:bootstrap.resolver,identity:bootstrap.identity,onLoss:()=>{resolverLost=true;onResolverLoss();}}):null;
   // Adapter code from a changed registry is never loaded. The refusal is recorded first so the retained directory stays enumerable.

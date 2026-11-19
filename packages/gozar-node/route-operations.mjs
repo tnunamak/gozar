@@ -500,7 +500,9 @@ export async function listRecordedRoutes({home,owner}={},deps={}){
   const observed=current.get(routeKey(view.handle));
   if(!observed||!sameHandle(observed.view.handle,view.handle)||(priorities.get(routeKey(view.handle))??0)>=30)return view;
   // A controller that answered and is still allocating has published nothing and holds no proof to expire.
-  if(!observed.native&&view.state==='creating'&&view.cleanup?.state==='none'&&view.published===null&&view.origin===null&&
+  // The exception is attached only: a creating session keeps ordinary session semantics, however it is run;
+  // generic execution is not the native daemon, and a missing session expiry never proves an attached kind.
+  if(view.handle.kind==='attached'&&view.state==='creating'&&view.cleanup?.state==='none'&&view.published===null&&view.origin===null&&
     (observed.expiresAtMs===null||Number.isFinite(observed.expiresAtMs)&&observed.expiresAtMs>now))return view;
   const until=view.verification?.validUntil;
   if(view.state!=='usable'||view.cleanup?.state!=='none'||view.verification?.status!=='verified'||view.consentChange||
