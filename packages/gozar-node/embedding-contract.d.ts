@@ -21,11 +21,13 @@ export interface HostEmbeddingMethods {
  commitConfigurationDraft(request:ConfigurationRequest&{draftId:string}):Promise<Configuration>;
  discardConfigurationDraft(request:{home:string;owner?:string;providerId:string;draftId:string}):Promise<{discarded:boolean}>;
  discardSecret(request:{home:string;handle:string}):Promise<{discarded:boolean}>;
- listProviders(request:{home:string;owner?:string;hostCapabilities?:HostCapabilities}):Promise<{schemaVersion:number;catalogRevision:string;observedAt:string;providers:ProviderInventory[]}>;
+ listProviders(request:{home:string;owner?:string;hostCapabilities?:HostCapabilities;refresh?:boolean}):Promise<{schemaVersion:number;catalogRevision:string;observedAt:string;providers:ProviderInventory[]}>;
 }
 export interface ProviderInventory {
  providerId:string;label:string;reach:Reach;transport:Properties['transport'];
  availability:Availability;
  prerequisites:Prerequisite[];configuration:Configuration;facts:Fact[];
+ /** Present when the host factory caches polling reads: the honest freshness of this row's detection. */
+ detection?:{checkedAt:string|null;fresh:boolean;refreshing:boolean};
 }
 export interface RouteBinding {authority:'adapter'|'owner'|'unknown';target:Observation<string>;remedy:Action|null}

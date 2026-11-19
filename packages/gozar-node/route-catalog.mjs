@@ -218,6 +218,9 @@ async function collect(query, deps) {
   const context = { ...await readContextFor(deps, home, platform, query.owner), origin: query.origin ?? null };
   // An unknown named route is an error before any provider is asked.
   if (query.route !== undefined && supportedPlatform(platform)) await context.configuration(query.route);
+  // The catalog issues single-use consent tokens bound to what Gozar actually observed, so its detection
+  // sweep is always live: it is an action read, not a routine poll. The cached surfaces are the provider
+  // inventory and offered configuration; redemption re-proves the provider independently.
   const inspections = await Promise.all(selectAdapters(adapters, query.providerId).map(adapter => inspectAdapter(adapter, context, platform)));
   const pinned = deps.pinnedAdapterId ? await deps.pinnedAdapterId(query) : null;
 

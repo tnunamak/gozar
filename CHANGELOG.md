@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.5.2
+
+### Added
+
+- **Awaited exact-origin host acknowledgment for embedded starts.** A host that
+  declares `createGozar({acknowledgeOrigin})` receives one typed, authenticated
+  request per route start attempt, naming the exact validated origin, its handle
+  and generation, the operation and the proof attempt. Publication verification
+  (and therefore the published address) waits for a well-formed acknowledgment
+  that echoes the exact origin, handle and attempt. A missing, refused,
+  throwing, aborted, timed-out or stale acknowledgment withdraws the route with
+  its retained cleanup receipt: nothing publishes, an acknowledgment naming
+  another origin never approves a foreign Host, and a late acknowledgment
+  cannot revive a lost owner. The request crosses the detached controller over
+  the authenticated embedding broker (a new `acknowledgeOrigin` method); generic
+  session and attached starts await it in the controller, durable starts await
+  the same typed request in-process. A host that declares no handler keeps the
+  0.5.1 behavior of verifying immediately after allocation, and a declared
+  handler plus a legacy recipe-session provider is refused `unsupported` rather
+  than verified without acknowledgment.
+- **Trusted host declarations of packaged runtime modules.** `createGozar({runtimeModules})`
+  names an explicit dependency mode per module: a bundled read-only module
+  directory (whose package identity, exact declared version and loadability are
+  re-proved both in the host process and in the detached route controller; the
+  declared install prerequisite is satisfied with no install, write or restart),
+  an explicitly writable runtime-install location, or host-managed dependencies.
+  The ngrok HTTPS edge accepts a tested `@ngrok/ngrok` 1.7.0 bundle this way, so
+  a packaged read-only host no longer sees an impossible install step: a
+  missing, unloadable, wrong-version or wrong-interface bundle leaves the
+  provider unavailable with a fixed plain reason and no install action. Without
+  a declaration the documented npm optional-peer flow is unchanged. The ngrok
+  CLI is not a substitute for the embedded SDK on this adapter; a CLI
+  transport is a pending proposal and is not implemented.
+- **Short-TTL cached detection for polling reads.** `listProviders` and offered
+  configuration actions answer from a per-scope cache (`detectionTtlMs`, default
+  15s) keyed by registry, home, owner, provider, platform and the configuration
+  revision it observed. A fresh hit runs zero live provider probes; a cold or
+  expired poll also runs zero probes, answering a declared unknown row or the
+  retained observation with its actual `checkedAt` (the new `detection:
+  {checkedAt, fresh, refreshing}` on inventory rows) while one same-scope
+  background refresh converges it; a `refresh: true` request awaits and owns
+  the probes. A completed setup, configuration or artifact mutation drops the
+  affected scope's entries, so the next read reflects the change immediately.
+  The route catalog is not cached — it issues single-use consent tokens bound
+  to what Gozar actually observed — and consent redemption, approved effects
+  and route allocation keep revalidating live state (a provider that moved
+  after approval still fails `candidate_stale`).
+
+### Fixed
+
+- Views returned after a confirmed resource removal (the attached
+  removal-evidence and reference-cleanup records) reported `routeState:
+  'released'`, which the frozen route contract does not define, and dropped the
+  cleanup `nextAction` field. They now carry `routeState: 'inactive'` with the
+  same closed `cleanup` shape as every other route view.
+- The localhost.run provider no longer declares a fifteen-minute address cap
+  it cannot enforce; its disclosure separates the relay's uncertainty from the
+  local runtime limit (900000), which a prior approval now reflects.
+
 ## 0.5.1
 
 - Resolve exact adapter IDs before display names, and reject ambiguous display

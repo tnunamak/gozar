@@ -99,6 +99,97 @@ The broker optionally accepts a host `dispatchEffect` callback and exposes
 exact fixture handlers. Without an explicitly supplied handler it returns
 `unsupported`. Awaiting connection includes a token/boot authentication handshake.
 
+## Exact-origin host acknowledgment (0.5.2)
+
+Declare `acknowledgeOrigin` on the factory to hold the awaited exact-origin
+boundary between a provider allocation and publication verification. The
+callback stays in the host process: a detached route controller reaches it over
+the authenticated, boot-bound broker (a new `acknowledgeOrigin` method with the
+host's home injected server-side) and awaits a JSON reply; nothing callable is
+ever serialized into the bootstrap.
+
+After the provider allocates and Gozar validates the exact credential-free
+origin, the controller sends one typed request per start attempt, scoped with
+`owner`, `providerId`, `handle {kind,id,generation}`, `operationId`, `target`,
+the exact `origin` and the proof `attemptId`. Publication verification (and
+therefore the published address) runs only after the reply echoes the exact
+origin, handle and attempt. A missing reply, `acknowledged` not true, a thrown
+or refused handler, an aborted or timed-out call (bounded by `originAckTimeoutMs`,
+default 10s), or a stale echo naming another origin, handle, generation or
+attempt withdraws the route exactly like a failed verification: the unverified
+state and the retained cleanup receipt are preserved, nothing publishes, a lost
+owner is not revived and a foreign Host is never approved. Durable starts await
+the same typed request in-process before publication verification.
+
+A host that declares no handler keeps the pre-0.5.2 behavior: verification starts
+immediately after allocation. Hosts that widen a service verifier's Host
+allowance during start should adopt this boundary instead; Gozar never requires
+or implies a wildcard Host allowance. The legacy daemon session controller does
+not implement the boundary: a declared handler plus a recipe-session provider is
+refused `unsupported`, never silently verified without acknowledgment.
+
+## Packaged runtime modules (0.5.2)
+
+An embedded adapter that uses an optional runtime module (the ngrok HTTPS edge
+embeds `@ngrok/ngrok` 1.7.0) takes its dependency mode from explicit trusted
+factory declarations, in order:
+
+1. `runtimeModules: { '@ngrok/ngrok': { kind: 'bundled', version, path } }` —
+   the host packages a TESTED read-only bundle (an AppImage, a read-only
+   installation) and hands its absolute module directory. Gozar proves the
+   bundle's package manifest names the exact package and the exact declared
+   version, loads the module entry, and marks the declared install prerequisite
+   satisfied — no install, no write, no restart. The load is re-proved in the
+   detached route controller from the same declaration (it crosses as validated
+   data in the private bootstrap; a closure never serializes). The bundle must
+   include the module's native platform dependencies for the host's
+   platform/architecture: package the full install tree, not the bare tarball.
+   A missing, unloadable, wrong-version or wrong-interface bundle leaves the
+   provider unavailable with a fixed plain reason and no install action.
+2. `{ kind: 'runtime-install' }` — the host explicitly says its install
+   location is writable; Gozar may offer the approved artifact install step
+   (host executor, `installer.execute` capability, pinned SHA-256, restart).
+3. `{ kind: 'host-managed' }` — the host provides its own dependencies; a
+   missing module is a fixed plain unavailability and no install step is
+   offered.
+
+Without any declaration the documented npm optional-peer flow is unchanged.
+Satisfying the prerequisite never claims account, route or address readiness.
+The ngrok CLI is NOT supported as a substitute for the embedded SDK on this
+adapter: the CLI and the embedded SDK are different agent forms with different
+behavior, and the CLI's default local agent API at 127.0.0.1:4040 is
+unauthenticated. A CLI transport proposal is pending and nothing here
+implements it.
+
+## Cached polling reads (0.5.2)
+
+`listProviders` and offered configuration reads answer from a short-TTL cached
+detection per full scope (registry identity, home, owner, provider, platform
+and the configuration revision it observed; `detectionTtlMs` tunes the TTL,
+default 15s). The route catalog is NOT cached: it issues single-use consent
+tokens bound to what Gozar actually observed, so its detection sweep is always
+live. The cached contract is strict:
+
+- A fresh hit serves the retained observation and runs ZERO live provider
+  probes.
+- A cold or expired poll also runs ZERO probes: cold answers a declared
+  unknown row, expired answers the retained row with its ACTUAL `checkedAt`
+  (`detection.checkedAt`, `fresh`, `refreshing` on inventory rows), while ONE
+  same-scope background refresh converges it. Concurrent polls share that
+  single refresh.
+- `refresh: true` on `listProviders` (or a draft read) awaits and owns the
+  probes.
+- A completed setup or configuration mutation (including an artifact install)
+  drops the scope's retained entries: the next read awaits one fresh detection,
+  so a changed draft or configuration is reflected immediately, never served
+  stale.
+- The cache stores only the sanitized detection. Decoration, offered actions,
+  consents, plans and secret material are recomputed live, and the scoped
+  configuration itself is always read live.
+- Authority never reads the cache: consent redemption, approved effects and
+  route allocation revalidate live state (candidate_stale / consent_mismatch as
+  before), and the catalog's plan and observation reads stay live.
+
 ## Draft input removal and controller incarnations
 
 `clearConfigurationInput({home,providerId,draftId,inputId,

@@ -20,6 +20,7 @@ import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { registryIdentity } from './registry-identity.mjs';
 import { createEmbeddingServices } from './embedding-services.mjs';
 import { validatedRuntimeModuleDeclaration } from './runtime-modules.mjs';
+import { createDetectionCache } from './detection-cache.mjs';
 import { listProviders as inventory } from './embedding-inventory.mjs';
 import { setupConsentReview,consentSnapshot,safeSetupAction,needsSetupOperation } from './consent-facts.mjs';
 import { runSetupOperation, readSetupOperation, cancelSetupOperation } from './setup-operations.mjs';
@@ -42,6 +43,10 @@ export function createRouteApi(deps = {}) {
   const runtimeModules = deps.runtimeModules === undefined || deps.runtimeModules === null ? undefined
     : Object.fromEntries(Object.entries(deps.runtimeModules)
       .map(([name, declaration]) => [name, validatedRuntimeModuleDeclaration(name, declaration)]));
+  // Short-TTL cached detection per full scope (registry, home, owner, provider, platform, configuration
+  // revision). Routine cold or expired polls run ZERO live provider probes; an explicit refresh request
+  // and the read after a mutation own the probes. Authority paths never read it.
+  const detection = deps.detectionCache ?? createDetectionCache({ ttlMs: deps.detectionTtlMs ?? 15_000, now: () => (deps.now ?? Date.now)() });
   let loaded;
   const adapters = async () => deps.adapters ?? (loaded ??= runtime().then(module => module.loadAdapters(deps.manifest ? { manifest: deps.manifest, root: deps.root } : undefined)).catch(error => { loaded = undefined; throw error; }));
   let servicesPromise;
@@ -54,6 +59,7 @@ export function createRouteApi(deps = {}) {
     hostCapabilities:deps.hostCapabilities??{}, ...(deps.dispatchEffect?{dispatchEffect:deps.dispatchEffect}:{}),
     ...(runtimeModules ? { runtimeModules } : {}),
     ...(deps.acknowledgeOrigin ? { acknowledgeOrigin: deps.acknowledgeOrigin } : {}),
+    detection,
     ...(Number.isFinite(deps.originAckTimeoutMs) ? { originAckTimeoutMs: deps.originAckTimeoutMs } : {}),
     ...(deps.readContext ? { readContext: deps.readContext } : {}),
     decorateSetupAction:({action,adapter,configuration,draftId=null,inspection})=>{
@@ -257,8 +263,12 @@ export function createRouteApi(deps = {}) {
     getRoutePreferences, setRoutePreferences,
     runSetupAction: request => guard(async () => {
       const context=await setupDeps(request);
-      return request && typeof request === 'object' && ('operationId' in request || 'expectedSetupRevision' in request)
-        ? runSetupOperation(request,context) : runSetup(request,context);
+      const outcome = request && typeof request === 'object' && ('operationId' in request || 'expectedSetupRevision' in request)
+        ? await runSetupOperation(request,context) : await runSetup(request,context);
+      // A completed setup or artifact action changed what detection observes: the scope's next read
+      // awaits one fresh detection instead of serving retained state.
+      detection.invalidate({ registryId: context.registryId, home: request.home, owner: request.owner, providerId: request.providerId });
+      return outcome;
     }),
     readSetupOperation: request => guard(async () => readSetupOperation(request,await setupDeps(request))),
     cancelSetupOperation: request => guard(async () => cancelSetupOperation(request,await setupDeps(request))),
@@ -280,9 +290,15 @@ export function createRouteApi(deps = {}) {
       return {routes:[...views.values()]};
     }),
     ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft'].map(method=>[method,request=>guard(async()=> (await services()).embeddingServices[method](request))])),
-    beginConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const draft=await context.embeddingServices.beginConfigurationDraft(request);return {...draft,configuration:await offeredConfiguration({...request,draftId:draft.draftId},draft.configuration,context)};}),
+    beginConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const draft=await context.embeddingServices.beginConfigurationDraft(request);
+      const offered=await offeredConfiguration({...request,draftId:draft.draftId},draft.configuration,context);
+      return {...draft,configuration:offered.configuration,...(offered.detection?{detection:offered.detection}:{})};}),
     readConfigurationDraft:request=>guard(async()=>readConfigurationDraft(request,await shared(request))),
-    commitConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const snapshot=await context.embeddingServices.commitConfigurationDraft(request);return offeredConfiguration({...request,draftId:undefined},snapshot,context);}),
+    commitConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const snapshot=await context.embeddingServices.commitConfigurationDraft(request);
+      // The applied configuration moved: the scope's next read awaits one fresh detection.
+      detection.invalidate({ registryId: context.registryId, home: request.home, owner: request.owner, providerId: request.providerId });
+      const offered=await offeredConfiguration({...request,draftId:undefined},snapshot,context);
+      return {...offered.configuration,...(offered.detection?{detection:offered.detection}:{})};}),
     clearConfigurationInput:request=>guard(async()=>clearConfigurationInput(request,await setupDeps(request))),
     reviewRouteConsent:request=>guard(async()=>request.handle?.kind==='external'?verified(()=>reviewExternalConsent(request),request):request.handle?.kind==='session'?sessionConsent(request,{adapters:await adapters()}):request.handle?.kind==='durable'?verified(async()=>(await engine()).reviewDurableConsent(request),request):reviewAttachedConsent(request)),
     approveRouteConsent:request=>guard(async()=>request.handle?.kind==='external'?verified(async()=>projectExternal(await approveExternalConsent(request),{handle:request.handle}),request):request.handle?.kind==='session'?sessionConsent(request,{approve:true,adapters:await adapters()}):request.handle?.kind==='durable'?verified(async()=>durableView(await (await engine()).approveDurableConsent(request)),request):approveAttachedConsent(request)),

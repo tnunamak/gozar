@@ -1,5 +1,5 @@
 import {clearInputActions} from './embedding-setup.mjs';
-import {inspectAdapter,readContextFor,catalogRevisionOf} from './route-catalog.mjs';
+import {inspectAdapter,detectAdapter,readContextFor,catalogRevisionOf} from './route-catalog.mjs';
 import {availabilityFor,prerequisitesFor,configurationFor} from './embedding-state.mjs';
 import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
 import {embeddingError} from './embedding-services.mjs';
@@ -9,10 +9,23 @@ export async function listProviders(request,deps={}){
  const platform=deps.platform??process.platform;const observedAt=new Date().toISOString();
  const owner=request.owner===undefined?deps.owner:request.owner;
  const read=await readContextFor(deps,request.home,platform,owner);
- const inspections=await Promise.all(deps.adapters.map(a=>inspectAdapter(a,read,platform)));
- const providers=await Promise.all(inspections.map(async item=>{
-  const {adapter,properties}=item;let actions=[...new Map([...item.actions,...(item.missingActions??[])].map(a=>[a.id,a])).values()];
-  const saved=await deps.embeddingServices.readConfiguration({...request,owner,providerId:adapter.id});
+ const cache=deps.detection;
+ const inspections=[];
+ const providers=await Promise.all(deps.adapters.map(async adapter=>{
+  let item, saved, detection=null;
+  if(cache){
+   // The cached detection path: the scoped configuration is read live (its revision keys the detection),
+   // and a cold or expired row answers from retained state while ONE background refresh converges it.
+   const cached=await cache.provider({scope:{registryId:deps.registryId,home:request.home,owner,providerId:adapter.id,platform,adapter},
+    readConfiguration:()=>deps.embeddingServices.readConfiguration({...request,owner,providerId:adapter.id}),
+    detect:()=>detectAdapter(adapter,read,platform),explicit:request.refresh===true});
+   item=cached.inspection;saved=cached.saved;detection=cached.detection;
+  }else{
+   item=await inspectAdapter(adapter,read,platform);
+   saved=await deps.embeddingServices.readConfiguration({...request,owner,providerId:adapter.id});
+  }
+  const properties=item.properties;
+  let actions=[...new Map([...item.actions,...(item.missingActions??[])].map(a=>[a.id,a])).values()];
   const decorate=action=>deps.decorateSetupAction?deps.decorateSetupAction({action,adapter,configuration:saved,draftId:null,inspection:item}):action;
   actions=await Promise.all([...actions,...clearInputActions(saved)].map(decorate));
   const configuration={...configurationFor(actions,saved,adapter.definition.inputRequirements),revision:saved.revision,scopeId:saved.scopeId};
@@ -25,7 +38,12 @@ export async function listProviders(request,deps={}){
    if(denied)availability[kind]={state:'unsupported',reason:`host-capability-${denied.state}`};
    else if(item.state!=='ready')availability[kind]={state:item.state,reason:`provider-${item.state}`};
   }
-  return {providerId:adapter.id,label:adapter.definition.label??adapter.id,reach:properties.reach,transport:properties.transport,availability,prerequisites,configuration,facts:catalogFactsFor(item)};
+  // The honest detection freshness this row was served from: its actual checked-at (null when nothing was
+  // observed yet), whether it is fresh, and whether one background refresh is converging it. A
+  // `refresh: true` request owns the probes and awaits them.
+  const row={providerId:adapter.id,label:adapter.definition.label??adapter.id,reach:properties?.reach,transport:properties?.transport,availability,prerequisites,configuration,facts:catalogFactsFor(item)};
+  if(detection)row.detection=detection;
+  return row;
  }));
  return {schemaVersion:1,catalogRevision:catalogRevisionOf(inspections,platform),observedAt,providers};
 }

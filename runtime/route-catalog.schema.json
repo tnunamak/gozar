@@ -133,8 +133,7 @@
         "owner",
         "target",
         "usage",
-        "requirements",
-        "home"
+        "requirements",        "home"
       ],
       "properties": {
         "schemaVersion": {
@@ -218,7 +217,7 @@
               }
             ]
           }
-        }
+        },
       },
       "additionalProperties": false
     },
@@ -3667,6 +3666,29 @@
       "additionalProperties": false
     },
     "RouteOwnership": { "enum": ["gozar-owned", "external-owned"] },
+    "DetectionFreshness": {
+      "type": "object",
+      "required": [
+        "checkedAt",
+        "fresh",
+        "refreshing"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "checkedAt": {
+          "type": ["string", "null"],
+          "description": "Actual observation time of the served detection; null when nothing was observed yet."
+        },
+        "fresh": {
+          "type": "boolean",
+          "description": "False when this row was served from a retained (cold or expired) detection; a background refresh converges it."
+        },
+        "refreshing": {
+          "type": "boolean",
+          "description": "One same-scope background refresh is converging this detection."
+        }
+      }
+    },
     "Cost": {
       "oneOf": [
         {

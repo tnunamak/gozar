@@ -33,6 +33,14 @@ export type Requirements = {
 export type Query = {
   operationId?:string;
   hostCapabilities?:import('./embedding-contract.js').HostCapabilities;
+  /**
+   * Explicit refresh request (0.5.2): this read owns the provider probes and awaits them. Without it,
+   * cached polling reads (the provider inventory and offered configuration actions) serve the short-TTL
+   * detection: a fresh hit runs zero probes, and a cold or expired row answers a declared unknown or the
+   * retained observation (with its actual checked-at) while one background refresh converges it. The
+   * route catalog always observes live: it issues consent tokens bound to current provider state.
+   */
+  refresh?:boolean;
   schemaVersion: 1;
   owner: string;
   target: string;
@@ -547,7 +555,9 @@ export type GozarOptions={manifest?: string | {providers: {id:string; module:str
   /** Bound for one acknowledgment attempt, in milliseconds. Default 10_000. Used only when acknowledgeOrigin is declared. */
   originAckTimeoutMs?: number;
   /** Trusted declarations of packaged runtime modules an adapter embeds; see RuntimeModuleDeclaration. */
-  runtimeModules?: Record<string, RuntimeModuleDeclaration>;};
+  runtimeModules?: Record<string, RuntimeModuleDeclaration>;
+  /** Short TTL for cached provider detection, in milliseconds (1000..300000; default 15000). */
+  detectionTtlMs?: number;};
 export function createGozar(options?: GozarOptions): import('./embedding-contract.js').HostEmbeddingMethods & {
  catalogRoutes: typeof catalogRoutes; expose: (request:ExposeRequest)=>Promise<RouteView>;
  ensureRoute: typeof ensureRoute; adoptRoute: typeof adoptRoute; routeStatus: typeof routeStatus;
