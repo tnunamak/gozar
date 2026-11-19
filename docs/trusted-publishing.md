@@ -81,7 +81,10 @@ and the trusted runner and checked-out code remain the trust boundary, not hosti
 concurrent local writers. Receipts are evidence, not independent cryptographic
 attestations.
 
-An attempt marker is recorded before npm publish. After success, registry integrity
+An attempt marker is recorded before npm publish. Record publication as confirmed
+only when the intended package and version are visible with the exact qualified
+tarball integrity. A marker alone leaves the outcome unresolved; retain the
+evidence and do not retry blindly. After success, registry integrity
 is polled for approximately three minutes (individual HTTP calls have ten-second
 bounds). Wrong visible integrity fails immediately; delayed absence eventually
 fails. There is no second publish within one evidence directory. Each hosted run
