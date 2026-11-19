@@ -246,6 +246,8 @@ export async function openAttachedRoute(request, deps = {}) {
         ...(session ? {execution:'generic-session-v1',handle,expiresAtMs:session.expiresAtMs} : {}),
         ...(broker?{resolver:broker.descriptor,identity,registryId:deps.registryId,owner:request.owner,consentReview:redeemed.consentReview,fixtureEffects:!!deps.dispatchEffect}:{}),
         ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) });
+      // The recovery identity is persisted, authenticated by the bootstrap beside it, before any controller or provider effect can exist.
+      if (!session) await recordPendingStart(directory, JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8')));
       const child = spawn(process.execPath, [here, '--controller', directory], { detached: true, stdio: 'ignore',
         env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
       child.unref();
@@ -504,6 +506,19 @@ function refusedBeforeStart(error, handle, request) {
     error.route = { ...projectAttached(lease, { handle, now: Date.now() }), operationId: request.operationId ?? null };
   }
   return error;
+}
+
+/**
+ * The first durable state of an attached allocation: creating, no receipt, nothing published. It is written after the bootstrap
+ * and before the controller starts, so a listing never sees a bootstrap without the state that binds it. If no controller
+ * ever answers, the recorded view is read back as unconfirmed history, never as a removal.
+ */
+async function recordPendingStart(directory,bootstrap){
+  const handle={kind:'attached',id:bootstrap.id,generation:1};
+  const lease={target:bootstrap.request.target,state:'creating',origin:null,properties:unknownProperties(),ingress:null,identity:bootstrap.identity??null,
+    limits:{recommendedPollIntervalMs:5_000,idleTimeoutMs:null},checkedAtMs:null,cleanup:{state:'none'}};
+  await atomicWrite(join(directory,'state.json'),{schemaVersion:1,adapterId:bootstrap.adapterId,request:bootstrap.request,plan:bootstrap.plan,receipt:null,handle,phase:'creating',
+    lastView:{...projectAttached(lease,{handle,now:Date.now()}),operationId:bootstrap.operationId??null,consentFactsDigest:bootstrap.consentReview?.consentFactsDigest??null},resourceRemoval:null});
 }
 
 /**

@@ -499,6 +499,9 @@ export async function listRecordedRoutes({home,owner}={},deps={}){
  return {routes:[...routes.values()].map(view=>{
   const observed=current.get(routeKey(view.handle));
   if(!observed||!sameHandle(observed.view.handle,view.handle)||(priorities.get(routeKey(view.handle))??0)>=30)return view;
+  // A controller that answered and is still allocating has published nothing and holds no proof to expire.
+  if(view.state==='creating'&&view.cleanup?.state==='none'&&view.published===null&&view.origin===null&&
+    (observed.expiresAtMs===null||Number.isFinite(observed.expiresAtMs)&&observed.expiresAtMs>now))return view;
   const until=view.verification?.validUntil;
   if(view.state!=='usable'||view.cleanup?.state!=='none'||view.verification?.status!=='verified'||view.consentChange||
     until?.known!==true||!Number.isFinite(Date.parse(until.value))||Date.parse(until.value)<=now||
