@@ -34,6 +34,7 @@ import {catalogFactsFor} from './catalog-facts.mjs';
 import {ownershipFor,planMatchesOwnership,validateShape} from './adapter-runtime.mjs';
 import {currentRouteReview} from './route-consent.mjs';
 import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
+import {hostBoundaryOf,sessionBlockedByBoundary} from './embedding-state.mjs';
 import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
 
 export const HEARTBEAT_MS = 5_000;
@@ -61,6 +62,8 @@ function checkExpose(request, kind) {
   if (!['allocated', 'verified'].includes(request.wait)) throw gozarError('invalid_input', "wait must be 'allocated' or 'verified'");
 }
 
+const SESSION_BOUNDARY_REFUSAL = 'This session controller does not implement the declared origin acknowledgment boundary; use a provider on the generic session runtime';
+
 // Static availability is an execution boundary, not an approval. Never redeem or
 // inspect provider state to reject a named detect-only choice.
 export async function preflightExpose(request, deps = {}) {
@@ -74,6 +77,9 @@ export async function preflightExpose(request, deps = {}) {
     if (adapter && (!adapter.definition.supportedKinds.includes(request.usage.kind) ||
         availability === 'detect-only' || availability === 'unsupported'))
       throw gozarError('unsupported', 'This usage is not admitted for execution in this release');
+    // Named before any approval is redeemed: the catalog never offered this session under the declared boundary.
+    if (adapter && request.usage.kind === 'session' && sessionBlockedByBoundary(adapter, hostBoundaryOf(deps)))
+      throw gozarError('unsupported', SESSION_BOUNDARY_REFUSAL);
   }
   checkExpose(request, request.usage.kind);
 }
@@ -1168,7 +1174,7 @@ export async function openSessionRoute(request, deps = {}) {
     // The legacy daemon session controller does not implement the declared exact-origin acknowledgment
     // boundary. A host that declared the boundary gets a refusal, never a silent unacknowledged verification.
     if (deps.acknowledgeOrigin) throw gozarError('unsupported',
-      'This session controller does not implement the declared origin acknowledgment boundary; use a provider on the generic session runtime');
+      SESSION_BOUNDARY_REFUSAL);
     // The adapter turns what its owner chose into the exact session-engine inputs, from live observation, before anything starts.
     const hostChoices = typeof redeemed.adapter.hostChoices === 'function'
       ? await redeemed.adapter.hostChoices(await readContextFor(deps, home, deps.platform ?? process.platform, request.owner)).catch(error => { throw refusedBeforeStart(error, stableHandle, request); })

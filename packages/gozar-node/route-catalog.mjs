@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { canonicalHome } from './service-state.mjs';
 import { gozarError, normalizeError, instructionAction } from './error-normalizer.mjs';
 import { supportedPlatform } from './platform.mjs';
-import { availabilityFor, prerequisitesFor, configurationFor, features } from './embedding-state.mjs';
+import { availabilityFor, prerequisitesFor, configurationFor, features, hostBoundaryOf } from './embedding-state.mjs';
 import { readConfiguration } from './adapter-configuration.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { loopbackTarget } from './durable-route.mjs';
@@ -171,9 +171,9 @@ export async function inspectAdapter(adapter, context, platform) {
 }
 
 /** One revision for the provider-side state: it changes when a setup state, an action or a property changes. */
-export function catalogRevisionOf(inspections, platform) {
+export function catalogRevisionOf(inspections, platform, host) {
   const view = inspections.map(item => ({ id: item.adapter.id, state: item.state, ownership: ownershipFor(item.adapter.definition), properties: item.properties,
-    facts: [...catalogFactsFor(item), ...failureFacts(item.failure)], availability: availabilityFor(item.adapter.definition),
+    facts: [...catalogFactsFor(item), ...failureFacts(item.failure)], availability: availabilityFor(item.adapter.definition, { adapter: item.adapter, host }),
     actions: item.actions.map(action => [action.id, action.digest, action.disclosure.revision]), disclosure: item.adapter.definition.disclosure.revision }));
   return `catrev_${sha(JSON.stringify([platform, view])).slice(0, 32)}`;
 }
@@ -284,7 +284,7 @@ async function collect(query, deps) {
       if (setup) setup.actual = {known: false, reason: failure.reason};
       inspection.failure = failure;
     }
-    const availability = availabilityFor(definition);
+    const availability = availabilityFor(definition, { adapter, host: hostBoundaryOf(deps) });
     if(unavailableHost)for(const kind of Object.keys(availability))if(availability[kind].state==='available')availability[kind]={state:'unsupported',reason:`host-capability-${unavailableHost.state}`};
     if (supportedPlatform(platform) && availability[query.usage.kind].state === 'detect-only') setupState = 'detect-only';
     const eligible = unmet.length === 0 && availability[query.usage.kind].state === 'available';
@@ -359,7 +359,7 @@ export async function catalogRoutes(query, deps = {}) {
     const adapters = deps.adapters ?? await runtime.loadAdapters();
     const { candidates, inspections } = await collect(query, { ...deps, adapters, platform, issue, durablePlanFacts, preferences: preferenceRecord.adapterPreference });
     const unmetNames = [...new Set(candidates.flatMap(candidate => candidate.unmet.map(item => item.requirement)))].sort();
-    return { schemaVersion: 2, features: [...features], catalogRevision: catalogRevisionOf(inspections, platform), observedAt: new Date((deps.now ?? Date.now)()).toISOString(),
+    return { schemaVersion: 2, features: [...features], catalogRevision: catalogRevisionOf(inspections, platform, hostBoundaryOf(deps)), observedAt: new Date((deps.now ?? Date.now)()).toISOString(),
       preferenceRevision: preferenceRecord.revision, candidates,
       noMatch: candidates.some(candidate => candidate.eligible) ? null : { code: 'requirements_unsatisfied', requirements: unmetNames } };
   } catch (error) { throw normalizeError(error); }

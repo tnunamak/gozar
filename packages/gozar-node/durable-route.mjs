@@ -73,9 +73,30 @@ const verifyRecord=async(record,eligible)=>{
  if(!await acknowledgePinnedOrigin(record))return unprovenResult();
  if(eligible&&!await eligible())return unprovenResult();
  const started=Date.now(),checked=await runVerifier({origin:record.origin??record.intent.origin,target:record.target,verifyCmd:null}),observed=Date.parse(checked.checkedAt);
- if(!Number.isFinite(observed)||observed<started||observed>Date.now()||Date.now()>started+5000)return {...checked,status:'unverified',observedAt:null,subject:null};
- return boundProof(record,{...checked,validUntil:new Date(observed+15000).toISOString()});
+ if(!Number.isFinite(observed)||observed<started||observed>Date.now()||Date.now()>started+5000)return rememberProof(record,{...checked,status:'unverified',observedAt:null,subject:null});
+ return rememberProof(record,await boundProof(record,{...checked,validUntil:new Date(observed+15000).toISOString()}));
 };
+// A watch observes; it does not prove. Under a declared `acknowledgeOrigin` every proof needs the host to bind its exact
+// origin and attempt inside a call the host itself opened, so only an explicit start, check or adoption may prove. A poll
+// that proved on its own would ask outside every host call (refused, and reported as a failure) or take the attempt
+// of an explicit check that overlaps it. What the watch reports instead is the latest proof this process obtained for this
+// exact route generation, while that proof's own validity window lasts; after it, the route reads unverified until an
+// explicit check renews it. Held only when a handler is declared, per route generation, never read as authority.
+const lastProofs=new Map();
+const proofKey=record=>{const runtime=scopedRuntime.getStore();return typeof runtime?.acknowledgeOrigin==='function'?JSON.stringify([runtime.home,record.routeId,record.generation]):null;};
+function rememberProof(record,proof){
+ const key=proofKey(record);if(!key)return proof;
+ for(const[held,value]of lastProofs)if(!(Date.parse(value.validUntil)>Date.now()))lastProofs.delete(held);
+ if(proof.status==='verified')lastProofs.set(key,proof);else lastProofs.delete(key);
+ return proof;
+}
+function observedProof(record){
+ const proof=lastProofs.get(proofKey(record)??'');
+ const origin=record.origin??record.intent.origin;
+ if(proof&&Date.parse(proof.validUntil)>Date.now()&&(!proof.subject||(proof.subject.origin===origin&&proof.subject.target===record.target&&proof.subject.handleGeneration===record.generation)))return proof;
+ return unprovenResult();
+}
+const forgetProofs=routeId=>{for(const key of lastProofs.keys())if(JSON.parse(key)[1]===routeId)lastProofs.delete(key);};
 async function currentConsent(record){
   const runtime=scopedRuntime.getStore();if(!runtime?.embeddingServices||!record.reviewQuery)return null;
   const adapter=runtime.adapters.find(item=>item.id===record.adapterId);if(!adapter)throw refuse('provider_unavailable','The recorded adapter is unavailable');
@@ -425,7 +446,7 @@ function matchesEmptyIntent(record, facet, observed, current) {
     isDeepStrictEqual(current, record.intent.rule);
 }
 
-async function reconcile(record, facet, observed, { verify = true, eligible } = {}) {
+async function reconcile(record, facet, observed, { verify = true, eligible, observe = false } = {}) {
   if (['releasing', 'handing-back', 'address_changed'].includes(record.state)) return { state: record.state };
   const pin = record.receipt ?? record.intent;
   if (observed.identity !== pin.dnsName) return { state: 'address_changed' };
@@ -439,7 +460,7 @@ async function reconcile(record, facet, observed, { verify = true, eligible } = 
   const binding={authority:'adapter',target:facet.slots(observed.snapshot,{target:record.target}).some(slot=>String(slot.slot)===String(pin.port)&&slot.forwards===true)?{known:true,value:record.target}:{known:false,reason:'effective-target-not-observed'},remedy:null};
   if (!verify || record.state === 'suspending') return { state: record.state };
   if(!await consentCurrent(record))return {state:'unverified',consentChange:record.consentChange};
-  const checked = await verifyRecord(record, eligible);
+  const checked = observe ? observedProof(record) : await verifyRecord(record, eligible);
   return { state: checked.status === 'verified' ? 'usable' : 'unverified', verification: checked,binding };
 }
 
@@ -799,6 +820,7 @@ async function removeListener(dir, record, adapters, ctx, { suspend = false } = 
 // Withdraw the provider rule while retaining the origin, consent and slot reservation.
 export async function suspendRoute({ routeId, home = defaultHome(), expectedGeneration }, deps) {
   routeId = routeIdValue(routeId);
+  forgetProofs(routeId);
   const adapters = await adaptersOf(deps), ctx = durableContext(home);
   return reserved(home, async dir => {
     await refuseUserStop(dir, routeId);
@@ -825,6 +847,7 @@ export async function suspendRoute({ routeId, home = defaultHome(), expectedGene
 // No mode clears a user stop.
 export async function releaseRoute({ routeId, mode = 'remove', home = defaultHome(), expectedGeneration }, deps) {
   routeId = routeIdValue(routeId);
+  forgetProofs(routeId);
   if (!['remove', 'hand-back', 'dismiss'].includes(mode)) throw refuse('invalid_input', 'mode must be remove, hand-back or dismiss');
   return reserved(home, async dir => {
     if (mode !== 'remove') await refuseUserStop(dir, routeId);
@@ -850,6 +873,7 @@ export async function releaseRoute({ routeId, mode = 'remove', home = defaultHom
 // record deletion, then compare-and-set removal. Works during a hand-back: the user outranks both owners.
 export async function stopRoute({ routeId, home = defaultHome() }, deps) {
   routeId = routeIdValue(routeId);
+  forgetProofs(routeId);
   return reserved(home, async dir => {
     await atomicWrite(tombstonePath(dir, routeId), { schemaVersion: 1, routeId, stoppedAt: new Date().toISOString() });
     const record = await load(dir, routeId);
@@ -998,6 +1022,8 @@ export async function adoptRoute(request, deps) {
 // is published under the reservation lock; nothing else changes.
 export async function statusRoutes({ routeId, home = defaultHome(), canonical = false } = {}, deps) {
   if (routeId !== undefined) routeIdValue(routeId);
+  // `deps.observe` is the watch's read: under a declared host boundary it proves nothing (see lastProofs).
+  const observing = deps?.observe === true && typeof scopedRuntime.getStore()?.acknowledgeOrigin === 'function';
   let dir;
   try {
     if (canonical) { dir = routeDirectory(home); await trustedDirectory(dir); await privateDirectory(dir); }
@@ -1022,8 +1048,9 @@ export async function statusRoutes({ routeId, home = defaultHome(), canonical = 
   };
   const routes = [];
   for (let record of records) {
-    const check = await targetCheck(record);
-    const extra = { targetCheck: check };
+    // An observation reads recorded state only: it sends no challenge request to the target either.
+    const check = observing ? null : await targetCheck(record);
+    const extra = observing ? {} : { targetCheck: check };
     if (check === 'another program is listening' && record.state !== 'suspended') Object.assign(extra, {
       warning: `Another program is listening on ${record.target}; the provider forwards traffic for this route to it.`,
       nextAction: `gozar stop --route ${record.routeId}` });
@@ -1031,13 +1058,13 @@ export async function statusRoutes({ routeId, home = defaultHome(), canonical = 
     try { entry = durableEntry(adapters, record.adapterId); } catch (cause) { routes.push({ ...view(record, { state: 'unknown' }, extra), error: { code: cause.code ?? null, message: cause.message } }); continue; }
     const { observed, error } = await observeFor(entry,record);
     if (!observed) { routes.push({ ...view(record, { state: 'unknown' }, extra), error }); continue; }
-    const current = await reconcile(record, entry.facet, observed, { eligible: () => statusEligible(dir, record) });
+    const current = await reconcile(record, entry.facet, observed, { eligible: () => statusEligible(dir, record), observe: observing });
     const fresh=await load(dir,record.routeId);
     if(!fresh||fresh.generation!==record.generation||['releasing','handing-back','suspending','suspended'].includes(fresh.state)){
       current.state=fresh?.state??'unknown';if(current.verification)current.verification={...current.verification,status:'unverified'};
       routes.push(view(record,current,extra));continue;
     }
-    if (current.state === 'usable' && record.origin === null) {
+    if (current.state === 'usable' && record.origin === null && !observing) {
       // First successful verification after a crash or a failed check: publish it durably.
       const published = await reserved(home, async locked => {
         const fresh = await load(locked, record.routeId);
@@ -1048,13 +1075,15 @@ export async function statusRoutes({ routeId, home = defaultHome(), canonical = 
       else current.state = 'unverified';
     }
     // The lease write is guarded again: a release that committed since the checks above must not be renewed.
-    if (['usable', 'unverified'].includes(current.state) && await statusEligible(dir, record)) await renewIfDue(record, entry.facet, observed, durableContext(home,record.owner), current);
+    // Lease renewal is a provider write, so it belongs to an explicit check, never to an observation.
+    if (!observing && ['usable', 'unverified'].includes(current.state) && await statusEligible(dir, record)) await renewIfDue(record, entry.facet, observed, durableContext(home,record.owner), current);
     routes.push(view(record, current, extra));
   }
   return { schemaVersion: 1, routes, stoppedRoutes };
 }
 
-// A leased rule that expires soon is renewed from status (and so from watch). A renewal that fails leaves the
+// A leased rule that expires soon is renewed from status (and from watch, unless the host declared `acknowledgeOrigin`:
+// then a watch observes only and the host's own explicit checks renew). A renewal that fails leaves the
 // rule in place and reports the route `unverified`: the lease may lapse, and that is never silent.
 async function renewIfDue(record, facet, observed, ctx, current) {
   if (!facet.renew || !facet.expiresAt) return;

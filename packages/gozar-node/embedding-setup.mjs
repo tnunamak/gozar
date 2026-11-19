@@ -1,5 +1,5 @@
 import {needsSetupOperation,safeSetupAction} from './consent-facts.mjs';
-import {configurationFor} from './embedding-state.mjs';
+import {configurationFor,hostBoundaryOf} from './embedding-state.mjs';
 import {createHash} from 'node:crypto';
 import {inspectAdapter,detectAdapter,readContextFor, catalogRevisionOf} from './route-catalog.mjs';
 import {bindConfiguration} from './adapter-configuration.mjs';
@@ -55,7 +55,7 @@ export async function runEmbeddingSetup(request,deps){
    readConfiguration:()=>services.readConfiguration({...request,owner:request.owner,providerId:a.id,draftId:a.id===request.providerId?request.draftId:undefined}),
    detect:()=>detectAdapter(a,scopedRead,platform)});
   return cached.inspection;
- })),platform)};
+ })),platform,hostBoundaryOf(deps))};
 }
 
 export function clearInputActions(configuration){

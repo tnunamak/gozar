@@ -59,6 +59,13 @@
 
 ### Fixed
 
+- Under a declared `acknowledgeOrigin`, a provider that runs sessions on the legacy
+  daemon controller is advertised `unsupported` (`origin-acknowledgment-unsupported`)
+  for the session kind before consent, matching the refusal `expose` always gave.
+- Under a declared `acknowledgeOrigin`, `watchRoutes` observes instead of proving: it
+  no longer asks the host for acknowledgments outside the host's own calls, no longer
+  takes the attempt of an overlapping explicit check, and no longer publishes or
+  renews leases. Explicit `routeStatus` checks verify with a watch open.
 - Views returned after a confirmed resource removal (the attached
   removal-evidence and reference-cleanup records) reported `routeState:
   'released'`, which the frozen route contract does not define, and dropped the

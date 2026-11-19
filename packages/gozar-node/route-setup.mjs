@@ -8,6 +8,7 @@ import { canonicalHome } from './service-state.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { inspectAdapter, catalogRevisionOf, readContextFor, loadRuntime } from './route-catalog.mjs';
 import { supportedPlatform } from './platform.mjs';
+import { hostBoundaryOf } from './embedding-state.mjs';
 import { storeSecret, withSecret, handlePattern } from './secret-store.mjs';
 import { bindSetupValue, bindSetupText, discardUnboundSecret, bindConfiguration } from './adapter-configuration.mjs';
 
@@ -69,7 +70,7 @@ export async function runSetupAction(request, deps = {}) {
       result = { state: 'pending', nextAction: action };
     } else if (action.kind === 'provide-value') {
       if (request.secretHandle !== undefined) throw gozarError('invalid_input', 'A provide-value action takes value, not a secretHandle');
-      if (request.value === undefined) return { schemaVersion: 1, state: 'pending', nextAction: action, catalogRevision: catalogRevisionOf(await inspect(), platform) };
+      if (request.value === undefined) return { schemaVersion: 1, state: 'pending', nextAction: action, catalogRevision: catalogRevisionOf(await inspect(), platform, hostBoundaryOf(deps)) };
       const value = checkValue(action.valueFormat, request.value);
       if (value === null) throw gozarError('invalid_input', `The value does not match the format this action asks for (${action.valueFormat})`);
       await bindSetupText({ home, adapterId: adapter.id, actionId: request.actionId, value });
@@ -92,7 +93,7 @@ export async function runSetupAction(request, deps = {}) {
       await bindSetupValue({ home, adapterId: adapter.id, actionId: request.actionId, handle: request.secretHandle });
       bound = true;
     }
-    return { schemaVersion: 1, state: result.state, nextAction: needsSetupOperation(result.nextAction) ? safeSetupAction(result.nextAction) : result.nextAction ?? null, catalogRevision: catalogRevisionOf(await inspect(), platform) };
+    return { schemaVersion: 1, state: result.state, nextAction: needsSetupOperation(result.nextAction) ? safeSetupAction(result.nextAction) : result.nextAction ?? null, catalogRevision: catalogRevisionOf(await inspect(), platform, hostBoundaryOf(deps)) };
   } catch (error) { throw normalizeError(error); }
   finally { if (provided && !bound) await discardUnboundSecret({ home: request.home, handle: provided }).catch(() => {}); }
 }
