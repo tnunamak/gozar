@@ -116,7 +116,7 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok'), fet
         },
 
         setupActions: facts => (!facts?.setupNeeded ? [] : [
-          ...(facts.sdk ? [] : facts.runtimeInstall === false ? [] : [installAction]),
+          ...(!facts.sdk && facts.runtimeInstall === true ? [installAction] : []),
           ...(facts.authSet ? [] : [authAction]),
           ...(facts.domainSet ? [] : [domainAction]), entry]),
 

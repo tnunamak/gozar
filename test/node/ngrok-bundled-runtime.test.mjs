@@ -53,6 +53,17 @@ const setupContext = (runtimeModules, extras = {}) => ({
 const operation = { id: 'operation-1', cancelled: false, resources: [], connectorInputs: [], lastActionId: 'check-prerequisites' };
 const observeSetup = (adapter, ctx) => adapter.observeSetup(ctx, operation);
 
+test('cold and incomplete observations offer SDK installation only with explicit writable authority', () => {
+  const adapter = createNgrokAdapter({ loadSdk: async () => { throw new Error('module missing'); } });
+  for (const runtimeInstall of [undefined, null, false, 'true', 0, 1]) {
+    const actions = adapter.setupActions({ setupNeeded: true, runtimeInstall });
+    assert.ok(!actions.some(action => action.id === 'install-sdk'), 'unknown writability cannot offer installation');
+    assert.ok(actions.some(action => action.id === 'auth'), 'cold observations still offer credential intake');
+  }
+  assert.ok(adapter.setupActions({ setupNeeded: true, runtimeInstall: true }).some(action => action.id === 'install-sdk'));
+  assert.ok(!adapter.setupActions({ setupNeeded: true, sdk: true, runtimeInstall: true }).some(action => action.id === 'install-sdk'));
+});
+
 test('red: a declared valid bundle satisfies the ngrok SDK prerequisite in catalog and managed setup, with no install step and no artifact work', async t => {
   const bundle = await cannedBundle(t);
   const adapters = await loadAdapters();
