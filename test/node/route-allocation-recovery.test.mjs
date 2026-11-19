@@ -492,3 +492,37 @@ for (const settled of ['released', 'reference-debt']) test(`a settled pending st
  assert.equal(refusal?.code,'route_conflict');
  assert.equal(await readFile(join(directory,'state.json'),'utf8'),bytes,'settled custody is not overwritten');
 });
+
+
+test('an identity failure after usable proof returns historical recovery, not a published view',async t=>{
+ let directory,usableBefore;
+ const w=await world(t,null,{identityRecorder:async()=>{
+  const [id]=await entries(w.home);assert.ok(id);
+  directory=join(w.home,'attached',id);
+  for(let i=0;i<1000;i++){
+   const state=await json(join(directory,'state.json')).catch(()=>null);
+   if(state?.lastView?.state==='usable'&&state.lastView.published){usableBefore=state;break;}
+   await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  assert.ok(usableBefore?.lastView?.published,'the controller persisted usable proof before identity failure');
+  // Freeze that valid saved snapshot: broker-loss persistence must not be an assumed teardown barrier.
+  await chmod(directory,0o500);
+  throw new Error('identity recording failed after usable proof');
+ }});
+ try{
+  const {error}=await w.exposed;assert.ok(error);
+  assert.ok(usableBefore?.receipt);
+  const saved=await json(join(directory,'state.json'));
+  assert.equal(saved.lastView.state,'usable','the stale saved proof remains available as historical evidence');
+  assert.equal(saved.lastView.published,usableBefore.lastView.published);
+  assert.deepEqual(saved.receipt,usableBefore.receipt,'teardown never erases the owned receipt');
+  assert.deepEqual(error.route.handle,usableBefore.handle);assert.equal(error.route.operationId,w.q.operationId);
+  assert.equal(error.route.state,'uncertain');assert.equal(error.route.published,null);
+  assert.equal(error.route.verification.status,'unverified');assert.deepEqual(error.route.verification.checks,[]);
+  assert.equal(error.route.cleanup.state,'unconfirmed','process teardown is not provider-removal evidence');
+  assert.equal(w.ledger.size,1);assert.equal(w.counts().closes,0);
+  const control=await json(join(directory,'control.json'));
+  assert.equal(await processIdentity(control.pid),null);
+  assert.equal(await accepts(w.foreignPort),true);
+ }finally{if(directory)await chmod(directory,0o700);}
+});

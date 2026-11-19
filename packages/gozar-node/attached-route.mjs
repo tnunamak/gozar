@@ -313,9 +313,9 @@ export async function openAttachedRoute(request, deps = {}) {
       const stopped = await stopController(controller);
       const record = await readJson(join(directory, 'state.json')).catch(() => null);
       // Normalize before attaching, so the frozen surface error carries the teardown outcome and the
-      // controller's own saved view out to the caller instead of losing them to a wrapper.
+      // controller's saved view as historical recovery; teardown attests neither current proof nor provider absence.
       const carried = withCleanupOutcome(normalizeError(error), stopped);
-      if (record?.lastView && !carried.route) carried.route = record.lastView;
+      if (record?.lastView && !carried.route) carried.route = recoveryHistory(record.lastView, 'Controller startup identity failed; historical evidence only, retain this handle for cleanup');
       throw carried;
     }
     if (!session) holdLease(directory, id, deps.heartbeatMs ?? HEARTBEAT_MS);
