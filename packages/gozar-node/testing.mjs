@@ -37,8 +37,8 @@ export async function createTestingGozar({effects,...options}={}){
     try{const result=await handler(structuredClone(request.input),{signal:abort.signal,fixture:true});event.state='completed';return structuredClone(result);}
     catch{event.state='failed';throw gozarError('provider_unavailable','The testing effect failed');}
   };
-  const {manifest,root,secretBackend,hostCapabilities,identity,acknowledgeOrigin,originAckTimeoutMs,runtimeModules,detectionTtlMs}=options;
-  const api=createCoreRouteApi({manifest,root,secretBackend,hostCapabilities,identity,acknowledgeOrigin,originAckTimeoutMs,runtimeModules,detectionTtlMs,dispatchEffect,
+  const {manifest,root,secretBackend,hostCapabilities,identity,acknowledgeOrigin,originAckTimeoutMs,runtimeModules,detectionTtlMs,registryLineage}=options;
+  const api=createCoreRouteApi({manifest,root,secretBackend,hostCapabilities,identity,acknowledgeOrigin,originAckTimeoutMs,runtimeModules,detectionTtlMs,registryLineage,dispatchEffect,
     verify:request=>verification(request,{fetch:testingFetch(dispatchEffect)})});
   const gozar={...api};
   const mark=value=>{const copy=structuredClone(value);copy.facts??=[];copy.facts.push({id:'gozar-testing-effects',label:'Fixture evidence',value:'Synthetic provider effects and isolated local transport; real provider acceptance is unverified.',known:true,group:'proof',affectsConsent:false,source:'@tnunamak/gozar/testing',asOf:null});return copy;};

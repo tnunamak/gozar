@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdtemp,readFile,writeFile,readdir,copyFile,mkdir,realpath} from 'node:fs/promises';
+import {mkdtemp,readFile,writeFile,readdir,copyFile,mkdir,realpath,cp,symlink,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -13,7 +13,7 @@ import {createEmbeddingServices} from '../../packages/gozar-node/embedding-servi
 import {bundledLineage,PUBLISHED_REGISTRY_IDS} from '../../packages/gozar-node/registry-lineage.mjs';
 import {setupConsentReview} from '../../packages/gozar-node/consent-facts.mjs';
 import {createGozar} from '../../packages/gozar-node/api.mjs';
-import {fakeRegistry} from '../../packages/gozar-node/testing.mjs';
+import {fakeRegistry,createTestingGozar} from '../../packages/gozar-node/testing.mjs';
 import {createEmbeddingServices as create040} from './fixtures/legacy-040/embedding-services.040.mjs';
 
 const here=dirname(fileURLToPath(import.meta.url));
@@ -301,4 +301,31 @@ test('cleanup of a carried secret uses its retained backend scope and a failed d
  failDelete=false;
  assert.deepEqual(await s.discardSecret({home:h,handle}),{discarded:true});
  assert.equal(store.size,0);assert.equal(JSON.parse(await stateBytes(h)).secrets[handle],undefined);
+});
+
+test('a custom root alone cannot inherit bundled configuration authority',async t=>{
+ const h=await home();t.after(()=>rm(h,{recursive:true,force:true}));await write040(h);
+ const registry=join(h,'custom-registry'),root=join(registry,'adapters');
+ await cp(new URL('../../adapters/',import.meta.url),root,{recursive:true});
+ await symlink(fileURLToPath(new URL('../../packages/',import.meta.url)),join(registry,'packages'),'dir');
+ const entry=join(root,'providers','own-address','index.mjs');
+ await writeFile(entry,(await readFile(entry,'utf8'))+'\n// A different host-controlled registry implementation.\n');
+ const list=await createGozar({root,identity,hostCapabilities:{}}).listProviders({home:h,owner:OWNER});
+ assert.equal(list.providers.find(p=>p.providerId==='own-address').configuration.values.origin,undefined);
+ assert.deepEqual(list.providers.find(p=>p.providerId==='cloudflare-named').configuration.credentials.token,{known:true,value:false});
+ assert.equal((await create040({registryId:R040,identity}).resolveConfiguration({home:h,owner:OWNER,providerId:'cloudflare-named'})).token,TOKEN);
+});
+
+test('the testing factory preserves a trusted host registry lineage',async t=>{
+ const h=await home();t.after(()=>rm(h,{recursive:true,force:true}));
+ const lineage={id:'testing-host',replaces:[]};
+ const registry=await fakeRegistry({id:'host-provider',kinds:['session'],reach:'internet',dir:join(h,'registry')});
+ const seed=createEmbeddingServices({registryId:'registry-v1:'+'c'.repeat(64),identity,lineage});
+ const c=await seed.readConfiguration({home:h,owner:OWNER,providerId:'host-provider'});
+ await seed.mutateConfiguration({home:h,owner:OWNER,providerId:'host-provider',expectedConfigurationRevision:c.revision},async tx=>tx.bindText('origin','https://fixture.invalid'));
+ const harness=await createTestingGozar({manifest:registry.manifest,root:registry.root,registryLineage:lineage,identity,effects:[]});
+ try{
+  const list=await harness.gozar.listProviders({home:h,owner:OWNER});
+  assert.equal(list.providers.find(p=>p.providerId==='host-provider').configuration.values.origin,'https://fixture.invalid');
+ }finally{await harness.close();}
 });

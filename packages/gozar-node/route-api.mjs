@@ -58,7 +58,7 @@ export function createRouteApi(deps = {}) {
     const registryId = await registryIdentity({...deps,adapters:deps.adapters});
     // The bundled registry keeps one stable storage name across releases. An injected or custom registry has no lineage
     // unless its host declares one: matching definitions are not proof of the same executable.
-    const lineage=deps.registryLineage??(deps.adapters||deps.manifest?undefined:bundledLineage());
+    const lineage=deps.registryLineage??(deps.adapters||deps.manifest||deps.root?undefined:bundledLineage());
     return {registryId,embeddingServices:deps.embeddingServices??createEmbeddingServices({registryId,lineage,secretBackend:deps.secretBackend,hostCapabilities:deps.hostCapabilities,identity:deps.identity})};
   })();
   const shared = async (request={}) => { const resolved=await services(); return ({ adapters: await adapters(), platform: platform(), ...resolved, owner:request.owner,home:request.home,
