@@ -47,7 +47,11 @@ test('serialized inventory carries typed presentation from shipped and unfamilia
   ];
   const deps={adapters,embeddingServices:createEmbeddingServices({registryId:'display-fixture'}),
     readContext:{configuration:async()=>null}};
-  const {providers:[wrapped,plain]}=JSON.parse(JSON.stringify(await listProviders({home},deps)));
+  const {providers}=JSON.parse(JSON.stringify(await listProviders({home},deps)));
+  const wrapped=providers.find(provider=>provider.providerId===shipped.id);
+  const plain=providers.find(provider=>provider.providerId===id);
+  assert.ok(wrapped);
+  assert.ok(plain);
   assert.deepEqual(wrapped.displayName,known(shipped.operationalDefinition.displayName));
   assert.deepEqual(wrapped.copy.human.summary,known(shipped.operationalDefinition.copy.human.summary));
   assert.deepEqual(wrapped.addressStability,known('stable'));
@@ -70,8 +74,8 @@ test('serialized inventory carries typed presentation from shipped and unfamilia
   assert.equal(plain.availability.attached.state,'unsupported');
   assert.equal(JSON.stringify(plain.copy).includes('synthetic-marker'),false);
 
-  const supportedKind=admitted.definition.supportedKinds[0];
-  assert.ok(supportedKind,'the loader-admitted declaration supports a usage');
+  const supportedKinds=admitted.definition.supportedKinds;
+  assert.ok(supportedKinds.length,'the loader-admitted declaration supports a usage');
   const readOffer=async observation=>{
     const result=JSON.parse(JSON.stringify(await listProviders({
       home,hostCapabilities:{'runtime.attached':observation},
@@ -79,7 +83,7 @@ test('serialized inventory carries typed presentation from shipped and unfamilia
     return result.providers.find(provider=>provider.providerId===id);
   };
   const allowed=await readOffer(known(true));
-  assert.equal(allowed?.availability[supportedKind]?.state,'available');
+  for(const kind of supportedKinds)assert.equal(allowed?.availability[kind]?.state,'available',kind);
 
   for(const [observation,state] of [
     [known(false),'denied'],
@@ -90,7 +94,7 @@ test('serialized inventory carries typed presentation from shipped and unfamilia
     const prerequisite=offer?.prerequisites.find(row=>row.id==='runtime.attached');
     assert.equal(prerequisite?.state,state);
     assert.deepEqual(prerequisite?.observation,observation);
-    assert.deepEqual(offer?.availability[supportedKind],{
+    for(const kind of supportedKinds)assert.deepEqual(offer?.availability[kind],{
       state:'unsupported',reason:`host-capability-${state}`,
     });
     for(const key of ['displayName','copy','addressStability','idleTimeoutMs','needsAccount']){
