@@ -75,7 +75,7 @@ capability is denied, which is distinct from missing software.
 
 For the default file backend only, the first configuration read with owner omitted
 imports checked ownerless 0.3 setup references and text without copying bytes.
-A named owner returns `configuration_migration_required`; no migration API or
+A named owner returns `configuration_migration_required`; no ownerless-0.3 migration API or
 import command assigns the legacy bindings to that owner. Custom backends never
 import or fall back to legacy files.
 
@@ -335,3 +335,30 @@ separate. Shipped execution is HTTP(S); ngrok TLS/TCP profiles remain detect-onl
 Ngrok HTTPS needs its optional SDK and account/domain prerequisites; Cloudflare
 named uses an existing owner-managed tunnel/DNS route. Neither is implied ready
 by saved inputs. No future release or provider expansion is promised here.
+
+## Stable configuration storage
+
+A configuration is stored under `scopeId = sha256([custodian, canonical home, owner, providerId])`. The custodian
+is a lineage name, not the registry content id, so a new release keeps the same scope and the same saved values and
+credentials. The content registry id stays in every consent scope, setup journal and route bootstrap, so changed
+code or schema is still re-approved. Nothing in the stored state transfers an old approval.
+
+- The bundled registry uses the fixed custodian `gozar-bundled`. A host registry (custom `manifest`, `root` or
+  injected `adapters`) keeps content-bound storage unless the host declares
+  `createGozar({registryLineage:{id,replaces,inputKinds?}})`. Matching provider definitions are not proof of the same
+  executable, so Gozar never infers a lineage. A host lineage cannot use `gozar-bundled` or a published Gozar
+  registry id.
+- One time, the first read of a provider recomputes the earlier scope from each trusted earlier registry id plus the
+  exact home, owner and provider (bundled: the 0.4.0, 0.5.0 and 0.5.1 ids; host: `replaces`). The state file is not
+  scanned. Config-only records carry no reverse metadata, so an unknown earlier registry id cannot be recovered.
+- The carry-forward is one atomic write of `embedding-state.json`: the stable record is created, bound secret
+  metadata is re-stamped and keeps its original backend scope (`backendScopeId`) so delegated backends still find
+  the item, and the earlier record stays as a tombstone (`migratedTo`). Live route reservations move with the record.
+- It refuses with `configuration_migration_required` (and never writes) when several earlier scopes match, a saved
+  input has the wrong role or an unknown id, secret metadata disagrees with the record, a draft, setup operation or
+  operation-held credential is open, or the earlier record already moved elsewhere.
+- `adoptConfiguration({home,owner?,providerId,fromRegistryId})` is the trusted host decision for the refusals above
+  (choose between candidates, or name a predecessor that no lineage declares). It never overwrites a configuration
+  that has values, bindings, drafts or uses.
+- Limit: when no lineage names the earlier registry, the earlier state stays untouched but unreferenced; the host
+  sees an unconfigured provider until it declares `replaces` or calls `adoptConfiguration`.

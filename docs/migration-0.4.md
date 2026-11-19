@@ -38,7 +38,9 @@ The default backend imports checked ownerless 0.3 setup references on first read
 ONLY when owner is omitted. It never silently assigns them to a named owner:
 a named-owner import returns configuration_migration_required. Custom backends
 never import or mirror file-backed bytes. Registry identity includes trusted
-code/data and excludes installation paths; changed registries have different scopes.
+code/data and excludes installation paths. Saved configuration is stored under a stable registry lineage name,
+not under that content id; see "Stable configuration storage" in embedding-contract.md. Different registries without
+a shared lineage keep different scopes.
 
 ### Move an ownerless installation to a named app by re-intake
 

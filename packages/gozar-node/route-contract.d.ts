@@ -549,7 +549,9 @@ export type BundledRuntimeModule = { kind: 'bundled'; version: string; path: str
 export type RuntimeModuleDeclaration = BundledRuntimeModule | { kind: 'runtime-install' } | { kind: 'host-managed' };
 
 /** Trusted executable extension registry. Relative provider paths resolve under root/providers. */
-export type GozarOptions={manifest?: string | {providers: {id:string; module:string; definition:string}[]}; root?: string;secretBackend?:import('./embedding-contract.js').SecretBackend;hostCapabilities?:import('./embedding-contract.js').HostCapabilities;identity?:import('./embedding-contract.js').HostIdentity;
+/** Stable storage name for a host registry. `replaces` lists earlier registry ids whose saved configuration this registry carries forward once; it cannot name a published Gozar registry id. `inputKinds` maps each input id to 'secret' or 'text' and makes the carry-forward refuse any other saved input. Without it, storage stays bound to the registry content. */
+export type RegistryLineage={id:string;replaces:string[];inputKinds?:Record<string,'secret'|'text'>};
+export type GozarOptions={registryLineage?:RegistryLineage;manifest?: string | {providers: {id:string; module:string; definition:string}[]}; root?: string;secretBackend?:import('./embedding-contract.js').SecretBackend;hostCapabilities?:import('./embedding-contract.js').HostCapabilities;identity?:import('./embedding-contract.js').HostIdentity;
   /** Awaited exact-origin host boundary; see OriginAcknowledgmentRequest. */
   acknowledgeOrigin?: OriginAcknowledgmentHandler;
   /** Bound for one acknowledgment attempt, in milliseconds. Default 10_000. Used only when acknowledgeOrigin is declared. */

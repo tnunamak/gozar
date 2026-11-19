@@ -2,6 +2,14 @@
 
 ## 0.5.2
 
+### Fixed
+
+- **Saved configuration survives a release upgrade.** Storage scope was a hash that included the content registry id,
+  so every release orphaned the saved values and credentials of the one before it (a 0.4.0 `own-address` origin read
+  back as unset on 0.5.1). The scope now uses a stable lineage name, one-time carry-forward recomputes the earlier
+  scope from the published 0.4.0, 0.5.0 and 0.5.1 registry ids, and `registryLineage` plus `adoptConfiguration`
+  give hosts the same path. Consent still binds the content registry id, so changed code is approved again.
+
 ### Added
 
 - **Awaited exact-origin host acknowledgment for embedded starts.** A host that

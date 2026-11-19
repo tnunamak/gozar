@@ -22,6 +22,8 @@ export interface HostEmbeddingMethods {
  commitConfigurationDraft(request:ConfigurationRequest&{draftId:string}):Promise<Configuration&{detection?:DetectionFreshness}>;
  discardConfigurationDraft(request:{home:string;owner?:string;providerId:string;draftId:string}):Promise<{discarded:boolean}>;
  discardSecret(request:{home:string;handle:string}):Promise<{discarded:boolean}>;
+ /** Trusted host decision: carry the one earlier configuration saved under `fromRegistryId` into the stable scope. Refuses with configuration_migration_required when nothing matches, the saved inputs do not fit, a draft or operation is open, or a configuration already exists. */
+ adoptConfiguration(request:{home:string;owner?:string;providerId:string;fromRegistryId:string}):Promise<Configuration>;
  listProviders(request:{home:string;owner?:string;hostCapabilities?:HostCapabilities;refresh?:boolean}):Promise<{schemaVersion:number;catalogRevision:string;observedAt:string;providers:ProviderInventory[]}>;
 }
 export interface ProviderInventory {

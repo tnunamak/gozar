@@ -19,6 +19,7 @@ import { resolveClientAddress } from './ingress.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { registryIdentity } from './registry-identity.mjs';
 import { createEmbeddingServices } from './embedding-services.mjs';
+import { bundledLineage } from './registry-lineage.mjs';
 import { validatedRuntimeModuleDeclaration } from './runtime-modules.mjs';
 import { createDetectionCache } from './detection-cache.mjs';
 import { listProviders as inventory } from './embedding-inventory.mjs';
@@ -55,7 +56,10 @@ export function createRouteApi(deps = {}) {
   let servicesPromise;
   const services = () => servicesPromise ??= (async()=>{
     const registryId = await registryIdentity({...deps,adapters:deps.adapters});
-    return {registryId,embeddingServices:deps.embeddingServices??createEmbeddingServices({registryId,secretBackend:deps.secretBackend,hostCapabilities:deps.hostCapabilities,identity:deps.identity})};
+    // The bundled registry keeps one stable storage name across releases. An injected or custom registry has no lineage
+    // unless its host declares one: matching definitions are not proof of the same executable.
+    const lineage=deps.registryLineage??(deps.adapters||deps.manifest?undefined:bundledLineage());
+    return {registryId,embeddingServices:deps.embeddingServices??createEmbeddingServices({registryId,lineage,secretBackend:deps.secretBackend,hostCapabilities:deps.hostCapabilities,identity:deps.identity})};
   })();
   const shared = async (request={}) => { const resolved=await services(); return ({ adapters: await adapters(), platform: platform(), ...resolved, owner:request.owner,home:request.home,
     ...(deps.manifest ? { registry: { manifest: deps.manifest, root: deps.root } } : {}),
@@ -292,7 +296,7 @@ export function createRouteApi(deps = {}) {
       }
       return {routes:[...views.values()]};
     }),
-    ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft'].map(method=>[method,request=>guard(async()=>{const resolved=await services();const result=await resolved.embeddingServices[method](request);
+    ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft','adoptConfiguration'].map(method=>[method,request=>guard(async()=>{const resolved=await services();const result=await resolved.embeddingServices[method](request);
       // A stored or discarded secret or draft changes what a scope offers: its retained detection is dropped.
       detection.invalidate({registryId:resolved.registryId,home:request.home,owner:request.owner,providerId:request.providerId});return result;})])),
     beginConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const draft=await context.embeddingServices.beginConfigurationDraft(request);
