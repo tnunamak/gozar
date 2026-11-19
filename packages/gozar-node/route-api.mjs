@@ -19,6 +19,7 @@ import { resolveClientAddress } from './ingress.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { registryIdentity } from './registry-identity.mjs';
 import { createEmbeddingServices } from './embedding-services.mjs';
+import { validatedRuntimeModuleDeclaration } from './runtime-modules.mjs';
 import { listProviders as inventory } from './embedding-inventory.mjs';
 import { setupConsentReview,consentSnapshot,safeSetupAction,needsSetupOperation } from './consent-facts.mjs';
 import { runSetupOperation, readSetupOperation, cancelSetupOperation } from './setup-operations.mjs';
@@ -36,6 +37,11 @@ const runtime = lazy(() => import('./adapter-runtime.mjs'));
 
 export function createRouteApi(deps = {}) {
   const platform = () => deps.platform ?? process.platform;
+  // Trusted host declarations of packaged runtime modules. Structural validation is synchronous; the
+  // identity, version and load check happen on every load, in this process and in a detached controller.
+  const runtimeModules = deps.runtimeModules === undefined || deps.runtimeModules === null ? undefined
+    : Object.fromEntries(Object.entries(deps.runtimeModules)
+      .map(([name, declaration]) => [name, validatedRuntimeModuleDeclaration(name, declaration)]));
   let loaded;
   const adapters = async () => deps.adapters ?? (loaded ??= runtime().then(module => module.loadAdapters(deps.manifest ? { manifest: deps.manifest, root: deps.root } : undefined)).catch(error => { loaded = undefined; throw error; }));
   let servicesPromise;
@@ -46,6 +52,9 @@ export function createRouteApi(deps = {}) {
   const shared = async (request={}) => { const resolved=await services(); return ({ adapters: await adapters(), platform: platform(), ...resolved, owner:request.owner,home:request.home,
     ...(deps.manifest ? { registry: { manifest: deps.manifest, root: deps.root } } : {}),
     hostCapabilities:deps.hostCapabilities??{}, ...(deps.dispatchEffect?{dispatchEffect:deps.dispatchEffect}:{}),
+    ...(runtimeModules ? { runtimeModules } : {}),
+    ...(deps.acknowledgeOrigin ? { acknowledgeOrigin: deps.acknowledgeOrigin } : {}),
+    ...(Number.isFinite(deps.originAckTimeoutMs) ? { originAckTimeoutMs: deps.originAckTimeoutMs } : {}),
     ...(deps.readContext ? { readContext: deps.readContext } : {}),
     decorateSetupAction:({action,adapter,configuration,draftId=null,inspection})=>{
       const review=setupConsentReview({registryId:resolved.registryId,providerId:adapter.id,configuration,draftId,action,facts:catalogFactsFor(inspection??{adapter})});

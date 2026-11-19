@@ -10,6 +10,7 @@ import {ownershipFor} from './adapter-runtime.mjs';
 import {enrichRoute} from './embedding-state.mjs';
 import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
 import {gozarError,instructionAction} from './error-normalizer.mjs';
+import {cleanupRecovery} from './embedding-projections.mjs';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const optionalRead=async path=>{try{return await readRecord(path);}catch(error){if(error.code==='ENOENT')return null;throw error;}};
 async function directory(home,create){const path=join(await canonicalHome(home,create),'operations');await trustedDirectory(path,create);await privateDirectory(path);return path;}
@@ -325,7 +326,7 @@ export async function retryRecordedReferenceCleanup({home,handle,owner}={},runti
    const error=gozarError('cleanup_debt','Resource removal is confirmed but configuration reference release failed',record.view.cleanup.nextAction,cause);
    error.route=structuredClone(record.view);throw error;
   }
-  record.view={...pending.resourceView,state:'released',routeState:'released',cleanup:{state:'confirmed'}};
+  record.view={...pending.resourceView,state:'released',routeState:'inactive',cleanup:cleanupRecovery({state:'confirmed'},pending.resourceView?.handle)};
   record.phase='terminal';delete record.referenceCleanup;await atomicWrite(path,record);
   return structuredClone(record.view);
  },{waitSeconds:30});
@@ -592,7 +593,7 @@ export async function retryCleanupReference(request,runtime){
   if(record.phase!=='resource-removed')return null;
   try{await releaseRecordedConfigurationUse(record.scope,runtime);await runtime.afterReferenceRelease?.();}
   catch(cause){const error=gozarError('cleanup_debt','Resource removed but exact configuration reference remains',record.view.cleanup.nextAction,cause);error.route=structuredClone(record.view);throw error;}
-  record.view={...record.resourceView,state:'released',routeState:'released',cleanup:{state:'confirmed'}};
+  record.view={...record.resourceView,state:'released',routeState:'inactive',cleanup:cleanupRecovery({state:'confirmed'},record.resourceView?.handle)};
   record.phase='terminal';await atomicWrite(join(dir,name),record);return structuredClone(record.view);
  },{waitSeconds:30});
 }

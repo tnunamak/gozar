@@ -89,6 +89,7 @@ export async function defaultReadContext() {
 export async function readContextFor(deps, home, platform, owner = deps.owner) {
   return { ...(deps.readContext ?? await defaultReadContext()), home, platform,
     ...(deps.embeddingServices ? {providerConfiguration: providerId => deps.embeddingServices.resolveConfiguration({home,owner,providerId})} : {}),
+    ...(deps.runtimeModules ? { runtimeModules: deps.runtimeModules } : {}),
     ...(deps.dispatchEffect ? {dispatchEffect: deps.dispatchEffect,probe:async recipe=>(await loadRuntime()).probeWithEffects(recipe,deps.dispatchEffect)} : {}) };
 }
 
@@ -125,14 +126,14 @@ const failureFacts = failure => failure ? [{id: 'catalog-observation', label: 'R
 // --- One adapter, observed ----------------------------------------------------------------------
 
 /**
- * Read-only observation of one adapter. A failing probe is an `unknown` state, never a thrown catalog error;
- * on a platform other than Linux nothing is probed and the adapter is `unsupported`.
+ * The live provider observation: one detect with failure capture. This is the part a polling read pays
+ * for; the cheap derivation that follows lives in `inspectionOf`, so a cached detection can be rebuilt
+ * without ever touching the provider. A failing probe is an `unknown` state, never a thrown catalog error.
  */
-export async function inspectAdapter(adapter, context, platform) {
-  const base = { adapter, properties: adapter.definition.capabilities, actions: [] };
-  if (!supportedPlatform(platform)) return { ...base, state: 'unsupported', facts: null, probed: false };
+export async function detectAdapter(adapter, context, platform) {
+  if (!supportedPlatform(platform)) return { state: 'unsupported', facts: null, probed: false, failure: null };
   let detected, failure = null;
-  const observedContext = {...context};
+  const observedContext = { ...context };
   for (const name of ['probe', 'dispatchEffect']) if (typeof context[name] === 'function') {
     observedContext[name] = async (...args) => {
       try { return await context[name](...args); }
@@ -140,16 +141,33 @@ export async function inspectAdapter(adapter, context, platform) {
     };
   }
   try { detected = await adapter.detect(bindConfiguration(observedContext, adapter.id)); }
-  catch (error) { return { ...base, state: 'unknown', facts: null, probed: true, failure: failure ?? catalogFailure(error) }; }
+  catch (error) { return { state: 'unknown', facts: null, probed: true, failure: failure ?? catalogFailure(error) }; }
   const state = failure ? 'unknown' : ['ready', 'action-required', 'unsupported', 'unknown'].includes(detected?.state) ? detected.state : 'unknown';
   if (state === 'unknown') failure ??= catalogFailure(null);
+  return { state, facts: detected.facts, probed: true, failure };
+}
+
+/** The cheap derivation of an inspection from a detection: properties and offered actions, no provider I/O. */
+export function inspectionOf(adapter, detection, platform) {
+  const base = { adapter, properties: adapter.definition.capabilities, actions: [] };
+  if (detection.probed === false) return { ...base, state: detection.state, facts: null, probed: false, failure: detection.failure ?? null };
+  const { state, facts, failure } = detection;
   let properties = base.properties, actions = [];
-  try { properties = adapter.properties(detected.facts); } catch { /* keep the declared capabilities */ }
-  if (state !== 'unsupported') { try { actions = adapter.configurationActions ? adapter.configurationActions() : adapter.setupActions({ ...detected.facts, setupNeeded: true }); } catch { /* no usable actions */ } }
+  try { properties = adapter.properties(facts); } catch { /* keep the declared capabilities */ }
+  if (state !== 'unsupported') { try { actions = adapter.configurationActions ? adapter.configurationActions() : adapter.setupActions({ ...facts, setupNeeded: true }); } catch { /* no usable actions */ } }
   let missingActions = [];
-  try { missingActions = adapter.setupActions(detected.facts); } catch {}
-  actions=[...new Map([...actions,...missingActions].map(action=>[action.id,action])).values()];
-  return { ...base, state, facts: detected.facts, properties, actions, missingActions, probed: true, failure };
+  try { missingActions = adapter.setupActions(facts); } catch {}
+  actions = [...new Map([...actions, ...missingActions].map(action => [action.id, action])).values()];
+  return { ...base, state, facts, properties, actions, missingActions, probed: true, failure };
+}
+
+/**
+ * Read-only observation of one adapter. A failing probe is an `unknown` state, never a thrown catalog error;
+ * on a platform other than Linux nothing is probed and the adapter is `unsupported`.
+ */
+export async function inspectAdapter(adapter, context, platform) {
+  if (!supportedPlatform(platform)) return { ...{ adapter, properties: adapter.definition.capabilities, actions: [] }, state: 'unsupported', facts: null, probed: false };
+  return inspectionOf(adapter, await detectAdapter(adapter, context, platform), platform);
 }
 
 /** One revision for the provider-side state: it changes when a setup state, an action or a property changes. */

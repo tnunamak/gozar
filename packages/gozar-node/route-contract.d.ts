@@ -483,8 +483,71 @@ export function listRoutes(request:{home:string;owner?:string}):Promise<{routes:
 export type {SecretBackend,HostCapabilities,HostCapabilityId,HostIdentity,ConfigurationDraft,ProviderInventory} from './embedding-contract.js';
 export type {Adapter,AdapterDefinition,AdapterRequest,AdapterPlan,AdapterProofSession,ProofAttempt,ReadContext,SetupContext,AdmittedEffectContext,Receipt,Removal,Verification,Observation as AdapterObservation} from './adapter-contract.js';
 
+/**
+ * The awaited exact-origin host boundary (0.5.2). Declare `acknowledgeOrigin` on the factory to receive
+ * one typed, authenticated request per route start attempt, naming the exact validated origin the provider
+ * allocated for this route, handle/generation and proof attempt, plus the owner, provider, operation and
+ * local target scope. Bind your own service verifier's Host allowance to exactly `request.origin` and
+ * answer only when that is done: publication verification (and therefore the published address) waits for
+ * your well-formed acknowledgment, bounded by `originAckTimeoutMs` (default 10s). Anything else — no reply,
+ * `acknowledged` not true, a thrown or refused handler, an aborted or timed-out call, or a stale echo
+ * naming another origin, handle, generation or attempt — publishes nothing and withdraws the route with
+ * its retained cleanup receipt. Not declared: verification starts exactly as before, immediately after
+ * allocation. The request carries no credential; the reply grants no authority beyond permitting Gozar's
+ * own verification of the origin it already validated.
+ */
+export type OriginAcknowledgmentRequest = {
+  home: string;
+  owner: string;
+  providerId: string;
+  handle: { kind: 'attached' | 'session' | 'durable'; id: string; generation: number };
+  operationId: string | null;
+  target: string;
+  origin: string;
+  attemptId: string;
+};
+export type OriginAcknowledgmentReply = {
+  acknowledged: true;
+  origin: string;
+  handle: { id: string; generation: number };
+  attemptId: string;
+};
+export type OriginAcknowledgmentHandler =
+  (request: OriginAcknowledgmentRequest) => Promise<OriginAcknowledgmentReply>;
+
+/**
+ * A trusted host declaration of one optional runtime module an embedded adapter uses (0.5.2; the
+ * registry's own adapter declarations name the packages and tested versions they need).
+ * Modes are explicit and exclusive:
+ *
+ * - `{ kind: 'bundled', version, path }`: the host packages a TESTED read-only bundle (for example inside
+ *   an AppImage) and hands its absolute module directory. Gozar proves the bundle's package manifest
+ *   names the exact package and the exact declared version, loads the module entry in the host factory
+ *   process AND in the detached route controller, and marks the declared install prerequisite satisfied
+ *   without installing, writing or restarting anything. The bundle must include the module's native
+ *   platform dependencies for the host's platform/architecture; a missing, unloadable or wrong-version
+ *   bundle leaves the provider unavailable with a fixed plain reason and no install action.
+ * - `{ kind: 'runtime-install' }`: the host explicitly says its install location is writable; Gozar may
+ *   offer the approved artifact install step (host executor, `installer.execute`, pinned SHA-256).
+ * - `{ kind: 'host-managed' }`: the host provides its own dependencies and Gozar offers no install step;
+ *   a missing module is a fixed plain unavailability, never an impossible install action.
+ *
+ * No declaration: the documented npm optional-peer flow is unchanged. Declarations are trusted factory
+ * options, never request data, and cross to a detached controller only as validated data in Gozar's
+ * private bootstrap. Satisfying the prerequisite never claims account, route or address readiness, and
+ * a provider's own CLI is never silently treated as a substitute for the embedded module it declared.
+ */
+export type BundledRuntimeModule = { kind: 'bundled'; version: string; path: string };
+export type RuntimeModuleDeclaration = BundledRuntimeModule | { kind: 'runtime-install' } | { kind: 'host-managed' };
+
 /** Trusted executable extension registry. Relative provider paths resolve under root/providers. */
-export type GozarOptions={manifest?: string | {providers: {id:string; module:string; definition:string}[]}; root?: string;secretBackend?:import('./embedding-contract.js').SecretBackend;hostCapabilities?:import('./embedding-contract.js').HostCapabilities;identity?:import('./embedding-contract.js').HostIdentity};
+export type GozarOptions={manifest?: string | {providers: {id:string; module:string; definition:string}[]}; root?: string;secretBackend?:import('./embedding-contract.js').SecretBackend;hostCapabilities?:import('./embedding-contract.js').HostCapabilities;identity?:import('./embedding-contract.js').HostIdentity;
+  /** Awaited exact-origin host boundary; see OriginAcknowledgmentRequest. */
+  acknowledgeOrigin?: OriginAcknowledgmentHandler;
+  /** Bound for one acknowledgment attempt, in milliseconds. Default 10_000. Used only when acknowledgeOrigin is declared. */
+  originAckTimeoutMs?: number;
+  /** Trusted declarations of packaged runtime modules an adapter embeds; see RuntimeModuleDeclaration. */
+  runtimeModules?: Record<string, RuntimeModuleDeclaration>;};
 export function createGozar(options?: GozarOptions): import('./embedding-contract.js').HostEmbeddingMethods & {
  catalogRoutes: typeof catalogRoutes; expose: (request:ExposeRequest)=>Promise<RouteView>;
  ensureRoute: typeof ensureRoute; adoptRoute: typeof adoptRoute; routeStatus: typeof routeStatus;

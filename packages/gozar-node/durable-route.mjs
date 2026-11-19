@@ -562,9 +562,34 @@ async function createListener(dir, record, entry, { table, firstAllocation, expe
   return publish(dir, record);
 }
 
+// The same awaited exact-origin host boundary for durable starts (0.5.2): when the host's factory declared
+// `acknowledgeOrigin`, the pinned origin is acknowledged in-process, scoped to this route and a fresh
+// attempt, before publication verification. A missing, refused, malformed, stale or timed-out
+// acknowledgment publishes nothing and leaves the record unverified with its retained cleanup debt.
+async function acknowledgePinnedOrigin(record) {
+  const runtime = scopedRuntime.getStore();
+  if (typeof runtime?.acknowledgeOrigin !== 'function') return true;
+  const origin = record.origin ?? record.intent?.origin;
+  if (typeof origin !== 'string' || !origin) return false;
+  const request = { owner: record.owner, providerId: record.adapterId,
+    handle: { kind: 'durable', id: record.routeId, generation: record.generation },
+    operationId: record.operationId ?? null, target: record.target, origin, attemptId: randomUUID() };
+  const bounded = new Promise(resolve => { const timer = setTimeout(resolve, runtime.originAckTimeoutMs ?? 10_000, null); timer.unref?.(); });
+  let reply;
+  try { reply = await Promise.race([runtime.acknowledgeOrigin({ ...request, home: await canonicalHome(runtime.home, false) }), bounded]); }
+  catch { return false; }
+  return reply?.acknowledged === true && reply.origin === origin && reply.handle?.id === record.routeId &&
+    reply.handle?.generation === record.generation && reply.attemptId === request.attemptId;
+}
+
 // Verify the pinned origin and durably publish it only after verification succeeds.
 async function publish(dir, record, checked) {
   if(!await consentCurrent(record)){await save(dir,{...record,state:'unverified'});return {record,verification:{status:'unverified',checkedAt:record.verification?.checkedAt??null,observedAt:record.verification?.observedAt??null,subject:record.verification?.subject??null}};}
+  if (!await acknowledgePinnedOrigin(record)) {
+    record = { ...record, state: 'unverified' };
+    await save(dir, record);
+    return { record, verification: { status: 'unverified', checkedAt: record.verification?.checkedAt ?? null, observedAt: record.verification?.observedAt ?? null, subject: record.verification?.subject ?? null } };
+  }
   checked ??= await verifyRecord(record);
   // Fence: a concurrent release or hand-back that moved the generation wins.
   const fresh = await load(dir, record.routeId);

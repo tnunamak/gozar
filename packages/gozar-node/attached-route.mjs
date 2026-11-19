@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { atomicWrite, processIdentity } from './journal.mjs';
 import { canonicalHome, trustedDirectory, privateDirectory, withExclusiveLock } from './service-state.mjs';
 import { gozarError, instructionAction, normalizeError } from './error-normalizer.mjs';
+import { cleanupRecovery } from './embedding-projections.mjs';
 import { cliCommand } from './cli-command.mjs';
 import { createGate } from './gate.mjs';
 import { projectAttached, projectSession, releasedView, recoveryHistory, checkRef, projectControllerObservation, unknownProperties } from './route-view.mjs';
@@ -247,13 +248,15 @@ export async function openAttachedRoute(request, deps = {}) {
         hostTouched = true;
         const hostIdentity=await deps.embeddingServices.resolveIdentity({home:redeemed.home});
         broker=await startEmbeddingBroker({services:deps.embeddingServices,home:redeemed.home,identity:hostIdentity,
-          dispatchEffect:deps.dispatchEffect,onLoss:()=>{if(brokers.has(id))void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
+          dispatchEffect:deps.dispatchEffect,acknowledgeOrigin:deps.acknowledgeOrigin,onLoss:()=>{if(brokers.has(id))void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
         const descriptor=await broker.registerController({identity:hostIdentity});
         identity={instanceId:descriptor.instanceId,bootId:descriptor.bootId};
         brokers.set(id,broker);
       }
       bootstrap = { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
         operationId:request.operationId??null,
+        ...(deps.acknowledgeOrigin ? { originAcknowledgment: true, originAckTimeoutMs: deps.originAckTimeoutMs ?? 10_000 } : {}),
+        ...(deps.runtimeModules ? { runtimeModules: deps.runtimeModules } : {}),
         ...(session ? {execution:'generic-session-v1',handle,expiresAtMs:session.expiresAtMs} : {}),
         ...(broker?{resolver:broker.descriptor,identity,registryId:deps.registryId,owner:request.owner,consentReview:redeemed.consentReview,fixtureEffects:!!deps.dispatchEffect}:{}),
         ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) };
@@ -568,8 +571,8 @@ export async function attachedRemovalEvidence(request,scope) {
       state.adapterId!==scope.providerId||state.lastView?.handle?.kind!==handle.kind||
       state.lastView.handle.id!==handle.id||state.lastView.handle.generation!==handle.generation)
     throw gozarError('cleanup_debt','Resource-removal evidence does not match cleanup scope');
-  return {...state.lastView,handle:structuredClone(handle),state:'released',routeState:'released',
-    published:null,ingress:null,verification:{...state.lastView.verification,status:'unverified'},cleanup:{state:'confirmed'}};
+  return {...state.lastView,handle:structuredClone(handle),state:'released',routeState:'inactive',
+    published:null,ingress:null,verification:{...state.lastView.verification,status:'unverified'},cleanup:cleanupRecovery({state:'confirmed'},handle)};
 }
 // --- The controller -----------------------------------------------------------------------------
 
@@ -722,6 +725,9 @@ export async function runAttachedController(directory, runtime = {}) {
     throw gozarError('artifact_integrity_failed','The controller registry content changed');
   }
   if(resolver)runtime={...runtime,embeddingServices:resolver,owner:bootstrap.owner,...(bootstrap.fixtureEffects?{dispatchEffect:resolver.dispatchEffect.bind(resolver)}:{})};
+  // The trusted host declaration of packaged runtime modules crosses as data; the detached controller
+  // re-validates identity, version and load through the same shared helper as the host factory.
+  if(bootstrap.runtimeModules)runtime={...runtime,runtimeModules:bootstrap.runtimeModules};
   if(bootstrap.fixtureEffects)runtime.fetch=testingFetch(runtime.dispatchEffect);
   const adapters = runtime.adapters ?? await (await loadRuntime())?.loadAdapters?.(bootstrap.registry);
   const adapter = adapters?.find(item => item.id === bootstrap.adapterId);
@@ -817,6 +823,29 @@ export async function runAttachedController(directory, runtime = {}) {
     return checked;
   }
 
+  // The awaited exact-origin host boundary (0.5.2). When the embedding host declared `acknowledgeOrigin`, no
+  // publication verification may run until the host has acknowledged THIS exact validated origin for this
+  // route, generation and proof attempt, over the authenticated broker. A missing, refused, malformed,
+  // stale, aborted or timed-out acknowledgment withdraws the route exactly like a failed verification: it
+  // can never publish, never approve a foreign Host (any echo naming another origin, handle or attempt is
+  // refused), never revive a lost owner, and never disturbs the retained cleanup receipt.
+  const acknowledgeAllocatedOrigin = async origin => {
+    if (!bootstrap.originAcknowledgment) return true;
+    if (!resolver || resolverLost || ownerLost || releasing || expired()) return false;
+    const request = { owner: bootstrap.owner, providerId: adapter.id,
+      handle: { kind: handle.kind, id: handle.id, generation: handle.generation },
+      operationId: bootstrap.operationId ?? null, target: bootstrap.request.target, origin, attemptId: attempt.id };
+    const bounded = new Promise(resolve => { const timer = setTimeout(resolve, bootstrap.originAckTimeoutMs ?? 10_000, null); timer.unref?.(); });
+    const aborted = new Promise(resolve => { if (proofAbort.signal.aborted) return resolve(); proofAbort.signal.addEventListener('abort', () => resolve(), { once: true }); });
+    let reply;
+    try { reply = await Promise.race([resolver.acknowledgeOrigin(request), bounded, aborted]); }
+    catch { return false; }
+    if (resolverLost || ownerLost || releasing || expired() || proofAbort.signal.aborted) return false;
+    return reply?.acknowledged === true && reply.origin === origin &&
+      reply.handle?.id === handle.id && reply.handle?.generation === handle.generation &&
+      reply.attemptId === attempt.id;
+  };
+
   async function withdrawInvalidObservation(){
     lease.state='unverified';lease.consentChange={reason:'runtime-observation-invalid',
       oldDigest:lease.approvedReview?.consentFactsDigest??'',newDigest:'',
@@ -901,6 +930,10 @@ export async function runAttachedController(directory, runtime = {}) {
       Object.assign(lease, { properties: facts.properties,binding:facts.binding, ingress: facts.ingress ?? null, limits: facts.limits,runtimeFacts:facts.facts??[], facts: [...new Map([...(adapter.definition.facts ?? []), ...(facts.facts ?? [])].map(f=>[f.id,f])).values()], origin, state: 'unverified' });
       await save();
       if(!await enforceConsent())return;
+      // The host boundary: with a declared acknowledgment handler, verification waits for the host to bind
+      // this exact origin. Nothing is reported published until the host has answered and the validation passes.
+      if (!await acknowledgeAllocatedOrigin(origin))
+        throw gozarError('verification_failed', 'The host did not acknowledge the allocated origin; the route was withdrawn');
       // Nothing is reported published until the validation passes; a failed check withdraws the route.
       const checked = await checkProof(claimsSse);
       if (checked.status !== 'verified') throw gozarError('verification_failed', 'The route did not pass publication validation and was withdrawn');
@@ -1132,6 +1165,10 @@ export async function openSessionRoute(request, deps = {}) {
       if (!Number.isFinite(expiresAtMs)||request.usage.lifetimeMs<=0) throw gozarError('invalid_input','A session needs a finite positive lifetime');
       return await openAttachedRoute(request,{...deps,sessionExecution:{redeemed,handle:stableHandle,directory,expiresAtMs}});
     }
+    // The legacy daemon session controller does not implement the declared exact-origin acknowledgment
+    // boundary. A host that declared the boundary gets a refusal, never a silent unacknowledged verification.
+    if (deps.acknowledgeOrigin) throw gozarError('unsupported',
+      'This session controller does not implement the declared origin acknowledgment boundary; use a provider on the generic session runtime');
     // The adapter turns what its owner chose into the exact session-engine inputs, from live observation, before anything starts.
     const hostChoices = typeof redeemed.adapter.hostChoices === 'function'
       ? await redeemed.adapter.hostChoices(await readContextFor(deps, home, deps.platform ?? process.platform, request.owner)).catch(error => { throw refusedBeforeStart(error, stableHandle, request); })

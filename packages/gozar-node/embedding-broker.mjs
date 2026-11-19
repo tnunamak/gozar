@@ -5,9 +5,9 @@ import {chmod,unlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {canonicalHome} from './service-state.mjs';
 import {embeddingError} from './embedding-services.mjs';
-const allowed=new Set(['ping','dispatchEffect','readConfiguration','resolveConfiguration','registerConfigurationUse','releaseConfigurationUse']);
+const allowed=new Set(['ping','dispatchEffect','acknowledgeOrigin','readConfiguration','resolveConfiguration','registerConfigurationUse','releaseConfigurationUse']);
 const same=(a,b)=>{if(typeof a!=='string'||typeof b!=='string')return false;const left=Buffer.from(a),right=Buffer.from(b);return left.length===right.length&&timingSafeEqual(left,right);};
-export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{},dispatchEffect}){
+export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{},dispatchEffect,acknowledgeOrigin}){
  home=await canonicalHome(home,true);identity??=await services.resolveIdentity({home});
  const descriptor={socketPath:join(home,`resolver-${randomBytes(6).toString('hex')}.sock`),token:randomBytes(32).toString('hex'),...identity};
  const sockets=new Set();let closed=false,registered=false;
@@ -17,13 +17,21 @@ export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{}
   socket.on('error',()=>{});socket.on('close',()=>{sockets.delete(socket);if(!closed)onLoss(embeddingError('secret_backend_unavailable'));});
   socket.on('data',chunk=>{
    buffer+=chunk;if(buffer.length>1024*1024){socket.destroy();return;}
-   let cut;while((cut=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,cut);buffer=buffer.slice(cut+1);queue=queue.then(async()=>{
-    let request;try{request=JSON.parse(line);}catch{socket.destroy();return;}
+   let cut;while((cut=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,cut);buffer=buffer.slice(cut+1);
+   let request;try{request=JSON.parse(line);}catch{socket.destroy();return;}
+   const handle=async()=>{
     if(!same(request.token,descriptor.token)||request.bootId!==identity.bootId||request.instanceId!==identity.instanceId||!allowed.has(request.method)){socket.end(JSON.stringify({id:request.id,error:'secret_backend_unavailable'})+'\n');return;}
     try{if(request.method==='dispatchEffect'&&!dispatchEffect)throw embeddingError('unsupported');
-     const result=request.method==='ping'?{ready:true}:request.method==='dispatchEffect'?await dispatchEffect(request.args):await services[request.method]({...request.args,home});socket.write(JSON.stringify({id:request.id,result})+'\n');}
+     if(request.method==='acknowledgeOrigin'&&!acknowledgeOrigin)throw embeddingError('unsupported');
+     const result=request.method==='ping'?{ready:true}:request.method==='dispatchEffect'?await dispatchEffect(request.args):
+      request.method==='acknowledgeOrigin'?await acknowledgeOrigin({...request.args,home}):await services[request.method]({...request.args,home});socket.write(JSON.stringify({id:request.id,result})+'\n');}
     catch(e){socket.write(JSON.stringify({id:request.id,error:['unsupported','configuration_stale','configuration_in_use','secret_backend_locked'].includes(e.code)?e.code:'secret_backend_unavailable'})+'\n');}
-   }).catch(()=>socket.destroy());}
+   };
+   // The acknowledgment is a host-side notification with the controller's own bound. It never occupies the
+   // per-socket request queue, so a held or hung host handler cannot block the controller's later
+   // configuration, effect or cleanup calls on this channel.
+   if(request.method==='acknowledgeOrigin')void handle().catch(()=>socket.destroy());
+   else queue=queue.then(handle).catch(()=>socket.destroy());}
   });
  });
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(descriptor.socketPath,resolve);});await chmod(descriptor.socketPath,0o600);
