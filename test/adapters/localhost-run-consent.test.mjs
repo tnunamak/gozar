@@ -26,13 +26,28 @@ test('consent copy names the requested lifetime and states no default number of 
   }
 });
 
-test('localhost.run does not declare a fixed provider cap', async () => {
+test('localhost.run definitions and generated provider row do not declare a fixed provider cap', async () => {
   const { adapter: declared } = JSON.parse(await readFile(join(root, 'adapters/providers/localhost-run/definition.json'), 'utf8'));
   const { definition: plan } = JSON.parse(await readFile(join(root, 'adapters/localhost-run.definition.json'), 'utf8'));
-  const unsupportedCap = 'the plan limits a session to 15 minutes';
-  assert.ok(!declared.capabilities.address.conditions.includes(unsupportedCap));
-  assert.ok(!declared.facts.some(fact => fact.known && fact.group === 'address' && fact.value === unsupportedCap));
-  assert.ok(declared.capabilities.address.conditions.includes('trial: uptime and URL lifetime are not guaranteed'));
+  const docs = await readFile(join(root, 'docs/providers.md'), 'utf8');
+  const row = docs.split('\n').find(line => line.startsWith('| `localhost-run` |'));
+  assert.ok(row, 'the generated localhost.run row is present');
+  const cells = row.split('|').slice(1, -1).map(cell => cell.trim());
+  assert.equal(cells[1], declared.label);
+  assert.equal(cells[5], declared.capabilities.address.stability);
+  assert.equal(plan.label, declared.label);
+
+  const unsupportedCap = /the plan limits a session to 15 minutes/i;
+  for (const [source, value] of [['normalized', declared], ['wrapped', plan], ['generated row', row]]) {
+    assert.doesNotMatch(JSON.stringify(value), unsupportedCap, `${source} repeats the removed provider cap`);
+  }
+
+  const trialUncertainty = 'uptime and URL lifetime are not guaranteed';
+  assert.ok(declared.capabilities.address.conditions.includes(`trial: ${trialUncertainty}`));
+  assert.ok(declared.facts.some(fact => fact.known && fact.group === 'address' &&
+    fact.value === `trial: ${trialUncertainty}`));
+  assert.ok(plan.unknowns.includes(`Trial ${trialUncertainty}.`));
+  assert.match(declared.disclosure.text, /for the requested lifetime\./);
   assert.match(plan.copy.consent, /for the requested lifetime\./);
   // The plan's owned-process duration is not a statement about the remote provider's limit.
   assert.equal(plan.recipes.create.process.lifetimeMs, 900000);
