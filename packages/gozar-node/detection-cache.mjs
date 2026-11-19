@@ -8,8 +8,12 @@
 //   - An expired hit serves the retained observation with its ACTUAL checked-at and `fresh: false`.
 //   - A cold read answers a declared unknown observation (`checkedAt: null`): declared configuration
 //     inputs are still offered, facts that need a probe are not.
-//   - Only an explicit refresh request runs the probes. Concurrent refreshes of one scope share one
-//     probe (single-flight) and each awaits it.
+//   - Only an explicit refresh request runs the probes. Refresh requests that OVERLAP share one probe per
+//     full scope (single-flight) and each awaits it. Overlap is judged at request ADMISSION, before any
+//     registry or configuration read: a request admitted while a probe ran, or before it finished, may
+//     share it even when a slow serialized configuration read delivers the request to the cache after the
+//     probe ended. A request admitted after a probe finished always runs a new probe. The only state this
+//     needs is a transient record of recent probes, cleared when the last admitted request ends.
 //   - A refresh stores only the sanitized detection ({state, facts, failure}); decorated actions,
 //     consents, plans and secret material are never cached. A mutation (setup, configuration, clear,
 //     commit, discard, install, backend change) deletes the scope's entries and bumps their generation, so
@@ -50,6 +54,18 @@ export function createDetectionCache({ now = Date.now, ttlMs = 15_000 } = {}) {
   if (!Number.isFinite(ttlMs) || ttlMs < 1_000 || ttlMs > 300_000)
     throw Object.assign(new Error('detectionTtlMs must be a number in 1000..300000'), { code: 'invalid_input' });
   const entries = new Map();   // full key -> retained entry
+  // Transient admission bookkeeping (never a cache): a logical clock ticks at each admission and each probe
+  // end; `recent` holds the probes admitted requests may still share; both vanish when the last one ends.
+  let tick = 0, active = 0;
+  const recent = new Map();    // full key -> { entry, generation, run, endedAt }
+
+  /** Admit one read at the boundary of a public call. Only an explicit refresh needs one; release when the call ends. */
+  function admit(explicit = false) {
+    if (!explicit) return { seq: 0, release() {} };
+    active += 1;
+    let released = false;
+    return { seq: ++tick, release() { if (released) return; released = true; if (--active === 0) recent.clear(); } };
+  }
 
   // Nothing observed: the adapter's DECLARED configuration actions are static (no provider I/O), so the
   // draft can still collect its inputs; actions that depend on observed facts appear after a refresh.
@@ -67,14 +83,18 @@ export function createDetectionCache({ now = Date.now, ttlMs = 15_000 } = {}) {
     return { ...rest, facts: facts === null ? null : closedFacts(adapter, facts) };
   };
 
-  const startRefresh = (entry, key, runDetect) => {
+  const startRefresh = (entry, key, runDetect, admission) => {
+    // Overlap by admission: a probe still running, or one that ended after this request was admitted, is shared.
+    const shared = recent.get(key);
+    if (shared && shared.entry === entry && shared.generation === entry.generation && (shared.endedAt === null || shared.endedAt > admission.seq)) return shared.run;
     if (entry.refresh !== null) return entry.refresh;
     const generation = entry.generation;
+    const record = { entry, generation, run: null, endedAt: null };
     const run = (async () => {
       let observation;
       try { observation = await runDetect(); }
       catch { return null; } // a failed refresh keeps the retained observation
-      finally { if (entry.refresh === run) entry.refresh = null; }
+      finally { record.endedAt = ++tick; if (entry.refresh === run) entry.refresh = null; }
       if (entries.get(key) !== entry || entry.generation !== generation) return null; // displaced: never stored, never served
       if (observation.probed !== false) {
         entry.projection = project(entry.adapter, observation, entry.platform);
@@ -85,6 +105,8 @@ export function createDetectionCache({ now = Date.now, ttlMs = 15_000 } = {}) {
       return null;
     })();
     entry.refresh = run;
+    record.run = run;
+    recent.set(key, record);
     return run;
   };
 
@@ -95,7 +117,13 @@ export function createDetectionCache({ now = Date.now, ttlMs = 15_000 } = {}) {
    * entry is marked `live: false` and carries only the closed projection: setup consent decoration must
    * treat its facts as unknown. The inspection an explicit refresh just observed is `live: true`.
    */
-  async function provider({ scope, readConfiguration, detect, explicit = false }) {
+  async function provider({ scope, readConfiguration, detect, explicit = false, admission }) {
+    const own = admission ?? admit(explicit);
+    try { return await read({ scope, readConfiguration, detect, explicit, admission: own }); }
+    finally { if (!admission) own.release(); }
+  }
+
+  async function read({ scope, readConfiguration, detect, explicit, admission }) {
     const saved = await readConfiguration();
     const key = keyOf({ ...scope, revision: saved.revision ?? null });
     let entry = entries.get(key);
@@ -109,7 +137,7 @@ export function createDetectionCache({ now = Date.now, ttlMs = 15_000 } = {}) {
     let live = null;
     if (explicit) {
       const started = entry.generation;
-      const done = await startRefresh(entry, key, detect);
+      const done = await startRefresh(entry, key, detect, admission);
       // A displaced read (a mutation dropped the entry while it awaited) is never served.
       if (entries.get(key) !== entry || entry.generation !== started)
         return { saved, detection: { checkedAt: null, fresh: false, refreshing: false }, inspection: declaredUnknown(scope.adapter) };
@@ -133,5 +161,5 @@ export function createDetectionCache({ now = Date.now, ttlMs = 15_000 } = {}) {
     }
   }
 
-  return { provider, invalidate, entries };
+  return { provider, admit, invalidate, entries };
 }

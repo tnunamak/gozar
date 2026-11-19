@@ -48,6 +48,9 @@ export function createRouteApi(deps = {}) {
   // and the read after a mutation own the probes. Authority paths never read it.
   const detection = deps.detectionCache ?? createDetectionCache({ ttlMs: deps.detectionTtlMs ?? 15_000, now: () => (deps.now ?? Date.now)() });
   let loaded;
+  // A read is admitted at the public boundary, before the registry and configuration awaits: refresh reads that
+  // overlap share one probe per scope (detection-cache.mjs). The admission ends with the call.
+  const admitted = async (request, run) => { const admission = detection.admit(request?.refresh === true); try { return await run(admission); } finally { admission.release(); } };
   const adapters = async () => deps.adapters ?? (loaded ??= runtime().then(module => module.loadAdapters(deps.manifest ? { manifest: deps.manifest, root: deps.root } : undefined)).catch(error => { loaded = undefined; throw error; }));
   let servicesPromise;
   const services = () => servicesPromise ??= (async()=>{
@@ -272,7 +275,7 @@ export function createRouteApi(deps = {}) {
     }),
     readSetupOperation: request => guard(async () => readSetupOperation(request,await setupDeps(request))),
     cancelSetupOperation: request => guard(async () => cancelSetupOperation(request,await setupDeps(request))),
-    listProviders: request => guard(async()=>inventory(request,await shared(request))),
+    listProviders: request => guard(()=>admitted(request,async admission=>inventory(request,await shared(request),admission))),
     listRoutes:request=>guard(async()=>{
       const context=await shared(request);
       const base=await listRecordedRoutes(request,context),retained=await listCleanupReferences(request);
@@ -295,7 +298,7 @@ export function createRouteApi(deps = {}) {
     beginConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const draft=await context.embeddingServices.beginConfigurationDraft(request);
       const offered=await offeredConfiguration({...request,draftId:draft.draftId},draft.configuration,context);
       return {...draft,configuration:offered.configuration,...(offered.detection?{detection:offered.detection}:{})};}),
-    readConfigurationDraft:request=>guard(async()=>readConfigurationDraft(request,await shared(request))),
+    readConfigurationDraft:request=>guard(()=>admitted(request,async admission=>readConfigurationDraft(request,await shared(request),admission))),
     commitConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const snapshot=await context.embeddingServices.commitConfigurationDraft(request);
       // The applied configuration moved: the scope's next read answers declared unknown until an explicit refresh.
       detection.invalidate({ registryId: context.registryId, home: request.home, owner: request.owner, providerId: request.providerId });

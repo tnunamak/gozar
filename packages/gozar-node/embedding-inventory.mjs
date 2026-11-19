@@ -4,7 +4,7 @@ import {availabilityFor,prerequisitesFor,configurationFor} from './embedding-sta
 import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
 import {embeddingError} from './embedding-services.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
-export async function listProviders(request,deps={}){
+export async function listProviders(request,deps={},admission){
  if(!Array.isArray(deps.adapters))throw embeddingError('provider_unavailable');
  const platform=deps.platform??process.platform;const observedAt=new Date().toISOString();
  const owner=request.owner===undefined?deps.owner:request.owner;
@@ -18,7 +18,7 @@ export async function listProviders(request,deps={}){
    // and a cold or expired row answers the retained or declared-unknown state: a poll never probes.
    const cached=await cache.provider({scope:{registryId:deps.registryId,home:request.home,owner,providerId:adapter.id,platform,adapter},
     readConfiguration:()=>deps.embeddingServices.readConfiguration({...request,owner,providerId:adapter.id}),
-    detect:()=>detectAdapter(adapter,read,platform),explicit:request.refresh===true});
+    detect:()=>detectAdapter(adapter,read,platform),explicit:request.refresh===true,admission});
    item=cached.inspection;saved=cached.saved;detection=cached.detection;
   }else{
    item=await inspectAdapter(adapter,read,platform);

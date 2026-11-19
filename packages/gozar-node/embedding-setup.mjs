@@ -78,7 +78,7 @@ export async function clearConfigurationInput(request,deps){
 }
 
 // Rebuild offered actions from the persisted scope; hosts never reconstruct consent metadata.
-export async function offeredConfiguration(request,snapshot,deps){
+export async function offeredConfiguration(request,snapshot,deps,admission){
  const adapter=deps.adapters.find(a=>a.id===request.providerId);if(!adapter)fail('candidate_stale');
  const platform=deps.platform??process.platform;const read=await readContextFor(deps,request.home,platform);
  const scopedRead={...read,providerConfiguration:providerId=>deps.embeddingServices.resolveConfiguration({...request,providerId})};
@@ -89,7 +89,7 @@ export async function offeredConfiguration(request,snapshot,deps){
   // refresh request owns the probes. The declared inputs and action decoration below stay live.
   const cached=await deps.detection.provider({scope:{registryId:deps.registryId,home:request.home,owner:request.owner,
    providerId:adapter.id,platform,adapter,draftId:request.draftId??null},
-   readConfiguration:()=>Promise.resolve(snapshot),detect:()=>detectAdapter(adapter,scopedRead,platform),explicit:request.refresh===true});
+   readConfiguration:()=>Promise.resolve(snapshot),detect:()=>detectAdapter(adapter,scopedRead,platform),explicit:request.refresh===true,admission});
   inspection=cached.inspection;detection=cached.detection;
  }else inspection=await inspectAdapter(adapter,scopedRead,platform);
  // A failed observation (a locked secret backend) leaves the inspection without actions, but the draft's declared inputs still exist.
@@ -100,8 +100,8 @@ export async function offeredConfiguration(request,snapshot,deps){
  // `{configuration, detection}`: the honest detection freshness this offered scope was served from.
  return detection?{configuration,detection}:{configuration};
 }
-export async function readConfigurationDraft(request,deps){
+export async function readConfigurationDraft(request,deps,admission){
  const draft=await deps.embeddingServices.readConfigurationDraft(request);
- const offered=await offeredConfiguration(request,draft.configuration,deps);
+ const offered=await offeredConfiguration(request,draft.configuration,deps,admission);
  return {...draft,configuration:offered.configuration,...(offered.detection?{detection:offered.detection}:{})};
 }

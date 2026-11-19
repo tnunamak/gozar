@@ -234,3 +234,25 @@ test('red: a deferred explicit refresh displaced by an API mutation of the saved
   assert.equal(fresh.availability.attached.state, 'action-required', 'the observation is the new one, not the displaced old one');
   assert.ok(fresh.configuration.actions.some(offeredAction => offeredAction.id === 'set-note'));
 });
+
+test('admission cohort: a probe is shared only by requests admitted before it ended; other revisions never share', async () => {
+  const cache = createDetectionCache({ now: () => 5, ttlMs: 1_000 });
+  const adapter = fakeAdapter();
+  let started = 0;
+  const detect = async () => { started += 1; return { state: 'ready', facts: { keep: 3 }, probed: true, failure: null }; };
+  const read = (admission, revision = 'v1') => cache.provider({ scope: scopeOf(adapter), readConfiguration: async () => ({ revision }), detect, explicit: true, admission });
+  const early = cache.admit(true), peer = cache.admit(true);
+  await read(early);                                  // the probe runs and ends while `peer` is still admitted
+  assert.equal(started, 1);
+  const late = cache.admit(true);                     // admitted after the probe ended: never shares it
+  await read(late);
+  assert.equal(started, 2, 'a request admitted after a probe ended runs its own probe');
+  await read(peer);                                   // admitted before both probes ended: shares, never probes a third time
+  assert.equal(started, 2, 'the overlapping peer shared an existing probe');
+  const before = started;
+  await read(peer, 'v2');
+  assert.equal(started, before + 1, 'a different configuration revision is a different scope and probes separately');
+  for (const admission of [early, peer, late]) admission.release();
+  await read(cache.admit(true));
+  assert.equal(started, before + 2, 'after the last admitted request ended a fresh refresh probes again');
+});
