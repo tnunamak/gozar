@@ -25,7 +25,7 @@ test('public persisted rotation observes presence before resolving either applie
  const registry=await fakeRegistry({dir:home+'/registry',id:providerId,kinds:['attached'],reach:'this-device',setupActions:[action]});t.after(registry.cleanup);
  const options={manifest:registry.manifest,root:registry.root,secretBackend:backend,hostCapabilities:Object.fromEntries(['secrets.backend','runtime.attached','runtime.durable'].map(id=>[id,{known:true,value:true}]))};
  let api=createGozar(options);
- const inventory=()=>api.listProviders({home,owner});
+ const inventory=()=>api.listProviders({home,owner,refresh:true});
  const initial=(await inventory()).providers.find(p=>p.providerId===providerId).configuration;
  const bind=async(configuration,scopeId,canary,draftId)=>{
   const secret=configuration.actions.find(a=>a.kind==='provide-secret');
@@ -36,15 +36,15 @@ test('public persisted rotation observes presence before resolving either applie
   return {configuration:result.configuration,handle:stored.handle,inputId:field.id};
  };
  const old=await bind(initial,initial.scopeId,'old-rotation-canary');
- let draft=await api.beginConfigurationDraft({home,owner,providerId,expectedConfigurationRevision:old.configuration.revision});
+ let draft=await api.beginConfigurationDraft({home,owner,providerId,expectedConfigurationRevision:old.configuration.revision,refresh:true});
  const replacement=await bind(draft.configuration,draft.scopeId,'new-rotation-canary',draft.draftId);
  api=createGozar(options); // No in-memory draft carried into the reader.
  const request={home,owner,providerId,draftId:draft.draftId};
- const ready=await api.readConfigurationDraft(request);
+ const ready=await api.readConfigurationDraft({...request,refresh:true});
  const before=await readFile(home+'/embedding-state.json','utf8');
  for(const mode of ['locked','unavailable','missing','ready']){
   backend.mode(mode);
-  const observed=await api.readConfigurationDraft(request);
+  const observed=await api.readConfigurationDraft({...request,refresh:true});
   assert.equal(observed.scopeId,ready.scopeId);assert.equal(observed.baseRevision,ready.baseRevision);
   assert.equal(observed.configuration.revision,ready.configuration.revision);
   assert.deepEqual(observed.configuration.inputRequirements,ready.configuration.inputRequirements);
@@ -73,7 +73,7 @@ test('public persisted rotation observes presence before resolving either applie
   for(const canary of ['old-rotation-canary','new-rotation-canary'])assert.ok(!JSON.stringify(listed).includes(canary));
  }
  backend.mode('ready');
- const back=await api.readConfigurationDraft(request),clear=back.configuration.actions.find(a=>a.kind==='clear-input'&&a.inputId===replacement.inputId);
+ const back=await api.readConfigurationDraft({...request,refresh:true}),clear=back.configuration.actions.find(a=>a.kind==='clear-input'&&a.inputId===replacement.inputId);
  const cleared=await api.clearConfigurationInput({...request,inputId:replacement.inputId,expectedConfigurationRevision:back.configuration.revision,approval:approval(clear)});
  assert.equal(cleared.credentials[replacement.inputId].value,false);
  await api.discardConfigurationDraft(request);

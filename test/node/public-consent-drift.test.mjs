@@ -35,7 +35,7 @@ async function fixture(t,options={}){
  api=createGozar({manifest:registry.manifest,root:registry.root});
  const q=query({home,...(options.owner?{owner:options.owner}:{}),usage:{kind:options.kind??'attached',...(options.kind==='session'?{lifetimeMs:60000}:{})},requirements:{reach:'this-device',transport:options.proofProtocol==='echo'?'tcp':'any',payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}});
  if(options.operationId)q.operationId=options.operationId;
- const initial=(await api.listProviders({home,owner:q.owner})).providers[0].configuration;
+ const initial=(await api.listProviders({home,owner:q.owner,refresh:true})).providers[0].configuration;
  const action=initial.actions[0];
  await api.runSetupAction({home,owner:q.owner,providerId:id,expectedConfigurationRevision:initial.revision,actionId:action.id,value:'initial',approval:{kind:'setup',digest:action.digest,disclosureRevision:action.disclosure.revision,consentFactsDigest:action.consent.consentFactsDigest}});
  const approval=c=>({kind:'route',candidateToken:c.candidateToken,disclosureRevision:c.disclosure.revision,consentFactsDigest:c.consentFactsDigest});
@@ -75,11 +75,11 @@ test('runtime drift withdraws and requires the exact current snapshot before sam
  assert.equal((await f.events()).split('"start"').length-1,1);
 });
 test('persisted draft read offers the current action-scoped observed facts and stale approval mutates nothing',async t=>{
- const f=await fixture(t),saved=(await f.api.listProviders({home:f.home,owner:f.q.owner})).providers[0].configuration;
- const draft=await f.api.beginConfigurationDraft({home:f.home,owner:f.q.owner,providerId:f.id,expectedConfigurationRevision:saved.revision});
+ const f=await fixture(t),saved=(await f.api.listProviders({home:f.home,owner:f.q.owner,refresh:true})).providers[0].configuration;
+ const draft=await f.api.beginConfigurationDraft({home:f.home,owner:f.q.owner,providerId:f.id,expectedConfigurationRevision:saved.revision,refresh:true});
  const action=draft.configuration.actions[0],request={home:f.home,owner:f.q.owner,providerId:f.id,draftId:draft.draftId,expectedConfigurationRevision:draft.configuration.revision,actionId:action.id,value:'staged',approval:{kind:'setup',digest:action.digest,disclosureRevision:action.disclosure.revision,consentFactsDigest:action.consent.consentFactsDigest}};
  await f.observe({decision:true,display:'changed'});await assert.rejects(f.api.runSetupAction(request),{code:'consent_mismatch'});
- const restored=await f.api.readConfigurationDraft({home:f.home,owner:f.q.owner,providerId:f.id,draftId:draft.draftId});assert.equal(restored.configuration.revision,draft.configuration.revision);assert.equal(restored.configuration.values.value,'initial');
+ const restored=await f.api.readConfigurationDraft({home:f.home,owner:f.q.owner,providerId:f.id,draftId:draft.draftId,refresh:true});assert.equal(restored.configuration.revision,draft.configuration.revision);assert.equal(restored.configuration.values.value,'initial');
  const fresh=restored.configuration.actions.find(row=>row.id===action.id);assert.equal(fresh.consent.scope.draftId,draft.draftId);assert.equal(fresh.consent.facts.find(row=>row.id==='decision').value,true);
  const result=await f.api.runSetupAction({...request,approval:{...request.approval,consentFactsDigest:fresh.consent.consentFactsDigest}});assert.equal(result.configuration.values.value,'staged');
  assert.equal(result.configuration.actions[0].consent.scope.configurationRevision,result.configurationRevision);

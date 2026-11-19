@@ -30,22 +30,13 @@ async function cacheWorld(t, { adapters, ttlMs = 15_000 } = {}) {
 const read = (world, request) => world.api.listProviders({ home: world.home, owner: 'poll-owner', ...request });
 const probes = world => world.adapters.reduce((sum, adapter) => sum + adapter.calls.detect, 0);
 
-test('polls never probe, cold or expired; an explicit refresh owns the probes and concurrent refreshes share one', async t => {
+test('polls never probe, cold or expired; an explicit refresh owns the probes', async t => {
   const world = await cacheWorld(t);
   for (let i = 0; i < 4; i++) for (const row of (await read(world)).providers)
     assert.deepEqual(row.detection, { checkedAt: null, fresh: false, refreshing: false }, 'a cold poll answers declared unknown');
   assert.equal(probes(world), 0, 'cold polls run zero live probes');
-  let entered = 0, release; const gate = new Promise(resolve => { release = resolve; });
-  for (const adapter of world.adapters) { const detect = adapter.detect.bind(adapter); adapter.detect = async context => { entered += 1; await gate; return detect(context); }; }
-  const pending = Array.from({ length: 5 }, () => read(world, { refresh: true }));
-  const refreshing = await read(world); // a poll while the refresh is in flight never probes and reports it
-  for (const row of refreshing.providers) assert.equal(row.detection.refreshing, true);
-  while (entered < world.adapters.length) await new Promise(resolve => setImmediate(resolve)); // every provider's one probe has started
-  await new Promise(resolve => setTimeout(resolve, 100)); // let the other four refresh reads reach the shared in-flight probe
-  release();
-  const concurrent = await Promise.all(pending);
-  for (const reply of concurrent) for (const row of reply.providers) assert.equal(row.detection.fresh, true);
-  assert.equal(entered, world.adapters.length, 'five overlapping same-scope refreshes shared one probe per provider');
+  await read(world, { refresh: true });
+  assert.equal(probes(world), world.adapters.length, 'one explicit refresh probed each provider once');
   for (let i = 0; i < 4; i++) for (const row of (await read(world)).providers) assert.equal(row.detection.fresh, true);
   assert.equal(probes(world), world.adapters.length, 'fresh polls ran zero further probes');
   world.clock.value += 15_001;
@@ -163,4 +154,38 @@ test('an invalidation that names no platform drops every platform, and the displ
   assert.deepEqual(served.detection, { checkedAt: null, fresh: false, refreshing: false });
   assert.equal(served.inspection.state, 'unknown', 'the displaced read serves declared unknown, never the old generation');
   assert.equal(cache.entries.size, 0, 'and stored nothing');
+});
+
+test('overlapping explicit refreshes of one scope share ONE probe and a poll during it never probes', async () => {
+  const cache = createDetectionCache({ now: () => 5, ttlMs: 1_000 });
+  const adapter = fakeAdapter();
+  let probesStarted = 0, release; const gate = new Promise(resolve => { release = resolve; });
+  const detect = async () => { probesStarted += 1; await gate; return { state: 'ready', facts: { keep: 3 }, probed: true, failure: null }; };
+  const read = explicit => cache.provider({ scope: scopeOf(adapter), readConfiguration: async () => ({ revision: 'v1' }), detect, explicit });
+  const refreshes = Array.from({ length: 5 }, () => read(true));
+  const poll = await read(false);
+  assert.equal(poll.detection.refreshing, true);
+  assert.equal(poll.detection.checkedAt, null, 'the poll answers declared unknown with no probe of its own');
+  release();
+  const replies = await Promise.all(refreshes);
+  assert.equal(probesStarted, 1, 'five overlapping refreshes shared one probe');
+  for (const reply of replies) assert.equal(reply.detection.fresh, true);
+});
+
+test('setup consent: a retained poll never carries probe facts; the refresh read carries the live digest that setup validates', async t => {
+  const bravo = stubAdapter('cache-bravo', { state: 'action-required', actions: [action('set-note', 'provide-value', { valueFormat: 'text', required: true, valueLabel: 'Note' })] });
+  bravo.definition.facts = [{ id: 'id', label: 'id', value: null, known: false, reason: 'not-observed', group: 'fixture', affectsConsent: true, source: 'local-observation:/id', asOf: null }];
+  const world = await cacheWorld(t, { adapters: [bravo] });
+  const consentOf = reply => reply.providers[0].configuration.actions.find(a => a.id === 'set-note').consent;
+  const cold = consentOf(await read(world));
+  const refreshed = consentOf(await read(world, { refresh: true }));
+  const retained = consentOf(await read(world));
+  assert.notEqual(refreshed.consentFactsDigest, cold.consentFactsDigest, 'the live observation changes the consent facts');
+  assert.equal(retained.consentFactsDigest, cold.consentFactsDigest, 'a retained poll presents facts as unknown, exactly like a cold one');
+  const configuration = (await read(world)).providers[0].configuration;
+  const setup = digest => settle(world.api.runSetupAction({ home: world.home, owner: 'poll-owner', providerId: 'cache-bravo',
+    expectedConfigurationRevision: configuration.revision, actionId: 'set-note', value: 'n',
+    approval: { kind: 'setup', digest: configuration.actions[0].digest, disclosureRevision: configuration.actions[0].disclosure.revision, consentFactsDigest: digest } }));
+  assert.equal((await setup(retained.consentFactsDigest)).error?.code, 'consent_mismatch', 'setup validates against live facts, never the retained presentation');
+  assert.equal((await setup(refreshed.consentFactsDigest)).value?.state, 'complete', 'the refresh read\'s consent is the live one');
 });

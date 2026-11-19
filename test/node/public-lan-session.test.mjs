@@ -33,7 +33,7 @@ async function world(t,{interfaces=inventory(row(SYNTHETIC))}={}){
  t.after(()=>harness.close());
  const api=harness.gozar,target='127.0.0.1:'+app.address().port;
  const q=()=>query({home,owner,target,providerId:'lan',usage:{kind:'session',lifetimeMs:60000},requirements:{reach:'lan',transport:'any',payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}});
- const provider=async()=>(await api.listProviders({home,owner})).providers.find(p=>p.providerId==='lan');
+ const provider=async()=>(await api.listProviders({home,owner,refresh:true})).providers.find(p=>p.providerId==='lan');
  const provide=async(inputId,value)=>{
   const config=(await provider()).configuration,action=config.actions.find(a=>a.id===inputId&&a.kind==='provide-value');assert.ok(action,'the adapter offers a provide-value action for '+inputId);
   return api.runSetupAction({home,owner,providerId:'lan',expectedConfigurationRevision:config.revision,actionId:action.id,value,

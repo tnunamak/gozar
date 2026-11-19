@@ -191,6 +191,10 @@ its detection sweep is always live. The contract is strict:
   as unknown. Consent for an adapter whose declared facts come from a probe is
   decorated from the read that owns a fresh probe (`refresh: true`), and setup
   approval is always re-validated live.
+- Consequently a cold poll reports provider availability and facts as unknown.
+  A host that needs observed availability, or that is about to show an
+  actionable setup step for an adapter with probe-derived consent facts, calls
+  the read once with `refresh: true`.
 - Authority never reads the cache: consent redemption, approved effects and
   route allocation revalidate live state (candidate_stale / consent_mismatch as
   before), and the catalog's plan and observation reads stay live.

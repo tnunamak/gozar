@@ -44,7 +44,8 @@
   `fresh: false`. Only `refresh: true` owns and awaits the probes (overlapping
   refreshes share one). Setup, clear, commit, discard, secret and install
   changes drop the scope. The projection holds no raw probe output and never
-  feeds setup consent. The route catalog is not cached, and consent redemption,
+  feeds setup consent. A cold poll reports availability and facts as unknown;
+  call the read once with `refresh: true` to observe them. The route catalog is not cached, and consent redemption,
   approved effects and route allocation keep revalidating live state.
 
 ### Fixed
