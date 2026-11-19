@@ -47,7 +47,8 @@ test('unknown normalized definitions can declare only typed presentation metadat
  const missing=providerPresentation({...adapter,definition:omitted},{});
  unknown(missing.idleTimeoutMs);
  unknown(missing.human.summary);
- for(const bad of [{idleTimeoutMs:-1},{idleTimeoutMs:1.5},{copy:{human:{summary:false}}},
+ assert.deepEqual(definitionErrors({...definition,idleTimeoutMs:Number.MAX_SAFE_INTEGER}),[]);
+ for(const bad of [{idleTimeoutMs:-1},{idleTimeoutMs:1.5},{idleTimeoutMs:Number.MAX_SAFE_INTEGER+1},{copy:{human:{summary:false}}},
   {copy:{human:{extra:'not public'}}},{copy:{extra:{}}},{displayName:'not a declaration'}]){
   assert.notDeepEqual(definitionErrors({...definition,...bad}),[]);
  }

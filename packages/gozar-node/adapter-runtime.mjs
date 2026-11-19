@@ -76,6 +76,7 @@ function validate(schema, value, defs, path = '$') {
       case 'additionalProperties': if (kinds.object(value)) for (const name of Object.keys(value)) if (!Object.hasOwn(schema.properties ?? {}, name)) errors.push(`${path}: unknown property ${name}`); break;
       case 'items': if (Array.isArray(value)) value.forEach((item, index) => errors.push(...validate(schema.items, item, defs, `${path}[${index}]`))); break;
       case 'minimum': if (typeof value === 'number' && value < schema.minimum) errors.push(`${path}: below minimum`); break;
+      case 'maximum': if (typeof value === 'number' && value > schema.maximum) errors.push(`${path}: above maximum`); break;
       case 'pattern': if (typeof value === 'string' && !new RegExp(schema.pattern).test(value)) errors.push(`${path}: pattern mismatch`); break;
       default: throw new Error(`Unsupported schema keyword ${key}`);
     }
