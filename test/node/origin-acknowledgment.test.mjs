@@ -536,3 +536,54 @@ test('red: a refused, foreign-origin or throwing adopt acknowledgment runs zero 
     world.untouched();
   }
 });
+
+// --- Post-acknowledgment eligibility fence (0.5.2) --------------------------------------------------------
+// Contract: after the host acknowledgment returns and BEFORE any proof starts, a durable proof re-checks that
+// its route is still the current generation and not ending or stopped. The unlocked status path carries that
+// recheck. Every path that holds the reservation lock needs none, because every cancelling mutation (release,
+// stop, suspend, hand-back, allow) takes the same exclusive lock and cannot commit until the call ends.
+
+// Only the FIRST acknowledgment asked from inside the named engine function after hold() is held (found from
+// its call stack: the status path and the lock-holding ensure path each ask separately); later ones answer.
+const durableHeld = async t => {
+  const gate = deferred(); let where = null, first;
+  const world = await durableWorld(t, { ack: request => where && !first && new Error().stack.includes(`async ${where} `)
+    ? (first = request, gate.promise) : matchingReply(request) });
+  const view = await world.api.ensureRoute(world.request);
+  assert.equal(view.state, 'usable');
+  const baseline = world.verifies.count;
+  return { world, view, gate, baseline, hold: name => { where = name; }, held: () => first };
+};
+
+test('red: a close committed while a status acknowledgment is held starts no proof and revives nothing', async t => {
+  const { world, view, gate, baseline, hold, held } = await durableHeld(t);
+  hold('statusRoutes');
+  const status = settle(world.api.routeStatus({ home: world.home, handle: view.handle }));
+  assert.ok(await waitFor(() => held(), 10_000), 'the status proof asked the host to acknowledge first');
+  assert.equal(world.verifies.count, baseline, 'no proof while the acknowledgment is held');
+  // The status path is unlocked: a legitimate close commits while the acknowledgment is held.
+  await world.api.closeRoute({ home: world.home, handle: view.handle, mode: 'remove' });
+  const afterClose = world.verifies.count;
+  gate.resolve(matchingReply(held()));
+  await status; await sleep(100);
+  assert.equal(world.verifies.count, afterClose, 'the matching late acknowledgment started no proof for the closed route');
+  assert.deepEqual((await world.api.listRoutes({ home: world.home, owner: 'fixture-owner' })).routes.map(route => route.state), ['released'], 'the route stays released: nothing was revived');
+});
+
+test('contract: a close during the held acknowledgment of a lock-holding start waits for the call, so no proof can follow a committed cancel', async t => {
+  const gate = deferred(); let held;
+  const world = await durableWorld(t, { ack: request => (held ??= request, gate.promise) });
+  const starting = settle(world.api.ensureRoute(world.request));
+  assert.ok(await waitFor(() => held, 10_000), 'the first publication proof asked the host to acknowledge, under the reservation lock');
+  let closed = false;
+  const closing = world.api.closeRoute({ home: world.home, handle: { kind: 'durable', id: 'ack-route', generation: 1 }, mode: 'remove' }).then(() => { closed = true; });
+  await sleep(300);
+  assert.equal(closed, false, 'the cancel cannot commit while the lock-holding call awaits the acknowledgment');
+  assert.equal(world.verifies.count, 0, 'no proof while the acknowledgment is held');
+  gate.resolve({ acknowledged: true, origin: held.origin, handle: { id: held.handle.id, generation: held.handle.generation }, attemptId: held.attemptId });
+  const outcome = await starting; await closing;
+  assert.equal(closed, true);
+  assert.equal(world.verifies.count, 1, 'the proof ran only inside the call, before the cancel committed');
+  assert.ok(outcome.value || outcome.error, 'the start finished before the cancel');
+  assert.deepEqual((await world.api.listRoutes({ home: world.home, owner: 'fixture-owner' })).routes.map(route => route.state), ['released']);
+});

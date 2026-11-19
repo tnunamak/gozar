@@ -41,8 +41,9 @@
   platform, draft and the configuration revision. No poll runs a live provider
   probe, cold or expired: a cold read answers declared unknown, an expired read
   answers the retained projection with its actual `detection.checkedAt` and
-  `fresh: false`. Only `refresh: true` owns and awaits the probes (overlapping
-  refreshes share one). Setup, clear, commit, discard, secret and install
+  `fresh: false`. Only `refresh: true` owns and awaits the probes (refreshes that
+  overlap, judged at request admission before any configuration read, share one
+  probe per provider; a refresh admitted after a probe finished runs a new one). Setup, clear, commit, discard, secret and install
   changes drop the scope. The projection holds no raw probe output and never
   feeds setup consent. A cold poll reports availability and facts as unknown;
   call the read once with `refresh: true` to observe them. The route catalog is not cached, and consent redemption,

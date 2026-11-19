@@ -121,6 +121,21 @@ state and the retained cleanup receipt are preserved, nothing publishes, a lost
 owner is not revived and a foreign Host is never approved. Durable starts await
 the same typed request in-process before publication verification.
 
+Scope. The boundary covers origins a provider assigns after allocation, which a
+host cannot know in advance. An owner-kept route (`ownership: external-owned`, for
+example `own-address`) has no allocation: its origin is the exact credential-free
+https origin the owner supplied before the call. Gozar asks no acknowledgment for
+it; every proof request names exactly that origin, so the host allows that one
+origin up front and needs no wildcard.
+
+Cancellation. After the callback returns and before any proof starts, a durable
+proof on the unlocked status path rechecks that the route is still the same
+generation and is not releasing, suspended or stopped; a cancel, close or stop
+that committed while the callback was held starts no proof. Paths that hold the
+reservation lock (start, adopt, consent approval) need no recheck: every
+cancelling mutation takes the same exclusive lock, so it cannot commit until the
+call ends.
+
 A host that declares no handler keeps the pre-0.5.2 behavior: verification starts
 immediately after allocation. Hosts that widen a service verifier's Host
 allowance during start should adopt this boundary instead; Gozar never requires

@@ -64,8 +64,14 @@ async function boundProof(record,checked){
 const unprovenResult=()=>({status:'unverified',checkedAt:null,observedAt:null,subject:null,checks:[]});
 // Every durable proof (publish, reconcile, adopt, renewal) passes the awaited exact-origin host boundary
 // first: with a declared acknowledgment handler no challenge runs until the host bound THIS origin.
-const verifyRecord=async record=>{
+// `eligible` is the caller's live recheck of the route (current generation, not releasing or stopped). It runs
+// immediately AFTER the acknowledgment and BEFORE the proof: a cancel, close, stop or generation change that
+// committed while the acknowledgment was held starts no proof. Callers that hold the reservation lock need none:
+// every cancelling mutation (release, stop, suspend, hand-back, allow) takes that same exclusive lock, so it
+// cannot commit until the call ends. Only the unlocked status path passes one.
+const verifyRecord=async(record,eligible)=>{
  if(!await acknowledgePinnedOrigin(record))return unprovenResult();
+ if(eligible&&!await eligible())return unprovenResult();
  const started=Date.now(),checked=await runVerifier({origin:record.origin??record.intent.origin,target:record.target,verifyCmd:null}),observed=Date.parse(checked.checkedAt);
  if(!Number.isFinite(observed)||observed<started||observed>Date.now()||Date.now()>started+5000)return {...checked,status:'unverified',observedAt:null,subject:null};
  return boundProof(record,{...checked,validUntil:new Date(observed+15000).toISOString()});
@@ -288,6 +294,12 @@ async function stopped(dir, routeId) {
   try { await readRecord(tombstonePath(dir, routeId)); return true; }
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
+const ineligibleStates = ['releasing', 'handing-back', 'suspending', 'suspended'];
+// A status call runs unlocked: the route is still this generation, not ending and not stopped by the user.
+async function statusEligible(dir, record) {
+  const fresh = await load(dir, record.routeId);
+  return !!fresh && fresh.generation === record.generation && !ineligibleStates.includes(fresh.state) && !await stopped(dir, record.routeId);
+}
 async function refuseUserStop(dir, routeId) {
   if (await stopped(dir, routeId)) throw refuse('stopped_by_user', 'The user stopped this route');
 }
@@ -413,7 +425,7 @@ function matchesEmptyIntent(record, facet, observed, current) {
     isDeepStrictEqual(current, record.intent.rule);
 }
 
-async function reconcile(record, facet, observed, { verify = true } = {}) {
+async function reconcile(record, facet, observed, { verify = true, eligible } = {}) {
   if (['releasing', 'handing-back', 'address_changed'].includes(record.state)) return { state: record.state };
   const pin = record.receipt ?? record.intent;
   if (observed.identity !== pin.dnsName) return { state: 'address_changed' };
@@ -427,7 +439,7 @@ async function reconcile(record, facet, observed, { verify = true } = {}) {
   const binding={authority:'adapter',target:facet.slots(observed.snapshot,{target:record.target}).some(slot=>String(slot.slot)===String(pin.port)&&slot.forwards===true)?{known:true,value:record.target}:{known:false,reason:'effective-target-not-observed'},remedy:null};
   if (!verify || record.state === 'suspending') return { state: record.state };
   if(!await consentCurrent(record))return {state:'unverified',consentChange:record.consentChange};
-  const checked = await verifyRecord(record);
+  const checked = await verifyRecord(record, eligible);
   return { state: checked.status === 'verified' ? 'usable' : 'unverified', verification: checked,binding };
 }
 
@@ -1019,7 +1031,7 @@ export async function statusRoutes({ routeId, home = defaultHome(), canonical = 
     try { entry = durableEntry(adapters, record.adapterId); } catch (cause) { routes.push({ ...view(record, { state: 'unknown' }, extra), error: { code: cause.code ?? null, message: cause.message } }); continue; }
     const { observed, error } = await observeFor(entry,record);
     if (!observed) { routes.push({ ...view(record, { state: 'unknown' }, extra), error }); continue; }
-    const current = await reconcile(record, entry.facet, observed);
+    const current = await reconcile(record, entry.facet, observed, { eligible: () => statusEligible(dir, record) });
     const fresh=await load(dir,record.routeId);
     if(!fresh||fresh.generation!==record.generation||['releasing','handing-back','suspending','suspended'].includes(fresh.state)){
       current.state=fresh?.state??'unknown';if(current.verification)current.verification={...current.verification,status:'unverified'};
@@ -1035,7 +1047,8 @@ export async function statusRoutes({ routeId, home = defaultHome(), canonical = 
       if (published) record = published;
       else current.state = 'unverified';
     }
-    if (['usable', 'unverified'].includes(current.state)) await renewIfDue(record, entry.facet, observed, durableContext(home,record.owner), current);
+    // The lease write is guarded again: a release that committed since the checks above must not be renewed.
+    if (['usable', 'unverified'].includes(current.state) && await statusEligible(dir, record)) await renewIfDue(record, entry.facet, observed, durableContext(home,record.owner), current);
     routes.push(view(record, current, extra));
   }
   return { schemaVersion: 1, routes, stoppedRoutes };
