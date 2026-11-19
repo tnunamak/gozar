@@ -595,7 +595,8 @@ export async function runAttachedController(directory, runtime = {}) {
   lease.approvedReview=bootstrap.consentReview??null;
   const reviewTokens=new Map();
   const safeRefresh=()=>!proofSession||typeof proofSession.refresh==='function';
-  async function currentConsent(runtimeFacts={properties:lease.properties,facts:[...(lease.runtimeFacts??[]),...(lease.proof?.facts??[])]}){
+  // Before creation, derive current properties from inspection, not the lease's static defaults.
+  async function currentConsent(runtimeFacts=receipt?{properties:lease.properties,facts:[...(lease.runtimeFacts??[]),...(lease.proof?.facts??[])]}:undefined){
     if(!lease.approvedReview)return null;
     const original=lease.approvedReview.canonicalInput;
     const current=await currentRouteReview({...bootstrap.request,home:bootstrap.home,owner:bootstrap.owner,origin:original.scope.query.expectedOrigin},adapter,

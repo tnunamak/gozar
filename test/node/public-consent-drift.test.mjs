@@ -6,11 +6,11 @@ import {fork} from 'node:child_process';
 import {join} from 'node:path';
 import {createGozar} from '@tnunamak/gozar';
 import {fakeRegistry} from '@tnunamak/gozar/testing';
-import {scratch,query,assertShape} from './route-schema-check.mjs';
+import {scratch,attachedScratch,query,assertShape} from './route-schema-check.mjs';
 const fact=(id,affectsConsent=true)=>({id,label:id,value:null,known:false,reason:'not-observed',group:'fixture',affectsConsent,source:`local-observation:/${id}`,asOf:null});
 async function fixture(t,options={}){
  let api,route;if(!options.home)t.after(async()=>{if(route)await api.closeRoute({home,handle:route.handle,mode:'remove'});});
- const home=options.home??await scratch(t),id='observed-consent';
+ const home=options.home??await (options.attachedCleanup?attachedScratch(t):scratch(t)),id='observed-consent';
  const registry=await fakeRegistry({dir:join(home,'registry'),id,kinds:[options.kind??'attached'],reach:'this-device',transport:options.proofProtocol==='echo'?'tcp':'http',proofProtocol:options.proofProtocol??'http',protocols:[],facts:[fact('decision'),fact('display',false)],setupActions:[{id:'value',kind:'provide-value',valueFormat:'text',label:'Input',digest:'value-1',disclosure:{revision:'fixture-1',text:'Fixture',links:[]}}]});
  const folder=join(registry.root,'providers',id),observations=join(folder,'observations.json'),rowsFile=join(folder,'consent-rows.json');
  const rows=[fact('decision'),fact('display',false)];await writeFile(rowsFile,JSON.stringify(rows));
@@ -385,4 +385,20 @@ for(const kind of ['attached','session'])test('invalid Cost retained withdrawal 
   if(failures.length)throw new AggregateError(primary?[primary,...failures]:failures,'Reader/route cleanup debt');
  }
  if(primary)throw primary;
+});
+
+test('initial effective properties may differ from static capability cost without bypassing later consent drift', async t => {
+ const f=await fixture(t,{runtimeCost:true,immutableDeclaration:true,attachedCleanup:true,owner:'initial-properties-owner'});
+ const initialCost={kind:'paid',summary:'Fixture price',amount:5,currency:'USD',period:'hour'};
+ await f.setCost(initialCost);
+ const choice=(await f.api.catalogRoutes(f.q)).candidates[0];
+ assert.deepEqual(choice.consent.disclosures.cost,initialCost);
+ const route=await f.start(choice);
+ assert.equal(route.verification.status,'verified');
+ assert.equal(await startCount(f),1);
+ await f.setCost({...initialCost,amount:6});
+ const changed=await f.api.routeStatus({home:f.home,handle:route.handle});
+ assert.equal(changed.published,null);
+ assert.ok(changed.consentChange,'real effective-property drift still withdraws publication');
+ assert.equal(await startCount(f),1,'consent drift cannot allocate a replacement');
 });
