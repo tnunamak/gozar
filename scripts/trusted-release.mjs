@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // CI-only release orchestration. Importing this module has no effects.
-import {readFile,writeFile,mkdir,readdir,lstat,realpath,copyFile} from 'node:fs/promises';
+import {readFile,writeFile,mkdir,readdir,lstat,realpath,copyFile,symlink} from 'node:fs/promises';
 import {join,resolve,relative,isAbsolute,sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
@@ -12,6 +12,20 @@ const digest=(b,algorithm='sha256')=>createHash(algorithm).update(b).digest(algo
 const json=async p=>JSON.parse(await readFile(p,'utf8'));
 const save=(p,v,flag='w')=>writeFile(p,JSON.stringify(v,null,2)+'\n',{mode:0o600,flag});
 const fail=message=>{throw new Error(message);};
+// The publisher tool is authenticated by committed integrity, never by an online bootstrap under publication authority.
+export const PUBLISHER_TOOL=Object.freeze({name:'npm',version:'11.15.0',
+ tarball:'https://registry.npmjs.org/npm/-/npm-11.15.0.tgz',
+ integrity:'sha512-+k0tk7lRnpMUPnC7kTuU/yrV/mnFoPhJQ75VfLtZ6fwbzOVXaPsTE/Il9Pn1DHi482byMyqkHv/XsQ76mNjXLw=='});
+export function verifyPublisherTool(bytes,tool=PUBLISHER_TOOL){
+ if(!/^sha512-[A-Za-z0-9+/]{86}==$/.test(tool?.integrity??'')||!Buffer.isBuffer(bytes)||!bytes.length||
+  'sha512-'+digest(bytes,'sha512')!==tool.integrity)fail('Publisher tool bytes fail the committed integrity pin');
+ return bytes;
+}
+function publisherToolPaths(outputDirectory){
+ const workRoot=resolve(join(outputDirectory,'..')),stageDir=join(workRoot,'publisher-tool-stage');
+ return {workRoot,stageDir,stage:join(stageDir,'npm.tgz'),
+  carried:join(outputDirectory,'publisher-tool','npm.tgz'),extract:join(workRoot,'publisher-npm')};
+}
 export function context(env){
  if(env.GITHUB_ACTIONS!=='true'||env.RUNNER_ENVIRONMENT!=='github-hosted'||
     env.GITHUB_EVENT_NAME!=='workflow_dispatch'||env.GITHUB_REF!=='refs/heads/main'||
@@ -138,12 +152,29 @@ async function archiveIdentity(manifest,pkg,call){
  if(manifest.package.name!==archived.name||manifest.package.version!==archived.version)fail('Pack output identity mismatch');
  return bytes;
 }
-export async function qualify({root,outputDirectory,env=process.env},{run=runProcess}={}){
+export async function preparePublisherTool({outputDirectory,env=process.env,tool=PUBLISHER_TOOL},{fetchImpl=fetch}={}){
+ // Unprivileged online preparation: fetch the pinned registry tarball and authenticate its bytes before staging.
+ context(env);outputDirectory=resolve(outputDirectory);
+ const paths=publisherToolPaths(outputDirectory);
+ await absent(paths.stageDir); // Fresh staging only; an earlier download is never reused or overwritten.
+ await mkdir(paths.stageDir,{mode:0o700});
+ const response=await fetchImpl(tool.tarball,{redirect:'error',signal:AbortSignal.timeout(60000)});
+ if(response.status!==200)fail('Publisher tool download failed: '+response.status);
+ const bytes=verifyPublisherTool(Buffer.from(await response.arrayBuffer()),tool);
+ await writeFile(paths.stage,bytes,{mode:0o600});
+ return {tarball:paths.stage,version:tool.version,integrity:tool.integrity};
+}
+export async function qualify({root,outputDirectory,env=process.env,tool=PUBLISHER_TOOL},{run=runProcess}={}){
  const sha=context(env);root=await realpath(root);outputDirectory=resolve(outputDirectory);
  const rel=relative(root,outputDirectory);
  if(!(rel==='..'||rel.startsWith('..'+sep)||isAbsolute(rel)))fail('Evidence must be outside checkout');
  await mkdir(outputDirectory,{mode:0o700}); // Never reuse a prior attempt's directory.
  await mkdir(join(outputDirectory,'logs'),{mode:0o700});
+ // Carry this run's pin-verified publisher tool with the evidence; artifact/ stays Gozar-only.
+ const toolPaths=publisherToolPaths(outputDirectory);
+ const toolBytes=verifyPublisherTool(await regular(toolPaths.stage),tool);
+ await mkdir(join(outputDirectory,'publisher-tool'),{mode:0o700});
+ await writeFile(toolPaths.carried,toolBytes,{mode:0o600});
  const call=caller(root,env,run,join(outputDirectory,'logs'));
  const pkg=await source(root,sha,call);
  await absent(join(root,'.npmrc'));
@@ -198,11 +229,11 @@ export async function pollIntegrity(pkg,expected,{fetchImpl=fetch,now=Date.now,s
  }
  fail('Registry visibility timeout; never republish automatically');
 }
-export async function publish({root,outputDirectory,env=process.env},{run=runProcess,fetchImpl=fetch,now=Date.now,sleep}={}){
+export async function publish({root,outputDirectory,env=process.env,tool=PUBLISHER_TOOL},{run=runProcess,fetchImpl=fetch,now=Date.now,sleep}={}){
  const pubEnv=publicationEnv(env),sha=context(env);root=await realpath(root);outputDirectory=resolve(outputDirectory);
  // Recreate the qualification job's exact logical paths in a fresh runner.
  // Do not resolve or read arbitrary absolute paths supplied by the artifact.
- for(const dir of [outputDirectory,join(outputDirectory,'artifact'),join(outputDirectory,'installed')]){
+ for(const dir of [outputDirectory,join(outputDirectory,'artifact'),join(outputDirectory,'installed'),join(outputDirectory,'publisher-tool')]){
   const info=await lstat(dir);
   if(!info.isDirectory()||await realpath(dir)!==dir)fail('Unexpected artifact directory');
  }
@@ -222,6 +253,9 @@ export async function publish({root,outputDirectory,env=process.env},{run=runPro
  const pkg=await source(root,sha,call);await absent(join(root,'.npmrc'));
  for(const path of required)
   if(digest(await regular(path))!==q.hashes[path])fail('Qualification receipt changed');
+ const toolPath=publisherToolPaths(outputDirectory).carried;
+ // Authenticate the carried publisher tool against the committed pin before any extraction or execution.
+ verifyPublisherTool(await regular(toolPath),tool);
  const prepared=JSON.parse(await regular(preparedPath)),manifest=JSON.parse(await regular(manifestPath));
  const candidates=(await readdir(join(outputDirectory,'artifact'))).filter(name=>/^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/.test(name));
  if(candidates.length!==1)fail('Expected one qualified archive');
@@ -244,9 +278,20 @@ export async function publish({root,outputDirectory,env=process.env},{run=runPro
  // Re-read immediately after network lookup; preserve exact qualified bytes, never pack again.
  for(const path of required)if(digest(await regular(path))!==q.hashes[path])fail('Evidence changed before publication');
  if(!(await regular(manifest.tarball)).equals(bytes))fail('Archive changed before publication');
+ // Extract the authenticated self-contained tool and expose it only through a private bin on PATH.
+ const toolPaths=publisherToolPaths(outputDirectory);
+ await absent(toolPaths.extract); // Fresh extraction target; a preexisting tool tree is never trusted.
+ await mkdir(toolPaths.extract,{mode:0o700});
+ await call('tar',['-xzf',toolPath,'-C',toolPaths.extract]);
+ await regular(join(toolPaths.extract,'package','bin','npm-cli.js'));
+ await mkdir(join(toolPaths.extract,'bin'),{mode:0o700});
+ await symlink('../package/bin/npm-cli.js',join(toolPaths.extract,'bin','npm'));
+ const toolBin=join(toolPaths.extract,'bin'),toolEnv={...env,PATH:toolBin+(env.PATH?':'+env.PATH:'')};
+ if((await call('npm',['--version'],{env:cleanEnv(toolEnv)})).stdout.trim()!==tool.version)
+  fail('Unexpected publisher tool version');
  await save(join(outputDirectory,'publication','attempt.json'),{sourceSha:sha,sha256:manifest.sha256,version:pkg.version,status:'attempted'},'wx');
  await call('npm',['publish',manifest.tarball,'--access','public','--ignore-scripts','--registry=https://registry.npmjs.org/'],
-  {env:pubEnv,timeoutMs:180000});
+  {env:{...pubEnv,PATH:toolBin+':'+pubEnv.PATH},timeoutMs:180000});
  const integrity=await pollIntegrity(pkg,'sha512-'+digest(bytes,'sha512'),{fetchImpl,now,sleep});
  const result={status:'published-and-integrity-verified',sourceSha:sha,sha256:manifest.sha256,integrity,version:pkg.version};
  await save(join(outputDirectory,'publication','result.json'),result);return result;
@@ -254,8 +299,9 @@ export async function publish({root,outputDirectory,env=process.env},{run=runPro
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
  try{
   const [mode,...extra]=process.argv.slice(2);
-  if(extra.length||!['qualify','publish'].includes(mode))fail('Choose qualify or publish; paths come from CI environment');
+  if(extra.length||!['qualify','publish','prepare-publisher-tool'].includes(mode))
+   fail('Choose qualify, publish or prepare-publisher-tool; paths come from CI environment');
   const input={root:process.env.GITHUB_WORKSPACE,outputDirectory:process.env.GOZAR_RELEASE_OUTPUT};
-  console.log(JSON.stringify(await (mode==='qualify'?qualify(input):publish(input))));
+  console.log(JSON.stringify(await (mode==='qualify'?qualify(input):mode==='publish'?publish(input):preparePublisherTool(input))));
  }catch(error){console.error(error.message);process.exitCode=1;}
 }

@@ -32,7 +32,8 @@ Commit a new release version on main before publication. An existing registry ve
 is refused regardless of its version number. Dispatch on main only; publish defaults
 to false. Qualification and publication run in separate Ubuntu-hosted jobs. The privileged
 job needs successful qualification and runs only for `publish: true`; it alone has
-`id-token: write` and uses `npm-publish`. It does not build, qualify, or run tests.
+`id-token: write` and uses `npm-publish`. It does not build, qualify, or run tests, and it
+installs no npm: its only npm is the pinned tool carried by this run's qualification artifact.
 Both jobs check out the same SHA and use `/tmp/gozar-release/evidence` so receipts
 retain their original absolute paths. Publication downloads the immutable artifact
 from the same run attempt at that exact path. A different checkout root or layout
@@ -40,12 +41,26 @@ fails closed; no receipt paths or hashes are rewritten. The event SHA and workfl
 match the checked-out clean source. There is no arbitrary ref input, token fallback,
 npm whoami gate, tag/PR/push publication trigger, or account mutation.
 
-Online setup installs concrete tool versions and populates Cargo's dependency cache.
+Online setup in the unprivileged job installs concrete tool versions, populates Cargo's
+dependency cache, and fetches the publisher npm 11.15.0 tarball from
+`registry.npmjs.org`; the download is verified against the committed sha512 integrity
+pin (public npm dist metadata) before it is staged for qualification.
 The qualification phase builds fresh WASM in a new target directory, recursively
 discovers sorted Node/adapters tests, runs them serially with TAP, and runs the
 locked offline Cargo workspace tests serially. Missing/empty/failed/skipped/cancelled
 results refuse qualification; do not change assertions or convert skips into passes.
 A private short disk-backed HOME/TMPDIR avoids socket-path and host-home dependence.
+
+The authorized job performs no online global npm install and no dependency bootstrap.
+Its checked-out code re-verifies the carried tool bytes against the same committed pin
+before any extraction or execution, extracts the self-contained package into a fresh
+private directory, exposes `bin/npm-cli.js` only through a private PATH symlink, and
+checks the tool's reported version before writing the attempt marker. Qualification
+copies the already-verified tool bytes into the same-run evidence under the nonhidden
+`publisher-tool/npm.tgz` directory, never inside `artifact/`, which keeps exactly one
+Gozar tgz. A byte-level pin is not a review of npm's own code: the pin trusts the
+official npm tarball's registry-published bytes, the same trust any global install
+would need, without letting that bootstrap execute under publication authority.
 
 prepareReleaseHandoff performs the single ordinary npm pack, including prepack.
 runInstalledJourney installs those exact archive bytes offline and measures the
@@ -60,8 +75,11 @@ registry HTTP 404 permits the attempt. Existing versions, redirects, auth errors
 network failures and unknown responses stop. The command publishes the checked
 tarball with public access and scripts disabled, never repacking. OIDC is required;
 npm credential/config environment overrides and repository .npmrc are refused.
-The trusted runner and checked-out code are the trust boundary, not hostile concurrent
-local writers. Receipts are evidence, not independent cryptographic attestations.
+The tool verification is an ordering and authentication change, not step isolation:
+OIDC remains job-wide, the hosted runner's tar and Node still mediate extraction,
+and the trusted runner and checked-out code remain the trust boundary, not hostile
+concurrent local writers. Receipts are evidence, not independent cryptographic
+attestations.
 
 An attempt marker is recorded before npm publish. After success, registry integrity
 is polled for approximately three minutes (individual HTTP calls have ten-second
@@ -86,8 +104,13 @@ while authoring this patch.
 Local verification runs the release orchestration tests with fake process and registry
 responses, plus both existing release test files. They exercise artifact tampering,
 failed qualification, duplicate publication attempts, and delayed registry visibility.
-The tests also cover OIDC permission placement and restored artifact paths.
-The current split-job change has not yet been exercised on a hosted runner.
+The tests also cover OIDC permission placement, restored artifact paths, the committed
+publisher tool pin, missing or tampered tool bytes refused before extraction or tool
+execution, extraction through the private bin, and a workflow regression forbidding any
+`npm install` in the authorized job. The current split-job change has not yet been
+exercised on a hosted runner. The real pinned tarball was additionally verified against
+public registry metadata and executed (`--version` only, credential-free) during this
+preparation; that control does not measure a hosted run.
 
 ```sh
 node --test --test-concurrency=1 test/node/trusted-release.test.mjs test/node/release-handoff.test.mjs test/node/release-installed-journey.test.mjs
@@ -112,6 +135,11 @@ Pins are concrete releases, not claims that this authoring run exercised them:
 [Node 22.16.0](https://nodejs.org/en/blog/release/v22.16.0),
 [npm 11.15.0](https://github.com/npm/cli/releases/tag/v11.15.0),
 [Rust 1.90.0](https://blog.rust-lang.org/2025/09/18/Rust-1.90.0/).
+The publisher npm pin includes its registry tarball URL and sha512 integrity
+(`dist.integrity` from [public metadata](https://registry.npmjs.org/npm/11.15.0)),
+committed in `scripts/trusted-release.mjs`; npm's engines range
+`^20.17.0 || >=22.9.0` accepts the workflow's Node 22.16.0. Review and update the
+version and integrity pin together, rechecking public metadata, never one alone.
 wasm-bindgen CLI 0.2.105 matches the existing crate/build script requirement.
 Action full SHAs resolve to official release commits:
 [checkout v4.2.2](https://github.com/actions/checkout/commit/11bd71901bbe5b1630ceea73d27597364c9af683),

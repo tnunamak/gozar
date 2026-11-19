@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,rm,readdir,cp,rename,realpath} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,rm,readdir,cp,rename,realpath,lstat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {gzipSync} from 'node:zlib';
 import {createHash} from 'node:crypto';
 import {context,identity,nodeGate,rustGate,discoverTests,consumerReceipt,publicationEnv,qualify,publish,pollIntegrity} from '../../scripts/trusted-release.mjs';
+import * as trustedRelease from '../../scripts/trusted-release.mjs';
 
 const sha='a'.repeat(40),hash=b=>createHash('sha256').update(b).digest('hex');
 const env={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_EVENT_NAME:'workflow_dispatch',
@@ -40,18 +41,38 @@ async function fixture(t,options={}){
  await writeFile(join(root,'package.json'),JSON.stringify(local));
  const e={...env,HOME:join(dir,'home'),TMPDIR:dir,CARGO_TARGET_DIR:join(dir,'target'),PATH:process.env.PATH};
  await mkdir(e.HOME);
+ // Model the unprivileged online step: a staged publisher tool blob with its own fixture pin.
+ const defaultToolBytes=Buffer.from('fixture publisher npm tool tarball\n');
+ const toolBytes=options.toolStage??defaultToolBytes;
+ const tool={name:'npm',version:'11.15.0',tarball:'https://registry.npmjs.org/npm/-/npm-11.15.0.tgz',
+  integrity:'sha512-'+createHash('sha512').update(defaultToolBytes).digest('base64')};
+ if(!options.noToolStage){
+  await mkdir(join(dir,'publisher-tool-stage'),{mode:0o700});
+  await writeFile(join(dir,'publisher-tool-stage','npm.tgz'),toolBytes,{mode:0o600});
+ }
  const packed=options.archivePackage??local;
  const files=new Map([['package.json',Buffer.from(JSON.stringify(packed))],
   ['examples/remote-access-screen.mjs',Buffer.from('// fixture')],
   ['examples/provider-lifecycle-fixture.mjs',Buffer.from('// fixture')]]);
  const bytes=archive(files),calls=[];
  const run=async(command,args,settings)=>{
-  calls.push({command,args:[...args]});
+  calls.push({command,args:[...args],envPath:settings?.env?.PATH});
   if(command==='git')return ok(args[0]==='rev-parse'?(options.head??sha)+'\n':'');
-  if(args[0]==='--version')return ok(command==='npm'?'11.15.0\n':command==='rustc'?'rustc 1.90.0 (fixture)\n':'v22.16.0\n');
+  if(args[0]==='--version'){
+   // The extracted publisher tool is only invoked through its private bin directory on PATH.
+   if(command==='npm'&&settings?.env?.PATH?.startsWith(join(dir,'publisher-npm','bin')))
+    return ok((options.toolVersion??'11.15.0')+'\n');
+   return ok(command==='npm'?'11.15.0\n':command==='rustc'?'rustc 1.90.0 (fixture)\n':'v22.16.0\n');
+  }
   if(command==='bash')return ok('');
   if(args[0]==='--test')return options.nodeResult??ok(tap);
   if(command==='cargo')return options.rustResult??ok(rust);
+  if(command==='tar'&&args[0]==='-xzf'){
+   const extract=args[args.indexOf('-C')+1];
+   await mkdir(join(extract,'package','bin'),{recursive:true});
+   await writeFile(join(extract,'package','bin','npm-cli.js'),'#!/usr/bin/env node\n',{mode:0o755});
+   return ok('');
+  }
   if(command==='tar')return ok(files.get('package.json').toString());
   if(command==='npm'&&args[0]==='pack'){
    await writeFile(join(args.at(-1),'gozar.tgz'),bytes);
@@ -74,7 +95,7 @@ async function fixture(t,options={}){
   throw new Error('Unexpected command '+command+' '+args.join(' '));
  };
  t.after(async()=>{for(const path of scratch)await rm(path,{recursive:true,force:true});await rm(dir,{recursive:true,force:true});});
- return {root,outputDirectory,env:e,run,calls,bytes,pkg:local};
+ return {root,outputDirectory,env:e,run,calls,bytes,pkg:local,tool,toolBytes};
 }
 // Text contract for this workflow's two fixed jobs, not a general YAML parser.
 function workflowBoundary(yaml){
@@ -100,6 +121,34 @@ test('only explicitly authorized publication job can request workflow OIDC',asyn
   withoutPublishGrant.replace('      contents: read\n','      contents: read\n      id-token: write\n'),
   yaml.replace('    if: ${{ inputs.publish == true }}\n',''),
  ])assert.throws(()=>workflowBoundary(mutant));
+});
+// The authorized job must not execute any online npm bootstrap; qualification prepares the pinned tool.
+function publisherBootstrap(yaml){
+ const [global,jobs]=yaml.split('\njobs:\n');
+ assert.ok(jobs,'explicit jobs block');
+ const [qualify,publication]=jobs.split('\n  publish:\n');
+ assert.match(qualify,/node scripts\/trusted-release\.mjs prepare-publisher-tool/);
+ assert.doesNotMatch(publication,/npm install/);
+ assert.match(publication,/node scripts\/trusted-release\.mjs publish/);
+}
+test('authorized publish job installs no npm and qualification pins the publisher tool',async()=>{
+ const yaml=await readFile(new URL('../../.github/workflows/npm-publish.yml',import.meta.url),'utf8');
+ publisherBootstrap(yaml);
+ // Each negative must be caught: a restored online bootstrap in publish, or no tool preparation in qualify.
+ const reinstalled=yaml.replace('      - name: Download only this run attempt',
+  '      - name: restored online bootstrap\n        run: npm install --global npm@11.15.0\n      - name: Download only this run attempt');
+ assert.notEqual(reinstalled,yaml);
+ const unprepared=yaml.replace('prepare-publisher-tool','qualify');
+ assert.notEqual(unprepared,yaml);
+ for(const mutant of [reinstalled,unprepared])assert.throws(()=>publisherBootstrap(mutant));
+});
+test('committed publisher tool pin matches official public npm metadata',()=>{
+ const pin=trustedRelease.PUBLISHER_TOOL;
+ assert.equal(pin.tarball,'https://registry.npmjs.org/npm/-/npm-11.15.0.tgz');
+ assert.equal(pin.version,'11.15.0');
+ assert.equal(pin.integrity,
+  'sha512-+k0tk7lRnpMUPnC7kTuU/yrV/mnFoPhJQ75VfLtZ6fwbzOVXaPsTE/Il9Pn1DHi482byMyqkHv/XsQ76mNjXLw==');
+ assert.match(pin.integrity,/^sha512-[A-Za-z0-9+/]{86}==$/);
 });
 test('context refuses wrong event/ref/repository/SHA/workflow and non-hosted runners',()=>{
  assert.equal(context(env),sha);
@@ -149,6 +198,39 @@ for(const [label,options] of [
  ['foreign retention',{lifecycle:{...lifecycle,resourceLedger:{foreignPreserved:false,ownedAfter:[]}}}]
 ])test('qualification refuses '+label,async t=>{
  const f=await fixture(t,options);await assert.rejects(qualify(f,{run:f.run}));
+ assert.equal(f.calls.some(c=>c.args[0]==='publish'),false);
+});
+test('prepare-publisher-tool downloads the fixed tarball, verifies the pin and stages it outside evidence',async t=>{
+ const f=await fixture(t,{noToolStage:true});
+ const seen=[];
+ const staged=await trustedRelease.preparePublisherTool(f,{fetchImpl:async(url,request)=>{
+  seen.push({url,request});return {status:200,arrayBuffer:async()=>f.toolBytes};
+ }});
+ assert.equal(seen.length,1);
+ assert.equal(seen[0].url,f.tool.tarball);
+ assert.equal(seen[0].request.redirect,'error');
+ assert.equal(staged.tarball,join(f.env.TMPDIR,'publisher-tool-stage','npm.tgz'));
+ assert.deepEqual(await readFile(staged.tarball),f.toolBytes);
+ const wrong=await fixture(t,{noToolStage:true});
+ await assert.rejects(trustedRelease.preparePublisherTool(wrong,
+  {fetchImpl:async()=>({status:200,arrayBuffer:async()=>Buffer.from('tampered tool bytes')})}),/integrity pin/);
+ await assert.rejects(readFile(join(wrong.env.TMPDIR,'publisher-tool-stage','npm.tgz')),{code:'ENOENT'});
+ const unavailable=await fixture(t,{noToolStage:true});
+ await assert.rejects(trustedRelease.preparePublisherTool(unavailable,
+  {fetchImpl:async()=>({status:503})}),/Publisher tool download failed: 503/);
+});
+test('qualification carries the pin-verified publisher tool beside its evidence',async t=>{
+ const f=await fixture(t);
+ await qualify(f,{run:f.run});
+ assert.deepEqual(await readFile(join(f.outputDirectory,'publisher-tool','npm.tgz')),f.toolBytes);
+ // The Gozar archive directory keeps exactly one tgz; the tool rides in a separate nonhidden directory.
+ assert.equal((await readdir(join(f.outputDirectory,'artifact'))).filter(name=>name.endsWith('.tgz')).length,1);
+ assert.ok((await readdir(f.outputDirectory)).includes('publisher-tool'));
+ assert.ok(!(await readdir(join(f.outputDirectory,'artifact'))).includes('npm.tgz'));
+});
+test('qualification refuses staged tool bytes that fail the committed pin',async t=>{
+ const f=await fixture(t,{toolStage:Buffer.from('tampered staged tool bytes')});
+ await assert.rejects(qualify(f,{run:f.run}),/integrity pin/);
  assert.equal(f.calls.some(c=>c.args[0]==='publish'),false);
 });
 test('publication sends checked archive once and tolerates delayed visibility',async t=>{
@@ -240,5 +322,39 @@ for(const change of ['missing','source','root','path','hash path','archive missi
   let lookups=0;
   await assert.rejects(publish(f,{run:f.run,fetchImpl:async()=>{lookups++;return response(404);}}));
   assert.equal(lookups,0);
+  assert.equal(f.calls.some(c=>c.args[0]==='publish'),false);
+ });
+test('publication extracts the pinned tool and publishes through its private bin',async t=>{
+ const f=await fixture(t);await qualify(f,{run:f.run});await transferEvidence(f);
+ const integrity='sha512-'+createHash('sha512').update(f.bytes).digest('base64');
+ let lookups=0;
+ const r=await publish(f,{run:f.run,fetchImpl:async()=>++lookups===1?response(404):response(200,{...pkg,dist:{integrity}})});
+ assert.equal(r.integrity,integrity);
+ const toolBin=join(f.env.TMPDIR,'publisher-npm','bin');
+ assert.ok((await lstat(join(toolBin,'npm'))).isSymbolicLink());
+ const extraction=f.calls.find(c=>c.command==='tar'&&c.args[0]==='-xzf');
+ assert.equal(extraction.args[1],join(f.outputDirectory,'publisher-tool','npm.tgz'));
+ const version=f.calls.find(c=>c.command==='npm'&&c.args[0]==='--version'&&c.envPath?.startsWith(toolBin));
+ assert.ok(version,'publisher npm version checked through the private bin');
+ assert.equal(version.envPath.split(':')[0],toolBin);
+ const published=f.calls.find(c=>c.args[0]==='publish');
+ assert.equal(published.envPath.split(':')[0],toolBin);
+ assert.equal(f.calls.filter(c=>c.args[0]==='publish').length,1);
+});
+for(const kind of ['missing','wrong bytes','wrong version'])
+ test('publication refuses publisher tool '+kind+' before registry or publish',async t=>{
+  const f=await fixture(t,kind==='wrong version'?{toolVersion:'11.16.0'}:{});
+  await qualify(f,{run:f.run});
+  if(kind==='missing')await rm(join(f.outputDirectory,'publisher-tool'),{recursive:true});
+  if(kind==='wrong bytes'){
+   await mkdir(join(f.outputDirectory,'publisher-tool'),{recursive:true});
+   await writeFile(join(f.outputDirectory,'publisher-tool','npm.tgz'),Buffer.from('tampered carried tool'));
+  }
+  let lookups=0;
+  await assert.rejects(publish(f,{run:f.run,fetchImpl:async()=>{lookups++;return response(404);}}),
+   kind==='wrong version'?/Unexpected publisher tool version/:undefined);
+  if(kind!=='wrong version')assert.equal(lookups,0);
+  assert.equal(f.calls.filter(c=>c.command==='tar'&&c.args[0]==='-xzf').length,kind==='wrong version'?1:0);
+  assert.ok(!(await readdir(join(f.outputDirectory,'publication')).catch(()=>[])).includes('attempt.json'));
   assert.equal(f.calls.some(c=>c.args[0]==='publish'),false);
  });
