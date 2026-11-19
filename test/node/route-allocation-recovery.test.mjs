@@ -7,7 +7,11 @@ import http from 'node:http';
 import net from 'node:net';
 import {readFile,writeFile,mkdir,rm,readdir,realpath} from 'node:fs/promises';
 import {join} from 'node:path';
-import {createTestingGozar} from '@tnunamak/gozar/testing';
+import {createRouteApi} from '../../packages/gozar-node/route-api.mjs';
+import {createEmbeddingServices} from '../../packages/gozar-node/embedding-services.mjs';
+import {registryIdentity} from '../../packages/gozar-node/registry-identity.mjs';
+import {testingFetch} from '../../packages/gozar-node/testing-network.mjs';
+import {verification} from '../../packages/gozar-node/service-state.mjs';
 import {listRecordedRoutes} from '../../packages/gozar-node/route-operations.mjs';
 import {attachedScratch,scratch,query,assertShape} from './route-schema-check.mjs';
 
@@ -20,7 +24,7 @@ const fetchBody=(port,path)=>new Promise((resolve,reject)=>http.get({host:'127.0
 
 // `holdAt` names the one provider call that stays withheld: 'discovery' is the first effect the controller
 // requests after the bootstrap binding is on disk; 'create' is the provider allocation itself.
-async function world(t,holdAt){
+async function world(t,holdAt,{cut,failRelease=false}={}){
  // Registered before the scratch home so it runs first: close the live route, then retire what is left.
  const settle={};
  t.after(async()=>{settle.gate?.resolve();await settle.exposed;await settle.harness?.close();});
@@ -66,8 +70,23 @@ async function world(t,holdAt){
    return {status:response.status,headers:Object.fromEntries(response.headers),chunks};
   }),
  ];
- const harness=await createTestingGozar({effects:list});
- api=harness.gozar;
+ // The same fixture effect dispatch the testing harness uses, built here so the publication seam and the host's
+ // configuration-use calls can be observed from the owner process.
+ const handlers=new Map(list.map(e=>[JSON.stringify([e.kind,e.operation]),e.handle])),abort=new AbortController();
+ const dispatchEffect=async request=>{const handler=handlers.get(JSON.stringify([request?.kind,request?.operation]));
+  if(abort.signal.aborted||!handler)throw Object.assign(new Error('No matching testing effect is declared'),{code:'unsupported'});
+  try{return structuredClone(await handler(structuredClone(request.input),{signal:abort.signal,fixture:true}));}
+  catch{throw Object.assign(new Error('The testing effect failed'),{code:'provider_unavailable'});}};
+ const real=createEmbeddingServices({registryId:await registryIdentity({})});
+ const uses={registered:[],released:[],failRelease};
+ const embeddingServices={...real,
+  registerConfigurationUse:async r=>{uses.registered.push(structuredClone(r.handle));return real.registerConfigurationUse(r);},
+  releaseConfigurationUse:async r=>{uses.released.push(structuredClone(r.handle));if(uses.failRelease)throw new Error('release refused');return real.releaseConfigurationUse(r);}};
+ api=createRouteApi({embeddingServices,dispatchEffect,verify:request=>verification(request,{fetch:testingFetch(dispatchEffect)}),expose:cut?{publicationCut:cut}:{}});
+ const harness={close:async()=>{
+  for(const route of (await api.listRoutes({home,owner}).catch(()=>({routes:[]}))).routes)
+   if(route.cleanup.state!=='confirmed')await api.closeRoute({home,handle:route.handle,mode:'remove'}).catch(()=>{});
+  abort.abort();}};
  const provider=(await api.listProviders({home,owner})).providers.find(p=>p.transport==='https'&&p.availability.attached.state!=='unsupported'&&!p.configuration.inputRequirements.some(i=>i.kind==='https-origin'));
  assert.ok(provider);
  let config=provider.configuration;
@@ -83,7 +102,7 @@ async function world(t,holdAt){
  const request={...q,wait:'verified',approval:{kind:'route',consentFactsDigest:candidate.consentFactsDigest,candidateToken:candidate.candidateToken,disclosureRevision:candidate.disclosure.revision}};
  const exposed=api.expose(request).then(route=>({route}),error=>({error}));
  Object.assign(settle,{gate,exposed,harness});
- return {home,owner,api,early:()=>early,q,request,exposed,enter,gate,snapshots,ledger,effects,counts:()=>({opens,closes,serial}),appPort,foreignPort};
+ return {home,owner,api,uses,early:()=>early,q,request,exposed,enter,gate,snapshots,ledger,effects,counts:()=>({opens,closes,serial}),appPort,foreignPort};
 }
 
 for(const holdAt of ['discovery','create']){
@@ -174,3 +193,91 @@ test('corrupt, replaced or unowned pending bindings stay refused',async t=>{
   assert.equal((await w.api.listRoutes({home:w.home,owner:w.owner})).routes[0].state,'creating','restored binding lists again');
  }finally{w.gate.resolve();await w.exposed;}
 });
+
+// --- The publication boundary ------------------------------------------------------------------------------------
+// `publicationCut(stage)` is awaited in the owner process immediately before each step that builds the recovery pair:
+// directory creation, bootstrap write, first state write, publication, controller spawn. A gate there is deterministic.
+const CUTS=['directory','bootstrap','state','publish','spawn'];
+// Redemption may read the provider before the lock; only allocation and removal are provider effects of the route itself.
+const mutations=w=>w.effects.filter(([,operation])=>operation==='open'||operation==='close');
+const entries=async home=>{try{return (await readdir(join(home,'attached'))).filter(n=>/^att_/.test(n));}catch{return [];}};
+const cutWorld=async(t,stage,behave,options={})=>{
+ const ctx={ready:deferred(),entered:deferred(),gate:deferred()};
+ const w=await world(t,null,{...options,cut:async s=>{
+  if(s!==stage)return;await ctx.ready.promise;
+  if(behave==='fail')throw Object.assign(new Error('injected write failure at '+stage),{code:'provider_unavailable'});
+  ctx.snapshot={stage,entries:await entries(w.home)};
+  try{ctx.listed=(await w.api.listRoutes({home:w.home,owner:w.owner})).routes;}catch(error){ctx.listed=error;}
+  ctx.entered.resolve();await ctx.gate.promise;
+ }});
+ ctx.ready.resolve();Object.assign(ctx,{w});
+  t.after(()=>ctx.gate.resolve());
+ return ctx;
+};
+
+for(const stage of CUTS){
+ test(`a listing at the ${stage} cut is never refused and sees only a complete pair, then one allocation completes`,async t=>{
+  const c=await cutWorld(t,stage,'gate'),{w}=c;
+  await Promise.race([c.entered.promise,w.exposed.then(r=>assert.fail('expose settled before the cut: '+r.error?.message))]);
+  assert.ok(Array.isArray(c.listed),'the listing must not throw: '+c.listed?.message);
+  if(stage==='spawn'){
+   assert.equal(c.snapshot.entries.length,1);
+   const directory=join(w.home,'attached',c.snapshot.entries[0]);
+   assert.equal((await json(join(directory,'state.json'))).phase,'creating');await json(join(directory,'bootstrap.json'));
+   assert.equal(c.listed.length,1);assert.notEqual(c.listed[0].state,'released');assert.equal(c.listed[0].published,null);
+  }else{
+   // No attached directory is enumerable before the pair is complete, so there is nothing to refuse. The operation's own
+   // reservation is the only thing listed: retained history for the reserved handle, never a live or removed route.
+   assert.deepEqual(c.snapshot.entries,[]);
+   assert.equal(c.listed.length,1);assert.equal(c.listed[0].handle.kind,'attached');assert.equal(c.listed[0].operationId,w.q.operationId);
+   assert.equal(c.listed[0].cleanup.state,'unconfirmed');assert.equal(c.listed[0].published,null);assert.notEqual(c.listed[0].state,'released');
+  }
+  assert.equal(w.counts().serial,0);
+  c.gate.resolve();
+  const {route,error}=await w.exposed;assert.ifError(error);
+  assert.equal(route.state,'usable');assert.equal(w.counts().serial,1);assert.equal(w.uses.registered.length,1);
+  assert.deepEqual((await w.api.expose(w.request)).handle,route.handle);assert.equal(w.counts().serial,1);
+  const [resource]=[...w.ledger.values()];
+  assert.equal(await fetchBody(Number(resource.target.split(':').pop()),'/'),'application-bytes');
+  assert.equal((await w.api.closeRoute({home:w.home,handle:route.handle,mode:'remove'})).cleanup.state,'confirmed');
+  assert.equal(w.counts().closes,1);assert.equal(await accepts(w.foreignPort),true);
+ });
+
+ test(`a write or abort failure at the ${stage} cut releases the host reference once and starts no provider effect`,async t=>{
+  const c=await cutWorld(t,stage,'fail'),{w}=c;
+  const {error}=await w.exposed;assert.ok(error,'expose must fail');
+  const registered=stage==='directory'?0:1;
+  assert.equal(w.uses.registered.length,registered);assert.equal(w.uses.released.length,registered);
+  if(registered)assert.deepEqual(w.uses.released[0],w.uses.registered[0],'the exact registered handle is released');
+  assert.deepEqual(mutations(w),[],'no provider effect');assert.deepEqual(w.counts(),{opens:0,closes:0,serial:0});
+  assert.equal(error.route?.cleanup.state,'confirmed');assert.equal(error.route.published,null);
+  // Only a complete, confirmed record may remain, and only once a controller path was published.
+  const kept=await entries(w.home);assert.equal(kept.length,stage==='spawn'?1:0);
+  const {routes}=await w.api.listRoutes({home:w.home,owner:w.owner});
+  // The operation's terminal record is the one listed route in every case; it is the confirmed, released view.
+  assert.equal(routes.length,1);
+  for(const route of routes){assert.equal(route.state,'released');assert.equal(route.cleanup.state,'confirmed');}
+  assert.equal(await accepts(w.foreignPort),true);
+ });
+}
+
+for(const stage of ['state','spawn']){
+ test(`a refused release after a ${stage} cut failure is kept as exact debt for a later owner`,async t=>{
+  const c=await cutWorld(t,stage,'fail',{failRelease:true}),{w}=c;
+  const {error}=await w.exposed;assert.ok(error);
+  assert.equal(w.uses.released.length,1);assert.deepEqual(mutations(w),[]);
+  assert.equal(error.route?.cleanup.state,'unconfirmed');
+  const [id,...extra]=await entries(w.home);assert.ok(id);assert.deepEqual(extra,[]);
+  const directory=join(w.home,'attached',id),state=await json(join(directory,'state.json')),bootstrap=await json(join(directory,'bootstrap.json'));
+  assert.deepEqual(state.resourceRemoval.handle,{kind:'attached',id,generation:1});
+  assert.equal(state.resourceRemoval.owner,w.owner);assert.equal(bootstrap.id,id);assert.equal(state.receipt,null);
+  const {routes}=await w.api.listRoutes({home:w.home,owner:w.owner});
+  assert.equal(routes.length,1);assert.equal(routes[0].cleanup.state,'unconfirmed');assert.equal(routes[0].published,null);
+  assert.equal(routes[0].operationId,w.q.operationId);
+  // A later owner retries release with the exact retained handle once the host accepts it.
+  w.uses.failRelease=false;
+  const closed=await w.api.closeRoute({home:w.home,handle:routes[0].handle,mode:'remove'});
+  assert.equal(closed.cleanup.state,'confirmed');
+  assert.equal(w.uses.released.length,2);assert.deepEqual(mutations(w),[]);
+ });
+}

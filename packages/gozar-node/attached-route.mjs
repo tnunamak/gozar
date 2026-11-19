@@ -10,7 +10,7 @@
 // openSessionRoute is the same redemption over the existing session machinery.
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { readFile, chmod, unlink } from 'node:fs/promises';
+import { readFile, chmod, unlink, open, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -219,9 +219,15 @@ export async function openAttachedRoute(request, deps = {}) {
     // Redeem, re-observe and start the controller under one reservation, so two opens cannot both win one resource.
     const controller = await withExclusiveLock(join(root, '.open.lock'), async () => {
       const redeemed = session?.redeemed ?? await redeemApproval(request, { ...deps, adapters }).catch(error => { throw refusedBeforeStart(error, handle, request); });
-      await trustedDirectory(directory, true);
-      await privateDirectory(directory);
+      // A published attached directory always holds its complete recovery pair: it is built in a private staging name no listing
+      // enumerates, then renamed into place. A session keeps its own directory and its own lifecycle.
+      const staging = session ? null : join(root, `.staging-${id}-${randomBytes(6).toString('hex')}`);
+      const cut = async stage => { await deps.publicationCut?.(stage); };
+      let broker, identity, bootstrap = null, published = false, hostTouched = false;
+      try {
       if (session) {
+        await trustedDirectory(directory, true);
+        await privateDirectory(directory);
         const prior=await readJson(join(directory,'bootstrap.json'));
         if(prior) {
           const state=await readJson(join(directory,'state.json')),control=await readJson(join(directory,'control.json'));
@@ -229,9 +235,13 @@ export async function openAttachedRoute(request, deps = {}) {
           if(prior.execution!=='generic-session-v1'||state?.handle?.id!==prior.handle?.id||state?.handle?.generation!==prior.handle?.generation||state?.lastView?.cleanup?.state!=='confirmed'||live)throw gozarError('route_conflict','A retained session already owns this directory');
           for(const name of ['state.json','failure.json','control.json'])await unlink(join(directory,name)).catch(error=>{if(error.code!=='ENOENT')throw error;});
         }
+      } else {
+        await cut('directory');
+        await trustedDirectory(staging, true);
+        await privateDirectory(staging);
       }
-      let broker,identity;
       if(deps.embeddingServices){
+        hostTouched = true;
         const hostIdentity=await deps.embeddingServices.resolveIdentity({home:redeemed.home});
         broker=await startEmbeddingBroker({services:deps.embeddingServices,home:redeemed.home,identity:hostIdentity,
           dispatchEffect:deps.dispatchEffect,onLoss:()=>{if(brokers.has(id))void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
@@ -241,18 +251,43 @@ export async function openAttachedRoute(request, deps = {}) {
         try{await deps.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle});}
         catch(error){await dropBroker(id);throw error;}
       }
-      await atomicWrite(join(directory, 'bootstrap.json'), { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
+      bootstrap = { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
         operationId:request.operationId??null,
         ...(session ? {execution:'generic-session-v1',handle,expiresAtMs:session.expiresAtMs} : {}),
         ...(broker?{resolver:broker.descriptor,identity,registryId:deps.registryId,owner:request.owner,consentReview:redeemed.consentReview,fixtureEffects:!!deps.dispatchEffect}:{}),
-        ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) });
-      // The recovery identity is persisted, authenticated by the bootstrap beside it, before any controller or provider effect can exist.
-      if (!session) await recordPendingStart(directory, JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8')));
+        ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) };
+      if (session) await atomicWrite(join(directory, 'bootstrap.json'), bootstrap);
+      else {
+        await cut('bootstrap');
+        await atomicWrite(join(staging, 'bootstrap.json'), bootstrap);
+        // The recovery identity is persisted, authenticated by the bootstrap beside it, before any controller or provider effect can exist.
+        await cut('state');
+        await recordPendingStart(staging, JSON.parse(await readFile(join(staging, 'bootstrap.json'), 'utf8')));
+        await cut('publish');
+        await rename(staging, directory);
+        published = true;
+        const parent = await open(root, 'r');
+        try { await parent.sync(); } finally { await parent.close(); }
+        await cut('spawn');
+      }
       const child = spawn(process.execPath, [here, '--controller', directory], { detached: true, stdio: 'ignore',
         env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
       child.unref();
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       return await recordController(child);
+      } catch (error) {
+        if (session) throw error;
+        // No controller has run, so no provider effect exists. Release what the host registered, or keep exact debt for a later owner.
+        if (brokers.get(id) === broker) await dropBroker(id); else await broker?.close().catch(() => {});
+        if (bootstrap) {
+          const view = await unwindUnstartedAttached({ directory, staging, published, bootstrap, services: deps.embeddingServices }).catch(() => null);
+          if (view && !error.route) error.route = view;
+        }
+        else if (!hostTouched) refusedBeforeStart(error, handle, request);
+        throw error;
+      } finally {
+        if (!session && !published) await rm(staging, { recursive: true, force: true }).catch(() => {});
+      }
     }, { waitSeconds: 30 });
     if (!session) holdLease(directory, id, deps.heartbeatMs ?? HEARTBEAT_MS);
     const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
@@ -525,6 +560,25 @@ async function recordPendingStart(directory,bootstrap){
  * A start refused before any adapter loaded has no provider resource to remove. This controller knows that first-hand, so the record
  * says so; only the configuration reference the host registered remains, and its release is confirmed or left as retryable debt.
  */
+/**
+ * An attached start that failed before its controller existed. Nothing ran, so the host's configuration reference is the only thing
+ * to settle: released once and confirmed, or kept as exact debt in a complete published pair for a later owner to retry.
+ */
+async function unwindUnstartedAttached({directory,staging,published,bootstrap,services}){
+  const resolver={releaseConfigurationUse:use=>services.releaseConfigurationUse({home:bootstrap.home,...use})};
+  if(!published){
+    await trustedDirectory(staging,true);await privateDirectory(staging);
+    await atomicWrite(join(staging,'bootstrap.json'),bootstrap);
+  }
+  const target=published?directory:staging;
+  await recordRefusedStart(target,bootstrap,resolver,()=>false);
+  const state=JSON.parse(await readFile(join(target,'state.json'),'utf8'));
+  // Confirmed removal of the only host reference leaves nothing to retain; an unconfirmed one is published as debt.
+  if(!published&&state.lastView.cleanup.state==='confirmed')return state.lastView;
+  if(!published)await rename(staging,directory);
+  return state.lastView;
+}
+
 async function recordRefusedStart(directory,bootstrap,resolver,lost){
   const session=bootstrap.execution==='generic-session-v1';
   const handle=session?bootstrap.handle:{kind:'attached',id:bootstrap.id,generation:1};
