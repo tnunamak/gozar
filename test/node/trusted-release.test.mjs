@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,rm,readdir} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,rm,readdir,cp,rename,realpath} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {gzipSync} from 'node:zlib';
@@ -33,7 +33,7 @@ function archive(files){
  return gzipSync(Buffer.concat([...parts,Buffer.alloc(1024)]));
 }
 async function fixture(t,options={}){
- const dir=await mkdtemp(join(tmpdir(),'gzt-')),root=join(dir,'source'),outputDirectory=join(dir,'evidence'),scratch=[];
+ const dir=await mkdtemp(join(await realpath(tmpdir()),'gzt-')),root=join(dir,'source'),outputDirectory=join(dir,'evidence'),scratch=[];
  await mkdir(root);await mkdir(join(root,'test/node/deep'),{recursive:true});await mkdir(join(root,'test/adapters'),{recursive:true});
  await writeFile(join(root,'test/node/deep/a.test.mjs'),'');await writeFile(join(root,'test/adapters/z.test.mjs'),'');
  const local=structuredClone(options.localPackage??pkg);if(options.version)local.version=options.version;
@@ -76,6 +76,31 @@ async function fixture(t,options={}){
  t.after(async()=>{for(const path of scratch)await rm(path,{recursive:true,force:true});await rm(dir,{recursive:true,force:true});});
  return {root,outputDirectory,env:e,run,calls,bytes,pkg:local};
 }
+// Text contract for this workflow's two fixed jobs, not a general YAML parser.
+function workflowBoundary(yaml){
+ const [global,jobs]=yaml.split('\njobs:\n');
+ assert.ok(jobs,'explicit jobs block');
+ const [qualify,publication]=jobs.split('\n  publish:\n');
+ assert.match(global,/^permissions: \{\}$/m);
+ assert.match(qualify,/^  qualify:\n    permissions:\n      contents: read$/m);
+ assert.doesNotMatch(qualify,/^    environment:/m);
+ assert.match(publication,/^    needs: qualify$/m);
+ assert.match(publication,/^    if: \$\{\{ inputs\.publish == true \}\}$/m);
+ assert.match(publication,/^    permissions:\n      contents: read\n      id-token: write$/m);
+ assert.match(publication,/^    environment: npm-publish$/m);
+ assert.equal((yaml.match(/^\s*id-token:\s*write\s*$/gm)??[]).length,1);
+}
+test('only explicitly authorized publication job can request workflow OIDC',async()=>{
+ const yaml=await readFile(new URL('../../.github/workflows/npm-publish.yml',import.meta.url),'utf8');
+ workflowBoundary(yaml);
+ // Move the grant out of publish; each negative must be caught, not just a duplicate grant.
+ const withoutPublishGrant=yaml.replace('      id-token: write\n','');
+ for(const mutant of [
+  withoutPublishGrant.replace('permissions: {}','permissions:\n  id-token: write'),
+  withoutPublishGrant.replace('      contents: read\n','      contents: read\n      id-token: write\n'),
+  yaml.replace('    if: ${{ inputs.publish == true }}\n',''),
+ ])assert.throws(()=>workflowBoundary(mutant));
+});
 test('context refuses wrong event/ref/repository/SHA/workflow and non-hosted runners',()=>{
  assert.equal(context(env),sha);
  for(const [key,value] of Object.entries({GITHUB_EVENT_NAME:'push',GITHUB_REF:'refs/tags/v1',GITHUB_REPOSITORY:'fork/gozar',
@@ -182,3 +207,38 @@ for(const mode of ['mismatch','timeout'])test('publication '+mode+' never issues
  assert.equal(f.calls.filter(c=>c.args[0]==='publish').length,1);
  if(mode==='timeout')assert.equal(time,180000);
 });
+
+// Model the artifact crossing to a fresh runner: copy the uploaded tree to staging,
+// destroy the original, then restore under the same runner-absolute layout.
+async function transferEvidence(f){
+ const stage=join(f.env.TMPDIR,'transferred');
+ await cp(f.outputDirectory,stage,{recursive:true});
+ await rm(f.outputDirectory,{recursive:true});
+ await rename(stage,f.outputDirectory);
+}
+test('exact cross-job artifact and receipts survive a fresh restore',async t=>{
+ const f=await fixture(t);await qualify(f,{run:f.run});await transferEvidence(f);
+ const integrity='sha512-'+createHash('sha512').update(f.bytes).digest('base64');
+ let lookups=0;
+ const r=await publish(f,{run:f.run,fetchImpl:async()=>++lookups===1?response(404):response(200,{...pkg,dist:{integrity}})});
+ assert.equal(r.integrity,integrity);assert.equal(f.calls.filter(c=>c.args[0]==='publish').length,1);
+});
+for(const change of ['missing','source','root','path','hash path','archive missing'])
+ test('restored artifact refuses '+change+' before registry or publish',async t=>{
+  const f=await fixture(t),m=await qualify(f,{run:f.run});await transferEvidence(f);
+  const receipt=join(f.outputDirectory,'qualification.json');
+  const q=JSON.parse(await readFile(receipt,'utf8'));
+  if(change==='missing')await rm(f.outputDirectory,{recursive:true});
+  else if(change==='archive missing')await rm(m.tarball);
+  else{
+   if(change==='source')q.sourceSha='b'.repeat(40);
+   if(change==='root')q.root=join(f.env.TMPDIR,'previous-runner');
+   if(change==='path')q.manifestPath=join(f.root,'package.json');
+   if(change==='hash path')q.hashes[join(f.root,'package.json')]='a'.repeat(64);
+   await writeFile(receipt,JSON.stringify(q));
+  }
+  let lookups=0;
+  await assert.rejects(publish(f,{run:f.run,fetchImpl:async()=>{lookups++;return response(404);}}));
+  assert.equal(lookups,0);
+  assert.equal(f.calls.some(c=>c.args[0]==='publish'),false);
+ });

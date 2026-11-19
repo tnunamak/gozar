@@ -200,21 +200,44 @@ export async function pollIntegrity(pkg,expected,{fetchImpl=fetch,now=Date.now,s
 }
 export async function publish({root,outputDirectory,env=process.env},{run=runProcess,fetchImpl=fetch,now=Date.now,sleep}={}){
  const pubEnv=publicationEnv(env),sha=context(env);root=await realpath(root);outputDirectory=resolve(outputDirectory);
- const q=await json(join(outputDirectory,'qualification.json'));
+ // Recreate the qualification job's exact logical paths in a fresh runner.
+ // Do not resolve or read arbitrary absolute paths supplied by the artifact.
+ for(const dir of [outputDirectory,join(outputDirectory,'artifact'),join(outputDirectory,'installed')]){
+  const info=await lstat(dir);
+  if(!info.isDirectory()||await realpath(dir)!==dir)fail('Unexpected artifact directory');
+ }
+ const preparedPath=join(outputDirectory,'prepared.json');
+ const manifestPath=join(outputDirectory,'artifact','manifest.json');
+ const gatePath=join(outputDirectory,'gate.json'),consumerPath=join(outputDirectory,'consumer.json');
+ const installedPath=join(outputDirectory,'installed','result.json');
+ const required=[preparedPath,manifestPath,gatePath,consumerPath,installedPath];
+ const q=JSON.parse(await regular(join(outputDirectory,'qualification.json')));
  if(q.sourceSha!==sha||q.root!==root)fail('Qualification source mismatch');
+ if(q.preparedPath!==preparedPath||q.manifestPath!==manifestPath)fail('Unexpected qualification receipt paths');
+ if(Object.keys(q.hashes??{}).length!==required.length||
+    required.some(p=>!Object.hasOwn(q.hashes??{},p)||!/^[0-9a-f]{64}$/.test(q.hashes[p])))
+  fail('Incomplete qualification');
  await mkdir(join(outputDirectory,'publication'),{mode:0o700}); // Single attempt, even after ambiguous failure.
  const call=caller(root,env,run,join(outputDirectory,'publication'));
  const pkg=await source(root,sha,call);await absent(join(root,'.npmrc'));
- for(const [path,expected] of Object.entries(q.hashes??{}))
-  if(digest(await regular(path))!==expected)fail('Qualification receipt changed');
- const prepared=await json(q.preparedPath),manifest=await json(q.manifestPath);
- const required=[q.preparedPath,q.manifestPath,prepared.gateReceipt,manifest.consumerReceipt,join(outputDirectory,'installed','result.json')];
- if(required.some(p=>!q.hashes[p])||manifest.status!=='qualified-artifact'||prepared.sourceSha!==sha)fail('Incomplete qualification');
- const raw=await json(join(outputDirectory,'installed','result.json'));
- if(JSON.stringify(consumerReceipt(raw,prepared))!==JSON.stringify(await json(manifest.consumerReceipt)))fail('Consumer translation changed');
+ for(const path of required)
+  if(digest(await regular(path))!==q.hashes[path])fail('Qualification receipt changed');
+ const prepared=JSON.parse(await regular(preparedPath)),manifest=JSON.parse(await regular(manifestPath));
+ const candidates=(await readdir(join(outputDirectory,'artifact'))).filter(name=>/^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/.test(name));
+ if(candidates.length!==1)fail('Expected one qualified archive');
+ const tarball=join(outputDirectory,'artifact',candidates[0]);
+ if(prepared.tarball!==tarball||manifest.tarball!==tarball||prepared.gateReceipt!==gatePath||
+    manifest.gateReceipt!==gatePath||manifest.consumerReceipt!==consumerPath)
+  fail('Unexpected archive evidence paths');
+ if(manifest.status!=='qualified-artifact'||prepared.sourceSha!==sha||manifest.sourceSha!==sha)
+  fail('Incomplete qualification');
+ const originalBytes=await regular(tarball);
+ if(digest(originalBytes)!==manifest.sha256)fail('Archive digest changed');
+ const raw=JSON.parse(await regular(installedPath));
+ if(JSON.stringify(consumerReceipt(raw,prepared))!==JSON.stringify(JSON.parse(await regular(consumerPath))))fail('Consumer translation changed');
  const validationPath=join(outputDirectory,'publication','revalidate.json');
- await copyFile(q.preparedPath,validationPath);
- const checked=await finalizeReleaseHandoff({manifestPath:validationPath,consumerReceipt:manifest.consumerReceipt});
+ await copyFile(preparedPath,validationPath);
+ const checked=await finalizeReleaseHandoff({manifestPath:validationPath,consumerReceipt:consumerPath});
  if(JSON.stringify(checked)!==JSON.stringify(manifest))fail('Qualified manifest changed');
  const bytes=await archiveIdentity(manifest,pkg,call);
  if(await registryVersion(pkg,{fetchImpl})!==null)fail('Version already exists');

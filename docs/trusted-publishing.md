@@ -7,8 +7,8 @@ that the next release is accepted. No release version is changed by this patch.
 
 After the trusted-publishing PR is reviewed and merged, verify the repository's
 GitHub Actions environment is named exactly `npm-publish` and retains the owner's
-intended protection rules. The workflow assigns that environment to the whole job,
-so existing environment rules apply to qualification-only runs too. Do not remove
+intended protection rules. Only the explicit `publish` job uses this environment. The `qualify` job has
+`contents: read`, no `id-token: write`, and does not use the trusted environment. Do not remove
 or bypass those rules to make the workflow run.
 
 In the existing public `@tnunamak/gozar` package's npm trusted-publisher settings,
@@ -30,8 +30,13 @@ Live OIDC exchange remains unverified. A publish=false run cannot verify it.
 
 Commit a new release version on main before publication. An existing registry version
 is refused regardless of its version number. Dispatch on main only; publish defaults
-to false. Qualification and publication stay in one Ubuntu-hosted job to preserve
-the existing helpers' absolute evidence paths. The event SHA and workflow SHA must
+to false. Qualification and publication run in separate Ubuntu-hosted jobs. The privileged
+job needs successful qualification and runs only for `publish: true`; it alone has
+`id-token: write` and uses `npm-publish`. It does not build, qualify, or run tests.
+Both jobs check out the same SHA and use `/tmp/gozar-release/evidence` so receipts
+retain their original absolute paths. Publication downloads the immutable artifact
+from the same run attempt at that exact path. A different checkout root or layout
+fails closed; no receipt paths or hashes are rewritten. The event SHA and workflow SHA must
 match the checked-out clean source. There is no arbitrary ref input, token fallback,
 npm whoami gate, tag/PR/push publication trigger, or account mutation.
 
@@ -64,8 +69,10 @@ bounds). Wrong visible integrity fails immediately; delayed absence eventually
 fails. There is no second publish within one evidence directory. Each hosted run
 uses a new directory, so the marker is not a cross-run lock. On ambiguous command
 failure or visibility timeout, stop and inspect npm and retained evidence before
-any new manual run; do not blindly retry. The workflow retains archive/evidence
-even for qualification-only runs and failures after setup.
+any new manual run; do not blindly retry. The workflow retains qualified archive/evidence and separately retains qualification
+failure and publication evidence. A failed-only rerun without a newly produced
+qualification artifact for that run attempt fails closed. Inspect npm and prior
+publication evidence before authorizing any fresh run.
 
 ## Acceptance still owed by the release owner
 
@@ -79,8 +86,8 @@ while authoring this patch.
 Local verification runs the release orchestration tests with fake process and registry
 responses, plus both existing release test files. They exercise artifact tampering,
 failed qualification, duplicate publication attempts, and delayed registry visibility.
-The test-only baseline fails because the runner does not exist; the implementation
-passes 72 tests with no skips. actionlint and Node syntax checks also pass.
+The tests also cover OIDC permission placement and restored artifact paths.
+The current split-job change has not yet been exercised on a hosted runner.
 
 ```sh
 node --test --test-concurrency=1 test/node/trusted-release.test.mjs test/node/release-handoff.test.mjs test/node/release-installed-journey.test.mjs
@@ -90,11 +97,13 @@ actionlint .github/workflows/npm-publish.yml
 The hosted tool installation, complete source gate, and live OIDC exchange are not
 yet measured for this workflow. For the first hosted qualification, the release
 owner selects **npm trusted release** in GitHub Actions, selects `main`, and leaves
-`publish` false. Inspect `gozar-release-<sha>-<run_attempt>` for the qualified
+`publish` false. Confirm the `publish` job is skipped. Inspect
+`gozar-qualified-<sha>-<run_attempt>` for the qualified
 archive and receipts tied to that SHA; a missing publication result is expected.
 No OIDC exchange is verified by this run. A later separately authorized publish
-run rebuilds and qualifies its own archive; it does not reuse the earlier run's
-provenance or bytes. The release owner must review that distinction when accepting
+run qualifies its own archive in the unprivileged job; its privileged job consumes
+only that run attempt's immutable qualification artifact. It does not reuse the
+earlier run's provenance or bytes. The release owner must review that distinction when accepting
 consumer evidence.
 
 ## Pinned tool and action sources
@@ -107,5 +116,6 @@ wasm-bindgen CLI 0.2.105 matches the existing crate/build script requirement.
 Action full SHAs resolve to official release commits:
 [checkout v4.2.2](https://github.com/actions/checkout/commit/11bd71901bbe5b1630ceea73d27597364c9af683),
 [setup-node v4.4.0](https://github.com/actions/setup-node/commit/49933ea5288caeca8642d1e84afbd3f7d6820020),
-[upload-artifact v4.6.2](https://github.com/actions/upload-artifact/commit/ea165f8d65b6e75b540449e92b4886f43607fa02).
+[upload-artifact v4.6.2](https://github.com/actions/upload-artifact/commit/ea165f8d65b6e75b540449e92b4886f43607fa02),
+[download-artifact v4.3.0](https://github.com/actions/download-artifact/commit/d3f86a106a0bac45b974a628896c90dbdf5c8093).
 Review/update these pins explicitly as part of maintenance, not via floating tags.
