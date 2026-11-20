@@ -4,6 +4,7 @@ import {availabilityFor,prerequisitesFor,configurationFor,hostBoundaryOf} from '
 import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
 import {embeddingError} from './embedding-services.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
+import {providerPresentation} from './adapter-runtime.mjs';
 export async function listProviders(request,deps={},admission){
  if(!Array.isArray(deps.adapters))throw embeddingError('provider_unavailable');
  const platform=deps.platform??process.platform;const observedAt=new Date().toISOString();
@@ -42,7 +43,9 @@ export async function listProviders(request,deps={},admission){
   // The honest detection freshness this row was served from: its actual checked-at (null when nothing was
   // observed yet), whether it is fresh, and whether an explicit refresh is in flight. A
   // `refresh: true` request owns the probes and awaits them.
-  const row={providerId:adapter.id,label:adapter.definition.label??adapter.id,reach:properties?.reach,transport:properties?.transport,availability,prerequisites,configuration,facts:catalogFactsFor(item)};
+  const {displayName,human,addressStability,idleTimeoutMs,needsAccount}=providerPresentation(adapter,properties);
+  const row={providerId:adapter.id,label:adapter.definition.label??adapter.id,reach:properties?.reach,transport:properties?.transport,
+   displayName,copy:{human},addressStability,idleTimeoutMs,needsAccount,availability,prerequisites,configuration,facts:catalogFactsFor(item)};
   if(detection)row.detection=detection;
   return row;
  }));
