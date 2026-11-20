@@ -58,6 +58,30 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
    assert.equal(terminal.operationId,q.operationId);assert.deepEqual(terminal.handle,route.handle);
    assert.equal(terminal.cleanup.state,'confirmed');assert.equal(writes,afterSuspend);
    assert.deepEqual(config,foreign);
+   const journalName=createHash('sha256').update(JSON.stringify([owner,q.operationId])).digest('hex')+'.json';
+   const journalPath=join(home,'operations',journalName);
+   const journalBefore=await readFile(journalPath);
+   const saved=JSON.parse(journalBefore.toString('utf8'));
+   assert.equal(saved.phase,'terminal');
+   assert.equal(saved.view.published,null);
+   assert.equal(saved.view.cleanup.state,'confirmed');
+
+   await harness.close();
+   harness=await createTestingGozar({effects});
+   const reopened=harness.gozar;
+   const beforeConflict=writes;
+   const differentTarget='127.0.0.1:1';
+   assert.notEqual(request.target,differentTarget);
+   await assert.rejects(reopened.ensureRoute({...request,target:differentTarget}),{code:'operation_conflict'});
+   assert.deepEqual(await readFile(journalPath),journalBefore,'refused intent leaves raw terminal evidence unchanged');
+   assert.equal(writes,beforeConflict,'refused intent makes no synthetic provider writes');
+   assert.deepEqual(config,foreign);
+   const replayed=await reopened.ensureRoute(request);
+   assert.deepEqual(replayed,terminal,'original intent recovers the exact terminal receipt');
+   assert.equal(replayed.published,null);
+   assert.deepEqual(await readFile(journalPath),journalBefore);
+   assert.equal(writes,afterSuspend,'reopening and replaying make no synthetic provider writes');
+   assert.deepEqual(config,foreign);
    return;
   }
   const beforeResume=writes;
