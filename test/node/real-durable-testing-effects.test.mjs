@@ -44,9 +44,21 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
   await assert.rejects(api.approveRouteConsent({home,handle:route.handle,approvalToken:review.approvalToken,consentFactsDigest:'changed'}),{code:'consent_mismatch'});
   const restored=await api.approveRouteConsent({home,handle:route.handle,approvalToken:review.approvalToken,consentFactsDigest:review.consentFactsDigest});assert.equal(restored.verification.status,'verified');assert.deepEqual(restored.handle,route.handle);assert.equal(writes,written);
   assert.deepEqual((await api.ensureRoute(request)).handle,route.handle);assert.equal(writes,written);
-  await api.suspendRoute({home,handle:route.handle});
+  const suspended=await api.suspendRoute({home,handle:route.handle});
+  assert.equal(suspended.origin,route.origin);
+  assert.equal(suspended.operationId,route.operationId);
+  assert.deepEqual(suspended.handle,route.handle);
+  assert.equal(suspended.published,null);
+  assert.equal(
+   Object.values(config.Web??{}).some(host=>Object.values(host.Handlers??{}).some(rule=>rule.Proxy===`http://${q.target}`)),false,
+   'suspend removes the fixture target forwarding');
+  assert.deepEqual(config.TCP?.['9000'],foreign.TCP['9000'],'suspend preserves the foreign rule');
   const beforeResume=writes;
   const resumed=await api.ensureRoute({...q,operationId:undefined});assert.equal(resumed.handle.generation,route.handle.generation+1);
+  assert.equal(resumed.origin,route.origin);
+  assert.equal(resumed.verification.status,'verified');
+  assert.ok(resumed.origin,'resume retains a public origin');
+  assert.equal(resumed.published,resumed.origin);
   assert.equal(writes,beforeResume+1,'resume restores the pinned rule exactly once');
   if(resumeJournal){
    // The committed engine record plus stale operation journal is the crash
