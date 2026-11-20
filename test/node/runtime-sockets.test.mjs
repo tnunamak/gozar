@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import net from 'node:net';
+import {EventEmitter} from 'node:events';
 import fs from 'node:fs/promises';
 import {lstat,mkdir,mkdtemp,readFile,readdir,realpath,rename,rm,symlink,writeFile} from 'node:fs/promises';
 import {syncBuiltinESMExports} from 'node:module';
 import {dirname,join} from 'node:path';
 import {test} from 'node:test';
-import {allocateRuntimeSocket,withRuntimeSockets} from '../../packages/gozar-node/runtime-sockets.mjs';
+import {allocateRuntimeSocket,resolveRuntimeSocket,withRuntimeSockets} from '../../packages/gozar-node/runtime-sockets.mjs';
 import {connectEmbeddingBroker,startEmbeddingBroker} from '../../packages/gozar-node/embedding-broker.mjs';
 
 const unixOnly={skip:process.platform==='win32'};
@@ -110,4 +111,57 @@ test('empty-endpoint cleanup never removes an unexpected entry',unixOnly,async t
  await rm(marker);
  await endpoint.cleanup();
  await gone(dirname(endpoint.path));
+});
+
+test('uncaptured synthetic endpoint never reports retirement as confirmed',unixOnly,async t=>{
+ const root=await fixture(t);
+ const endpoint=await allocateRuntimeSocket(root);
+ let closeCalls=0;
+ class FixtureListener extends EventEmitter{
+  listening=false;
+  listen(){this.listening=true;this.emit('listening');}
+  unref(){}
+  close(done){closeCalls++;this.listening=false;done();}
+ }
+ const server=new FixtureListener();
+ // The synthetic listener reports ready but has no endpoint metadata.
+ await assert.rejects(endpoint.bind(server),{code:'invalid_input'});
+ assert.deepEqual(await endpoint.retire(),{
+  state:'unconfirmed',reason:'identity-unavailable',listenerRetired:false,directoryAbsent:false,
+ });
+ assert.equal(closeCalls,0);
+});
+
+test('synthetic verified endpoint retires after a transient close failure',unixOnly,async t=>{
+ const root=await fixture(t), endpoint=await allocateRuntimeSocket(root);
+ let closeCalls=0;
+ class FixtureListener extends EventEmitter{
+  listening=false;
+  listen(){this.listening=true;this.emit('listening');}
+  unref(){}
+  close(done){
+   if(++closeCalls===1){done(new Error('synthetic close refusal'));return;}
+   this.listening=false;done();
+  }
+ }
+ const observe=fs.lstat, changeMode=fs.chmod;
+ const stat={uid:BigInt(process.getuid()),mode:0o600n,dev:41n,ino:73n,isSocket:()=>true};
+ t.mock.method(fs,'lstat',async (path,...args)=>path===endpoint.path?stat:observe(path,...args));
+ t.mock.method(fs,'chmod',async (path,...args)=>{if(path!==endpoint.path)await changeMode(path,...args);});
+ syncBuiltinESMExports();
+ try {
+  const descriptor=await endpoint.bind(new FixtureListener());
+  assert.deepEqual(descriptor.socket,{dev:'41',ino:'73'});
+  assert.deepEqual(await resolveRuntimeSocket({runtimeSocket:descriptor},{legacyPath:endpoint.path}),{kind:'bound',path:endpoint.path});
+  await assert.rejects(resolveRuntimeSocket({runtimeSocket:null},{legacyPath:endpoint.path}),{code:'invalid_input'});
+  assert.deepEqual(await resolveRuntimeSocket({},{legacyPath:endpoint.path}),{kind:'legacy',path:endpoint.path});
+  assert.deepEqual(await endpoint.retire(),{
+   state:'unconfirmed',reason:'server-close-failed',listenerRetired:false,directoryAbsent:false,
+  });
+  assert.deepEqual(await endpoint.retire(),{state:'confirmed',listenerRetired:true,directoryAbsent:true});
+  assert.equal(closeCalls,2);
+ }finally{
+  t.mock.restoreAll();
+  syncBuiltinESMExports();
+ }
 });
