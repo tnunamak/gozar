@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **Late consent checks cannot revive a retired route.** A check that finishes after the owner is lost or the route
+  is closed can no longer publish the route or overwrite its recovery facts.
 - **Saved configuration survives a release upgrade.** Storage scope was a hash that included the content registry id,
   so every release orphaned the saved values and credentials of the one before it (a 0.4.0 `own-address` origin read
   back as unset on 0.5.1). The scope now uses a stable lineage name, one-time carry-forward recomputes the earlier
