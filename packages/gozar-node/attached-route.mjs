@@ -392,23 +392,36 @@ async function viewFromRecord(directory, handle) {
   return state;
 }
 
-/** Private authenticated controller observation; never asks for fresh proof or cleanup. */
-export async function observeAttachedRoute(request) {
+/**
+ * Private authenticated controller observation; never asks for fresh proof or cleanup. The scope check binds home, handle,
+ * generation and the controller's recorded owner; the controller itself checks its process identity and the same handle.
+ * `asStatus` is the watch's and the internal close read's use of it (route-view.mjs): the caller is the host's own ordinary
+ * status/watch request, which names no owner, so the recorded owner is the scope (a given owner must still equal it), and a
+ * controller that is gone answers like `attachedStatus` does (released stays released), still without any effect.
+ */
+export async function observeAttachedRoute(request,{asStatus=false}={}) {
   const handle=checkRef(request);
   if(!['attached','session'].includes(handle.kind))throw gozarError('unsupported','Not a generic controller handle');
   const home=await canonicalHome(request.home,false),directory=await routeDirectory(home,handle);
   const bootstrap=await readJson(join(directory,'bootstrap.json'));
   const bound=handle.kind==='attached'?{kind:'attached',id:bootstrap?.id,generation:1}:bootstrap?.handle;
-  if(!bootstrap||bootstrap.home!==home||typeof request.owner!=='string'||request.owner!==bootstrap.owner||
+  const owner=asStatus&&request.owner===undefined?bootstrap?.owner:request.owner;
+  if(!bootstrap||bootstrap.home!==home||typeof owner!=='string'||owner!==bootstrap.owner||
       bound?.kind!==handle.kind||bound.id!==handle.id||bound.generation!==handle.generation)
     throw gozarError('route_conflict','Observation scope does not match the current controller');
   try {
     return (await controlAttached(directory,{type:'observe',handleKind:handle.kind,handleId:handle.id,generation:handle.generation})).view;
   } catch(error) {
-    if(!error.gone&&error.code!=='provider_unavailable')throw error;
-    const state=await viewFromRecord(directory,handle);
-    return recoveryHistory(state.lastView,'Current controller observation unavailable; historical evidence only');
+    if(!error.gone&&(asStatus||error.code!=='provider_unavailable'))throw error;
+    return recordedView(directory,handle,asStatus,'Current controller observation unavailable; historical evidence only');
   }
+}
+
+// What the saved record says when no controller answers: a finished route stays released, anything else is history only.
+async function recordedView(directory,handle,releasedStaysReleased,message) {
+  const state=await viewFromRecord(directory,handle);
+  if(releasedStaysReleased&&(state.phase==='released'||state.lastView?.cleanup.state==='confirmed'))return releasedView(state.lastView,handle);
+  return recoveryHistory(state.lastView,message);
 }
 
 /**
@@ -439,9 +452,7 @@ export async function attachedStatus(request, deps = {}) {
   try { return (await controlAttached(directory, { type: 'status', fresh: true, generation: handle.generation, handleId:handle.id }, 60_000)).view; }
   catch (error) {
     if (!error.gone) throw error;
-    const state = await viewFromRecord(directory, handle);
-    if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') return releasedView(state.lastView, handle);
-    return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
+    return recordedView(directory, handle, true, 'The route controller stopped before it removed the route');
   }
 }
 

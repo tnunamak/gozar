@@ -69,13 +69,16 @@ async function attachedWorld(t, { ack, over = {} } = {}) {
     try { return structuredClone(await handler(structuredClone(request.input))); }
     catch { throw Object.assign(new Error('The testing effect failed'), { code: 'provider_unavailable' }); }
   };
+  const acknowledgeOrigin = async request => { acks.push(structuredClone(request)); return ack(request); };
   const api = createRouteApi({
     embeddingServices: createEmbeddingServices({ registryId: await registryIdentity({}) }),
     dispatchEffect,
     expose: {
-      ...(ack ? { acknowledgeOrigin: async request => { acks.push(structuredClone(request)); return ack(request); } } : {}),
+      ...(ack ? { acknowledgeOrigin } : {}),
       startTimeoutMs: 30_000, ...over,
     },
+    // The public factory declares the handler at the top level; the same function also rides the expose seam used here.
+    ...(ack ? { acknowledgeOrigin } : {}),
   });
   const provider = (await api.listProviders({ home, owner })).providers.find(p => p.providerId === 'ngrok-https-edge');
   assert.ok(provider, 'the shipped registry lists ngrok-https-edge');
@@ -265,13 +268,16 @@ async function sessionWorld(t, { ack, over = {} } = {}) {
     try { return structuredClone(await handler(structuredClone(request.input))); }
     catch { throw Object.assign(new Error('The testing effect failed'), { code: 'provider_unavailable' }); }
   };
+  const acknowledgeOrigin = async request => { acks.push(structuredClone(request)); return ack(request); };
   const api = createRouteApi({
     manifest: registry.manifest, root: registry.root, dispatchEffect,
     readContext: fakeReadContext({ home }),
     expose: {
-      ...(ack ? { acknowledgeOrigin: async request => { acks.push(structuredClone(request)); return ack(request); } } : {}),
+      ...(ack ? { acknowledgeOrigin } : {}),
       startTimeoutMs: 30_000, ...over,
     },
+    // The public factory declares the handler at the top level; the same function also rides the expose seam used here.
+    ...(ack ? { acknowledgeOrigin } : {}),
   });
   const q = { schemaVersion: 1, owner, operationId: 'ack-session-op', providerId: 'ack-session', home,
     usage: { kind: 'session', lifetimeMs: 120_000 }, target: '127.0.0.1:8799',
@@ -587,3 +593,69 @@ test('contract: a close during the held acknowledgment of a lock-holding start w
   assert.ok(outcome.value || outcome.error, 'the start finished before the cancel');
   assert.deepEqual((await world.api.listRoutes({ home: world.home, owner: 'fixture-owner' })).routes.map(route => route.state), ['released']);
 });
+
+// --- Observation versus proof across handle kinds (0.5.2 retirement/observation repair) -------------------------
+// Declared handler: `watchRoutes` is an observation for EVERY allocated-origin kind. For attached and generic-session
+// routes it asks the route's own authenticated controller for its passive `observe` view instead of a fresh `status`
+// (which verifies, may release an expired lease and rewrites the saved record). One steady watch must not ask the host,
+// send a proof request, allocate or remove anything, or write any saved record. An explicit routeStatus still proves.
+// (These two kinds acknowledge the allocated origin once, at start; their later proofs reuse it. Durable asks per proof.)
+import { createHash } from 'node:crypto';
+async function jsonFingerprint(dir) {
+  const out = {};
+  const walk = async current => {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else if (entry.isFile() && entry.name.endsWith('.json')) out[path] = createHash('sha256').update(await readFile(path)).digest('hex');
+    }
+  };
+  await walk(dir);
+  return out;
+}
+async function watchFor(api, world, handle, ms = 900) {
+  const controller = new AbortController(), events = [];
+  const done = (async () => {
+    try { for await (const event of api.watchRoutes({ home: world.home, handle, signal: controller.signal, intervalMs: 250 })) events.push(event); }
+    catch (error) { events.error = error; }
+  })();
+  await waitFor(() => events.length > 0 || events.error, 10_000);
+  await sleep(ms); controller.abort(); await done;
+  return events;
+}
+const echo = request => ({ acknowledged: true, origin: request.origin, handle: { id: request.handle.id, generation: request.handle.generation }, attemptId: request.attemptId });
+
+for (const [kind, build] of [['attached', attachedWorld], ['generic session', sessionWorld]]) {
+  test(`${kind}: a declared-handler watch is passive (no acknowledgment, proof, allocation, removal or record write), explicit status still proves, and close ends it`, async t => {
+    const world = await build(t, { ack: echo });
+    const started = await world.api.expose(world.request);
+    assert.equal(started.state, 'usable');
+    const snapshot = () => ({ acks: world.acks.length, probes: world.counts.probes, opens: world.counts.opens, closes: world.counts.closes });
+    const before = snapshot(), files = await jsonFingerprint(world.home);
+    assert.equal(before.acks, 1);
+    const events = await watchFor(world.api, world, started.handle, 1200);
+    assert.equal(events.error, undefined);
+    assert.ok(events.length >= 1 && events.every(event => event.route.handle.id === started.handle.id), 'the watch reported this route');
+    assert.deepEqual(snapshot(), before, 'the watch asked the host for nothing, sent no proof request and allocated or removed nothing');
+    assert.deepEqual(await jsonFingerprint(world.home), files, 'and rewrote no saved record (no lease or proof renewal)');
+    // Sensitivity of the measurement: the explicit check is the proof, and it asks.
+    const checked = await world.api.routeStatus({ home: world.home, handle: started.handle });
+    assert.equal(checked.verification.status, 'verified');
+    assert.ok(world.counts.probes > before.probes, 'an explicit status is the proof: it sends fresh probe requests (the origin was acknowledged once, at start)');
+    // A closed route is observed as released, still without asking.
+    await world.api.closeRoute({ home: world.home, handle: started.handle, mode: 'remove' });
+    const afterClose = world.acks.length, probes = world.counts.probes;
+    const late = await watchFor(world.api, world, started.handle, 300);
+    assert.equal(late[0]?.route.state, 'released');
+    assert.equal(world.acks.length, afterClose);assert.equal(world.counts.probes, probes);
+  });
+
+  test(`${kind}: a host that declares no handler keeps the earlier polling watch, which proves`, async t => {
+    const world = await build(t, {});
+    const started = await world.api.expose(world.request);
+    const probes = world.counts.probes;
+    await watchFor(world.api, world, started.handle, 600);
+    assert.ok(world.counts.probes > probes, 'with no handler the watch still verifies, as before 0.5.2');
+    await world.api.closeRoute({ home: world.home, handle: started.handle, mode: 'remove' });
+  });
+}

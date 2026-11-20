@@ -47,6 +47,7 @@ const refuseMigration=reason=>{throw Object.assign(embeddingError('configuration
  absent:'no earlier configuration exists for this home, owner and provider under that registry',
  inflight:'a setup draft, setup operation or operation-held credential is still open for the earlier configuration; finish or discard it first',
  in_use:'a route still holds the earlier configuration; remove that route (or release its exact handle) first. Nothing was changed',
+ retired:'this configuration moved to a stable registry lineage and is no longer usable under the registry that wrote it; use the lineage that claimed it',
 }[reason]}`});};
 // `lineage` gives the storage a stable custodian name: {id, replaces:[earlier registry ids]}.
 // Only the bundled lineage may use the reserved name and the published registry ids. The lineage names whose scope may be
@@ -118,9 +119,13 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
  }
  // The earlier record moves to the stable scope in one in-memory edit that is made durable by ONE atomic write (the claim)
  // before the caller may ask the backend for anything. Until that write is renamed nothing changed, so a fault leaves the
- // earlier state intact and no byte was released. After it, only the claimant can reach the record: a rival lineage sees
- // the tombstone and is refused. The earlier record stays as a tombstone, and the retained backend scope keeps every
- // opaque handle usable.
+ // earlier state intact and no byte was released. The same write RETIRES the earlier record: it becomes a data-free tombstone
+ // (`migratedTo`; no bindings, no values, no drafts, no reservations, a fresh unrelated revision) and the secret metadata
+ // is re-stamped, so ordinary resolution under the earlier registry (this SDK, or the original 0.4.0 writer after a
+ // downgrade) finds nothing to read. Only the successor reference keeps the physical backend scope (`backendScopeId`), so
+ // the stored item stays addressable by exactly one authorized record. A rival lineage sees the tombstone and is refused.
+ // The promise is about ordinary supported resolution after the commit; it does not recall bytes a trusted earlier host
+ // already read into memory.
  async function adopt(state,providerId,scopeId,{R,key,rec}){
   const sound=plain(rec)&&rec.scopeId===key&&plain(rec.bindings)&&plain(rec.values)&&plain(rec.drafts)&&typeof rec.revision==='string'&&Array.isArray(rec.uses)&&rec.uses.every(x=>typeof x==='string');
   if(!sound)refuseMigration('incompatible');
@@ -137,14 +142,19 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   // A reservation was made through the earlier registry, and only that registry's release (or the exact handle, see
   // releaseConfigurationUse) ends it. Copying it would leave the stable scope held after that release.
   if(rec.uses.length)refuseMigration('in_use');
-  for(const handle of Object.values(rec.bindings))Object.assign(state.secrets[handle],{registryId:custodian,scopeId,backendScopeId:key});
-  rec.migratedTo=scopeId;
-  const adopted=state.configs[scopeId]={scopeId,revision:rec.revision,bindings:clone(rec.bindings),values:clone(rec.values),drafts:{},uses:[],migratedFrom:[key]};
+  // Build the successor from the validated fields first; only then empty the predecessor, in the same in-memory edit.
+  const adopted={scopeId,revision:rec.revision,bindings:clone(rec.bindings),values:clone(rec.values),drafts:{},uses:[],migratedFrom:[key]};
+  for(const handle of Object.values(adopted.bindings))Object.assign(state.secrets[handle],{registryId:custodian,scopeId,backendScopeId:key});
+  state.configs[scopeId]=adopted;
+  state.configs[key]={scopeId:key,revision:fresh(),bindings:{},values:{},drafts:{},uses:[],migratedTo:scopeId};
   await persisters.get(state)();
   return adopted;
  }
  const config=async(state,home,providerId,owner)=>{
-  const scopeId=scope(home,providerId,owner);if(state.configs[scopeId])return state.configs[scopeId];
+  const scopeId=scope(home,providerId,owner);
+  // A retired predecessor is never a usable configuration, even when its own scope is addressed directly.
+  if(state.configs[scopeId]?.migratedTo)refuseMigration('retired');
+  if(state.configs[scopeId])return state.configs[scopeId];
   const found=candidates(state,home,providerId,owner,scopeId,lineage?.replaces??[]);
   if(found.length>1)refuseMigration('ambiguous');
   if(found.length===1)return adopt(state,providerId,scopeId,found[0]);
@@ -250,6 +260,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
    if(typeof from!=='string'||!registryIdPattern.test(from)||typeof r.providerId!=='string'||!r.providerId||(r.owner!==undefined&&(typeof r.owner!=='string'||!r.owner)))fail('invalid_input');
    if(PUBLISHED_REGISTRY_IDS.includes(from)&&!isBundledLineage(lineage))fail('invalid_input');
    const scopeId=scope(h,r.providerId,r.owner),existing=s.configs[scopeId];
+   if(existing?.migratedTo)refuseMigration('retired');
    if(existing?.migratedFrom?.includes(legacyScope(from,h,r.providerId,r.owner)))return redacted(h,s,existing);
    const [found]=candidates(s,h,r.providerId,r.owner,scopeId,[from]);
    if(!found)refuseMigration('absent');

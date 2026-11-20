@@ -150,14 +150,31 @@ that declares no handler are unchanged.
 
 Observation versus proof. With a declared handler, `routeStatus`, `startRoute`/`ensureRoute`
 and adoption are the proofs: each asks the host to acknowledge a fresh attempt, inside the
-call the host opened. `watchRoutes` is an observation: it reads the recorded state and
-the latest proof this process obtained for that exact route generation while that
-proof's own validity window lasts, and after it reports the route unverified until the
-host checks again. It asks no acknowledgment, starts no proof or challenge request,
-publishes nothing and renews no lease, so it can never take the attempt of an explicit
-check that overlaps it. A host that declares a handler therefore schedules its own
-explicit checks, which also renew a leased rule. Hosts that declare no handler keep
-the earlier polling watch, which proves, publishes and renews.
+call the host opened. `watchRoutes` (and the read `closeRoute` makes of the route before it
+ends it) is an observation, for every handle kind that carries an allocated origin:
+
+| Handle kind | Explicit `routeStatus` | `watchRoutes` and the internal close read |
+| --- | --- | --- |
+| durable | fresh proof, acknowledgment asked inside the call | recorded state, plus the latest proof of this process for that exact generation while its own validity window lasts, then unverified |
+| attached | controller `status`: fresh verification, may release or write | authenticated controller `observe`: the last view the controller recorded; a gone controller reports the saved record |
+| generic session | same as attached | same as attached |
+| external, owner-kept | one exact-origin proof request, no acknowledgment (the owner supplied the origin) | the same single proof request of that one handle; no other route of the home is read, proved or acknowledged |
+
+An observation asks no acknowledgment, starts no challenge request for an allocated origin,
+allocates nothing, publishes nothing and renews no lease, so it can never take the attempt of
+an explicit check that overlaps it. The `observe` command runs only after the handle kind, id,
+generation, owner and controller boot identity checks of the explicit read.
+
+One exception is deliberate and defensive. A durable observation reads the route's current
+consent facts; when they differ from what the person approved it persists a fail-closed
+withdrawal (the route reports `consentChange` and is no longer published). It never creates or
+widens authority, and it is the only write an observation makes. An attached or session
+`observe` reports the last controller view and never detects this drift; the next explicit
+status does. Foreign routes, foreign listeners and provider rules are never touched. A host that
+declares a handler therefore schedules its own explicit checks, which also renew a leased
+rule. Hosts that declare no handler keep the earlier polling watch, which proves, publishes and
+renews. A legacy daemon session carrying no `embedding.handle` cannot be observed passively;
+under a declared handler such sessions are not created.
 
 ## Packaged runtime modules (0.5.2)
 
@@ -369,11 +386,20 @@ code or schema is still re-approved. Nothing in the stored state transfers an ol
   scanned. Config-only records carry no reverse metadata, so an unknown earlier registry id cannot be recovered.
 - The carry-forward is one atomic write of `embedding-state.json`, the claim: the stable record is created, bound
   secret metadata is re-stamped and keeps its original backend scope (`backendScopeId`) so delegated backends still
-  find the item, and the earlier record stays as a tombstone (`migratedTo`). Every path that can migrate (read,
+  find the item, and the earlier record becomes a data-free tombstone: no bindings, no values, no
+  drafts, no uses, a fresh revision and `migratedTo`. Only the authorized stable record holds the bindings. Every path that can migrate (read,
   resolve, mutate, `adoptConfiguration`) renames the claim before it asks the secret backend for anything, so a
   fault leaves the earlier state as it was and no bytes were released. A second lineage that declares the same
   predecessor finds the tombstone and is refused (`taken`) without any backend call. A resolve of an already-stable
   scope writes nothing.
+- Retirement. After the claim the earlier registry gets nothing from that scope. The current SDK refuses any
+  replacement-aware access to the tombstone with `configuration_migration_required` (reason `retired`), including
+  read, resolve, draft, setup, secret intake, `registerUse`, adoption and exact-use cleanup, and calls no backend. The
+  original published 0.4.0 writer, which ignores `migratedTo`, reads an empty configuration and resolves nothing. A
+  0.4.0 writer that saves its own configuration afterwards writes only into the old scope and never reaches the stable
+  record. Before the claim renames (a fault or kill), the 0.4.0 writer still reads everything; after it, only the
+  successor does. Limit: the physical secret is not deleted, and bytes a trusted earlier host already read before the
+  claim are not recalled.
 - A saved input carries forward only when the provider's own current declaration (its `provide-secret` and
   `provide-value` actions, read without any live probe) still names that input id with the same role. A provider
   without such a declaration carries nothing forward. The lineage names which earlier scopes may be recomputed; it

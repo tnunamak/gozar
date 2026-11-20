@@ -61,11 +61,12 @@ function spyBackend(h){
  };
 }
 // What a 0.4.0 host did for one provider: a secret `token` and a text `origin`, both bound in one configuration.
-async function write040Mixed(h,{providerId,backend,registryId}){
+async function write040Mixed(h,options){
+ const {providerId,backend,registryId}=options,owner='owner' in options?options.owner:OWNER;
  const s=create040({registryId,identity,secretBackend:backend});
- const c=await s.readConfiguration({home:h,owner:OWNER,providerId});
- const stored=await s.storeSecret({home:h,owner:OWNER,providerId,inputId:'token',scopeId:c.scopeId,expectedConfigurationRevision:c.revision,bytes:Buffer.from(TOKEN)});
- await s.mutateConfiguration({home:h,owner:OWNER,providerId,expectedConfigurationRevision:c.revision},async tx=>{await tx.bindSecret('token',stored.handle);tx.bindText('origin','https://fixture.invalid');});
+ const c=await s.readConfiguration({home:h,owner,providerId});
+ const stored=await s.storeSecret({home:h,owner,providerId,inputId:'token',scopeId:c.scopeId,expectedConfigurationRevision:c.revision,bytes:Buffer.from(TOKEN)});
+ await s.mutateConfiguration({home:h,owner,providerId,expectedConfigurationRevision:c.revision},async tx=>{await tx.bindSecret('token',stored.handle);tx.bindText('origin','https://fixture.invalid');});
  return stored.handle;
 }
 const R_OLD='registry-v1:'+'a'.repeat(64);
@@ -211,15 +212,15 @@ test('migration is idempotent across restarts and never overwrites later changes
  assert.equal(later.values.origin,'https://changed.invalid');
 });
 
-test('a resolve that migrates commits the claim before it releases bytes, and an already-stable resolve writes nothing',async()=>{
+test('a resolve that migrates commits the claim before it releases bytes, retires the earlier record, and an already-stable resolve writes nothing',async()=>{
  const h=await home(),backend=spyBackend(h);await write040(h,{secretBackend:backend,text:false});backend.log.length=0;
  const snapshot=await stateBytes(h),s=candidate('registry-v1:candidate-a',{secretBackend:backend});
  assert.equal((await s.resolveConfiguration({home:h,owner:OWNER,providerId:'cloudflare-named'})).token,TOKEN);
  assert.notEqual(await stateBytes(h),snapshot,'the claim is durable after the resolve');
  assert.ok(backend.log.some(entry=>entry.op==='withSecret'));
  assert.ok(backend.log.every(entry=>entry.claimed),'no backend call happened before the durable claim');
- // The old release still reads its own state: the tombstone keeps the bindings.
- assert.equal((await create040({registryId:R040,identity,secretBackend:backend}).resolveConfiguration({home:h,owner:OWNER,providerId:'cloudflare-named'})).token,TOKEN);
+ // After the commit the earlier record is a data-free tombstone: the original 0.4.0 writer resolves nothing through it.
+ assert.equal(await create040({registryId:R040,identity,secretBackend:backend}).resolveConfiguration({home:h,owner:OWNER,providerId:'cloudflare-named'}),null);
  const before=await stat(join(h,'embedding-state.json'));
  for(let i=0;i<3;i++)assert.equal((await s.resolveConfiguration({home:h,owner:OWNER,providerId:'cloudflare-named'})).token,TOKEN);
  const after=await stat(join(h,'embedding-state.json'));
@@ -246,7 +247,7 @@ const rename=fsp.rename;fsp.rename=async(from,to)=>{if(String(to).endsWith('embe
  assert.equal((await s.resolveConfiguration({home:h,owner:OWNER,providerId:'cloudflare-named'})).token,TOKEN);
 });
 
-test('a keyed secret backend keeps resolving the old binding after the scope moves, and a backend failure changes nothing',async()=>{
+test('a keyed secret backend keeps resolving the carried binding through the successor, and a backend failure changes nothing',async()=>{
  const h=await home(),store=new Map();let failing=false,n=0;
  // Like a keychain adapter: the item is addressed by scope and handle, so a scope change would orphan it.
  const backend={
@@ -267,7 +268,8 @@ test('a keyed secret backend keeps resolving the old binding after the scope mov
  assert.equal((await read(s,h,'cloudflare-named')).credentials.token.known,false);
  failing=false;
  assert.equal((await s.resolveConfiguration({home:h,owner:OWNER,providerId:'cloudflare-named'})).token,TOKEN);
- assert.equal((await create040({registryId:R040,identity,secretBackend:backend}).resolveConfiguration({home:h,owner:OWNER,providerId:'cloudflare-named'})).token,TOKEN);
+ // The earlier record is retired: the original writer resolves nothing, and the physical item stays for the successor.
+ assert.equal(await create040({registryId:R040,identity,secretBackend:backend}).resolveConfiguration({home:h,owner:OWNER,providerId:'cloudflare-named'}),null);
  assert.deepEqual([...store.keys()].map(k=>k.split('/')[1]),['item-1']);
  // A secret stored after the migration is addressed by the stable scope.
  const c=await read(s,h,'cloudflare-named');
@@ -512,6 +514,7 @@ test('a fault before the claim is renamed releases no bytes, keeps the earlier s
  try{await assert.rejects(hostSuccessor('host-a',backend).resolveConfiguration(args));}
  finally{fsp.rename=rename;syncBuiltinESMExports();}
  assert.equal(backend.log.length,0,'no backend call before a committed claim');assert.equal(await stateBytes(h),snapshot);
+ assert.equal((await create040({registryId:R_OLD,identity,secretBackend:backend}).resolveConfiguration(args)).token,TOKEN,'before the commit the original writer still reads its own state');backend.log.length=0;
  assert.equal((await hostSuccessor('host-b',backend).resolveConfiguration(args)).token,TOKEN);
  await assert.rejects(hostSuccessor('host-a',backend).resolveConfiguration(args),reason('taken'));
  assert.ok(backend.log.every(entry=>entry.claimed));
@@ -544,4 +547,109 @@ test('an explicit adoption commits its claim before it observes the backend, and
  const adopted=await s.adoptConfiguration({...args,fromRegistryId:R_OLD});
  assert.deepEqual(adopted.credentials.token,{known:true,value:true});
  assert.ok(backend.log.length>0&&backend.log.every(entry=>entry.claimed));
+});
+
+// ---- D. Retirement: the claim leaves the earlier record a data-free tombstone; only the successor reaches the bytes.
+// What this proves, and what it does not: after the claim commits, ordinary supported resolution under the earlier
+// registry (the current SDK addressed by the earlier registry id, and the unmodified published 0.4.0 writer after a
+// downgrade) obtains no value, binding or credential. It does not recall bytes a trusted earlier host already read.
+const configsOf=async h=>JSON.parse(await stateBytes(h)).configs;
+function assertTombstone(tomb,{key,successor,priorRevision}){
+ assert.deepEqual(Object.keys(tomb).sort(),['bindings','drafts','migratedTo','revision','scopeId','uses','values']);
+ assert.deepEqual({...tomb,revision:null},{scopeId:key,revision:null,bindings:{},values:{},drafts:{},uses:[],migratedTo:successor});
+ assert.equal(typeof tomb.revision,'string');assert.notEqual(tomb.revision,priorRevision,'the predecessor keeps no usable revision');
+}
+const backendCalls=backend=>backend.log.length;
+
+test('retirement: after the claim only the successor reaches the bytes; the earlier registry, a rollback writer and a rival obtain nothing',async()=>{
+ for(const {name,owner,keyed} of [{name:'named owner, default backend',owner:OWNER,keyed:false},{name:'unnamed owner, keyed backend',owner:undefined,keyed:true}]){
+  const h=await home(),backend=keyed?spyBackend(h):undefined;
+  const handle=await write040Mixed(h,{providerId:'host-provider',backend,registryId:R_OLD,owner});
+  const real=await realpath(h),oldKey=oldScope(R_OLD,real,owner,'host-provider');
+  const before=(await configsOf(h))[oldKey],args={home:h,owner,providerId:'host-provider'};
+  assert.equal(before.bindings.token,handle,name);
+  const successor=hostSuccessor('host-a',backend),resolved=await successor.resolveConfiguration(args);
+  assert.deepEqual(resolved,{origin:'https://fixture.invalid',token:TOKEN},name);
+  const after=JSON.parse(await stateBytes(h)),carried=Object.values(after.configs).find(c=>c.migratedFrom?.includes(oldKey));
+  assertTombstone(after.configs[oldKey],{key:oldKey,successor:carried.scopeId,priorRevision:before.revision});
+  assert.deepEqual(carried.bindings,before.bindings,name);assert.deepEqual(carried.values,before.values,name);assert.equal(carried.revision,before.revision);
+  // The physical backend scope stays only on the successor's secret reference, and the item is not deleted.
+  assert.deepEqual(after.secrets[handle],{...after.secrets[handle],registryId:'host-a',scopeId:carried.scopeId,backendScopeId:oldKey},name);
+  if(keyed)assert.equal(backend.store.has(`${oldKey}/${handle}`),true,'the item the successor addresses is not deleted');
+  assert.equal(JSON.stringify(after.configs[oldKey]).includes(handle),false,name);assert.equal(JSON.stringify(after).includes(TOKEN),false);
+  const tombstone=JSON.stringify(after.configs[oldKey]);
+
+  // The unmodified published 0.4.0 writer, reopened after the commit (rollback/downgrade): nothing to read.
+  const old=create040({registryId:R_OLD,identity,...(keyed?{secretBackend:backend}:{})});
+  assert.equal(await old.resolveConfiguration(args),null,`${name}: original writer resolves nothing`);
+  const seen=await old.readConfiguration(args);
+  assert.deepEqual({values:seen.values,credentials:seen.credentials},{values:{},credentials:{}},name);
+  // The current SDK addressed by the earlier registry id finds the tombstone and refuses every access kind, without a backend call.
+  const earlier=createEmbeddingServices({registryId:R_OLD,identity,...(keyed?{secretBackend:backend}:{}),currentInputKinds:hostKinds});
+  const some=await successor.readConfiguration(args);
+  const calls=keyed?backendCalls(backend):0;
+  for(const call of [
+   ()=>earlier.readConfiguration(args),()=>earlier.resolveConfiguration(args),()=>earlier.beginConfigurationDraft({...args,expectedConfigurationRevision:seen.revision}),
+   ()=>earlier.readConfigurationDraft({...args,draftId:'d'}),()=>earlier.mutateConfiguration({...args,expectedConfigurationRevision:seen.revision},async tx=>tx.markChanged()),
+   ()=>earlier.storeSecret({...args,inputId:'token',scopeId:oldKey,expectedConfigurationRevision:seen.revision,bytes:Buffer.from('x')}),
+   ()=>earlier.setupTransaction({...args,operationId:'op'},async()=>null),()=>earlier.registerConfigurationUse({...args,revision:seen.revision,handle:'r'}),
+   ()=>earlier.discardConfigurationDraft({...args,draftId:'d'}),()=>earlier.adoptConfiguration({...args,fromRegistryId:R_OLD}),
+  ])await assert.rejects(call(),reason('retired'),name);
+  assert.equal(JSON.stringify((await configsOf(h))[oldKey]),tombstone,`${name}: no refused access changed the tombstone`);
+  if(keyed)assert.equal(backendCalls(backend),calls,`${name}: no refused access called the backend`);
+  // A rival lineage still loses without a backend call, and the cleanup of the earlier handle cannot reach the successor's item.
+  const rival=hostSuccessor('host-b',backend);
+  await assert.rejects(rival.resolveConfiguration(args),reason('taken'));
+  assert.equal(await old.discardSecret({home:h,handle}).then(r=>r.discarded),false);
+  assert.equal(await earlier.discardSecret({home:h,handle}).then(r=>r.discarded),false,'the earlier registry no longer owns the item');
+  // A rollback writer that saves anew works only inside its own tombstone: the successor and the earlier-registry refusal are unchanged.
+  await old.mutateConfiguration({...args,expectedConfigurationRevision:seen.revision},async tx=>tx.bindText('origin','https://rollback.invalid'));
+  assert.equal((await old.readConfiguration(args)).values.origin,'https://rollback.invalid');
+  assert.deepEqual(await successor.resolveConfiguration(args),{origin:'https://fixture.invalid',token:TOKEN},name);
+  assert.equal((await successor.readConfiguration(args)).scopeId,some.scopeId);
+  await assert.rejects(earlier.readConfiguration(args),reason('retired'));
+  assert.equal(await old.resolveConfiguration(args).then(v=>v?.token),undefined,`${name}: the rollback writer still obtains no credential`);
+ }
+});
+
+test('retirement: text-only, secret-only and bundled configurations leave data-free tombstones',async()=>{
+ const h=await home(),real=await realpath(h);
+ const {handle}=await write040(h);
+ const s=candidate('registry-v1:candidate-a');
+ const own=await read(s,h,'own-address'),cloud=await read(s,h,'cloudflare-named');
+ const configs=await configsOf(h);
+ for(const [providerId,view] of [['own-address',own],['cloudflare-named',cloud]]){
+  const key=oldScope(R040,real,OWNER,providerId);
+  assertTombstone(configs[key],{key,successor:view.scopeId,priorRevision:undefined});
+  const old=create040({registryId:R040,identity});
+  assert.equal(await old.resolveConfiguration({home:h,owner:OWNER,providerId}),null,providerId);
+  assert.deepEqual(Object.keys((await old.readConfiguration({home:h,owner:OWNER,providerId})).credentials),[],providerId);
+  await assert.rejects(createEmbeddingServices({registryId:R040,identity}).readConfiguration({home:h,owner:OWNER,providerId}),reason('retired'));
+ }
+ assert.equal((await s.resolveConfiguration({home:h,owner:OWNER,providerId:'cloudflare-named'})).token,TOKEN);
+ assert.equal(JSON.stringify(configs[oldScope(R040,real,OWNER,'cloudflare-named')]).includes(handle),false);
+});
+
+test('a process killed right after the claim is renamed: the original writer reads nothing, no backend call was made, and one successor owns the bytes',async()=>{
+ const h=await home(),backend=spyBackend(h);await write040Mixed(h,{providerId:'host-provider',backend,registryId:R_OLD});backend.log.length=0;
+ const args={home:h,owner:OWNER,providerId:'host-provider'};
+ const dir=await mkdtemp(join(tmpdir(),'stbl-hook-')),marker=join(dir,'backend-calls.log'),preload=join(dir,'kill-after-rename.mjs');
+ await writeFile(preload,`import fsp from 'node:fs/promises';import {syncBuiltinESMExports} from 'node:module';
+const rename=fsp.rename;fsp.rename=async(from,to)=>{const result=await rename(from,to);if(String(to).endsWith('embedding-state.json'))process.kill(process.pid,'SIGKILL');return result;};syncBuiltinESMExports();`);
+ const child=spawn(process.execPath,['--import',preload,'--input-type=module','-e',`
+ import {appendFileSync} from 'node:fs';
+ import {createEmbeddingServices} from ${JSON.stringify(new URL('../../packages/gozar-node/embedding-services.mjs',import.meta.url).href)};
+ const note=op=>appendFileSync(${JSON.stringify(marker)},op+'\\n');
+ const secretBackend={put:async()=>{note('put');return {handle:'x'};},withSecret:async()=>{note('withSecret');throw {code:'setup_required'};},presence:async()=>{note('presence');return {known:true,value:true};},delete:async()=>{note('delete');return {deleted:true};}};
+ const s=createEmbeddingServices({registryId:'registry-v1:host-a',identity:{instanceId:'i',bootId:'b'},secretBackend,lineage:{id:'host-a',replaces:[${JSON.stringify(R_OLD)}]},currentInputKinds:async()=>({token:'secret',origin:'text'})});
+ await s.resolveConfiguration(${JSON.stringify(args)});`],{stdio:'ignore'});
+ assert.equal(await new Promise(resolve=>child.on('exit',(c,signal)=>resolve(signal??c))),'SIGKILL');
+ await assert.rejects(readFile(marker,'utf8'),{code:'ENOENT'},'no backend call before or after the committed claim');
+ const key=oldScope(R_OLD,await realpath(h),OWNER,'host-provider'),configs=await configsOf(h);
+ assert.equal(typeof configs[key].migratedTo,'string');assert.deepEqual(configs[key].bindings,{});assert.deepEqual(configs[key].values,{});
+ assert.equal(await create040({registryId:R_OLD,identity,secretBackend:backend}).resolveConfiguration(args),null,'after the rename only the authorized successor reads');
+ assert.equal(backend.log.length,0);
+ assert.equal((await hostSuccessor('host-a',backend).resolveConfiguration(args)).token,TOKEN);
+ await assert.rejects(hostSuccessor('host-b',backend).resolveConfiguration(args),reason('taken'));
+ assert.ok(backend.log.every(entry=>entry.claimed));
 });

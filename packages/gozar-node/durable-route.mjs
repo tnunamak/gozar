@@ -1071,7 +1071,7 @@ export async function statusRoutes({ routeId, home = defaultHome(), canonical = 
   };
   const routes = [];
   for (let record of records) {
-    // An observation reads recorded state only: it sends no challenge request to the target either.
+    // An observation reads recorded state only and sends no challenge request to the target. Its one write is the defensive consent withdrawal (consentCurrent).
     const check = observing ? null : await targetCheck(record);
     const extra = observing ? {} : { targetCheck: check };
     if (check === 'another program is listening' && record.state !== 'suspended') Object.assign(extra, {

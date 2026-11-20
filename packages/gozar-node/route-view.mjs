@@ -187,11 +187,13 @@ const defaults = {
     },
   },
   session: {
-    async status({ home, handle }) {
-      const { control } = await import('./daemon.mjs');
+    // `observe` is the watch's and the internal close read's: the daemon's authenticated, read-only `observe` command
+    // (daemon.mjs observeSession) instead of `status`, which runs the controller's own health probe.
+    async status({ home, handle }, { observe = false } = {}) {
+      const { control, observeSession } = await import('./daemon.mjs');
       const [directory, sessionId] = checkedSession(handle.id);
       let reply;
-      try { reply = await control(join(home, directory), { type: 'status' }, 30_000); }
+      try { reply = observe ? await observeSession(join(home, directory), { sessionId, handleGeneration: handle.generation }) : await control(join(home, directory), { type: 'status' }, 30_000); }
       catch (cause) { if(cause.code&&cause.code!=='ENOENT'&&cause.code!=='ECONNREFUSED')throw cause;throw gozarError('route_not_found', `No running session ${handle.id}`, null, cause); }
       if (sessionId && reply.snapshot?.sessionId !== sessionId) throw gozarError('route_conflict', 'The session was replaced; this handle is stale');
       return reply;
@@ -207,7 +209,8 @@ const defaults = {
   external: {
     async status({ home, handle }) {
       const { statusServices } = await import('./service.mjs');
-      const route = (await statusServices({ home, origin: handle.id })).routes.find(item => item.ownership === 'external-owned');
+      // Only the owner-kept record: the unfiltered listing also re-proves every durable route in the home.
+      const route = (await statusServices({ home, origin: handle.id, ownerKeptOnly: true })).routes.find(item => item.ownership === 'external-owned');
       if (!route) throw gozarError('route_not_found', 'No external service record for this origin');
       return route;
     },
@@ -222,8 +225,11 @@ function checkedSession(id){const parts=splitSession(id);if(!/^port-[0-9]+$/.tes
 
 /**
  * Fresh proof for one handle. An external service is read with handle {kind:'external', id:<origin>}.
- * `deps.observe` is the watch's and close's read: a durable route under a declared host acknowledgment is observed,
- * never proven, so that no acknowledgment is asked outside a call the host opened (durable-route.mjs, lastProofs).
+ * `deps.observe` is the watch's and close's read, set only when the host declared an acknowledgment handler: every
+ * allocated-origin route is then observed, never proven, so that no acknowledgment is asked outside a call the host opened.
+ * Durable reads the recorded state and the latest remembered proof (durable-route.mjs, lastProofs); attached and generic
+ * session routes ask their own controller's authenticated `observe` command; a legacy session asks the daemon's `observe`.
+ * An owner-kept external route has no allocation and is proven against its one exact owner-supplied origin (no acknowledgment).
  */
 export async function routeStatus(request, deps = {}) {
   const handle = checkRef(request);
@@ -237,11 +243,14 @@ export async function routeStatus(request, deps = {}) {
       }
       case 'session': {
         const generic=await defaults.attached();
-        if(await generic.genericSessionRecord(request))return await generic.attachedStatus(request,deps.attachedDeps);
-        const reply = await (deps.session ?? defaults.session).status(request);
+        if(await generic.genericSessionRecord(request))return await (deps.observe?generic.observeAttachedRoute(request,{asStatus:true}):generic.attachedStatus(request,deps.attachedDeps));
+        const reply = await (deps.session ?? defaults.session).status(request, { observe: deps.observe });
         return projectSession(reply, { handle, now, ...await propertiesFor(reply.snapshot?.adapterId, deps, 'session') });
       }
-      case 'attached': return await (deps.attached ?? await defaults.attached()).attachedStatus(request, deps.attachedDeps);
+      case 'attached': {
+        const attached = deps.attached ?? await defaults.attached();
+        return await (deps.observe && attached.observeAttachedRoute ? attached.observeAttachedRoute(request, { asStatus: true }) : attached.attachedStatus(request, deps.attachedDeps));
+      }
       case 'external': return projectExternal(await (deps.external ?? defaults.external).status(request), { handle, now });
     }
   } catch (error) { throw normalizeError(error); }
