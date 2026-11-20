@@ -1,62 +1,36 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
-import { networkInterfaces } from 'node:os';
-import { readFile, readdir, realpath } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
-import { loadCatalog, loadDefinition, loadActiveDrop, loadDropRequirements, safeOrigin } from '../packages/gozar-node/catalog.mjs';
-import { loadCore } from '../packages/gozar-node/core.mjs';
-import { Journal, atomicWrite } from '../packages/gozar-node/journal.mjs';
-import { EffectDriver } from '../packages/gozar-node/driver.mjs';
-import { Controller } from '../packages/gozar-node/controller.mjs';
-import { sessionTargetCheck } from '../packages/gozar-node/target-check.mjs';
-import { control, launch, serve, recoverStop, stopSession, failureRecord } from '../packages/gozar-node/daemon.mjs';
-import { render, renderDetection, exposeSnapshot, installLink } from '../packages/gozar-node/render.mjs';
-import { validateLifetimeMs } from '../packages/gozar-node/gate.mjs';
-import { selectedInterfaceAddress } from '../packages/gozar-node/interfaces.mjs';
-
 import { plainCaveat } from '../packages/gozar-node/plain-copy.mjs';
-import { resolveVia } from '../packages/gozar-node/expose-copy.mjs';
 import { cliCommand } from '../packages/gozar-node/cli-command.mjs';
 import { defaultHome } from '../packages/gozar-node/default-home.mjs';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const reaches = ['internet', 'tailnet', 'lan', 'this-device', 'unknown'];
+// Session routes are opened, observed and closed through the route-contract commands (ensure, expose --query-file,
+// route-status, close): every provider runs the generic session runtime. The port-form commands below were the
+// earlier session controller's command line and are removed, not redirected.
+const REMOVED = { expose: 'expose --port', detect: 'detect', health: 'health', 'update-origin': 'update-origin' };
+const REMOVED_MESSAGE = command => `\`gozar ${command}\` was removed: every provider now runs the generic session runtime. Use \`gozar ensure --query-file FILE\` or \`gozar expose --query-file FILE --approval-file FILE\`; see \`gozar --help\`.`;
 export function parseArgs(argv) {
-  const options = { command: argv[0] ?? 'help', clientReach: 'unknown' };
+  if (Object.hasOwn(REMOVED, argv[0] ?? '')) throw new Error(REMOVED_MESSAGE(REMOVED[argv[0]]));
+  const options = { command: argv[0] ?? 'help' };
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i];
-    if (['--yes', '--json', '--verbose', '--alternatives', '--operational', '--sse', '--streamable-http', '--oauth-dcr', '--observe-process-output'].includes(flag)) options[flag.slice(2)] = true;
-    else if (['--port', '--client-reach', '--origin', '--adapter', '--via', '--bind-address', '--firewall-ack', '--client-profile', '--install-link-template', '--transport', '--local-name', '--probe-directory', '--probe-request', '--probe-receipt', '--probe-executor-id', '--probe-wait-ms', '--lifetime-ms', '--route'].includes(flag)) {
+    if (['--yes', '--json', '--verbose'].includes(flag)) options[flag.slice(2)] = true;
+    else if (['--port', '--route'].includes(flag)) {
       const value = argv[++i];
       if (!value || value.startsWith('--')) throw new Error(`Missing value for ${flag}`);
-      options[{ '--port': 'port', '--client-reach': 'clientReach', '--origin': 'origin', '--adapter': 'adapterId', '--via': 'adapterId', '--bind-address': 'bindAddress', '--firewall-ack': 'firewallAck', '--client-profile': 'clientProfileId', '--install-link-template': 'installLinkTemplate', '--transport': 'transport', '--local-name': 'localName', '--probe-directory': 'probeDirectory', '--probe-request': 'probeRequest', '--probe-receipt': 'probeReceipt', '--probe-executor-id': 'probeExecutorId', '--probe-wait-ms': 'probeWaitMs', '--route': 'route', '--lifetime-ms': 'lifetimeMs' }[flag]] = flag === '--via' ? resolveVia(value) : value;
+      options[flag.slice(2)] = value;
     } else throw new Error(`Unknown option: ${flag}`);
   }
-  if (!['expose', 'detect', 'status', 'health', 'update-origin', 'stop', 'allow', 'demo-server', 'help', '--help'].includes(options.command)) throw new Error('Use expose, detect, status, stop, allow or demo-server');
+  if (!['status', 'stop', 'allow', 'demo-server', 'help', '--help'].includes(options.command)) throw new Error('Use status, stop, allow or demo-server; route commands are listed in --help');
   if (options.port !== undefined) {
     if (!/^\d+$/.test(options.port) || Number(options.port) < (options.command === 'demo-server' ? 0 : 1) || Number(options.port) > 65535) throw new Error('--port must be 1..65535');
     options.port = Number(options.port);
   }
   if (options.route !== undefined && (!['status', 'stop', 'allow'].includes(options.command) || options.port !== undefined || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(options.route))) throw new Error('--route is for status, stop and allow, takes a route ID and excludes --port');
   if (options.command === 'allow' && options.route === undefined) throw new Error('allow requires --route ID');
-  if (options.lifetimeMs !== undefined) {
-    if (options.command !== 'expose' || !/^\d+$/.test(options.lifetimeMs)) throw new Error('--lifetime-ms is for expose and must be 1..2147483647');
-    options.lifetimeMs = validateLifetimeMs(Number(options.lifetimeMs));
-  }
-  if (!reaches.includes(options.clientReach)) throw new Error(`--client-reach must be ${reaches.join('|')}`);
-  if (options.origin) options.origin = safeOrigin(options.origin);
-  if (options.bindAddress && !selectedInterfaceAddress(options.bindAddress)) throw new Error('--bind-address must name one unicast non-loopback interface address');
-  if (options.firewallAck && options.firewallAck !== options.bindAddress) throw new Error('--firewall-ack must match the exact --bind-address');
-  if (options.probeWaitMs !== undefined) {
-    if (!/^\d+$/.test(options.probeWaitMs) || Number(options.probeWaitMs) < 1000 || Number(options.probeWaitMs) > 600000) throw new Error('--probe-wait-ms must be 1000..600000');
-    options.probeWaitMs = Number(options.probeWaitMs);
-  }
-  if ((options.probeRequest || options.probeReceipt) && (!options.probeRequest || !options.probeReceipt || !options.probeExecutorId || dirname(resolve(options.probeRequest)) !== dirname(resolve(options.probeReceipt)))) throw new Error('Trusted fixed probe channel requires same-directory --probe-request, --probe-receipt and --probe-executor-id');
-  if (options.probeExecutorId && !/^[A-Za-z0-9_.:-]{1,128}$/.test(options.probeExecutorId)) throw new Error('Invalid probe executor identity');
-  if (options.localName && (options.localName.length > 253 || !options.localName.split('.').every(label => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label)))) throw new Error('--local-name must be a DNS name; client resolution still requires verification');
-  if (options.transport && !['http', 'https', 'tls', 'tcp'].includes(options.transport)) throw new Error('--transport must be http|https|tls|tcp');
-  if (options.installLinkTemplate && !installLink(options.installLinkTemplate, 'https://endpoint.example/mcp')) throw new Error('--install-link-template requires a credential-free HTTPS template containing {url}');
   return options;
 }
 
@@ -65,37 +39,14 @@ async function ask(question) {
   try { return (await prompt.question(question)).trim(); } finally { prompt.close(); }
 }
 
-export function clientRequirements(options, defaults = {}, profile = {}) {
-  return {
-    clientReach: options.clientReach,
-    httpsRequired: options.clientReach === 'internet' || options.transport === 'https' || (defaults.httpsRequired === true && (!defaults.clientReach || defaults.clientReach === options.clientReach)) || profile.httpsRequired === true,
-    sse: options.sse === true || defaults.sse === true || profile.sse === true,
-    streamableHttp: options['streamable-http'] === true || defaults.streamableHttp === true || profile.streamableHttp === true,
-    oauthDcr: options['oauth-dcr'] === true || defaults.oauthDcr === true || profile.oauthDcr === true,
-  };
-}
-
 // Every session, service route and durable route in one home. Each entry is a fresh observation.
 async function inventory(home, routeId) {
   const { statusRoutes } = await import('../packages/gozar-node/durable-route.mjs');
   const { routes: durableRoutes, stoppedRoutes } = await statusRoutes({ routeId, home });
   if (routeId !== undefined) return { schemaVersion: 1, durableRoutes, stoppedRoutes };
   const { statusServices } = await import('../packages/gozar-node/service.mjs');
-  const sessions = [];
-  let names = [];
-  try { names = await readdir(home); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  for (const name of names.sort()) {
-    const match = /^port-([0-9]+)$/.exec(name);
-    if (!match) continue;
-    const directory = join(home, name), port = Number(match[1]);
-    try {
-      const reply = await control(directory, { type: 'status' }, 5000);
-      sessions.push({ port, phase: reply.snapshot?.phase ?? 'unknown', origin: reply.snapshot?.phase === 'published-ready' ? reply.snapshot.published ?? null : null, targetCheck: await sessionTargetCheck(port) });
-    } catch {
-      const journal = new Journal(directory); await journal.load();
-      sessions.push({ port, phase: Object.keys(journal.value.owned).length ? 'cleanup-pending' : 'not-running', origin: null });
-    }
-  }
+  const { sessionInventory } = await import('../packages/gozar-node/session-directory.mjs');
+  const sessions = await sessionInventory(home);
   const serviceRoutes = (await statusServices({ home })).routes.filter(route => route.ownership === 'external-owned');
   return { schemaVersion: 1, sessions, serviceRoutes, durableRoutes, stoppedRoutes };
 }
@@ -103,7 +54,7 @@ function renderInventory(reply) {
   if (reply.error) return `Routes: unavailable (${reply.error})`;
   const lines = [];
   if (reply.sessions) {
-    lines.push('Sessions:', ...(reply.sessions.length ? reply.sessions.map(item => `  port ${item.port}  ${item.phase}${item.origin ? '  ' + item.origin : ''}${item.targetCheck ? `  target: ${item.targetCheck}` : ''}`) : ['  none']));
+    lines.push('Sessions:', ...(reply.sessions.length ? reply.sessions.map(item => `  port ${item.port}  ${item.state}${item.origin ? '  ' + item.origin : ''}${item.earlierVersion ? '  (recorded by an earlier Gozar version)' : ''}${item.cleanup === 'unconfirmed' ? '  cleanup unconfirmed' : ''}${item.targetCheck ? `  target: ${item.targetCheck}` : ''}${item.error ? `  (${item.error})` : ''}`) : ['  none']));
     lines.push('Service routes:', ...(reply.serviceRoutes.length ? reply.serviceRoutes.map(item => `  ${item.origin} -> ${item.target}  ${item.verification.status}`) : ['  none']));
   }
   lines.push('Durable routes:', ...(reply.durableRoutes.length ? reply.durableRoutes.map(item =>
@@ -127,12 +78,6 @@ export async function main(argv = process.argv.slice(2)) {
     await serviceMain(argv.slice(1));
     return;
   }
-  if (argv[0] === '--daemon') {
-    const directory = argv[1];
-    try { await serve(directory); }
-    catch (error) { await atomicWrite(join(directory, 'failure.json'), failureRecord(error)); process.exitCode = 1; }
-    return;
-  }
   let options;
   try { options = parseArgs(argv); } catch (error) { error.userInput = true; throw error; }
   if (options.command === 'demo-server') {
@@ -149,7 +94,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (['help', '--help'].includes(options.command)) {
     console.log('Service routes (existing owner-managed ingress):\n  gozar service add --origin URL --target HOST:PORT [--verify-cmd COMMAND] --json\n  gozar service status [--origin URL] --json\n  gozar service remove --origin URL --json\n');
     console.log('Routes by requirement (requests are JSON files; --json prints one envelope, progress goes to stderr):\n  gozar catalog --query-file FILE [--route NAME] --json\n  gozar ensure --query-file FILE [--approval-file FILE] [--reconsent] --json\n  gozar adopt --query-file FILE --approval-file FILE --handover-file FILE --json\n  gozar expose --query-file FILE --approval-file FILE [--wait allocated|verified] --json   (attached: close stdin to end it)\n  gozar configure --query-file FILE --provider-id ID --json   (descriptor prompts; stores credentials)\n  gozar setup ACTION_ID --query-file FILE --provider-id ID --approval-file FILE [--secret-file FILE | --value VALUE | --prompt] --json\n  gozar setup-operation reserve|read|run|cancel --request-file FILE [--secret-file FILE | --browser-handoff] --json\n  gozar preference show|set [--profile-home DIR] [--expected-revision N] [--prefer REF ...]\n  gozar suspend --route ID --json\n  gozar suspend --handle-file FILE --json\n  gozar routes --home DIR [--owner OWNER] --json   (owned recovery records)\n  gozar route-status --handle-file FILE --json\n  gozar close --handle-file FILE --json\n  gozar review-consent --handle-file FILE --json\n  gozar approve-consent --handle-file FILE --approval-file FILE --json\n  gozar watch --handle-file FILE --json   (one event per line)\nApproval and secret files must be private (mode 0600). Exit codes: 0 ok; 2 requirements, setup or unsupported; 3 missing or stale approval, or no such route; 1 other errors.\n');
-    console.log('Gozar\n  gozar demo-server [--port N]\n  gozar expose --port N [--client-reach internet|tailnet|lan|this-device|unknown] [--origin URL] [--lifetime-ms N]\n  gozar detect --port N\n  gozar status [--port N | --route ID]\n  gozar health [--port N]\n  gozar update-origin --origin URL [--port N]\n  gozar stop [--port N | --route ID]\n  gozar allow --route ID [--yes]\n\n--yes approves only the displayed selected route and exact loopback target.\n--via NAME selects a way by short name or adapter ID. --adapter ID is also supported.\n--verbose prints full engineering detail. --json returns unchanged machine-readable status.\n--install-link-template HTTPS_TEMPLATE supplies a client install link using {url}; only the link is printed.\n--alternatives lists usable ways with their setup status, then asks for approval. No route is installed automatically.\n--probe-directory PATH selects the private challenge/receipt channel for the trusted outside verifier.\n--sse --streamable-http --oauth-dcr require those protocol checks; no inferred success.\n--operational opts into only the operational plans listed in the adapter manifest.\nLAN: --bind-address IP --firewall-ack IP records your exact-interface firewall approval.\n--transport http|https|tls|tcp and --client-profile ID select catalog data; unsupported modes remain blocked.');
+    console.log('Gozar\n  gozar demo-server [--port N]\n  gozar status [--port N | --route ID]   (sessions, service routes and durable routes in this home)\n  gozar stop [--port N | --route ID]   (closes the recorded session on a port, or a durable route)\n  gozar allow --route ID [--yes]\n\nA session is opened with `ensure`/`expose --query-file`; every provider runs the same generic session runtime.\n--json returns machine-readable output. --verbose prints full engineering detail.');
     return;
   }
   const home = defaultHome();
@@ -180,179 +125,35 @@ export async function main(argv = process.argv.slice(2)) {
     console.log(options.json ? JSON.stringify(reply) : renderInventory(reply));
     return;
   }
-  // Bare status keeps the last session's output, JSON shape and exit, and adds the inventory.
-  let withInventory = false;
-  if (!options.port && ['status', 'health', 'update-origin', 'stop'].includes(options.command)) {
-    try { options.port = JSON.parse(await readFile(join(home, 'last.json'), 'utf8')).port; withInventory = options.command === 'status'; }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
-  if (options.command === 'status' && !options.port) {
-    const reply = await inventory(home);
+  if (options.command === 'status') {
+    // An unreadable home is reported inside the inventory, with a failing exit; it is never read as "no routes".
+    const reply = await inventory(home).catch(error => ({ schemaVersion: 1, error: error.message }));
+    if (reply.error) process.exitCode = 1;
+    else if (options.port) reply.sessions = reply.sessions.filter(item => item.port === options.port);
     console.log(options.json ? JSON.stringify(reply) : renderInventory(reply));
     return;
   }
-  // A session cannot take a listener a durable route holds: a read-only check before detection,
-  // then the reservation, with the selected adapter's provider ports, just before launch.
-  if (options.command === 'expose' && options.port) {
-    const { durableListenerHeld } = await import('../packages/gozar-node/durable-route.mjs');
-    if (await durableListenerHeld({ home, port: options.port })) throw new Error(`Another session or route already holds this listener (127.0.0.1:${options.port}); see gozar status`);
-  }
-  if (!options.port) throw new Error('Supply the exact local service port with --port N');
-  if (options.command === 'update-origin' && !options.origin) throw new Error('update-origin requires --origin with the exact new HTTPS origin');
-  const directory = join(home, `port-${options.port}`);
-  let adapters = await loadCatalog(root, { operational: true });
-  const activeIds = await loadActiveDrop(root);
-  if (options.adapterId && options.command === 'expose') {
-    const operational = adapters.find(adapter => adapter.id === options.adapterId && adapter.planVersion === 1 && adapter.admission?.state === 'admitted');
-    if (!activeIds.includes(options.adapterId) && !operational) throw new Error('Selected route is not available in this version. Run detect to see available routes.');
-    const definition = await loadDefinition(root, options.adapterId);
-    adapters = [...adapters.filter(adapter => adapter.id !== definition.id), definition];
-  }
-  const print = reply => {
-    const view = options.command === 'detect' ? reply : { ...reply, snapshot: exposeSnapshot(reply.snapshot, activeIds) };
-    if (['cleanup-pending', 'stopping'].includes(view.snapshot?.phase) || view.localCleanupFailures?.length) {
-      view.nextAction = { command: cliCommand('stop', options.port), expectedSuccess: 'Exposure stopped, with no remaining cleanup failures.' };
-    } else if (view.snapshot?.phase === 'unknown') {
-      view.nextAction = { command: cliCommand('expose', options.port), expectedSuccess: 'The guided setup starts a fresh controller for this service.' };
-    } else if (['failed', 'blocked', 'degraded'].includes(view.snapshot?.phase)) {
-      const immutableLoss = adapters.some(adapter => adapter.id === view.snapshot.adapterId && adapter.originPolicy === 'immutable') &&
-        view.snapshot.lastRouteChange && !view.snapshot.candidate && !view.snapshot.published;
-      if (view.action?.recheckCommand === 'stop' || immutableLoss) {
-        if (immutableLoss && view.action?.recheckCommand !== 'stop') view.action = { kind: 'external', instruction: 'Stop the current session and start a new route.', recheckCommand: 'stop' };
-        view.nextAction = { command: cliCommand('stop', options.port), expectedSuccess: 'Stop the session, then start a new route.' };
-      } else {
-        view.nextAction = { command: cliCommand('health', options.port), expectedSuccess: 'Route checks pass and a validated URL is printed.' };
-      }
-    }
-    // The inventory is additive: its failure is reported inside it, never in place of the session reply.
-    const extra = withInventory ? inventory(home).catch(error => ({ schemaVersion: 1, error: error.message })) : null;
-    if (!extra) { console.log(options.json ? JSON.stringify(view) : render(view, adapters, options)); return; }
-    return extra.then(inv => console.log(options.json ? JSON.stringify({ ...view, inventory: inv }) : `${render(view, adapters, options)}\n\n${renderInventory(inv)}`));
-  };
-  if (['status', 'health', 'update-origin', 'stop'].includes(options.command)) {
-    try { await print(options.command === 'stop' ? await stopSession(directory) : await control(directory, { type: options.command, ...(options.command === 'update-origin' ? { origin: options.origin } : {}) }, 120_000)); }
-    catch (error) {
-      if (options.command === 'stop') {
-        try { await print(await recoverStop(directory)); return; }
-        catch (recoveryError) { error = recoveryError; }
-      }
-      const journal = new Journal(directory); await journal.load();
-      // Historical state is useful for recovery, but never presented as current readiness.
-      const debt = Object.keys(journal.value.owned).length;
-      const reply = { snapshot: { phase: debt ? 'cleanup-pending' : 'unknown', candidate: null, published: null, limitations: [
-        `Controller unavailable: ${error.message}`, ...(debt ? ['Owned resources remain recorded; restart reconciliation is required.'] : [])] }, journalPath: journal.path };
-      await print(reply); process.exitCode = 1;
-    }
-    return;
-  }
-  if (options.origin) {
-    const external = adapters.filter(adapter => adapter.ownership === 'external-owned' && (!options.adapterId || adapter.id === options.adapterId));
-    if (external.length !== 1) throw new Error('--origin requires exactly one external-owned catalog route');
-    external[0].endpoint = options.origin; options.adapterId = external[0].id;
-  }
-  const defaults = options.command === 'expose' ? await loadDropRequirements(root) : {};
-  const requirements = clientRequirements(options, defaults);
-  if (options.transport) {
-    // The current core protocol only models HTTP(S); never silently reinterpret passthrough as HTTPS.
-    if (!['http', 'https'].includes(options.transport)) throw new Error('Selected transport needs an admitted core transport contract; no substitution is available.');
-    if (options.clientReach === 'internet' && options.transport === 'http') throw new Error('Internet clients require public HTTPS.');
-    requirements.httpsRequired = options.transport === 'https' || requirements.httpsRequired;
-  }
-  const step = await loadCore();
-  // Detection has no prompts or mutation authority. Planner state is separate from the live session journal.
-  const memoryJournal = { value: { owned: {}, intents: {} }, async save() {}, async intent() { throw new Error('Detection cannot persist mutation intents'); } };
-  const planner = new Controller({ step, journal: memoryJournal, adapters, requirements, targetPort: options.port,
-    driver: new EffectDriver({ adapters, journal: memoryJournal, targetPort: options.port, sessionId: 'planning' }), sessionId: 'planning' });
-  await planner.command({ type: 'detect' });
-  if (options.clientReach === 'unknown' && options.command === 'expose') {
-    const question = 'Where does the app that will use this run?';
-    if (!process.stdin.isTTY) {
-      if (options.json) console.log(JSON.stringify({ action: { kind: 'choose', title: question, choices: reaches.slice(0, 4) } }));
-      else console.log(`${question}\n${reaches.slice(0, 4).join(' | ')}\nFor an internet client, run: ${cliCommand('expose', options.port)} --client-reach internet`);
-      process.exitCode = 2; return;
-    }
-    options.clientReach = await ask(`${question}\n${reaches.slice(0, 4).join(' | ')}\n> `);
-    if (!reaches.slice(0, 4).includes(options.clientReach)) throw new Error('Choose internet, tailnet, lan or this-device');
-  }
-  Object.assign(requirements, clientRequirements(options, defaults));
-  if (options.clientReach === 'internet' && options.transport === 'http') throw new Error('Internet clients require public HTTPS. Run again with --transport https.');
-  const planned = await planner.command({ type: 'recommend' });
-  if (options.command === 'detect' && !options.json) console.log(renderDetection({ snapshot: planned.snapshot }, adapters, await loadActiveDrop(root)));
-  else if (options.command === 'detect') print({ snapshot: planned.snapshot, action: planned.action });
-  if (options.command === 'detect') return;
-  const recommendation = planned.snapshot.recommendations?.find(item => activeIds.includes(typeof item === 'string' ? item : item.adapterId));
-  const selectedId = options.adapterId ?? (typeof recommendation === 'string' ? recommendation : recommendation?.adapterId);
-  if (!selectedId) throw new Error('No eligible route. Check the listed prerequisites and client requirements, then run expose again.');
-  const selected = adapters.find(adapter => adapter.id === selectedId);
-  if (!selected) throw new Error('Selected route is not in the admitted catalog');
-  if (selected.ownership !== 'external-owned' && !selected.recipes?.create) throw new Error(`${selected.copy?.fix ?? selected.fix ?? 'This route has detection data only; no admitted create recipe is available.'}`);
-  const clientProfile = options.clientProfileId ? selected.clientProfiles?.find(profile => profile.id === options.clientProfileId) : selected.clientProfile ?? selected.profile;
-  if (options.clientProfileId && !clientProfile) throw new Error('Client profile is not in this route catalog record');
-  if (clientProfile) { selected.clientProfile = clientProfile; }
-  if (options.installLinkTemplate) selected.clientProfile = { ...selected.clientProfile, installLinkTemplate: options.installLinkTemplate };
-  const profileRequirements = clientProfile?.clientRequirements;
-  if (profileRequirements) Object.assign(requirements, clientRequirements(options, requirements, profileRequirements));
-  if (requirements.httpsRequired && selected.capabilities?.https === false) throw new Error(`This route provides HTTP. Configure a trusted HTTPS listener, then run ${cliCommand('expose', options.port)} --origin https://your-service.example.`);
-  const interfaceInput = Object.values(selected.bindings ?? {}).some(binding => binding.type === 'selected-interface-address');
-  const originInput = Object.values(selected.bindings ?? {}).some(binding => binding.type === 'credential-free-https-origin');
-  const requestInput = async action => {
-    if (options.json) console.log(JSON.stringify({ action }));
-    else console.log(`${action.title}\n${action.instruction}`);
-    process.exitCode = 2;
-  };
-  if (originInput && !options.origin) {
-    await requestInput({ kind: 'input', field: 'origin', title: 'Choose the existing HTTPS origin', instruction: `Run ${cliCommand('expose', options.port)} --origin https://your-service.example` }); return;
-  }
-  if (interfaceInput) {
-    if (options.localName) throw new Error('Local-name routing needs separate DNS proof. Run again with --bind-address IP and omit --local-name.');
-    const addresses = Object.values(networkInterfaces()).flat().filter(address => !address.internal && selectedInterfaceAddress(address.address)).map(address => address.address);
-    if (!options.bindAddress) {
-      if (!options.json && process.stdin.isTTY) {
-        options.bindAddress = await ask(`Choose the exact interface address: ${addresses.join(', ')}\n> `);
-        if (!addresses.includes(options.bindAddress)) throw new Error('Choose a listed interface address with --bind-address IP');
-      } else { await requestInput({ kind: 'input', field: 'bindAddress', title: 'Choose a local network interface', choices: addresses, instruction: `Run ${cliCommand('expose', options.port)} --client-reach ${options.clientReach} --bind-address IP` }); return; }
-    }
-    if (!addresses.includes(options.bindAddress)) throw new Error(`Selected interface is not currently assigned. Run ${cliCommand('expose', options.port)} --client-reach ${options.clientReach} without --bind-address to choose a current interface.`);
-    for (const [key, flag, title] of [['firewallAck', '--firewall-ack', 'Approve inbound traffic on this exact interface and an ephemeral HTTP port']]) {
-      if (options[key]) continue;
-      if (!options.json && process.stdin.isTTY) {
-        if (!['y', 'yes'].includes((await ask(`${title}: ${options.bindAddress}, forward to http://127.0.0.1:${options.port}? [y/N] `)).toLowerCase())) return;
-        options[key] = options.bindAddress;
-      } else { await requestInput({ kind: 'confirm', field: key, title, target: { bindAddress: options.bindAddress, port: 0, targetHost: '127.0.0.1', targetPort: options.port, scheme: 'http' }, instruction: `Repeat this command with ${flag} ${options.bindAddress}` }); return; }
-    }
-  }
-  if (!options.json) print({ snapshot: { ...planned.snapshot, adapterId: selectedId }, action: planned.action });
-  if (!options.yes) {
-    if (!process.stdin.isTTY) throw new Error('Exposure requires approval. Review the selected route and run again with --yes.');
-    if (!['y', 'yes'].includes((await ask(`Expose it with ${selected.displayName ?? selected.label ?? selected.id}? [y/N] `)).toLowerCase())) return;
-  }
-  const { reserveSession } = await import('../packages/gozar-node/durable-route.mjs');
-  const providerPort = selected.bindings?.port;
-  await reserveSession({ home, port: options.port, providerResource: selected.providerResource ?? null,
-    providerPorts: providerPort ? (providerPort.value !== undefined ? [providerPort.value] : providerPort.candidates ?? []) : [] });
-  const reply = await launch(directory, { adapters, requirements, targetPort: options.port, adapterId: selectedId,
-    lifetimeMs: options.lifetimeMs, origin: options.origin, bindAddresses: options.bindAddress ? [options.bindAddress] : [], firewallApproved: Boolean(options.firewallAck), clientProfileId: options.clientProfileId, operational: selected.planVersion === 1, probeDirectory: options.probeRequest ? dirname(resolve(options.probeRequest)) : options.probeDirectory ?? process.env.GOZAR_PROBE_DIRECTORY, probeRequest: options.probeRequest && resolve(options.probeRequest), probeReceipt: options.probeReceipt && resolve(options.probeReceipt), probeExecutorId: options.probeExecutorId, probeWaitMs: options.probeWaitMs, observeProcessOutput: options['observe-process-output'] === true, consent: true, approveOrigin: true }, fileURLToPath(import.meta.url)).catch(error => { error.exposureAttempt = true; throw error; });
-  await atomicWrite(join(home, 'last.json'), { port: options.port });
-  print(reply);
-  if (['failed', 'blocked', 'unknown', 'degraded', 'cleanup-pending'].includes(reply.snapshot?.phase)) process.exitCode = 1;
+  // `stop --port N` closes the one session recorded for that port. Durable routes use `stop --route`.
+  if (!options.port) throw new Error('Supply the exact local service port with --port N, or a durable route with --route ID');
+  const { stopSessionByPort } = await import('../packages/gozar-node/session-directory.mjs');
+  const view = await stopSessionByPort(home, options.port);
+  const confirmed = view.cleanup?.state === 'confirmed';
+  console.log(options.json ? JSON.stringify(view) : confirmed ? `Stopped the session on port ${options.port}.` :
+    `The session on port ${options.port} is not confirmed stopped: ${view.cleanup?.message ?? 'cleanup remains recorded'}. Run ${cliCommand('stop', options.port)} again.`);
+  if (!confirmed) process.exitCode = 1;
 }
 
 if (process.argv[1] && await realpath(resolve(process.argv[1])).catch(() => null) === fileURLToPath(import.meta.url)) {
   main().catch(error => {
-    const argv = process.argv.slice(2), port = argv[argv.indexOf('--port') + 1];
+    const argv = process.argv.slice(2);
     if (argv[0] === 'service') {
       if (argv.includes('--json')) console.log(JSON.stringify({ schemaVersion: 1, error: { code: 'SERVICE_ERROR', message: error.message } }));
       else console.error(`Gozar service: ${error.message}`);
       process.exitCode = 1;
       return;
     }
-    const next = cliCommand('detect', /^\d+$/.test(port ?? '') ? port : 'N');
-    if (argv.includes('--json')) console.log(JSON.stringify({ error: error.message, action: { kind: 'repair', instruction: `Run ${next} to inspect prerequisites.`, command: next, expectedSuccess: 'Detection lists route prerequisites for this service port.' } }));
-    else {
-      const message = error.userInput ? error.message : plainCaveat(error.message).plain ?? 'The command could not finish. The cause was not recorded. Use --verbose for details.';
-      const recovery = error.exposureAttempt ? `Public access or a background process may remain. Cleanup is not confirmed.\nStop: ${cliCommand('stop', /^\d+$/.test(port ?? '') ? port : 'N')}\nInspect first: ${cliCommand('health', /^\d+$/.test(port ?? '') ? port : 'N')}` : `Next: ${next}`;
-      console.error(`Gozar: ${message}\n${recovery}${argv.includes('--verbose') ? `\nFull detail: ${error.message}` : ''}`);
-    }
+    if (argv.includes('--json')) console.log(JSON.stringify({ error: error.message }));
+    else console.error(`Gozar: ${error.userInput ? error.message : plainCaveat(error.message).plain ?? 'The command could not finish. The cause was not recorded. Use --verbose for details.'}${argv.includes('--verbose') ? `\nFull detail: ${error.message}` : ''}`);
     process.exitCode = 1;
   });
 }

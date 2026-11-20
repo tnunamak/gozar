@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixture } from './helpers.mjs';
 import { loadCore } from '../../packages/gozar-node/core.mjs';
-import { stopSession, recoveryAdapters } from '../../packages/gozar-node/daemon.mjs';
+import { recoveryAdapters } from '../../packages/gozar-node/session-recipe.mjs';
+import { closeLegacySession, legacyControllerAlive } from '../../packages/gozar-node/legacy-session-record.mjs';
 import { atomicWrite, processIdentity } from '../../packages/gozar-node/journal.mjs';
 import { EffectDriver } from '../../packages/gozar-node/driver.mjs';
 
@@ -22,32 +23,45 @@ async function oldController(t, stopRequested = true) {
   return { directory, journal, child };
 }
 
-test('stop hands an authenticated older controller to the current reconciler', async t => {
+// Sessions an earlier version started leave a journal and a controller record. This version never runs that controller's
+// protocol: a live one is a named debt for its owner, a dead or replaced one is recovered from the journal alone.
+
+test('a live earlier controller is never asked, handed over or signalled: close is cleanup debt and its record is untouched', async t => {
   const { directory, journal, child } = await oldController(t);
-  const self = await processIdentity(process.pid);
-  const result = await stopSession(directory);
-  assert.equal(result.controllerHandover, true);
+  assert.equal((await legacyControllerAlive(directory)).alive, true);
+  await assert.rejects(closeLegacySession(directory, null), { code: 'cleanup_debt' });
+  assert.ok(await processIdentity(child.pid), 'the earlier controller still runs');
+  await assert.rejects(readFile(join(directory, 'handed-over')), { code: 'ENOENT' });
+  await journal.load();
+  assert.equal(journal.value.snapshot.phase, 'cleanup-pending', 'the recorded phase is not rewritten');
+});
+
+test('a controller that has not durably fenced stop is preserved the same way', async t => {
+  const { directory, child } = await oldController(t, false);
+  await assert.rejects(closeLegacySession(directory, null), { code: 'cleanup_debt' });
+  assert.ok(await processIdentity(child.pid));
+  await assert.rejects(readFile(join(directory, 'handed-over')), { code: 'ENOENT' });
+});
+
+test('a replaced controller birth identity is never signalled; the journal alone is recovered', async t => {
+  const { directory, journal, child } = await oldController(t);
+  await atomicWrite(join(directory, 'control.json'), { pid: child.pid, startIdentity: 'replaced', nonce: 'old-controller-nonce' });
+  assert.equal((await legacyControllerAlive(directory)).alive, false);
+  const result = await closeLegacySession(directory, null);
   assert.equal(result.snapshot.phase, 'stopped');
-  assert.equal(await processIdentity(child.pid), null);
-  assert.equal(await processIdentity(process.pid), self);
-  assert.equal(await readFile(join(directory, 'handed-over'), 'utf8'), 'yes');
+  assert.ok(await processIdentity(child.pid), 'the process under the replaced identity is not ours to stop');
+  await assert.rejects(readFile(join(directory, 'handed-over')), { code: 'ENOENT' });
   await journal.load(); assert.deepEqual(journal.value.owned, {});
 });
 
-test('a controller that has not durably fenced stop is preserved', async t => {
-  const { directory, child } = await oldController(t, false);
-  await assert.rejects(stopSession(directory), /Controller changed during stop/);
-  assert.ok(await processIdentity(child.pid));
-  await assert.rejects(readFile(join(directory, 'handed-over')), { code: 'ENOENT' });
+test('a missing journal is cleanup debt, never confirmed absence', async t => {
+  const { directory } = await fixture(t, {});
+  await assert.rejects(closeLegacySession(directory, null), { code: 'cleanup_debt' });
 });
 
-test('a replaced controller birth identity is never signalled', async t => {
-  const { directory, child } = await oldController(t);
-  await atomicWrite(join(directory, 'control.json'), { pid: child.pid, startIdentity: 'replaced', nonce: 'old-controller-nonce' });
-  const result = await stopSession(directory);
-  assert.equal(result.snapshot.phase, 'stopped');
-  assert.ok(await processIdentity(child.pid));
-  await assert.rejects(readFile(join(directory, 'handed-over')), { code: 'ENOENT' });
+test('a stale handle for a replaced session is route_conflict, not a close', async t => {
+  const { directory } = await oldController(t);
+  await assert.rejects(closeLegacySession(directory, 'a-different-session'), { code: 'route_conflict' });
 });
 
 test('legacy cleanup metadata requires an exact installed recipe and binding match', () => {

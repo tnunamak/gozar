@@ -385,41 +385,20 @@ export async function listRecordedRoutes({home,owner}={},deps={}){
    put(record.view,record.phase==='terminal'?40:record.phase==='resource-removed'?30:-1);
   }
  };
- const boundContext=(bootstrap,native=false)=>{
-  const binding=native?bootstrap.embedding:bootstrap;
-  return typeof deps.registryId==='string'&&deps.registryId.length>0&&binding?.registryId===deps.registryId&&
+  const boundContext=bootstrap=>typeof deps.registryId==='string'&&deps.registryId.length>0&&bootstrap?.registryId===deps.registryId&&
    Array.isArray(deps.adapters)&&deps.adapters.some(adapter=>adapter.id===bootstrap.adapterId);
- };
- // Both controller families authenticate the live incarnation. A subsequent disk
+ // The generic controller authenticates the live incarnation. A subsequent disk
  // binding check prevents a replacement during the await from acquiring its reply.
- const observe=async(root,bootstrap,handle,fallback,native=false)=>{
-  if(!boundContext(bootstrap,native))return history(fallback);
+ const observe=async(root,bootstrap,handle,fallback)=>{
+  if(!boundContext(bootstrap))return history(fallback);
   try{
-   let view,expiresAtMs;
-   if(native){
-    const binding=bootstrap.embedding;
-    if(typeof bootstrap.owner!=='string'||!bootstrap.owner||
-       !sameHandle(binding?.handle,handle)||binding.request?.owner!==bootstrap.owner||
-       binding.request?.home!==home||bootstrap.sessionId!==handle.id.split(':')[1])
-     throw gozarError('route_conflict','Native observation binding changed');
-    const {observeSession}=await import('./daemon.mjs');
-    const reply=await observeSession(root,{sessionId:bootstrap.sessionId,handleGeneration:handle.generation});
-    if(reply.owner!==bootstrap.owner||reply.snapshot?.adapterId!==bootstrap.adapterId||
-       reply.proofSubject?.instanceId!==binding.identity?.instanceId||reply.proofSubject?.bootId!==binding.identity?.bootId)
-     throw gozarError('route_conflict','Native observation identity changed');
-    view=projectSession(reply,{handle,now:Date.now(),...await propertiesFor(bootstrap.adapterId,deps,'session')});
-    expiresAtMs=reply.expiresAtMs??reply.snapshot?.expiresAtMs;
-    // A session must have a finite absolute lifetime, never an inferred duration.
-    if(!Number.isFinite(expiresAtMs))return history(view);
-   }else{
-    const {observeAttachedRoute}=await import('./attached-route.mjs');
-    view=await observeAttachedRoute({home,owner:bootstrap.owner,handle});
-    expiresAtMs=bootstrap.expiresAtMs??null;
-   }
+   const {observeAttachedRoute}=await import('./attached-route.mjs');
+   const view=await observeAttachedRoute({home,owner:bootstrap.owner,handle});
+   const expiresAtMs=bootstrap.expiresAtMs??null;
    const after=await optionalRead(join(root,'bootstrap.json'));
    if(!after||canonicalDigest(after)!==canonicalDigest(bootstrap)||!sameHandle(view.handle,handle))
     throw gozarError('route_conflict','Controller binding changed during enumeration');
-   current.set(routeKey(handle),{view,expiresAtMs,root,bootstrap,native});
+   current.set(routeKey(handle),{view,expiresAtMs,root,bootstrap});
    return view;
   }catch(error){
    if(error.code==='route_conflict')throw error;
@@ -463,11 +442,13 @@ export async function listRecordedRoutes({home,owner}={},deps={}){
    put({...view,operationId:bootstrap.operationId??view.operationId??null},record.resourceRemoval?30:view.cleanup?.state==='confirmed'?40:10);
    continue;
   }
+  // A session recorded by an earlier version: history only. Its controller is never run or asked, and a record that cannot
+  // be read is an error, never a sign that the provider resource is gone.
   const journal=await optionalRead(join(root,'session.json'));
-  if(!journal?.snapshot)throw gozarError('provider_unavailable','The native session recovery snapshot is unreadable');
+  if(!journal?.snapshot)throw gozarError('provider_unavailable','The earlier-version session recovery snapshot is unreadable');
   const handle={kind:'session',id:entry.name+':'+journal.snapshot.sessionId,generation:1};
   const fallback=projectSession(journal.embeddingView??{snapshot:journal.snapshot},{handle,properties:unknownProperties()});
-  put({...await observe(root,bootstrap,handle,fallback,true),operationId:bootstrap.operationId??fallback.operationId??null},10);
+  put({...history(fallback),operationId:bootstrap.operationId??fallback.operationId??null},10);
  }
  for(const entry of await names(join(home,'services'))){
   if(!entry.isFile()||!/^[a-f0-9]{64}\.json$/.test(entry.name))continue;
@@ -483,17 +464,12 @@ export async function listRecordedRoutes({home,owner}={},deps={}){
   if(!after||canonicalDigest(after)!==canonicalDigest(observed.bootstrap)){
    put(history(observed.view),20);continue;
   }
-  const record=await optionalRead(join(observed.root,observed.native?'session.json':'state.json'));
+  const record=await optionalRead(join(observed.root,'state.json'));
   if(!record){put(history(observed.view),20);continue;}
-  if(observed.native){
-   if(record.snapshot?.sessionId!==observed.bootstrap.sessionId){put(history(observed.view),20);continue;}
-   if(record.snapshot?.phase!=='published-ready')put(history(observed.view),20);
-  }else{
-   if(!sameHandle(record.handle,observed.view.handle))throw gozarError('route_conflict','Controller generation changed');
-   if(record.resourceRemoval)put(referenceCleanupDebt(record.lastView),30);
-   else if(record.phase==='released'||record.lastView?.cleanup?.state==='confirmed')put(record.lastView,40);
-   else if(record.phase==='failed'||record.phase==='blocked')put(history(observed.view),20);
-  }
+  if(!sameHandle(record.handle,observed.view.handle))throw gozarError('route_conflict','Controller generation changed');
+  if(record.resourceRemoval)put(referenceCleanupDebt(record.lastView),30);
+  else if(record.phase==='released'||record.lastView?.cleanup?.state==='confirmed')put(record.lastView,40);
+  else if(record.phase==='failed'||record.phase==='blocked')put(history(observed.view),20);
  }
  await lifecycle();
  const now=Date.now();
@@ -501,8 +477,8 @@ export async function listRecordedRoutes({home,owner}={},deps={}){
   const observed=current.get(routeKey(view.handle));
   if(!observed||!sameHandle(observed.view.handle,view.handle)||(priorities.get(routeKey(view.handle))??0)>=30)return view;
   // A controller that answered and is still allocating has published nothing and holds no proof to expire.
-  // The exception is attached only: a creating session keeps ordinary session semantics, however it is run;
-  // generic execution is not the native daemon, and a missing session expiry never proves an attached kind.
+  // The exception is attached only: a creating session keeps ordinary session semantics, and a missing
+  // session expiry never proves an attached kind.
   if(view.handle.kind==='attached'&&view.state==='creating'&&view.cleanup?.state==='none'&&view.published===null&&view.origin===null&&
     (observed.expiresAtMs===null||Number.isFinite(observed.expiresAtMs)&&observed.expiresAtMs>now))return view;
   const until=view.verification?.validUntil;

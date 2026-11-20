@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadCore } from '../../packages/gozar-node/core.mjs';
-import { Controller } from '../../packages/gozar-node/controller.mjs';
+import { SessionAllocation } from '../../packages/gozar-node/session-allocation.mjs';
 import { fixture } from './helpers.mjs';
 
 const machineAdapter = { id: 'machine', audience: 'local', ownership: 'owned', capabilities: { https: false }, recipes: {
@@ -72,7 +72,7 @@ test('controller stop fences a slow effect before it finishes, and preserves fai
     return { type: 'effect-result', effectId: effect.id, sessionId: effect.sessionId, generation: effect.generation,
       ok: effect.kind === 'persist', result: effect.kind === 'persist' ? { durable: true } : {} };
   } };
-  const controller = new Controller({ step, journal, adapters: [machineAdapter], requirements: { clientReach: 'this-device' }, sessionId: 'test', driver });
+  const controller = new SessionAllocation({ step, journal, adapters: [machineAdapter], requirements: { clientReach: 'this-device' }, sessionId: 'test', driver });
   const start = controller.command({ type: 'start', adapterId: 'machine', consent: true });
   await started;
   const stopping = await controller.command({ type: 'stop' });

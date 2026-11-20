@@ -66,7 +66,9 @@ for (const receipt of [null, {generation: 1, resourceKey: 'synthetic-owned'}]) {
       assert.deepEqual(listed.routes[0].handle,handle);
       assert.equal(listed.routes[0].operationId,'failed-operation');
       let runtimeReads=0;
-      const deps = {get adapters(){runtimeReads++;throw new Error('transient runtime must not be loaded');}};
+      // Without a receipt nothing was created, so no runtime may be loaded. With a receipt the session removes from it (journal-only
+      // recovery, in this process), which needs the registry; the record's adapter is absent from it, so the debt must stay recorded.
+      const deps = receipt ? {adapters:[]} : {get adapters(){runtimeReads++;throw new Error('transient runtime must not be loaded');}};
       for (let i=0;i<2;i++) {
         const view=await closeAttachedRoute({home,handle},deps);
         assert.deepEqual(view.handle,handle);

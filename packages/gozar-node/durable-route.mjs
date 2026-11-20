@@ -431,6 +431,12 @@ export async function reserveSession({ home = defaultHome(), port, providerResou
     return { reserved: true };
   });
 }
+/** Once a session has settled on one provider port, its reservation names only that port (it reserved every candidate to start). */
+export async function narrowSessionReservation({ home, port, providerPorts }) {
+  const file = join(await canonicalHome(home, false), `port-${port}`, 'reservation.json');
+  const current = JSON.parse(await readFile(file, 'utf8'));
+  await atomicWrite(file, { ...current, providerPorts });
+}
 // Read-only, for service routes: the route ID of a durable record published at origin, if any.
 // home must already be canonical.
 export async function durableRouteAt(home, origin, deps) {
@@ -448,11 +454,12 @@ export async function durableListenerHeld({ home = defaultHome(), port }) {
 
 // Read-only: which Gozar route or live session in this home holds each of these provider ports. A port that no
 // Gozar route holds is absent from the answer: whatever holds it is not ours. Never creates state.
-export async function portHolders({ home = defaultHome(), providerResource, ports }, deps) {
+export async function portHolders({ home = defaultHome(), providerResource, ports, exceptSessionPort }, deps) {
   let dir, canonical;
   try { dir = await routesDirectory(home, false); canonical = await canonicalHome(home, false); }
   catch (error) { if (['ENOENT', 'unsafe_state_path'].includes(error.code)) return []; throw error; }
-  const table = await reservationTable(canonical, dir);
+  // The asking session's own reservation is not a holder of its own ports.
+  const table = (await reservationTable(canonical, dir)).filter(entry => exceptSessionPort === undefined || entry.owner.sessionPort !== exceptSessionPort);
   return ports.flatMap(port => { const entry = heldBy(table, { resource: providerResource, port }); return entry ? [{ port, ...entry.owner }] : []; });
 }
 

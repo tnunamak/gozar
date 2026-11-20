@@ -6,7 +6,7 @@
 
 ## What the current build already demonstrates
 
-- `gozar expose --port N` asks one client-location question when reach is unknown and gives a concrete non-interactive next command. The no-route-flag journey has now passed tool call, timed SSE, status and stop through an existing public route. `test/node/entrypoint.test.mjs` covers the no-flag CLI path. The CLI still needs the local service port; interactive launch still shows the selected route and exact target for approval.
+- (Historical, 0.4.) `gozar expose --port N` was the session command; it was removed in 0.5.2. Sessions are opened through the route-contract request (`ensure`/`expose --query-file` or the JavaScript API) and run on the one generic session runtime.
 - `gozar demo-server` is available. The committed demo test exercises initialization, tool listing and calling, fresh identity/echo data, timed SSE at both supported paths, and orderly SIGINT/SIGTERM shutdown. Do not create a second demo server.
 - Recovery can clear recorded cleanup debt when a dead owned process and its provider route are both freshly proved absent. Existing tests also preserve debt for a present or changed mapping, malformed readback, expired observations, unsupported removal prerequisites, and a live process identity. The actual stale session repro and three running older controllers were reconciled to stopped with empty ownership records and unchanged foreign routes. Broader reboot/interruption matrix coverage remains with R4.
 - `docs/architecture.md`, `docs/slices.md`, the CLI and client-reach tests already describe and exercise generic client-location filtering. Reuse them; do not add client-name branches or restate the architecture in a new guide.

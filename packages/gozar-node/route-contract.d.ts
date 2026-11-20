@@ -438,23 +438,18 @@ export function readSetupOperation<Interactive extends boolean | undefined = und
 export function cancelSetupOperation(request: SetupOperationRef): Promise<SetupOperation>;
 export function resolveClientAddress(proof: ClientAddressProof, ingress: Ingress): ResolveClientAddressResult;
 
-/**
- * Legacy session options, kept through a version-discriminated overload: a call without
- * `schemaVersion: 1` is the legacy call. Keys mirror the legacy CLI flags in api.mjs.
- */
-export type LegacyExposeOptions = {
-  schemaVersion?: undefined;
-  home?: string; port?: number; clientReach?: string; adapterId?: string; origin?: string; lifetimeMs?: number;
-  bindAddress?: string; firewallAck?: boolean; transport?: string; clientProfileId?: string; probeWaitMs?: number;
-  probeDirectory?: string; probeRequest?: string; probeReceipt?: string; probeExecutorId?: string;
-  installLinkTemplate?: string; yes?: boolean; sse?: boolean; streamableHttp?: boolean; oauthDcr?: boolean; operational?: boolean;
-};
-export type LegacySessionReply = Record<string, unknown>;
-/** Attached usage returns a plain RouteView; see ExposeRequest for who holds the lease. */
+/** Attached and session usage return a plain RouteView; see ExposeRequest for who holds the lease. */
 export function expose(request: ExposeRequest): Promise<RouteView>;
-export function expose(options: LegacyExposeOptions): Promise<LegacySessionReply>;
-export function status(options?: LegacyExposeOptions): Promise<LegacySessionReply>;
-export function stop(options?: LegacyExposeOptions): Promise<LegacySessionReply>;
+/** A session recorded under one port in a Gozar home. `earlierVersion` entries are history of a session an older version started. */
+export type RecordedSession = {
+  port: number; state: string; origin: string | null; cleanup: string;
+  handle?: Handle; earlierVersion?: true; targetCheck?: unknown; error?: string;
+};
+export type SessionPortRef = { home?: string; port?: number };
+/** Reads the sessions recorded in a home; changes nothing. */
+export function status(options?: SessionPortRef): Promise<{ schemaVersion: 1; sessions: RecordedSession[] }>;
+/** Closes the one session recorded for `port`. `cleanup.state` says whether removal is confirmed. */
+export function stop(options: SessionPortRef & { port: number }): Promise<{ schemaVersion: 1; session: Record<string, unknown> }>;
 
 // --- Kept service and hand-back exports (also at @tnunamak/gozar/service) ------------------------
 // The pre-0.2 durable signatures (ensureRoute/adoptRoute with adapterId and approvals tuples, and

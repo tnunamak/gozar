@@ -258,6 +258,11 @@ export class EffectDriver {
         case 'local-forwarder': result = await this.forward(effect); break;
         default: throw new Error('Unsupported effect kind');
       }
+      // A readback that did not run to success saw nothing: an empty document would satisfy every "is absent" assertion.
+      if (effect.recipeRef && effect.operation === 'observe' && effect.kind === 'spawn' && result.exitCode !== 0) {
+        const how = result.exitCode === null ? 'no status' : `status ${result.exitCode}`;
+        throw new Error(`The provider readback exited with ${how}; nothing was observed`);
+      }
       if (effect.recipeRef && effect.operation === 'observe') {
         const observedAtMs = this.nowMs(); result.observation = { authorityRef: randomUUID(), sessionId: this.sessionId, observedAtMs, expiresAtMs: observedAtMs + 5000 };
       }

@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- **A failed session start no longer orphans the host's configuration reference.** A start that fails after the host registered the reference, and before the session controller runs, now releases that
+  exact reference once, or keeps it as retryable debt a later `closeRoute` settles. Before, the reference stayed registered with no record. A close
+  that reports cleanup confirmed now also means the local forwarding (the gate) has stopped accepting, not only that the provider resource is gone.
 - **Late consent checks cannot revive a retired route.** A check that finishes after the owner is lost or the route
   is closed can no longer publish the route or overwrite its recovery facts.
 - **Saved configuration survives a release upgrade.** Storage scope was a hash that included the content registry id,
@@ -19,6 +22,28 @@
   between the recheck and the start of the challenge; the host acknowledgment stays outside that lock. A check whose
   acknowledgment is refused or fails ends the earlier remembered proof for that route generation, newest-started attempt
   wins, and ending one home's route no longer forgets another home's proof for the same route ID.
+
+### Changed
+
+- **One session runtime for all five recipe providers; the earlier session controller is removed.** localhost.run,
+  tunnl.gg, LAN, Tailscale Funnel and Tailscale Serve now run their sessions on the same generic session controller
+  as every other Gozar-allocated session (an owner-kept route such as own-address has no allocation and never needed it), so every provider honours the awaited exact-origin acknowledgment (allocate, announce the exact
+  origin, await the exact acknowledgment, verify only the announced name, publish). Session availability under a
+  declared handler is the 0.5.1 answer for every provider; nothing is advertised `origin-acknowledgment-unsupported`.
+  Their allocation and removal recipes, provider-port reservations, installation-key lease and
+  exactly-once owned removal are unchanged. A session is proven by the session controller, through the effect driver's own checks of
+  the probe the core asked for (exact origin, vantage, this attempt's nonce, freshness, TLS and stream protocols). The default
+  executor is the public relay verifier, a request pinned to a public DNS answer and a public IP for the public vantage only, so a
+  device on the tailnet cannot answer a Funnel proof over the tailnet; a tailnet or LAN proof needs a trusted executor on that
+  network, which the session runtime accepts but no public option supplies in 0.5.2, so it stays unverified and the route is withdrawn, as in 0.5.1. The allocation never runs the core's proof itself, and
+  a stop that arrives while the proof is pending removes the owned resource from the ledger without any proof. A provider readback that exits non-zero is now treated as nothing observed
+  (an unreadable provider is cleanup debt, not absence). The detached `daemon` controller, its CLI commands
+  (`expose --port`, `detect`, `health`, `update-origin`), the human renderer, the `startSession` seam and the adapters' `sessionExecution: 'recipe'`
+  marker are deleted. `gozar status [--port N]` and `gozar stop --port N` remain and read and close sessions through the
+  same runtime; the JavaScript `status` and `stop` helpers no longer run a subprocess, and `expose` accepts only the
+  route request (`schemaVersion: 1`). Session directories recorded by an earlier version are history: they are listed,
+  never executed, and closing one stops only what its journal proves and otherwise reports `cleanup_debt`.
+  Route rotation of a session address is dropped: a rotated address is a lost route and fails closed.
 
 ### Added
 
@@ -36,8 +61,7 @@
   session and attached starts await it in the controller, durable starts await
   the same typed request in-process. A host that declares no handler keeps the
   0.5.1 behavior of verifying immediately after allocation, and a declared
-  handler plus a legacy recipe-session provider is refused `unsupported` rather
-  than verified without acknowledgment.
+  handler keeps the same session availability for every provider (see Changed).
 - **Trusted host declarations of packaged runtime modules.** `createGozar({runtimeModules})`
   names an explicit dependency mode per module: a bundled read-only module
   directory (whose package identity, exact declared version and loadability are
@@ -69,9 +93,6 @@
 
 ### Fixed
 
-- Under a declared `acknowledgeOrigin`, a provider that runs sessions on the legacy
-  daemon controller is advertised `unsupported` (`origin-acknowledgment-unsupported`)
-  for the session kind before consent, matching the refusal `expose` always gave.
 - Under a declared `acknowledgeOrigin`, `watchRoutes` observes instead of proving: it
   no longer asks the host for acknowledgments outside the host's own calls, no longer
   takes the attempt of an overlapping explicit check, and no longer publishes or

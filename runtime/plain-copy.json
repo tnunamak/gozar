@@ -1319,6 +1319,21 @@
       "plain": "Current status check unavailable: the background controller has no current observation yet; retry shortly.",
       "decision": false,
       "kind": "failure"
+    },
+    "The provider readback exited with value; nothing was observed": {
+      "plain": "Removal check failed: Gozar could not read the provider, so it cannot say whether the route is gone.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "No core probe is held for this allocation": {
+      "plain": "Public check failed: Gozar has no pending check to run for this route, so nothing was published.",
+      "decision": false,
+      "kind": "failure"
+    },
+    "The announced origin is not the origin the core asked to have proven": {
+      "plain": "Public check failed: the address the app confirmed is not the address Gozar planned to check, so nothing was published.",
+      "decision": false,
+      "kind": "failure"
     }
   },
   "patterns": [

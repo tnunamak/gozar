@@ -81,7 +81,7 @@ async function operationalMaterialization(t) {
   const { journal } = await fixture(t, {});
   const { EffectDriver } = await import('../../packages/gozar-node/driver.mjs');
   const { loadCore } = await import('../../packages/gozar-node/core.mjs');
-  const { Controller } = await import('../../packages/gozar-node/controller.mjs');
+  const { SessionAllocation } = await import('../../packages/gozar-node/session-allocation.mjs');
   const input = materializationCase(); const current = Date.now();
   for (const receipt of [...Object.values(input.bindings), ...Object.values(input.facts)]) { receipt.observedAtMs = current - 10; receipt.expiresAtMs = current + 60000; }
   const endpoint = { scheme: 'https', hostname: 'selected.example', port: 443, endpointName: 'selected-endpoint' };
@@ -106,7 +106,7 @@ async function operationalMaterialization(t) {
   const path = await driver.privateFiles.path(fileReceipt.handleRef);
   const step = await loadCore();
   const output = step({ command: { type: 'start', sessionId, adapterId: adapter.id, consent: true }, adapters: [adapter], requirements: { clientReach: 'internet', httpsRequired: true }, host: { ...driver.host, nowMs: driver.nowMs() } });
-  const controller = new Controller({ step, journal, adapters: [adapter], requirements: { clientReach: 'internet', httpsRequired: true }, targetPort: 8123, sessionId, driver });
+  const controller = new SessionAllocation({ step, journal, adapters: [adapter], requirements: { clientReach: 'internet', httpsRequired: true }, targetPort: 8123, sessionId, driver });
   controller.state = output.state; controller.last = output;
   return { adapter, driver, controller, journal, output, step, secret, observed, fileReceipt, path };
 }

@@ -39,10 +39,16 @@ function canonical(value) {
 export function effectError(code, message) { return Object.assign(new Error(message), { code }); }
 const effectCodes = new Set(['precondition_failed', 'unsupported', 'provider_unavailable', 'setup_required']);
 const isEffectError = error => effectCodes.has(error?.code);
+/**
+ * A failure the runtime itself decided, with a frozen consumer code and a next step (a port held by another route, unresolved
+ * cleanup from an earlier session). It passes through `create` unmapped; every other thrown value is a provider failure.
+ */
+const RUNTIME_FAILURE = Symbol.for('gozar.runtime-failure');
+export const runtimeFailure = error => Object.assign(error, { [RUNTIME_FAILURE]: true });
 // Provider codes map onto the frozen list (route contract revision 3 (f)). Anything else is a generic
 // provider failure: the provider's own message is never forwarded, so it cannot carry a secret.
 export function mapProviderError(error) {
-  if (isEffectError(error)) return error;
+  if (isEffectError(error) || error?.[RUNTIME_FAILURE]) return error;
   if (['provider_denied', 'provider_not_running'].includes(error?.code)) return effectError('setup_required', 'The provider needs an operator action before this can proceed');
   if (error?.code === 'provider_unsupported') return effectError('unsupported', 'The provider does not support this operation');
   return effectError('provider_unavailable', 'The provider operation failed');
@@ -288,8 +294,6 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
   const adapter = {
     id: definition.id,
     definition,
-    // Explicit recipe provenance survives scopedAdapter wrapping; unknown modules use the generic controller.
-    sessionExecution: wrapped?.recipes?.create ? 'recipe' : 'generic',
     // The recipe through which this adapter observes the interface inventory, when it declares one.
     interfaceRecipe: wrapped?.recipes?.detect?.kind === 'interfaces' ? wrapped.recipes.detect : null,
     // The operational plan this adapter wraps. A session runs the plan of the adapter the owner approved, from whichever registry holds it.
@@ -516,12 +520,21 @@ export function createAdmittedContext({ read, adapterId, generation, assertGener
 /**
  * The effect context an attached route's controller gives its adapter. An attached provider owns its own runtime
  * (an SDK listener the controller process holds), so it needs the generation and a fence, not the recipe engine:
- * `executePlan` and `compareAndRemove` are the recipe engine's, and an attached route has no recipe, so they
- * refuse with `unsupported` instead of pretending to run one.
+ * `executePlan` and `compareAndRemove` are the recipe engine's: an attached route has no recipe, so they refuse with
+ * `unsupported`; a session of a recipe provider gets the session recipe executor instead (it also carries `prove`, the session's own proof request).
  */
-export function createAttachedEffectContext({ generation = 1, assertGeneration = async () => {}, adapter, readContext } = {}) {
+export function createAttachedEffectContext({ generation = 1, assertGeneration = async () => {}, adapter, readContext, session } = {}) {
   const lacks = what => effectError('unsupported', `An attached route has no recipe engine for ${what}`);
   const effects = { generation, assertGeneration, executePlan: async () => { throw lacks('executePlan'); }, compareAndRemove: async () => { throw lacks('compareAndRemove'); } };
+  // A session of a recipe provider allocates and removes through the session recipe executor, in the controller's own process.
+  // `session` names that session's directory, handle, gate and runtime; the core and effect driver load on first use.
+  if (session && adapter?.operationalDefinition?.recipes?.create) {
+    let executor;
+    const load = async () => executor ??= (await import('./session-recipe.mjs')).sessionRecipeEffects({ adapter, readContext, generation, ...session });
+    effects.executePlan = async plan => (await load()).executePlan(plan);
+    effects.compareAndRemove = async (receipt, observed) => (await load()).compareAndRemove(receipt, observed);
+    effects.prove = async proof => (await load()).prove(proof);
+  }
   // With the adapter and its read context the effect context carries the adapter's own configuration, as every context does.
   return adapter && readContext ? bindConfiguration({ ...readContext, ...effects }, adapter.id) : effects;
 }

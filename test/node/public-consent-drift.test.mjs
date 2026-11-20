@@ -32,6 +32,21 @@ async function fixture(t,options={}){
      .replace('ingress: null, limits:', 'facts:JSON.parse(readFileSync(new URL("./runtime-facts.json",import.meta.url))),ingress: null, limits:');
    await writeFile(module,source);
  }
+ // A provider that can be held after it has read its facts: the next runtimeFacts call (in the controller process) answers with what it read, but only
+ // once `release` exists. This lets a test finish a newer command between a provider read and the commit of its answer.
+ if(options.holdRuntimeFacts){
+   let source=await readFile(module,'utf8');
+   const before=source;
+   source=source.replace(/(async runtimeFacts\(\) \{ )return (\{[\s\S]*?\});( \},)/,'$1const __out = $2; await __hold(); return __out;$3');
+   assert.notEqual(source,before,'the fake module has a runtimeFacts to hold');
+   source=source.replace('export default {',`import { existsSync as __exists, writeFileSync as __write, unlinkSync as __unlink } from 'node:fs';
+const __dir = new URL('./', import.meta.url);
+async function __hold(){ const next = new URL('./hold-next', __dir); if(!__exists(next)) return; __unlink(next); __write(new URL('./held', __dir), '1');
+  while(!__exists(new URL('./release', __dir))) await new Promise(resolve => setTimeout(resolve, 20));
+  __unlink(new URL('./release', __dir)); __unlink(new URL('./held', __dir)); }
+export default {`);
+   await writeFile(module,source);
+ }
  api=createGozar({manifest:registry.manifest,root:registry.root});
  const q=query({home,...(options.owner?{owner:options.owner}:{}),usage:{kind:options.kind??'attached',...(options.kind==='session'?{lifetimeMs:60000}:{})},requirements:{reach:'this-device',transport:options.proofProtocol==='echo'?'tcp':'any',payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}});
  if(options.operationId)q.operationId=options.operationId;
@@ -41,9 +56,12 @@ async function fixture(t,options={}){
  const approval=c=>({kind:'route',candidateToken:c.candidateToken,disclosureRevision:c.disclosure.revision,consentFactsDigest:c.consentFactsDigest});
  const setRows=async value=>{await writeFile(rowsFile,JSON.stringify(value));const path=join(folder,'definition.json'),data=JSON.parse(await readFile(path,'utf8'));data.adapter.facts=value;await writeFile(path,JSON.stringify(data));api=createGozar({manifest:registry.manifest,root:registry.root});};
  const setCost=async value=>{assert.ok(options.runtimeCost);await writeFile(costFile,JSON.stringify(value));};
+  const holdNext=()=>writeFile(join(folder,'hold-next'),'1');
+ const waitHeld=async()=>{for(const end=Date.now()+20000;Date.now()<end;await new Promise(resolve=>setTimeout(resolve,20)))if(await readFile(join(folder,'held'),'utf8').then(()=>true,()=>false))return;assert.fail('the provider read was never held');};
+ const releaseHeld=()=>writeFile(join(folder,'release'),'1');
  const identity=async()=>Promise.all([readFile(module,'utf8'),readFile(join(folder,'definition.json'),'utf8')]);
  const stop=async()=>{const stopped=await api.closeRoute({home,handle:route.handle,mode:'remove'});assert.equal(stopped.cleanup.state,'confirmed');route=null;return stopped;};
- return {home,id,api,q,config:{manifest:registry.manifest,root:registry.root},approval,rows,setRows,setCost,setRawCost:value=>writeFile(costFile,value),setRuntimeFacts:value=>writeFile(join(folder,'runtime-facts.json'),JSON.stringify(value)),identity,stop,observe:value=>writeFile(observations,JSON.stringify(value)),start:async choice=>(route=await api.expose({...q,wait:'verified',approval:approval(choice)})),events:async()=>readFile(join(folder,'events.jsonl'),'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;})};
+ return {holdNext,waitHeld,releaseHeld,home,id,api,q,config:{manifest:registry.manifest,root:registry.root},approval,rows,setRows,setCost,setRawCost:value=>writeFile(costFile,value),setRuntimeFacts:value=>writeFile(join(folder,'runtime-facts.json'),JSON.stringify(value)),identity,stop,observe:value=>writeFile(observations,JSON.stringify(value)),start:async choice=>(route=await api.expose({...q,wait:'verified',approval:approval(choice)})),events:async()=>readFile(join(folder,'events.jsonl'),'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;})};
 }
 test('actual candidate token rejects a changed local consent value before create while display changes remain admissible',async t=>{
  const f=await fixture(t),choice=(await f.api.catalogRoutes(f.q)).candidates[0];
@@ -401,4 +419,30 @@ test('initial effective properties may differ from static capability cost withou
  assert.equal(changed.published,null);
  assert.ok(changed.consentChange,'real effective-property drift still withdraws publication');
  assert.equal(await startCount(f),1,'consent drift cannot allocate a replacement');
+});
+// Two commands on one controller can interleave at an await with the SAME attempt, receipt, generation and approved review. An approval that read
+// the provider's facts before a newer review committed its own must not commit the older facts over the newer ones, nor publish on them.
+test('an approval that read older provider facts cannot overwrite a newer concurrent review or publish on stale consent',async t=>{
+ const f=await fixture(t,{owner:'same-attempt-owner',runtimeCost:true,holdRuntimeFacts:true});
+ const choice=(await f.api.catalogRoutes(f.q)).candidates[0],route=await f.start(choice);
+ await f.setCost({kind:'paid',summary:'Fixture price',amount:7,currency:'USD',period:'hour'});
+ const old=await f.api.reviewRouteConsent({home:f.home,handle:route.handle});
+ assert.equal(old.disclosures.cost.amount,7);
+ await f.holdNext();
+ const stale=f.api.approveRouteConsent({home:f.home,handle:route.handle,approvalToken:old.approvalToken,consentFactsDigest:old.consentFactsDigest}).then(value=>({value}),error=>({error}));
+ await f.waitHeld();
+ await f.setCost({kind:'paid',summary:'Fixture price',amount:8,currency:'USD',period:'hour'});
+ const current=await f.api.reviewRouteConsent({home:f.home,handle:route.handle});
+ assert.equal(current.disclosures.cost.amount,8,'the newer review saw the newer price');
+ await f.releaseHeld();
+ const result=await stale;
+ assert.equal(result.error?.code,'consent_mismatch',`the approval of the older review is refused: ${JSON.stringify(result.value?.verification??result.error?.message)}`);
+ const status=await f.api.routeStatus({home:f.home,handle:route.handle});
+ assert.equal(status.published,null,'nothing is published on consent the provider no longer shows');
+ const fresh=await f.api.reviewRouteConsent({home:f.home,handle:route.handle});
+ assert.equal(fresh.disclosures.cost.amount,8,'the older read did not overwrite the newer observation');
+ const restored=await f.api.approveRouteConsent({home:f.home,handle:route.handle,approvalToken:fresh.approvalToken,consentFactsDigest:fresh.consentFactsDigest});
+ assert.equal(restored.verification.status,'verified');
+ assert.equal(await startCount(f),1,'no second resource');
+ await f.stop();
 });

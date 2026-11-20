@@ -8,7 +8,7 @@ const start = source.indexOf('  const consentObservation =');
 const end = source.indexOf('  async function enforceConsent(', start);
 assert.ok(start >= 0 && end > start);
 const make = Function('lease', 'handle', 'proofAuthorityLost', 'identity',
-  'currentRouteReview', 'bootstrap', 'adapter', 'runtime', 'resolver',
+  'currentRouteReview', 'bootstrap', 'adapter', 'runtime', 'resolver', 'resourceRemoval', 'expired',
   `let {attempt, receipt}=identity; ${source.slice(start, end)}
   return {consentObservation, currentConsent, commitConsentEvidence,
     replaceAttempt: () => { attempt = {}; }};`);
@@ -21,7 +21,7 @@ for (const scenario of ['current','revoked','superseded','no approved review']) 
     let revoked = false, deliver;
     const read = new Promise(resolve => { deliver=resolve; });
     const h = make(lease,{generation:1},()=>revoked,{attempt:{},receipt:null},()=>read,
-      {request:{}},{},{},null);
+      {request:{}},{},{},null,null,()=>false);
     const identity = h.consentObservation();
     const pending = h.currentConsent();
     if (scenario === 'revoked') revoked=true;

@@ -1,8 +1,12 @@
+// The operational recipe path on the bounded allocation primitive: real core, real driver and journal. The allocation allocates, holds the
+// core's probe for the session controller to request, and removes; it starts no timer and publishes nothing.
+// The health, expiry-callback and late-probe tests of the earlier engine tested timer and republication policy that now belongs to the session
+// controller alone (see session-lifecycle and the attached-route suites); the delivery report's matrix says where each of them went.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { loadCore } from '../../packages/gozar-node/core.mjs';
-import { Controller } from '../../packages/gozar-node/controller.mjs';
+import { SessionAllocation } from '../../packages/gozar-node/session-allocation.mjs';
 import { createGate } from '../../packages/gozar-node/gate.mjs';
 import { prepareHost, LOCAL_PLAN_FEATURES } from '../../packages/gozar-node/host.mjs';
 import { fixture } from './helpers.mjs';
@@ -22,62 +26,34 @@ async function operationalFixture(t, { external = false, shortProof = false } = 
         ledger: { bindAddress: '127.0.0.1', targetHost: '127.0.0.1', targetPort: '{gatePort}', scheme: 'http' } },
       remove: { kind: 'local-forwarder', before: [], requires: [], after: [], parser: { kind: 'exit-code' } },
     } };
-  const controller = new Controller({ step: await loadCore(), journal, adapters: [adapter], requirements: { clientReach: 'this-device', sse: false }, targetPort: gate.port, sessionId: 'test' });
+  const controller = new SessionAllocation({ step: await loadCore(), journal, adapters: [adapter], requirements: { clientReach: 'this-device', sse: false }, targetPort: gate.port, sessionId: 'test' });
   await prepareHost(controller.driver, adapter, { gate });
   if (shortProof) controller.driver.host.probe.expiresAtMs = controller.driver.nowMs() + 1500;
   t.after(() => controller.shutdown());
   return { controller, adapter, gate, journal };
 }
 
-test('real operational WASM + driver creates, returns before expiry timer, inspects exact handle and removes', async t => {
+test('real operational WASM + driver allocates and holds the probe, runs it only when asked for the announced origin, then removes the owned resource', async t => {
   const { controller, journal } = await operationalFixture(t);
   const startedAt = Date.now();
   const output = await controller.command({ type: 'start', adapterId: 'plan-fixture', consent: true });
-  assert.equal(output.snapshot.phase, 'candidate-ready', JSON.stringify(output.snapshot));
-  assert.ok(Date.now() - startedAt < 2000, 'start must not await lease expiry');
-  assert.equal(controller.background.size, 1);
-  const ready = await controller.approve();
-  assert.equal(ready.snapshot.phase, 'published-ready');
-  assert.equal(await (await fetch(ready.snapshot.published)).text(), 'app-fixture');
+  assert.equal(output.snapshot.phase, 'validating', JSON.stringify(output.snapshot));
+  assert.ok(output.snapshot.candidate, 'the allocation named its origin');
+  assert.ok(Date.now() - startedAt < 2000, 'start must not wait on any proof or lease');
+  assert.ok(controller.heldProbe, 'the core asked for a probe, and it is held, not run');
+  assert.equal(controller.driver.acceptedProbeReceipt, undefined, 'no probe ran during allocation');
+  assert.equal(controller.driver.timers.size, 0, 'the allocation starts no timer');
+  assert.equal(output.snapshot.published, null, 'the allocation never publishes');
+  const candidate = output.snapshot.candidate;
+  assert.equal(await (await fetch(candidate)).text(), 'app-fixture');
+  const proof = await controller.prove({ origin: candidate });
+  assert.equal(proof.vantage, 'local');
+  assert.equal(proof.probeReceipt.origin, new URL(candidate).origin);
+  assert.equal(controller.last.snapshot.published, null, 'a proof does not publish: the session controller does');
   const stopped = await controller.shutdown();
   assert.equal(stopped.snapshot.phase, 'stopped', JSON.stringify(stopped.snapshot));
   assert.equal(Object.keys(journal.value.owned).length, 0);
   assert.equal(controller.driver.timers.size, 0);
-  assert.equal(controller.driver.proofExpiries.size, 0);
-});
-
-test('operational health rechecks exact instance and withdraws wrong-origin health without mutation', async t => {
-  const { controller, gate } = await operationalFixture(t, { external: true });
-  const started = await controller.command({ type: 'start', adapterId: 'plan-fixture', consent: true });
-  assert.equal(started.snapshot.phase, 'candidate-ready', JSON.stringify(started.snapshot));
-  await controller.approve();
-  const generation = controller.state.generation;
-  const refreshed = await controller.command({ type: 'health' });
-  assert.equal(refreshed.snapshot.phase, 'candidate-ready', JSON.stringify(refreshed.snapshot));
-  assert.ok(refreshed.snapshot.generation > generation);
-  assert.deepEqual([...controller.driver.proofExpiries.keys()], [refreshed.snapshot.generation]);
-  await controller.approve();
-  const original = gate.verify;
-  gate.verify = async () => { throw new Error('Origin points to a different instance'); };
-  const failed = await controller.command({ type: 'health' });
-  assert.equal(failed.snapshot.published, null);
-  assert.equal(failed.snapshot.phase, 'degraded');
-  assert.equal(failed.action.kind, 'external');
-  assert.equal(controller.driver.forwarders.size, 0);
-  assert.equal(controller.driver.children.size, 0);
-  gate.verify = original;
-});
-
-test('real expiry callback withdraws readiness while stop cancels future timers promptly', async t => {
-  const { controller } = await operationalFixture(t, { external: true, shortProof: true });
-  const started = await controller.command({ type: 'start', adapterId: 'plan-fixture', consent: true });
-  assert.equal(started.snapshot.phase, 'candidate-ready', JSON.stringify(started.snapshot));
-  await controller.approve();
-  await new Promise(resolve => setTimeout(resolve, 1600));
-  assert.equal(controller.last.snapshot.phase, 'degraded');
-  assert.equal(controller.last.snapshot.published, null);
-  const start = Date.now(); await controller.shutdown();
-  assert.ok(Date.now() - start < 1000);
 });
 
 test('owned handle remains attributable through after-removal readback and retires only after core confirmation', async t => {
@@ -93,31 +69,33 @@ test('owned handle remains attributable through after-removal readback and retir
   assert.equal(Object.keys(journal.value.owned).length, 0);
 });
 
-test('late probe completion cannot retain obsolete proof expiry history', async t => {
-  const { controller, adapter } = await operationalFixture(t, { external:true });
-  adapter.audience = 'public'; adapter.capabilities.https = true; adapter.endpoint = 'https://fixture.invalid';
-  controller.adapters = [adapter]; controller.driver.adapters = structuredClone([adapter]);
-  controller.requirements = { clientReach:'internet', httpsRequired:true, sse:false };
-  let enter, release;
-  const entered = new Promise(resolve => { enter = resolve; });
-  const blocked = new Promise(resolve => { release = resolve; });
-  t.after(() => release());
-  let calls = 0;
-  controller.driver.probeExecutor = { vantages:['public'], async verify({authorization,origin,vantage}) {
-    const now = controller.driver.nowMs();
-    const receipt = {...authorization,origin,vantage,remote:true,observedAtMs:now,expiresAtMs:now+1500,
-      tls:true,instanceMatched:true,sse:false,streamableHttp:false,oauthDcr:false};
-    if (++calls === 1) { enter(); await blocked; }
-    return {probeReceipt:receipt};
-  }};
-  const start = controller.command({type:'start',adapterId:adapter.id,consent:true});
-  await entered;
-  const current = await controller.command({type:'health'});
-  release(); await start;
-  assert.equal(current.snapshot.phase,'candidate-ready');
-  assert.deepEqual([...controller.driver.proofExpiries.keys()],[current.snapshot.generation]);
-  await new Promise(resolve => setTimeout(resolve,1700));
-  assert.equal(controller.driver.timers.size,0);
-  assert.equal(controller.driver.proofExpiries.size,0);
-  assert.equal(controller.state.published,null);
+// The pending-probe hypothesis at the allocation level, on the real core and driver: the core cannot be advanced past `validating` without
+// an observed probe result, so a stop there must clean up from the recorded ownership alone, and must not need or invent a proof.
+test('a stop while the core still waits for its probe removes the owned resource from the ledger, with no proof run and none invented', async t => {
+  const { controller, journal } = await operationalFixture(t);
+  const output = await controller.command({ type: 'start', adapterId: 'plan-fixture', consent: true });
+  assert.equal(output.snapshot.phase, 'validating');
+  assert.equal(Object.keys(journal.value.owned).length, 1, 'one owned resource is recorded before any proof');
+  const transitions = [];
+  const step = controller.step;
+  controller.step = input => { transitions.push(input.command.effectId ?? input.command.type); return step(input); };
+  const stopped = await controller.shutdown();
+  assert.equal(stopped.snapshot.phase, 'stopped', JSON.stringify(stopped.snapshot));
+  assert.equal(stopped.snapshot.resources[0].cleanup, 'removed');
+  assert.equal(Object.keys(journal.value.owned).length, 0);
+  assert.equal(controller.driver.acceptedProbeReceipt, undefined, 'no probe receipt exists for a proof that never ran');
+  assert.equal(journal.value.validation ?? null, null);
+  assert.equal(stopped.snapshot.published, null);
+  assert.ok(controller.heldProbe?.id, 'the probe effect the core asked for was held');
+  assert.equal(transitions.includes(controller.heldProbe.id), false, `the core was never fed a result for its probe: ${transitions}`);
+  await assert.rejects(controller.prove({ origin: output.snapshot.candidate }), /No core probe is held/, 'a stopped allocation proves nothing');
+});
+
+test('a proof is run only for the origin the core asked about', async t => {
+  const { controller } = await operationalFixture(t);
+  const output = await controller.command({ type: 'start', adapterId: 'plan-fixture', consent: true });
+  await assert.rejects(controller.prove({ origin: 'https://foreign.example' }), /not the origin the core asked/);
+  assert.equal(controller.driver.acceptedProbeReceipt, undefined, 'a refused request leaves no receipt');
+  const proof = await controller.prove({ origin: output.snapshot.candidate });
+  assert.equal(proof.probeReceipt.origin, new URL(output.snapshot.candidate).origin);
 });

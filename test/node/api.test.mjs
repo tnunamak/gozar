@@ -3,18 +3,17 @@ import assert from 'node:assert/strict';
 import { fixture } from './helpers.mjs';
 import { expose, status, stop, addService, statusServices, removeService, createServiceVerifier } from '@tnunamak/gozar';
 
-test('host API returns CLI failure JSON without changing the host exit code', async t => {
+test('the host session helpers read and close recorded sessions in process, report failures as errors, and leave the host exit code alone', async t => {
   const { directory } = await fixture(t, {});
   const exitCode = process.exitCode;
-  await assert.rejects(status({ home: directory, port: 19873 }), error => {
-    assert.equal(error.code, 1);
-    assert.equal(error.reply.snapshot.phase, 'unknown');
-    assert.match(error.reply.journalPath, /port-19873/);
-    return true;
-  });
-  await assert.rejects(stop({ home: directory, port: 19873 }), error => error.reply.snapshot.phase === 'unknown');
+  // A home with no session records is an empty answer, not a failure.
+  assert.deepEqual(await status({ home: directory, port: 19873 }), { schemaVersion: 1, sessions: [] });
+  // A port with no record cannot be stopped, and that is said, not read as stopped.
+  await assert.rejects(stop({ home: directory, port: 19873 }), { code: 'route_not_found' });
+  await assert.rejects(stop({ home: directory }), { code: 'invalid_input' });
   assert.equal(process.exitCode, exitCode);
-  assert.throws(() => expose({ lifetimeMs: '1500000' }), /lifetimeMs/);
+  // The earlier port-and-flags call started the removed controller; only a route request is accepted.
+  await assert.rejects(expose({ port: 19873, lifetimeMs: 1_500_000 }), { code: 'invalid_input', message: /schemaVersion: 1/ });
 });
 
 test('root API exports service routes and preserves their persisted lifecycle', async t => {

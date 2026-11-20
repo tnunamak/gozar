@@ -1,11 +1,10 @@
 // Regression for the live localhost.run banner: the relay now announces `<id>.app.lhr.life`.
-// The recipe's hostnamePattern is the single matcher: the announcement parser, the WASM core parser,
+// The recipe's hostnamePattern is the single matcher: the WASM core parser (the only announcement parser),
 // the provider setup check and the public fixture all read that one pattern.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import * as core from '../../packages/gozar-core/generated/gozar_core.js';
-import { routeAnnouncement } from '../../packages/gozar-node/announcement.mjs';
 import localhost from '../../adapters/providers/localhost-run/index.mjs';
 
 const root = new URL('../../', import.meta.url);
@@ -60,15 +59,13 @@ const rejected = [
   ['bare app host', 'app.lhr.life.'],
 ];
 
-test('observed live banner yields exactly the new-family origin through every parser', () => {
+test('observed live banner yields exactly the new-family origin through the core parser', () => {
   const line = bannerFor(OBSERVED);
-  assert.equal(routeAnnouncement(parser, line), `https://${OBSERVED}`);
   assert.equal(wasm(line), true);
 });
 
 for (const host of accepted) {
-  test(`accepts ${host.length > 40 ? 'long label host' : host} in announcement, WASM and setup`, async () => {
-    assert.equal(routeAnnouncement(parser, `https://${host}`), `https://${host}`);
+  test(`accepts ${host.length > 40 ? 'long label host' : host} in WASM and setup`, async () => {
     assert.equal(wasm(`https://${host}`), true);
     assert.equal(await setupAccepts(`https://${host}`), true);
   });
@@ -76,7 +73,6 @@ for (const host of accepted) {
 
 for (const [name, host] of rejected) {
   test(`rejects ${name}`, async () => {
-    assert.equal(routeAnnouncement(parser, `https://${host}`), null);
     assert.equal(wasm(`https://${host}`), false);
     assert.equal(await setupAccepts(`https://${host}`), false);
   });
@@ -84,33 +80,29 @@ for (const [name, host] of rejected) {
 
 test('credentials, query, fragment, path, port and scheme are refused for the new family', async () => {
   for (const origin of [`https://user@${OBSERVED}`, `https://user:pw@${OBSERVED}`, `https://${OBSERVED}?t=1`, `https://${OBSERVED}#f`, `https://${OBSERVED}/p`, `http://${OBSERVED}`]) {
-    assert.equal(routeAnnouncement(parser, origin), null, origin);
     assert.equal(wasm(origin), false, origin);
     assert.equal(await setupAccepts(origin), false, origin);
   }
 });
 
-// A port is refused by setup validation. The announcement parsers compare only hostnames, as they did for the
+// A port is refused by setup validation. The core parser compares only hostnames, as it did for the
 // single-label family, so the new family must behave exactly like the old one there.
 test('a port is refused by setup validation and parses like the old family', async () => {
   const oldFamily = 'https://fixture-trial.lhr.life:8443', newFamily = `https://${OBSERVED}:8443`;
   assert.equal(await setupAccepts(newFamily), false);
   assert.equal(await setupAccepts(oldFamily), false);
-  assert.equal(routeAnnouncement(parser, newFamily) === null, routeAnnouncement(parser, oldFamily) === null);
   assert.equal(wasm(newFamily), wasm(oldFamily));
 });
 
 test('two distinct origins stay ambiguous, across and within families', () => {
   for (const other of ['https://other.app.lhr.life', 'https://other.lhr.life']) {
     const line = `https://${OBSERVED} ${other}`;
-    assert.equal(routeAnnouncement(parser, line), null);
     assert.equal(wasm(line), false);
   }
-  assert.equal(routeAnnouncement(parser, `https://${OBSERVED} https://${OBSERVED}`), `https://${OBSERVED}`);
+  assert.equal(wasm(`https://${OBSERVED} https://${OBSERVED}`), true);
 });
 
 test('a banner whose bare hostname line carries no https origin is not an endpoint', () => {
-  assert.equal(routeAnnouncement(parser, `${OBSERVED} tunneled with tls termination`), null);
   assert.equal(wasm(`${OBSERVED} tunneled`), false);
 });
 

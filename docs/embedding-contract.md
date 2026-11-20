@@ -139,14 +139,13 @@ call ends.
 A host that declares no handler keeps the pre-0.5.2 behavior: verification starts
 immediately after allocation. Hosts that widen a service verifier's Host
 allowance during start should adopt this boundary instead; Gozar never requires
-or implies a wildcard Host allowance. The legacy daemon session controller does
-not implement the boundary, so under a declared handler a provider that runs sessions
-on it is advertised `unsupported` with reason `origin-acknowledgment-unsupported` for
-the `session` usage kind only (in `listProviders` and `catalogRoutes`, so no candidate
-token exists and the owner cannot consent to it). `expose` refuses it `unsupported`
-before any approval is redeemed or any effect runs, never silently verified without
-acknowledgment. Generic-runtime sessions, attached and durable routes, and every host
-that declares no handler are unchanged.
+or implies a wildcard Host allowance. Every Gozar-allocated session, including the five recipe
+providers (localhost.run, tunnl.gg, LAN, Tailscale Funnel, Tailscale Serve), runs on the one generic session runtime, which implements the boundary: it
+allocates, announces the exact origin, awaits the exact acknowledgment, verifies only the
+announced name and then publishes. A provider's session availability does not depend on whether
+a handler is declared, and no reason says that acknowledgment is unsupported. A stale, foreign,
+refused, missing, malformed or aborted acknowledgment fails the start closed with exact
+cleanup. Attached and durable routes, and every host that declares no handler, are unchanged.
 
 Observation versus proof. With a declared handler, `routeStatus`, `startRoute`/`ensureRoute`
 and adoption are the proofs: each asks the host to acknowledge a fresh attempt, inside the
@@ -173,8 +172,9 @@ widens authority, and it is the only write an observation makes. An attached or 
 status does. Foreign routes, foreign listeners and provider rules are never touched. A host that
 declares a handler therefore schedules its own explicit checks, which also renew a leased
 rule. Hosts that declare no handler keep the earlier polling watch, which proves, publishes and
-renews. A legacy daemon session carrying no `embedding.handle` cannot be observed passively;
-under a declared handler such sessions are not created.
+renews. A session directory recorded by an earlier Gozar version (no `execution` field in its bootstrap) is history
+only: it is listed, never executed, and never observed passively. Closing it stops only what its journal proves
+and otherwise reports `cleanup_debt` with a stop command; a missing journal is never taken as absence.
 
 ## Packaged runtime modules (0.5.2)
 

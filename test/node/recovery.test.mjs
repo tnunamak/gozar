@@ -6,9 +6,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { EffectDriver } from '../../packages/gozar-node/driver.mjs';
 import { processIdentity } from '../../packages/gozar-node/journal.mjs';
-import { fileURLToPath } from 'node:url';
-import http from 'node:http';
-import { recoverStop, launch, control } from '../../packages/gozar-node/daemon.mjs';
+import { recoverStop } from '../../packages/gozar-node/session-recipe.mjs';
 import { loadCore } from '../../packages/gozar-node/core.mjs';
 import { fixture } from './helpers.mjs';
 
@@ -72,24 +70,14 @@ async function recordDebt(fixture) {
   await journal.save({ state, snapshot: { phase: 'cleanup-pending' }, targetPort: 8123, owned: { [resource.id]: resource } });
 }
 
-test('recovery confirms a dead process and absent provider route, clears core debt and permits a fresh daemon launch', async t => {
+test('recovery confirms a dead process and absent provider route, clears core debt, and a second recovery is a no-op', async t => {
   const data = await absentFixture(t); await recordDebt(data);
   const recovered = await recoverStop(data.directory);
   assert.equal(recovered.snapshot.phase, 'stopped', JSON.stringify(recovered));
   await data.journal.load(); assert.deepEqual(data.journal.value.owned, {});
   assert.deepEqual(JSON.parse(await readFile(data.configPath, 'utf8')), data.config);
-  const app = http.createServer((_req, res) => res.end('restarted'));
-  await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
-  t.after(() => { app.closeAllConnections(); app.close(); });
-  const adapter = { id: 'loopback-fixture', planVersion: 1, admission: { state: 'admitted', requiredFeatures: [] }, audience: 'local', ownership: 'owned', capabilities: { https: false }, recipes: {
-    create: { kind: 'local-forwarder', bindAddress: '127.0.0.1', port: 0, parser: { kind: 'json', pointer: '/origin' } },
-    remove: { kind: 'local-forwarder' } } };
-  t.after(async () => { try { await control(data.directory, { type: 'stop' }); } catch {} });
-  const fresh = await launch(data.directory, { adapters: [adapter], requirements: { clientReach: 'this-device' }, targetPort: app.address().port,
-    adapterId: adapter.id, consent: true, approveOrigin: true }, fileURLToPath(new URL('./fixtures/daemon.mjs', import.meta.url)));
-  assert.equal(fresh.snapshot.phase, 'published-ready', JSON.stringify(fresh));
-  assert.equal(await (await fetch(fresh.snapshot.published)).text(), 'restarted');
-  assert.equal((await control(data.directory, { type: 'stop' })).snapshot.phase, 'stopped');
+  const again = await recoverStop(data.directory);
+  assert.equal(again.snapshot.phase, 'stopped', 'recovering a recovered record changes nothing');
 });
 
 test('recovery retains the exact debt when a changed provider mapping is present', async t => {

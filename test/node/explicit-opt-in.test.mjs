@@ -1,24 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { fixture } from './helpers.mjs';
 
-const api = fileURLToPath(new URL('../../packages/gozar-node/api.mjs', import.meta.url));
-
-test('API accepts explicit admitted relay selection but continues to block next-drop modes', async t => {
+// 0.5.1 pinned this through the schema-less `expose({ port, adapterId })` call, which ran the old CLI in a subprocess. That call no longer exists
+// (a call without a route request is refused, see cli.test.mjs and api.test.mjs); the same two promises are kept through the route request:
+// choosing a provider explicitly still needs the candidate approval, and a provider this version does not admit is refused before anything starts.
+test('an explicitly chosen provider still needs approval, and one this version does not admit is refused', async t => {
   const { directory } = await fixture(t, {});
-  const bin = join(directory, 'bin'); await mkdir(bin);
-  await writeFile(join(bin, 'ssh'), '#!/bin/sh\nif [ "$1" = "-V" ]; then echo OpenSSH_fixture >&2; exit 0; fi\nexit 1\n', { mode: 0o700 });
-  await writeFile(join(bin, 'tailscale'), '#!/bin/sh\nexit 1\n', { mode: 0o700 });
-  const source = `import { expose } from ${JSON.stringify(api)};\nfor (const adapterId of ['tunnl-gg', 'ngrok-https-edge']) {\n  try { await expose({ port: 18765, clientReach:'internet', adapterId, home:process.env.GOZAR_HOME }); console.log('unexpected success'); }\n  catch (error) { console.log(JSON.stringify({ adapterId, message:error.message })); }\n}`;
-  const child = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
-    encoding:'utf8', timeout:30000, env:{ ...process.env, HOME:directory, GOZAR_HOME:join(directory, 'home'), PATH:bin },
-  });
-  assert.equal(child.status, 0, child.stderr);
-  const lines = child.stdout.trim().split('\n').map(line => JSON.parse(line));
-  assert.match(lines[0].message, /Exposure requires approval/);
-  assert.match(lines[1].message, /Selected route is not available in this version/);
+  const { createGozar } = await import('@tnunamak/gozar');
+  const { query } = await import('./route-schema-check.mjs');
+  const home = join(directory, 'home');
+  const gozar = createGozar({ identity: { instanceId: 'explicit-opt-in', bootId: 'boot-1' } });
+  const request = providerId => query({ home, owner: 'explicit-opt-in', target: '127.0.0.1:18765', providerId, usage: { kind: 'session', lifetimeMs: 60_000 },
+    requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'allow', protocols: [] } });
+  const unapproved = await gozar.expose({ ...request('tunnl-gg'), operationId: 'explicit-opt-in-1', wait: 'verified' }).then(() => null, error => error);
+  assert.equal(unapproved?.code, 'consent_required', unapproved?.message);
+  const unadmitted = await gozar.expose({ ...request('ngrok-https-edge'), operationId: 'explicit-opt-in-2', wait: 'verified', approval: { kind: 'route', candidateToken: 'none', disclosureRevision: 'none', consentFactsDigest: 'none' } })
+    .then(() => null, error => error);
+  assert.ok(unadmitted, 'a provider this version does not admit is refused');
+  assert.notEqual(unadmitted.code, 'internal_error', unadmitted.message);
 });

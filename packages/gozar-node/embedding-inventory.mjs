@@ -1,6 +1,6 @@
 import {clearInputActions} from './embedding-setup.mjs';
 import {inspectAdapter,detectAdapter,readContextFor,catalogRevisionOf} from './route-catalog.mjs';
-import {availabilityFor,prerequisitesFor,configurationFor,hostBoundaryOf} from './embedding-state.mjs';
+import {availabilityFor,prerequisitesFor,configurationFor} from './embedding-state.mjs';
 import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
 import {embeddingError} from './embedding-services.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
@@ -33,7 +33,7 @@ export async function listProviders(request,deps={},admission){
   configuration.actions=actions.filter(a=>['provide-secret','provide-value','clear-input'].includes(a.kind));
   const prerequisites=[...prerequisitesFor(item,observedAt),...capabilityPrerequisites(adapter.definition,request.hostCapabilities??deps.hostCapabilities??{})];
   for(const prerequisite of prerequisites)if(prerequisite.remedy)prerequisite.remedy=await decorate(prerequisite.remedy);
-  const availability=availabilityFor(adapter.definition,{adapter,host:hostBoundaryOf(deps)});
+  const availability=availabilityFor(adapter.definition);
   for(const kind of Object.keys(availability))if(availability[kind].state==='available'){
    const denied=prerequisites.find(p=>['denied','unsupported','unknown'].includes(p.state)&& (adapter.definition.requiredCapabilities??[]).includes(p.id));
    if(denied)availability[kind]={state:'unsupported',reason:`host-capability-${denied.state}`};
@@ -46,5 +46,5 @@ export async function listProviders(request,deps={},admission){
   if(detection)row.detection=detection;
   return row;
  }));
- return {schemaVersion:1,catalogRevision:catalogRevisionOf(inspections,platform,hostBoundaryOf(deps)),observedAt,providers};
+ return {schemaVersion:1,catalogRevision:catalogRevisionOf(inspections,platform),observedAt,providers};
 }

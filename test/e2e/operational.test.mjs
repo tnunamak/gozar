@@ -15,7 +15,7 @@ async function serverFixture(t) {
 const start = fixture => fixture.controller.command({ type: 'start', adapterId: fixture.adapter.id, consent: true });
 const noAllocation = async fixture => { assert.equal(Object.keys(fixture.journal.value.owned).length, 0); await assert.rejects(access(fixture.files.mutation)); };
 
-test('actual WASM + Controller/EffectDriver runs ordered observations, durable intent, allocation and readback', { timeout: 8000 }, async t => {
+test('actual WASM + SessionAllocation/EffectDriver runs ordered observations, durable intent, allocation and readback', { timeout: 8000 }, async t => {
   const server = await serverFixture(t); const fixture = await operationalFixture(t, { targetPort: server.port });
   const execute = fixture.driver.execute.bind(fixture.driver);
   fixture.driver.execute = async effect => {
@@ -28,10 +28,11 @@ test('actual WASM + Controller/EffectDriver runs ordered observations, durable i
     return execute(effect);
   };
   const result = await start(fixture);
-  assert.deepEqual(fixture.dispatched.map(effect => effect.stage), ['before', 'persist', 'execute', 'after', 'probe'], `operational wire/API mismatch: ${JSON.stringify(result.snapshot)}`);
+  assert.deepEqual(fixture.dispatched.map(effect => effect.stage), ['before', 'persist', 'execute', 'after'], `operational wire/API mismatch: ${JSON.stringify(result.snapshot)}`);
   assert.ok(fixture.completions.slice(0, 4).every(completion => completion.ok), JSON.stringify(fixture.completions));
   assert.ok(result.snapshot.candidate?.startsWith('http://127.0.0.1:'));
-  assert.equal(result.snapshot.published, null, 'missing actual verifier cannot publish');
+  assert.equal(result.snapshot.published, null, 'an allocation never publishes');
+  assert.ok(fixture.controller.heldProbe, 'the core\'s probe is held for the session controller, not dispatched by the allocation');
   const receipt = await probe({ origin: result.snapshot.candidate, nonce: server.nonce });
   assert.equal(receipt.vantage, 'local'); assert.equal(receipt.events.length, 2);
   const stopped = await fixture.controller.shutdown();
@@ -96,9 +97,9 @@ test('owned long-running process stop preserves an unrelated process', { timeout
 test('external-owned operational origin is observed and never allocated or removed', { timeout: 8000 }, async t => {
   const server = await serverFixture(t); const fixture = await operationalFixture(t, { targetPort: server.port, ownership: 'external-owned' });
   const result = await start(fixture); await fixture.controller.shutdown();
-  assert.equal(fixture.dispatched[0]?.kind, 'http-probe', 'external origin must actually be observed');
+  assert.equal(fixture.controller.heldProbe?.kind, 'http-probe', 'the external origin is to be observed, by the probe the core asked for');
   assert.equal(result.snapshot.candidate, server.origin);
-  assert.ok(fixture.dispatched.every(effect => effect.operation === 'probe'), JSON.stringify(fixture.dispatched));
+  assert.deepEqual(fixture.dispatched, [], 'the allocation dispatches nothing for an external origin: no allocation, no removal, and the probe is the session controller\'s to request');
   await noAllocation(fixture);
   assert.equal((await fetch(server.origin + '/identity')).status, 200, 'external server survives stop');
 });

@@ -34,7 +34,6 @@ import {catalogFactsFor} from './catalog-facts.mjs';
 import {ownershipFor,planMatchesOwnership,validateShape} from './adapter-runtime.mjs';
 import {currentRouteReview} from './route-consent.mjs';
 import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
-import {hostBoundaryOf,sessionBlockedByBoundary} from './embedding-state.mjs';
 import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
 
 export const HEARTBEAT_MS = 5_000;
@@ -62,8 +61,6 @@ function checkExpose(request, kind) {
   if (!['allocated', 'verified'].includes(request.wait)) throw gozarError('invalid_input', "wait must be 'allocated' or 'verified'");
 }
 
-const SESSION_BOUNDARY_REFUSAL = 'This session controller does not implement the declared origin acknowledgment boundary; use a provider on the generic session runtime';
-
 // Static availability is an execution boundary, not an approval. Never redeem or
 // inspect provider state to reject a named detect-only choice.
 export async function preflightExpose(request, deps = {}) {
@@ -77,9 +74,6 @@ export async function preflightExpose(request, deps = {}) {
     if (adapter && (!adapter.definition.supportedKinds.includes(request.usage.kind) ||
         availability === 'detect-only' || availability === 'unsupported'))
       throw gozarError('unsupported', 'This usage is not admitted for execution in this release');
-    // Named before any approval is redeemed: the catalog never offered this session under the declared boundary.
-    if (adapter && request.usage.kind === 'session' && sessionBlockedByBoundary(adapter, hostBoundaryOf(deps)))
-      throw gozarError('unsupported', SESSION_BOUNDARY_REFUSAL);
   }
   checkExpose(request, request.usage.kind);
 }
@@ -190,7 +184,7 @@ const routeDirectory = async (home, handle) => {
   const id=handle.id;
   if (handle.kind==='session') {
     const record=await genericSessionRecord({home,handle});
-    if (!record) throw gozarError('route_conflict','This session is not owned by the generic controller');
+    if (!record) throw gozarError('route_conflict','This session was recorded by an earlier Gozar version; this version does not run its controller');
     return record.directory;
   }
   if (!idPattern.test(id)) throw gozarError('route_not_found', 'Not an attached route id');
@@ -300,7 +294,15 @@ export async function openAttachedRoute(request, deps = {}) {
       return { pid: child.pid, startIdentity: null, child };
       } catch (error) {
       if (brokers.get(id) === broker) await dropBroker(id); else await broker?.close().catch(() => {});
-      if (session) throw error;
+      if (session) {
+        // A session registers the host's configuration reference before its controller exists. A failure after that registration owes a
+        // release of the exact registered handle, or exact retryable debt in the session's own record; it must not leave an orphaned use.
+        if (bootstrap && hostRegistered) {
+          const view = await unwindUnstartedSession({ directory, bootstrap, services: deps.embeddingServices }).catch(() => null);
+          if (view && !error.route) error.route = view;
+        }
+        throw error;
+      }
       // No controller has run, so no provider effect exists. Release what the host registered, or keep exact debt for a later owner.
       if (bootstrap) {
         const view = await unwindUnstartedAttached({ directory, staging, published, bootstrap, services: deps.embeddingServices, hostRegistered }).catch(() => null);
@@ -474,15 +476,19 @@ export async function closeAttachedRoute(request, deps = {}) {
       const settled = await settleUnstartedReference(request, directory, handle, deps);
       if (settled) return settled;
     }
-    // Without an owned receipt or recovery effects, retain debt without loading transient runtime.
-    if (!state.receipt || !deps.effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
+    // Without an owned receipt, retain debt without loading transient runtime. A session removes through the session recipe's
+    // journal-only recovery (no gate, no create path); other routes need the effect context their caller supplies.
+    const createSessionContext = handle.kind === 'session' ? (await loadRuntime())?.createAttachedEffectContext : null;
+    const effectContext = deps.effectContext ?? (createSessionContext ? ({ adapter, readContext, generation }) => createSessionContext({ generation, adapter, readContext,
+      session: { request: state.request, handle, directory, gate: () => { throw gozarError('internal_error', 'A dead controller has no gate'); }, runtime: {}, operationId: state.lastView?.operationId ?? null } }) : null);
+    if (!state.receipt || !effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
     // The controller died with the route up: remove it from the saved receipt, in this process.
     const adapters = await adaptersOf(deps);
     const adapter = adapters.find(item => item.id === state.adapterId);
-    if (!adapter || !state.receipt || !deps.effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
+    if (!adapter) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
     const read = bindConfiguration(await readContextFor(deps, await canonicalHome(request.home), deps.platform ?? process.platform), adapter.id);
     const observed = await adapter.observe(read, state.request);
-    const removal = await adapter.remove(bindConfiguration({ ...read, generation: state.handle.generation, ...deps.effectContext({ adapter, readContext: read, request: state.request, plan: state.plan, generation: state.handle.generation }) }, adapter.id), state.receipt, observed);
+    const removal = await adapter.remove(bindConfiguration({ ...read, generation: state.handle.generation, ...effectContext({ adapter, readContext: read, request: state.request, plan: state.plan, generation: state.handle.generation }) }, adapter.id), state.receipt, observed);
     return removal.removed && !removal.debt ? releasedView(state.lastView, handle)
       : { ...releasedView(state.lastView, handle), state: 'uncertain', cleanup: { state: 'unconfirmed', message: removal.debt?.message ?? 'The route could not be removed' } };
   }
@@ -505,16 +511,12 @@ export async function releaseSessionConfiguration(request,runtime){
   await releaseRecordedConfigurationUse({registryId:bootstrap.embedding.registryId,home:request.home,owner:bootstrap.owner,providerId:bootstrap.adapterId,handle},runtime);
   await dropBroker(handle.id);
 }
-export async function sessionConsent(request,{approve=false,adapters}={}){
+export async function sessionConsent(request,{approve=false}={}){
  const handle=checkRef(request);if(handle.kind!=='session')throw gozarError('unsupported','This handle is not a session');
  const generic=await genericSessionRecord(request);
  if(generic)return approve?approveAttachedConsent(request):reviewAttachedConsent(request);
- const directory=join(request.home,handle.id.split(':')[0]),bootstrap=await readJson(join(directory,'bootstrap.json'));
- if(bootstrap?.embedding?.handle.id!==handle.id)throw gozarError('route_conflict','This session handle is stale or has no current consent authority');
- const {control}=await import('./daemon.mjs');
- const result=await control(directory,{type:approve?'approve-consent':'review-consent',approvalToken:request.approvalToken,consentFactsDigest:request.consentFactsDigest},60000);
- if(!approve)return result.review;
- const adapter=adapters.find(a=>a.id===bootstrap.adapterId);return projectSession(result,{handle,properties:adapter.definition.capabilities,facts:adapter.definition.facts});
+ // A session recorded by an earlier version has no controller this version runs, so it has no current consent authority.
+ throw gozarError('route_conflict','This session handle is stale or has no current consent authority');
 }
 
 /** Persisted dispatch, never provider-name inference or lookup-failure fallback. */
@@ -534,7 +536,7 @@ export async function genericSessionRecord(request) {
 export async function finishCleanupController(request){
   const handle=checkRef(request);dropLease(handle.id);await dropBroker(handle.id);
   if(!['attached','session'].includes(handle.kind))return;
-  if(handle.kind==='session'&&!await genericSessionRecord(request))return; // A legacy session daemon has its own control protocol.
+  if(handle.kind==='session'&&!await genericSessionRecord(request))return; // An earlier version's session has no controller here to finalize.
   const home=await canonicalHome(request.home,false);
   const directory=handle.kind==='attached'?await routeDirectory(home,handle):join(home,handle.id.split(':')[0]);
   // The reference release is confirmed, so the controller may end. Its own persisted removal milestone, the handle, the generation
@@ -704,6 +706,17 @@ async function unwindUnstartedAttached({directory,staging,published,bootstrap,se
   return state.lastView;
 }
 
+/**
+ * A session start that failed after its host registration and before its controller ran. Nothing ran, so the registered reference is the only
+ * thing to settle: released and confirmed, or kept as exact debt beside the complete bootstrap so a later close retries the exact handle.
+ */
+async function unwindUnstartedSession({directory,bootstrap,services}){
+  const resolver={releaseConfigurationUse:use=>services.releaseConfigurationUse({home:bootstrap.home,...use})};
+  await atomicWrite(join(directory,'bootstrap.json'),bootstrap);
+  await recordRefusedStart(directory,bootstrap,resolver,()=>false,true);
+  return JSON.parse(await readFile(join(directory,'state.json'),'utf8')).lastView;
+}
+
 async function recordRefusedStart(directory,bootstrap,resolver,lost,hostRegistered=true){
   const session=bootstrap.execution==='generic-session-v1';
   const handle=session?bootstrap.handle:{kind:'attached',id:bootstrap.id,generation:1};
@@ -778,7 +791,10 @@ export async function runAttachedController(directory, runtime = {}) {
     await save();
   }
 
-  const admitted = (runtime.effectContext ?? (await loadRuntime())?.createAttachedEffectContext)?.({ adapter, readContext: read, request: bootstrap.request, plan: bootstrap.plan, generation: 1 });
+  const admitted = (runtime.effectContext ?? (await loadRuntime())?.createAttachedEffectContext)?.({ adapter, readContext: read, request: bootstrap.request, plan: bootstrap.plan, generation: 1,
+    ...(session ? { session: { request: bootstrap.request, handle, directory, gate: () => gate, runtime, operationId: bootstrap.operationId ?? null, owner: bootstrap.owner ?? null,
+      // An owned provider process that exits by itself ends the session through the same removal as an explicit close.
+      onProviderLoss: async () => { await release(); if (lease.cleanup.state === 'confirmed') finish(); } } } : {}) });
   // The effect is admitted for generation 1: a new route. Receipts carry the generation create returns.
   const context = bindConfiguration({ ...read, generation: 1, ...(admitted ?? {}) }, adapter.id);
 
@@ -786,10 +802,23 @@ export async function runAttachedController(directory, runtime = {}) {
   // gate recipe routes use). Through the public origin the gate proves the origin reaches this instance and,
   // when the route claims SSE, that a timed stream arrives unbuffered. `verifyChallenge` is that proof, so
   // adapter.verify is the one verification path. `validation: 'none'` exists only for controller test modules.
-  const claimsSse = adapter.definition.capabilities?.protocols?.sse === true;
+  // A recipe session is proven by the driver's authorized-vantage probe (`admitted.prove`); every other route is proven from this device through the gate.
+  const recipeSession = session && Boolean(adapter.operationalDefinition?.recipes?.create);
+  // A recipe session is timed for SSE only when its request asked for SSE (the 0.5.1 session rule: the proof matches the requested protocols);
+  // every other route is timed for what its provider claims.
+  const claimsSse = recipeSession
+    ? adapter.definition.capabilities?.protocols?.sse === true && bootstrap.request.requirements?.protocols?.includes('sse') === true
+    : adapter.definition.capabilities?.protocols?.sse === true;
   const gateChecked = sse => async origin => {
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), sse ? 15_000 : 5_000);
-    try { await gate.verify(origin, { sse, signal: controller.signal, fetch: runtime.fetch }); return { status: 'verified', checkedAt: new Date(now()).toISOString() }; }
+    try {
+      // A recipe session is proven through the driver's authorized-vantage probe (exact origin, the vantage the core asked for, this attempt's nonce, SSE,
+      // protocols). Every other route is proven from this device through the gate.
+      const vantage = recipeSession
+        ? (await admitted.prove({ origin, signal: controller.signal, deadlineMs: bootstrap.expiresAtMs })).vantage
+        : (await gate.verify(origin, { sse, signal: controller.signal, fetch: runtime.fetch }), 'this-device');
+      return { status: 'verified', checkedAt: new Date(now()).toISOString(), vantage };
+    }
     catch { return { status: 'unverified', checkedAt: new Date(now()).toISOString() }; }
     finally { clearTimeout(timer); }
   };
@@ -802,9 +831,13 @@ export async function runAttachedController(directory, runtime = {}) {
   const reviewTokens=new Map();
   const safeRefresh=()=>!proofSession||typeof proofSession.refresh==='function';
   const proofAuthorityLost = () => ownerLost || Boolean(releasing) || resolverLost || proofAbort.signal.aborted;
-  const consentObservation = () => ({attempt, receipt, generation:handle.generation, approvedReview:lease.approvedReview});
-  const consentObservationCurrent = observed => !proofAuthorityLost() && observed.attempt===attempt &&
-    observed.receipt===receipt && observed.generation===handle.generation && observed.approvedReview===lease.approvedReview;
+  // Commands run concurrently on one controller and interleave at every await, so an observation also names the exact inputs it read
+  // (proof, properties, runtime facts). A result computed from inputs another command has since replaced is dropped, never committed over the newer ones.
+  const consentObservation = () => ({attempt, receipt, generation:handle.generation, approvedReview:lease.approvedReview,
+    proof:lease.proof, properties:lease.properties, runtimeFacts:lease.runtimeFacts});
+  const consentObservationCurrent = observed => !proofAuthorityLost() && !resourceRemoval && !expired() && observed.attempt===attempt &&
+    observed.receipt===receipt && observed.generation===handle.generation && observed.approvedReview===lease.approvedReview &&
+    observed.proof===lease.proof && observed.properties===lease.properties && observed.runtimeFacts===lease.runtimeFacts;
   const commitConsentEvidence = (observed, staged) => {
     if(!consentObservationCurrent(observed))return false;
     if(staged)lease.facts=staged.facts;
@@ -852,7 +885,7 @@ export async function runAttachedController(directory, runtime = {}) {
     }
     const observed=Date.parse(checked.checkedAt);
     if(resolverLost||activeAttempt!==attempt||attempt.signal.aborted||releasing||ownerLost||now()>=attempt.deadlineMs||!proofObservedDuring(checked,started,now()))return {...checked,status:'unverified'};
-    if(!proofSession)lease.proof={...checked,vantage:'this-device',checks:checked.status==='verified'?[...(endpoint.startsWith('https:')?['tls']:[]),'nonce',...(sse?['sse']:[])]:[],validUntil:new Date(observed+15000).toISOString()};
+    if(!proofSession)lease.proof={...checked,vantage:checked.vantage??'this-device',checks:checked.status==='verified'?[...(endpoint.startsWith('https:')?['tls']:[]),'nonce',...(sse?['sse']:[])]:[],validUntil:new Date(observed+15000).toISOString()};
     lease.proofSubject=bootstrap.identity?{origin:endpoint,target:bootstrap.request.target,...bootstrap.identity,handleGeneration:handle.generation}:null;
     return checked;
   }
@@ -943,8 +976,12 @@ export async function runAttachedController(directory, runtime = {}) {
     return adapter.remove(context, receipt, observed);
   }
   const debtOf = removal => ({ state: 'unconfirmed', message: removal.debt?.message ?? 'The route could not be removed' });
+  // Control-ready barrier: the authenticated control channel (control.json) is published before the first provider
+  // effect, so a caller can always reach, observe and close the controller that holds the allocation custody.
+  let controlPublished; const controlReady = new Promise(resolve => { controlPublished = resolve; });
   const creation = (async () => {
     try {
+      if(!await controlReady)throw gozarError('internal_error','The controller could not publish its control channel');
       if(session)await save();
       if(expired())throw gozarError('verification_failed','The session lifetime has expired');
       if (!admitted) throw gozarError('unsupported', 'No admitted effect context is wired for this route');
@@ -1111,11 +1148,11 @@ export async function runAttachedController(directory, runtime = {}) {
         if (command.generation !== undefined && command.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
         if (command.type === 'status') { if (command.fresh) await verify(); return reply({ view: lastView(),startupComplete:initialSettled }); }
         if(command.type==='review-consent'){
-          const observed=consentObservation();
-          if(!consentObservationCurrent(observed))throw gozarError('consent_mismatch','The route authority changed; request a current review');
+          if(!consentObservationCurrent(consentObservation()))throw gozarError('consent_mismatch','The route authority changed; request a current review');
           lease.state='unverified';lease.consentChange={reason:safeRefresh()?'review-requested':'proof-refresh-unsupported',nextAction:safeRefresh()?instructionAction('review-route-consent','Review route consent','Approve the current review before publication can resume.'):null};await save();
           if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
           if(receipt&&!resourceRemoval&&!releasing&&initialSettled&&!failure)await refreshRuntimeFacts();
+          const observed=consentObservation();
           if(!consentObservationCurrent(observed))throw gozarError('consent_mismatch','The route authority changed; request a current review');
           const staged=await currentConsent(),current=staged?.review;
           if(!current)throw gozarError('unsupported','This route has no current consent snapshot');
@@ -1128,12 +1165,12 @@ export async function runAttachedController(directory, runtime = {}) {
           reviewTokens.set(token,{snapshot,current});return reply({review:snapshot});
         }
         if(command.type==='approve-consent'){
-          const observed=consentObservation();
-          if(!consentObservationCurrent(observed))throw gozarError('consent_mismatch','The route authority changed; request a current review');
+          if(!consentObservationCurrent(consentObservation()))throw gozarError('consent_mismatch','The route authority changed; request a current review');
           lease.state='unverified';await save();
           if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
           const stored=reviewTokens.get(command.approvalToken);reviewTokens.delete(command.approvalToken);
           if(receipt&&!resourceRemoval&&!releasing&&initialSettled&&!failure)await refreshRuntimeFacts();
+          const observed=consentObservation();
           if(!consentObservationCurrent(observed))throw gozarError('consent_mismatch','The route authority changed; request a current review');
           const staged=await currentConsent(),current=staged?.review;
           if(!stored||Date.parse(stored.snapshot.expiresAt)<=now()||stored.snapshot.consentFactsDigest!==command.consentFactsDigest||stored.current.consentFactsDigest!==current?.consentFactsDigest||JSON.stringify(stored.snapshot.subject)!==JSON.stringify(lease.proofSubject??null))throw gozarError('consent_mismatch','The runtime review changed; request a new review');
@@ -1150,16 +1187,33 @@ export async function runAttachedController(directory, runtime = {}) {
           proofAbort.abort();lease.state='released';lease.cleanup={state:'confirmed'};await save();
           reply({view:lastView()});finish();return;
         }
-        if (command.type === 'close') { await release(); reply({ view: lastView() }); if(lease.cleanup.state==='confirmed')finish();return; }
+        if (command.type === 'close') {
+          // A close that joins a removal already in flight (an automatic retry after the provider process ended) must not return that older
+          // attempt's debt as its own answer: the provider may have recovered since it started. Debt from a joined attempt earns one fresh attempt.
+          const joined = Boolean(releasing);
+          await release();
+          if (joined && lease.cleanup.state === 'unconfirmed' && !ownerLost) await release();
+          // A removal confirmed to the caller means the local forwarding (the gate, the proof session) no longer accepts either: close it before
+          // answering, not after the reply has left. A closure that cannot be confirmed keeps the recovery handle instead of a false confirmation.
+          if (lease.cleanup.state === 'confirmed' && !await closeForwarding()) {
+            lease.state = 'uncertain';
+            lease.cleanup = { state: 'unconfirmed', message: 'Local forwarding closure remains unconfirmed; retain this recovery handle' };
+            await within(LOCAL_CLOSE_MS, save);
+          }
+          reply({ view: lastView() }); if(lease.cleanup.state==='confirmed')finish();return;
+        }
         throw gozarError('invalid_input', 'Unsupported controller command');
       } catch (error) { const normalized = normalizeError(error); reply({ error: { code: normalized.code, message: normalized.message } }); }
     });
   });
   const socketPath = join(directory, 'control.sock');
-  await unlink(socketPath).catch(() => {});
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
-  await chmod(socketPath, 0o600);
-  await atomicWrite(join(directory, 'control.json'), { pid: process.pid, startIdentity: controllerStartIdentity, nonce });
+  try {
+    await unlink(socketPath).catch(() => {});
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
+    await chmod(socketPath, 0o600);
+    await atomicWrite(join(directory, 'control.json'), { pid: process.pid, startIdentity: controllerStartIdentity, nonce });
+  } catch (cause) { controlPublished(false); throw cause; }
+  controlPublished(true);
 
   let monitor;
   const stdin = !session && runtime.lease?.kind === 'stdin' ? runtime.lease.stream : null;
@@ -1189,24 +1243,9 @@ export async function runAttachedController(directory, runtime = {}) {
 
 // --- Session usage ------------------------------------------------------------------------------
 
-async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs, origin, requirements,owner,operationId,sessionId,embedding,hostChoices,operationalDefinition }) {
-  const root = fileURLToPath(new URL('../../', import.meta.url));
-  const { loadCatalog, loadDefinition } = await import('./catalog.mjs');
-  const { launch } = await import('./daemon.mjs');
-  const catalog = await loadCatalog(root, { operational: true });
-  // The approved adapter carries its own plan, so a registry that is not the shipped catalog runs on the same generic runtime.
-  const definition = operationalDefinition ?? await loadDefinition(root, adapterId);
-  if (definition.id !== adapterId) throw gozarError('artifact_integrity_failed', 'The approved adapter carries another adapter plan');
-  return launch(directory, { adapters: [...catalog.filter(item => item.id !== definition.id), definition],
-    requirements: { clientReach: requirements.reach, httpsRequired: requirements.transport === 'https', sse: requirements.protocols.includes('sse'),
-      streamableHttp: requirements.protocols.includes('streamable-http'), oauthDcr: requirements.protocols.includes('oauth-dcr') },
-    targetPort: port, adapterId, lifetimeMs,owner,operationId:operationId??null,...(hostChoices??{}),...(sessionId?{sessionId}:{}),...(embedding?{embedding}:{}),origin: origin ?? undefined, operational: definition.planVersion === 1, consent: true, approveOrigin: true },
-  join(root, 'bin', 'gozar.mjs'));
-}
-
 /**
- * Session usage over the existing session machinery. The adapter comes from the redeemed grant, never from the
- * request; the legacy controller (startSession) enforces the lifetime.
+ * Session usage. The adapter comes from the redeemed grant, never from the request. Every session, whichever provider, runs the
+ * generic session controller: the provider differs only in how its resource is allocated and removed (session-recipe.mjs).
  */
 export async function openSessionRoute(request, deps = {}) {
   await preflightExpose(request, deps);
@@ -1220,103 +1259,11 @@ export async function openSessionRoute(request, deps = {}) {
     const stableHandle=deps.reservedHandle??{kind:'session',id:`port-${port}:${randomUUID()}`,generation:1};
     const redeemed = await withExclusiveLock(join(await attachedRoot(home), '.open.lock'), () => redeemApproval(request, { ...deps, adapters }).catch(error => { throw refusedBeforeStart(error, stableHandle, request); }), { waitSeconds: 30 });
     const directory = join(home, `port-${port}`);
-    if (!deps.startSession && redeemed.adapter.sessionExecution !== 'recipe') {
-      if (stableHandle.kind!=='session'||stableHandle.generation!==1||!new RegExp(`^port-${port}:[A-Za-z0-9_-]+$`).test(stableHandle.id)) throw gozarError('invalid_input','Invalid reserved session handle');
-      const expiresAtMs=Date.now()+request.usage.lifetimeMs;
-      if (!Number.isFinite(expiresAtMs)||request.usage.lifetimeMs<=0) throw gozarError('invalid_input','A session needs a finite positive lifetime');
-      return await openAttachedRoute(request,{...deps,sessionExecution:{redeemed,handle:stableHandle,directory,expiresAtMs}});
-    }
-    // The legacy daemon session controller does not implement the declared exact-origin acknowledgment
-    // boundary. A host that declared the boundary gets a refusal, never a silent unacknowledged verification.
-    if (deps.acknowledgeOrigin) throw gozarError('unsupported',
-      SESSION_BOUNDARY_REFUSAL);
-    // The adapter turns what its owner chose into the exact session-engine inputs, from live observation, before anything starts.
-    const hostChoices = typeof redeemed.adapter.hostChoices === 'function'
-      ? await redeemed.adapter.hostChoices(await readContextFor(deps, home, deps.platform ?? process.platform, request.owner)).catch(error => { throw refusedBeforeStart(error, stableHandle, request); })
-      : undefined;
-    let embedding;
-    if(deps.embeddingServices){
-      const broker=await startEmbeddingBroker({services:deps.embeddingServices,home,identity:await deps.embeddingServices.resolveIdentity({home}),dispatchEffect:deps.dispatchEffect,
-        onLoss:()=>{void import('./daemon.mjs').then(module=>module.control(directory,{type:'resolver-lost'})).catch(()=>{});}});
-      const descriptor=await broker.registerController();brokers.set(stableHandle.id,broker);
-      try{await deps.embeddingServices.registerConfigurationUse({home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle:stableHandle});}
-      catch(error){await dropBroker(stableHandle.id);throw error;}
-      embedding={resolver:descriptor,identity:{instanceId:descriptor.instanceId,bootId:descriptor.bootId},...(deps.registry?{registry:deps.registry}:{}),registryId:deps.registryId,request:{...redeemed.request,home,owner:request.owner,...(request.intent?{intent:request.intent}:{})},consentReview:redeemed.consentReview,handle:stableHandle,fixtureEffects:!!deps.dispatchEffect};
-    }
-    let reply = await (deps.startSession ?? legacyStartSession)({ home, directory, adapterId: redeemed.adapter.id, port, lifetimeMs: request.usage.lifetimeMs,
-      owner:request.owner,operationId:request.operationId,sessionId:stableHandle.id.split(':').slice(1).join(':'),embedding,hostChoices,operationalDefinition:redeemed.adapter.operationalDefinition,
-      origin: request.origin ?? redeemed.plan.origin ?? null, requirements: request.requirements, wait: request.wait });
-    const sessionId = reply.snapshot?.sessionId;
-    const handle = { kind: 'session', id: sessionId ? `port-${port}:${sessionId}` : `port-${port}`, generation: 1 };
-    const project = value => projectSession(value, { handle, properties: redeemed.adapter.definition.capabilities, now: (deps.now ?? Date.now)() });
-    // Like an attached route, a session returns when `wait` is met and fails, cleaned up, when it cannot be.
-    try {
-      const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
-      for (;;) {
-        const view = project(reply);
-        if (['lost', 'released', 'uncertain'].includes(view.state)) throw await sessionStartFailure(reply, { home, adapterId: redeemed.adapter.id, deps });
-        if (request.wait === 'verified' ? view.state === 'usable' : view.origin !== null) return view;
-        if (Date.now() >= deadline) throw gozarError(view.state === 'unverified' ? 'verification_failed' : 'provider_unavailable',
-          view.state === 'unverified' ? 'The route did not pass verification in time' : 'The route did not start in time');
-        await new Promise(resolve => setTimeout(resolve, deps.pollMs ?? 250));
-        try { reply = await (deps.sessionStatus ?? (async () => (await import('./daemon.mjs')).control(directory, { type: 'status' }, 30_000)))(); }
-        catch (cause) { throw gozarError('provider_unavailable', 'The session controller stopped before the route was ready', null, cause); }
-      }
-    } catch (error) { throw await failedSessionStart(directory, error, deps); }
+    if (stableHandle.kind!=='session'||stableHandle.generation!==1||!new RegExp(`^port-${port}:[A-Za-z0-9_-]+$`).test(stableHandle.id)) throw gozarError('invalid_input','Invalid reserved session handle');
+    const expiresAtMs=Date.now()+request.usage.lifetimeMs;
+    if (!Number.isFinite(expiresAtMs)||request.usage.lifetimeMs<=0) throw gozarError('invalid_input','A session needs a finite positive lifetime');
+    return await openAttachedRoute(request,{...deps,sessionExecution:{redeemed,handle:stableHandle,directory,expiresAtMs}});
   } catch (error) { throw normalizeError(error); }
-}
-
-/**
- * What the core says, in `snapshot.limitations`, when it stops a session before it changes anything because every port the
- * route may use is taken. The core owns the sentence; the session-ports test reads it from the real core.
- */
-export const LISTENERS_TAKEN = 'All explicit listener candidates are occupied or protected';
-
-const portList = ports => ports.length === 2 ? `${ports[0]} and ${ports[1]}` : ports.join(', ');
-
-/**
- * The error for a session that ended before it was published. When the core stopped it because every candidate port is
- * taken, the app gets the closest frozen code and a next step that names the ports and, when Gozar knows it, the holder:
- *   route_conflict            another Gozar route or session in this home holds a candidate port: name it, say how to stop it
- *   requirements_unsatisfied  only other listeners hold the ports: nothing Gozar owns can be stopped, and a retry changes nothing
- * Anything else is a plain `provider_unavailable`: provider diagnostics stay inside Gozar.
- */
-async function sessionStartFailure(reply, { home, adapterId, deps }) {
-  const generic = () => gozarError('provider_unavailable', 'The route could not be started');
-  if (!(reply.snapshot?.limitations ?? []).includes(LISTENERS_TAKEN)) return generic();
-  let ports = [], holders = [];
-  try {
-    const definition = await (deps.loadDefinition ?? (async id => (await import('./catalog.mjs')).loadDefinition(fileURLToPath(new URL('../../', import.meta.url)), id)))(adapterId);
-    ports = definition.bindings?.port?.candidates ?? [];
-    if (ports.length) holders = await (deps.portHolders ?? (await import('./durable-route.mjs')).portHolders)({ home, providerResource: definition.providerResource ?? null, ports });
-  } catch { /* the ports are an explanation, not a precondition: without them the generic error stands */ }
-  if (!ports.length) return generic();
-  const named = holders.map(({ port, routeId, sessionPort }) => routeId !== undefined ? `port ${port} is held by route ${routeId}` : `port ${port} is held by the session on port ${sessionPort}`);
-  if (named.length) {
-    const first = holders[0];
-    const step = first.routeId !== undefined ? `Release route ${first.routeId} (or stop the app that owns it)` : `Stop the session on port ${first.sessionPort}`;
-    const how = first.routeId !== undefined ? step : `${step} with: ${cliCommand('stop', first.sessionPort, home)}`;
-    return gozarError('route_conflict', `No port is free for this route (${portList(ports)}): ${named.join('; ')}. Existing listeners were left untouched.`,
-      instructionAction('free-route-port', `Free port ${first.port}`, `${how}, then start this route again.`));
-  }
-  return gozarError('requirements_unsatisfied', `No port is free for this route: ${portList(ports)} are all in use by other listeners. They were left untouched.`,
-    instructionAction('free-route-port', `Free one of ports ${portList(ports)}`, `Stop whatever listens on port ${ports[0]} or ${ports[1] ?? ports[0]}, then start this route again.`));
-}
-
-/**
- * A session that did not reach `wait` must not keep running: stop it through the session's own path (which removes the
- * provider state), then prove the controller process is gone. The reported error stays the original one unless cleanup is unconfirmed.
- */
-async function failedSessionStart(directory, error, deps) {
-  let identity = null;
-  try { identity = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8')); } catch {}
-  let stopped = null, stopFailure = null;
-  try { stopped = await (deps.stopSession ?? (async () => (await import('./daemon.mjs')).stopSession(directory)))(); } catch (cause) { stopFailure = cause; }
-  const outcome = identity?.startIdentity ? await stopController({ pid: identity.pid, startIdentity: identity.startIdentity }) : { state: 'gone' };
-  const unconfirmed = stopFailure || stopped?.snapshot?.phase === 'cleanup-pending' || stopped?.localCleanupFailures?.length;
-  const stop = `Run: ${cliCommand('stop', Number(directory.slice(directory.lastIndexOf('-') + 1)), dirname(directory))}`;
-  return withCleanupOutcome(unconfirmed ? gozarError('cleanup_debt', 'The route failed to start and its cleanup is not confirmed; stop the session again',
-    instructionAction('stop-session', 'Stop the failed session', stop), error) : error, outcome);
 }
 
 // --- Detached controller entry ------------------------------------------------------------------
