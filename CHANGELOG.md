@@ -9,6 +9,11 @@
   back as unset on 0.5.1). The scope now uses a stable lineage name, one-time carry-forward recomputes the earlier
   scope from the published 0.4.0, 0.5.0 and 0.5.1 registry ids, and `registryLineage` plus `adoptConfiguration`
   give hosts the same path. Consent still binds the content registry id, so changed code is approved again.
+- **Proof and observation boundaries under a host acknowledgment.** An explicit check rechecks that the route is live
+  and runs its challenge (or a due lease renewal) under the reservation lock, so a close, stop or release cannot commit
+  between the recheck and the start of the challenge; the host acknowledgment stays outside that lock. A check whose
+  acknowledgment is refused or fails ends the earlier remembered proof for that route generation, newest-started attempt
+  wins, and ending one home's route no longer forgets another home's proof for the same route ID.
 
 ### Added
 

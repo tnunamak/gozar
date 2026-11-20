@@ -162,6 +162,8 @@ export function createRouteApi(deps = {}) {
     return viewStatus(request,{adapters:await adapters(),...deps.view,...(observe?{observe}:{})});
   },request);
   const routeStatus = request => statusOf(request, false);
+  // The watch's read (internal, not part of the public API): the same view, observed rather than proven when a host acknowledgment is declared.
+  const observeRoute = request => guard(async () => withRouteGuidance(request, await statusOf(request, true)));
 
   const api = {
     catalogRoutes: query => guard(()=>verified(async () => buildCatalog(query, { ...await shared(query), profileHome: deps.profileHome,
@@ -183,8 +185,6 @@ export function createRouteApi(deps = {}) {
     }),
 
     routeStatus: request => guard(async () => withRouteGuidance(request, await routeStatus(request))),
-    // The watch's read: the same view, observed rather than proven when a host acknowledgment is declared.
-    observeRoute: request => guard(async () => withRouteGuidance(request, await statusOf(request, true))),
     closeRoute: request => guard(async () => {
       let reference;
       const view = await verified(async () => {
@@ -269,7 +269,7 @@ export function createRouteApi(deps = {}) {
       return withRouteGuidance(request,view,reference);
     }),
     suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }),request)),
-    watchRoutes:async function*(request){try{for await(const event of pollRoutes(request,{routeStatus:api.observeRoute,...deps.watch}))yield structuredClone(event);}catch(error){throw publicError(error);}},
+    watchRoutes:async function*(request){try{for await(const event of pollRoutes(request,{routeStatus:observeRoute,...deps.watch}))yield structuredClone(event);}catch(error){throw publicError(error);}},
     getRoutePreferences, setRoutePreferences,
     runSetupAction: request => guard(async () => {
       const context=await setupDeps(request);
