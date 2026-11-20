@@ -796,7 +796,7 @@ export async function runAttachedController(directory, runtime = {}) {
   const gated = runtime.validation !== 'none';
   const proofAbort = new AbortController();
   let attempt = { id: bootstrap.id, nonce: randomBytes(32).toString('hex'), deadlineMs: session?Math.min(bootstrap.expiresAtMs,now()+120000):now()+120000, signal: proofAbort.signal };
-  onResolverLoss=()=>{if(lease.cleanup.state!=='confirmed'){lease.state='unverified';proofAbort.abort();void save().catch(()=>{});}};
+  onResolverLoss=()=>{if(!ownerLost&&!releasing&&lease.cleanup.state!=='confirmed'){lease.state='unverified';proofAbort.abort();void save().catch(()=>{});}};
   Object.assign(context,{signal:attempt.signal,deadlineMs:attempt.deadlineMs,attemptId:attempt.id,operationId:bootstrap.operationId??null});
   lease.approvedReview=bootstrap.consentReview??null;
   const reviewTokens=new Map();
@@ -998,7 +998,13 @@ export async function runAttachedController(directory, runtime = {}) {
       await atomicWrite(join(directory, 'failure.json'), failure);
       await save().catch(() => {});
     }
-  })().finally(()=>{initialSettled=true;});
+  })().finally(async()=>{
+    if(!failure&&proofAuthorityLost()){
+      failure={code:'verification_failed',message:'Route verification ended before publication',nextAction:null};
+      await atomicWrite(join(directory,'failure.json'),failure).catch(()=>{});
+    }
+    initialSettled=true;
+  });
 
   async function releaseUse(){
     // Proof identity alone does not claim custody of a configuration reference.
