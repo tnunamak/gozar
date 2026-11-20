@@ -67,6 +67,30 @@ const badConsentDigest:RouteConsentFields={consentFactsDigest:123};
 const badConsentChange:RouteConsentFields={consentChange:null};
 // @ts-expect-error All four consentChange members are required.
 const incompleteConsentChange:RouteConsentFields={consentChange:{oldDigest:'old',newDigest:'new',nextAction:null}};
+// Check the actual installed root's return type, not just a structural assignment.
+type InventoryProvider=Inventory['providers'][number];
+type Observed<T>={known:true;value:T}|{known:false;reason:string};
+type Equal<A,B>=(<T>()=>T extends A ? 1 : 2) extends (<T>()=>T extends B ? 1 : 2) ? true : false;
+type AssertTrue<T extends true>=T;
+type HumanCopy=InventoryProvider['copy']['human'];
+export type InstalledProviderMetadata=[
+ AssertTrue<Equal<InventoryProvider['displayName'],Observed<string>>>,
+ AssertTrue<Equal<HumanCopy,{name:Observed<string>;address:Observed<string>;summary:Observed<string>;setup:Observed<string>}>>,
+ AssertTrue<Equal<InventoryProvider['addressStability'],Observed<'stable'|'ephemeral'>>>,
+ AssertTrue<Equal<InventoryProvider['idleTimeoutMs'],Observed<number|null>>>,
+ AssertTrue<Equal<InventoryProvider['needsAccount'],Observed<boolean>>>,
+ AssertTrue<Equal<InventoryProvider['availability']['attached']['reason'],string>>,
+];
+// @ts-expect-error A decorative display name is an observation, not bare text.
+const plainProviderName:InventoryProvider['displayName']='Unfamiliar relay';
+// @ts-expect-error Human copy excludes raw probe facts and other extra keys.
+const extraHumanCopy:HumanCopy={name:{known:false,reason:'fixture'},address:{known:false,reason:'fixture'},summary:{known:false,reason:'fixture'},setup:{known:false,reason:'fixture'},rawProbe:{known:true,value:'fixture'}};
+// @ts-expect-error Observed address stability is a closed literal union.
+const invalidStability:InventoryProvider['addressStability']={known:true,value:'fixture'};
+// @ts-expect-error Known idle timeout is a number or null, not text.
+const invalidTimeout:InventoryProvider['idleTimeoutMs']={known:true,value:'0'};
+// @ts-expect-error Needs-account is observed as boolean, not as text.
+const invalidNeedsAccount:InventoryProvider['needsAccount']={known:true,value:'false'};
 type InventoryAvailability=Inventory['providers'][number]['availability'];
 const supportedAvailability:InventoryAvailability={
  session:{state:'available',reason:'admitted'},

@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -13,13 +13,29 @@ import { fileURLToPath } from 'node:url';
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
+async function packageFiles(directory, prefix = '') {
+  const files = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) files.push(...await packageFiles(path, name));
+    else {
+      assert.ok(entry.isFile(), `unexpected non-file package entry: ${name}`);
+      files.push(name);
+    }
+  }
+  return files.sort();
+}
+
 test('installed package: root and /service import, exports equal the contract, catalogRoutes runs on the installed bytes', async t => {
-  await mkdir(join(homedir(), '.tmp'), { recursive: true });
+  await mkdir(join(homedir(), '.tmp'), { recursive: true, mode: 0o700 });
   const base = await mkdtemp(join(homedir(), '.tmp', 'gozar-installed-'));
   t.after(() => rm(base, { recursive: true, force: true }));
-  const pack = join(base, 'pack'), project = join(base, 'project'), stateHome = join(base, 'home'), emptyBin = join(base, 'bin');
+  const pack = join(base, 'pack'), project = join(base, 'project'), emptyBin = join(base, 'bin');
+  const stateHome = await mkdtemp(join(homedir(), '.tmp', 'g-'));
+  t.after(() => rm(stateHome, { recursive: true, force: true }));
   for (const dir of [pack, project, emptyBin]) await mkdir(dir);
-  await mkdir(stateHome, { mode: 0o700 });
+  await mkdir(join(stateHome, '.tmp'), { mode: 0o700 });
 
   // npm 11 prints an object keyed by package name; npm 10 printed an array.
   const output = JSON.parse((await exec('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', pack], { cwd: root, timeout: 120_000 })).stdout);
@@ -29,11 +45,27 @@ test('installed package: root and /service import, exports equal the contract, c
   await exec('npm', ['install', '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund', join(pack, packed.filename)], { cwd: project, timeout: 120_000 });
   const installed = join(project, 'node_modules', '@tnunamak', 'gozar');
 
+  assert.ok(Array.isArray(packed.files), 'npm pack reports its archived file manifest');
+  const archivedFiles = packed.files.map(file => file.path).sort();
+  assert.deepEqual(await packageFiles(installed), archivedFiles, 'installed package file set matches npm pack manifest');
+  // Every installed byte must match the corresponding source byte named in the archive manifest.
+  for (const path of archivedFiles) {
+    assert.deepEqual(await readFile(join(installed, path)), await readFile(join(root, path)), `installed bytes match packed source: ${path}`);
+  }
+
+  const compilerLookup = process.platform === 'win32' ? 'where' : 'which';
+  const compilerOutput = await exec(compilerLookup, ['tsc'], { cwd: root, timeout: 10_000 });
+  const compiler = compilerOutput.stdout.trim().split(/\r?\n/)[0];
+  assert.ok(compiler, 'TypeScript compiler is available on PATH');
+  const typecheck = await exec(process.execPath, [join(root, 'scripts/check-public-types.mjs'), '--installed-root', project, '--tsc', compiler], { cwd: root, timeout: 60_000 });
+  assert.match(typecheck.stdout, /Installed public consumer compiled\./);
+
   const probe = join(project, 'probe.mjs');
   await writeFile(probe, `import * as root from '@tnunamak/gozar';
 import * as service from '@tnunamak/gozar/service';
 import * as testing from '@tnunamak/gozar/testing';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 const dts = await readFile(new URL('./node_modules/@tnunamak/gozar/packages/gozar-node/route-contract.d.ts', import.meta.url), 'utf8');
 const pkg = JSON.parse(await readFile(new URL('./node_modules/@tnunamak/gozar/package.json', import.meta.url), 'utf8'));
 const manifest = JSON.parse(await readFile(new URL('./node_modules/@tnunamak/gozar/adapters/manifest.json', import.meta.url), 'utf8'));
@@ -45,7 +77,43 @@ const fake = testing.createRouteApi({ manifest: registry.manifest, root: registr
 const fakeCatalog = await fake.catalogRoutes({ schemaVersion: 1, owner: 'example-app', target: '127.0.0.1:9', home: ${JSON.stringify(stateHome)}, usage: { kind: 'session', lifetimeMs: 60000 },
   requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] } });
 await registry.cleanup();
-console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
+// Capture serialized inventory through the installed public testing facade. No route is started.
+async function inventoryProbe(id, wrapped) {
+  const fixture = await testing.fakeRegistry({ id, label:'Fixture relay', kinds:['session','durable'], reach:'internet' });
+  try {
+    const folder = join(fixture.root,'providers',id);
+    const declarationFile = join(folder,'definition.json');
+    const declaration = JSON.parse(await readFile(declarationFile, 'utf8'));
+    declaration.adapter.copy = {human:{name:'Declared name',summary:'Declared summary'}};
+    declaration.adapter.requiredCapabilities = ['runtime.attached'];
+    if (!wrapped) declaration.adapter.idleTimeoutMs = 0;
+    await writeFile(declarationFile, JSON.stringify(declaration));
+    const moduleFile = join(folder,'index.mjs');
+    const moduleBytes = await readFile(moduleFile, 'utf8');
+    await writeFile(join(folder,'registry-original.mjs'), moduleBytes);
+    const fixtureModule = [
+      "import original from './registry-original.mjs';",
+      'export default {...original,',
+      wrapped ? "operationalDefinition: {displayName:'Wrapped relay', idleTimeoutMs:null, copy:{human:{name:'Fallback name', address:'Fallback address', setup:'Fallback setup'}}}," : 'operationalDefinition:null,',
+      "async detect(ctx) {return {...await original.detect(ctx),rawProbe:'synthetic-probe-not-for-inventory'};},",
+      wrapped ? 'properties: () => original.properties(),' : "properties: () => {const p=original.properties();return {...p,address:{...p.address,stability:'ephemeral'}};},",
+      '};',
+    ].join('\\n');
+    await writeFile(moduleFile, fixtureModule);
+    const home = ${JSON.stringify(stateHome)};
+    const api = testing.createRouteApi({manifest:fixture.manifest,root:fixture.root,readContext:testing.fakeReadContext({home})});
+    const rows = [];
+    for (const capability of [{known:true,value:true},{known:true,value:false},{known:false,reason:'fixture-unobserved'}]) {
+      const result = await api.listProviders({home,hostCapabilities:{'runtime.attached':capability}});
+      rows.push(result.providers);
+    }
+    return rows;
+  } finally {
+    await fixture.cleanup();
+  }
+}
+const inventory = await Promise.all([inventoryProbe('fixture-opaque-inventory-a7', false), inventoryProbe('fixture-opaque-inventory-b8', true)]);
+console.log(JSON.stringify({ inventory, testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
   types: pkg.types, exportsTypes: pkg.exports['.'].types, engines: pkg.engines.node, providers: manifest.providers.map(item => item.id),
   candidates: catalog.candidates.length, observedAt: typeof catalog.observedAt, tokens: catalog.candidates.filter(item => item.candidateToken).length }));
 `);
@@ -57,6 +125,40 @@ console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeId
     'reviewExternalConsent', 'statusServices', 'withServiceContext']);
   assert.deepEqual(seen.testingExports, ['createReadContext', 'createRouteApi', 'createTestingGozar', 'fakeReadContext', 'fakeRegistry', 'fakeRouteScenarios'], 'the testing export is in the archive and names its public helpers');
   assert.deepEqual(seen.fakeIds, ['fake-0a1b2c3d']);
+  const known = value => ({known:true,value}), unknown = reason => ({known:false,reason});
+  for (const [index, id] of ['fixture-opaque-inventory-a7','fixture-opaque-inventory-b8'].entries()) {
+    const wrapped = index === 1;
+    const versions = seen.inventory[index];
+    for (const [variant, providers] of versions.entries()) {
+      assert.deepEqual(providers.map(row => row.providerId), [id], 'lookup uses the exact unfamiliar provider ID');
+      const provider = providers.find(row => row.providerId === id);
+      assert.deepEqual(provider.displayName, known(wrapped ? 'Wrapped relay' : 'Fixture relay'));
+      assert.deepEqual(provider.copy.human, {
+        name:known('Declared name'), summary:known('Declared summary'),
+        address:wrapped ? known('Fallback address') : unknown('not-declared'),
+        setup:wrapped ? known('Fallback setup') : unknown('not-declared'),
+      });
+      assert.deepEqual(provider.addressStability, known(wrapped ? 'stable' : 'ephemeral'));
+      assert.deepEqual(provider.idleTimeoutMs, known(wrapped ? null : 0));
+      assert.deepEqual(provider.needsAccount, known(false));
+      const prereq = provider.prerequisites.find(row => row.id === 'runtime.attached');
+      assert.ok(prereq, 'the real capability prerequisite survives serialization');
+      if (variant === 1) {
+        assert.equal(prereq.state, 'denied');
+        assert.deepEqual(prereq.observation, known(false));
+      } else if (variant === 2) {
+        assert.equal(prereq.state, 'unknown');
+        assert.deepEqual(prereq.observation, unknown('fixture-unobserved'));
+      }
+      for (const kind of ['session','durable']) {
+        if (variant === 0) assert.equal(provider.availability[kind].state, 'available', kind);
+        else assert.deepEqual(provider.availability[kind], {
+          state:'unsupported', reason:variant === 1 ? 'host-capability-denied' : 'host-capability-unknown',
+        }, kind);
+      }
+      assert.doesNotMatch(JSON.stringify(provider), /synthetic-probe-not-for-inventory/);
+    }
+  }
   assert.deepEqual(seen.fakeEligible, [true], 'the fake provider is listed from the installed bytes');
   assert.equal(seen.types, './packages/gozar-node/route-contract.d.ts');
   assert.equal(seen.exportsTypes, seen.types);
