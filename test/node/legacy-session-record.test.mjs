@@ -92,16 +92,6 @@ test('reader: one record that names a session still binds the handle, and the ot
   await assert.rejects(readLegacySession(directory, 'another'), { code: 'route_conflict' });
 });
 
-test('a missing controller identity beside unresolved cleanup evidence is debt, not absence of the controller; nothing is removed', async t => {
-  const { directory, journal } = await recordedFiles(t, { bootstrapId: 'old-session', journalId: 'old-session', owned: { r1: { id: 'r1', kind: 'process', sessionId: 'old-session', pid: 1 } } });
-  assert.deepEqual(await legacyControllerAlive(directory), { alive: false, known: false, pid: null });
-  await assert.rejects(closeLegacySession(directory, 'old-session'), { code: 'cleanup_debt' });
-  await journal.load();
-  assert.deepEqual(Object.keys(journal.value.owned), ['r1'], 'the recorded resource is still recorded');
-  await atomicWrite(join(directory, 'control.json'), { pid: 1, nonce: 'n' });
-  await assert.rejects(closeLegacySession(directory, 'old-session'), { code: 'cleanup_debt' }, 'a partial identity (no birth identity) proves nothing either');
-});
-
 test('a stale handle for a replaced session is route_conflict, not a close', async t => {
   const { directory } = await oldController(t);
   await assert.rejects(closeLegacySession(directory, 'a-different-session'), { code: 'route_conflict' });

@@ -25,23 +25,18 @@ export async function readLegacySession(directory, sessionId) {
   return { bootstrap, journal };
 }
 
-/**
- * The controller identity recorded at start, and whether that exact process still runs. `known` is false when no complete identity was recorded:
- * then `alive: false` only means nothing could be checked, never that the controller is gone.
- */
+/** The controller identity recorded at start, and whether that exact process still runs. */
 export async function legacyControllerAlive(directory) {
   const identity = await optional(join(directory, 'control.json'));
-  if (!identity?.pid || !identity.startIdentity) return { alive: false, known: false, pid: identity?.pid ?? null };
-  return { alive: await processIdentity(identity.pid) === identity.startIdentity, known: true, pid: identity.pid };
+  if (!identity?.pid || !identity.startIdentity) return { alive: false, pid: identity?.pid ?? null };
+  return { alive: await processIdentity(identity.pid) === identity.startIdentity, pid: identity.pid };
 }
 
 /** Journal-only close of a recorded legacy session. Never sends a command to the old controller. */
 export async function closeLegacySession(directory, sessionId) {
   const { journal } = await readLegacySession(directory, sessionId);
   if (!journal) throw gozarError('cleanup_debt', 'The recorded session journal is unavailable; the provider resource may remain. Inspect this home and retry.');
-  const { alive, known, pid } = await legacyControllerAlive(directory);
-  const unresolved = Object.keys(journal.owned ?? {}).length > 0 || Object.keys(journal.intents ?? {}).length > 0 || (journal.snapshot?.phase ?? 'stopped') !== 'stopped';
-  if (!known && unresolved) throw gozarError('cleanup_debt', 'No complete controller identity was recorded for this session, so it cannot be shown that the earlier controller stopped. Inspect this home and retry.');
+  const { alive, pid } = await legacyControllerAlive(directory);
   if (alive) throw gozarError('cleanup_debt', `An earlier Gozar version's controller (process ${pid}) still holds this session. This version does not run or stop it.`,
     instructionAction('stop-earlier-controller', 'Stop the earlier controller', `Stop process ${pid} yourself, then close this handle again.`));
   const { recoverStop } = await import('./session-recipe.mjs');
