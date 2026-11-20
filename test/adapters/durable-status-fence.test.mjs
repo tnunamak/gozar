@@ -1,5 +1,6 @@
 // The unlocked status path renews a due lease only while the route is live (the same fence as a proof).
 // Cut: a release commits after the last eligibility read and before the provider's renew call (see tombstone-read-interposer.mjs).
+import { interposeTombstoneRead } from '../node/tombstone-read-interposer.mjs'; // first: it wraps fs.link before the library binds it
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
@@ -12,7 +13,6 @@ import { issueConsentToken, consentBinding } from '../../packages/gozar-node/con
 import { consentDisclosureRevision } from '../../packages/gozar-node/adopt-disclosure.mjs';
 import { canonicalHome } from '../../packages/gozar-node/service-state.mjs';
 import { store } from './fixtures/providers/fake-durable/index.mjs';
-import { interposeTombstoneRead } from '../node/tombstone-read-interposer.mjs';
 
 const here = path => fileURLToPath(new URL(path, import.meta.url));
 const requirements = { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'stable', setup: 'none', protocols: [] };
@@ -45,18 +45,22 @@ test('a release that commits after the last eligibility read is not followed by 
   store.entries.get('a').expiresAt = new Date(Date.now() + 5_000).toISOString(); // due
   const interposer = interposeTombstoneRead(t);
   onVerified = () => { interposer.armed = true; }; // the proof's own recheck is past; the next such read is the renewal's
-  let releasing = null, released = false;
+  let releasing = null, released = false, witness = null;
   const renewals = [];
   let count = store.renewals;
   Object.defineProperty(store, 'renewals', { configurable: true, get: () => count, set: value => { renewals.push({ afterReleaseCommitted: released }); count = value; } });
   t.after(() => { delete store.renewals; store.renewals = count; });
   interposer.onAbsent = async () => {
+    const blocked = interposer.contention();
     releasing = releaseRoute({ routeId: 'coordinator', home }, deps).then(result => { released = true; return result; });
-    // The release gets every chance to commit first; if the renewal holds the reservation it cannot, and this wait ends without it.
-    await Promise.race([releasing, new Promise(resolve => setTimeout(resolve, 1500))]);
+    // Hold the cut until the release did something concrete: reached the reservation lock and lost the link race (fenced: it
+    // is blocked behind the renewal), or committed (unfenced). The timer only bounds a broken fixture and fails it.
+    let bound; const failed = new Promise((_, reject) => { bound = setTimeout(() => reject(new Error('fixture: the release neither reached the lock nor committed')), 20_000); });
+    try { witness = await Promise.race([blocked, releasing.then(() => 'release-committed'), failed]); } finally { clearTimeout(bound); }
   };
   await statusRoutes({ home }, deps);
   assert.equal(interposer.fired, 1, 'the cut was reached once');
+  assert.equal(witness, 'blocked-at-lock', 'the competing release was witnessed blocked at the reservation lock while the renewal held the cut');
   assert.equal((await releasing).removed, true, 'the release completed');
   assert.deepEqual(renewals.filter(item => item.afterReleaseCommitted), [], 'no lease was renewed after the release had committed');
   assert.equal(renewals.length, 1, 'the due lease was renewed while the route was still live');

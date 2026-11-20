@@ -11,9 +11,9 @@
 // when that read reports "not stopped" the interposer starts a competing close through the same public API and waits for it
 // to commit if it can. Same-process lock holders exclude each other exactly like another process (the lock record names
 // pid and start time and a live holder is never broken), so this is the ordering a second process would produce.
+import { interposeTombstoneRead } from './tombstone-read-interposer.mjs'; // first: it wraps fs.link before the library binds it
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { interposeTombstoneRead } from './tombstone-read-interposer.mjs';
 import { hostedFunnelWorld, approved } from './consumer-host-fixture.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -31,10 +31,14 @@ test('A: a close that commits after the last eligibility read of an explicit che
   timeline.length = 0;
   interposer.onAbsent = async () => {
     timeline.push({ event: 'eligibility-passed' });
+    const blocked = interposer.contention();
     closing = host.close(api, route.handle).then(result => { closeCommitted = true; timeline.push({ event: 'close-committed' }); return result; });
-    // Give the competing close every chance to commit before the check goes on. If the check holds the reservation across
-    // its recheck and challenge the close cannot commit yet, and this wait ends without it.
-    await Promise.race([closing, sleep(1500)]);
+    // Hold the cut until the competing close has done one of two concrete things. Fenced: it reached the reservation lock and
+    // opened the holder's record (it is blocked behind the check). Unfenced: it acquired and committed. Either event ends the
+    // wait at once; the timer only bounds a broken fixture where neither happens, and fails it.
+    let bound; const failed = new Promise((_, reject) => { bound = setTimeout(() => reject(new Error('fixture: the competing close neither reached the lock nor committed')), 20_000); });
+    try { timeline.push({ event: await Promise.race([blocked, closing.then(() => 'close-committed'), failed]) }); }
+    finally { clearTimeout(bound); }
   };
   // The explicit check opens the window: its acknowledgment arms the interposer.
   const checked = await host.check(api, route.handle).catch(error => ({ error }));
@@ -44,6 +48,7 @@ test('A: a close that commits after the last eligibility read of an explicit che
   const challenges = timeline.filter(item => item.event === 'challenge-begins');
   assert.deepEqual(challenges.filter(item => item.closeCommitted), [], 'no challenge began after the close had committed: ' + JSON.stringify(timeline));
   assert.ok(challenges.length >= 1, 'the check did run its challenge, so the assertion above is not vacuous');
+  assert.ok(timeline.some(item => item.event === 'blocked-at-lock'), 'the competing close was witnessed blocked at the reservation lock while the check held the cut: ' + JSON.stringify(timeline));
   assert.ok(timeline.findIndex(item => item.event === 'challenge-begins') < timeline.findIndex(item => item.event === 'close-committed'), 'the close committed after the challenge began');
   // The host's close drops the handle's permission first (closeShared), so this check ends unverified either way; only the order is asserted.
   assert.ok(checked.verification, 'the check returned a verification');

@@ -147,13 +147,15 @@ export function createRouteApi(deps = {}) {
     }
   }
 
+  // Observation replaces proof only for a host that declared the acknowledgment handler; without one, the earlier polling watch keeps proving.
+  const observing = () => typeof deps.acknowledgeOrigin === 'function';
   const statusOf = (request, observe) => verified(async () => {
     const retained=await cleanupReferenceRecord(request,await services());
     if(retained){
       if(retained.phase!=='prepared')return retained.view;
       // Preparation is intent, not proof of removal. Consult the actual controller.
       let observed;
-      try{observed=await viewStatus(request,{adapters:await adapters(),...deps.view,...(observe?{observe}:{})});}
+      try{observed=await viewStatus(request,{adapters:await adapters(),...deps.view,...(observe&&observing()?{observe}:{})});}
       catch(error){if(error.code!=='route_not_found')throw error;}
       const current=await cleanupReferenceRecord(request,await services());
       if(current?.phase!=='prepared')return current?.view??retained.view;
@@ -162,7 +164,7 @@ export function createRouteApi(deps = {}) {
         throw gozarError('route_conflict','Current observation belongs to another handle');
       return observed;
     }
-    return viewStatus(request,{adapters:await adapters(),...deps.view,...(observe?{observe}:{})});
+    return viewStatus(request,{adapters:await adapters(),...deps.view,...(observe&&observing()?{observe}:{})});
   },request);
   const routeStatus = request => statusOf(request, false);
   // The watch's read (internal, not part of the public API): the same view, observed rather than proven when a host acknowledgment is declared.
@@ -193,7 +195,7 @@ export function createRouteApi(deps = {}) {
       const view = await verified(async () => {
         const context=await services();
         const cleanupRuntime={...context,afterReferenceRelease:async()=>{
-          try{await viewClose(request,{adapters:await adapters(),...deps.view});}
+          try{await viewClose(request,{adapters:await adapters(),...deps.view,...(observing()?{observe:true}:{})});}
           catch(error){if(error.code!=='route_not_found')throw error;}
           await finishCleanupController(request);
         }};
@@ -232,7 +234,7 @@ export function createRouteApi(deps = {}) {
         const removed=await reconcileRemoval();
         if(removed)return removed;
         let view;
-        try{view=await viewClose(request,{adapters:await adapters(),...deps.view});}
+        try{view=await viewClose(request,{adapters:await adapters(),...deps.view,...(observing()?{observe:true}:{})});}
         catch(error){
           if(error.code!=='route_not_found')throw error;
           if(retainedCleanup)return retainedCleanup.view;
