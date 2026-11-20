@@ -54,6 +54,8 @@ jobs:
           tar -xzf "$dir/wb.tar.gz" -C "$dir" --strip-components=1
           echo "$dir" >> "$GITHUB_PATH"
       - run: bash scripts/build-wasm.sh
+      # Some tests require a private (mode 0700) ~/.tmp, as on a developer machine.
+      - run: mkdir -p ~/.tmp && chmod 700 ~/.tmp
       - run: npm run test:node
       - name: Publish
         if: github.ref_type == 'tag'
