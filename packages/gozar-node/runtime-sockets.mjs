@@ -21,6 +21,11 @@ export function withRuntimeSockets(socketDirectory,run){
  return factorySockets.run({socketDirectory},run);
 }
 
+export function currentRuntimeSocketDirectory(){
+ return validateSocketDirectory(factorySockets.getStore()?.socketDirectory);
+}
+
+
 // A private final directory is insufficient if an untrusted ancestor can be renamed.
 async function checkAncestors(parent,uid){
  for(let path=dirname(parent);;path=dirname(path)){
