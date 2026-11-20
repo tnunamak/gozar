@@ -77,7 +77,13 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
  // Presence is authoritative: observe every binding before requesting any bytes.
  // A migrated secret keeps the scope it was stored under: a delegated backend addresses its item by that scope.
  const backendScope=(s,c,handle)=>s.secrets[handle]?.backendScopeId??c.scopeId;
- async function resolvedValues(home,s,c){
+ async function compatibleInputs(providerId,c){
+  const kinds=await currentInputKinds?.(providerId);
+  if(!plain(kinds)||Object.keys(c.bindings).some(id=>kinds[id]!=='secret')||Object.keys(c.values).some(id=>kinds[id]!=='text'))refuseMigration('incompatible');
+ }
+ async function resolvedValues(home,s,c,providerId){
+  // Stable storage outlives an executable revision: recheck the current roles before releasing configured bytes, including drafts.
+  if(lineage&&(Object.keys(c.bindings).length||Object.keys(c.values).length))await compatibleInputs(providerId,c);
   const values=clone(c.values),present=[];
   for(const[id,handle]of Object.entries(c.bindings)){
    const observation=await call(home,'presence',{scopeId:backendScope(s,c,handle),handle});
@@ -127,9 +133,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   }
   for(const value of Object.values(rec.values))if(typeof value!=='string')refuseMigration('incompatible');
   // The provider's CURRENT declaration decides: an id must still exist there with the role it was saved in. No declaration, no carry-forward.
-  const kinds=await currentInputKinds?.(providerId);
-  if(!plain(kinds))refuseMigration('incompatible');
-  if(Object.keys(rec.bindings).some(id=>kinds[id]!=='secret')||Object.keys(rec.values).some(id=>kinds[id]!=='text'))refuseMigration('incompatible');
+  await compatibleInputs(providerId,rec);
   // A reservation was made through the earlier registry, and only that registry's release (or the exact handle, see
   // releaseConfigurationUse) ends it. Copying it would leave the stable scope held after that release.
   if(rec.uses.length)refuseMigration('in_use');
@@ -214,7 +218,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
      config.revision=fresh();
     }
    },
-   resolveConfiguration:()=>c?resolvedValues(h,s,c):null,
+   resolveConfiguration:()=>c?resolvedValues(h,s,c,r.providerId):null,
    configuration:()=>c?redacted(h,s,c):null,
    withSecret:async(inputId,handle,use)=>{
     assertCurrent();
@@ -238,7 +242,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
  const api={hostCapabilities,
   readConfiguration:r=>transaction(r.home,async(s,h)=>redacted(h,s,select(await config(s,h,r.providerId,r.owner),r.draftId))),
   readConfigurationDraft:r=>transaction(r.home,async(s,h)=>{if(!r.draftId)fail('invalid_input');const c=await config(s,h,r.providerId,r.owner),d=select(c,r.draftId);return {draftId:r.draftId,scopeId:d.scopeId,baseRevision:d.baseRevision,configuration:await redacted(h,s,d)};},{readOnly:true}),
-  resolveConfiguration:r=>transaction(r.home,async(s,h)=>{const c=select(await config(s,h,r.providerId,r.owner),r.draftId);return resolvedValues(h,s,c);},{readOnly:true}),
+  resolveConfiguration:r=>transaction(r.home,async(s,h)=>{const c=select(await config(s,h,r.providerId,r.owner),r.draftId);return resolvedValues(h,s,c,r.providerId);},{readOnly:true}),
   // Trusted host decision: carry one named earlier registry's configuration into the stable scope. Used to choose
   // between several candidates or to name a predecessor that no lineage declares. Never overwrites a used configuration.
   adoptConfiguration:r=>transaction(r.home,async(s,h)=>{

@@ -412,6 +412,29 @@ test('the testing factory preserves a trusted host registry lineage',async t=>{
 });
 
 // ---- A. The current executable declaration decides what an earlier saved input may become.
+test('public API: a later compatible release reads a stable credential, but changed current roles release no bytes',async t=>{
+ const action=(kind,id)=>({id,kind,label:id,digest:`${id}-1`,disclosure:{revision:`${id}-1`,text:'Fixture',links:[]},...(kind==='provide-secret'?{secretLabel:id}:{valueFormat:'text'})});
+ const h=await home(),backend=spyBackend(h);t.after(()=>rm(h,{recursive:true,force:true}));
+ await write040Mixed(h,{providerId:'host-provider',backend,registryId:R_OLD});
+ const lineage={id:'stable-schema-host',replaces:[R_OLD]};
+ const current=async(name,actions)=>{
+  const registry=await fakeRegistry({id:'host-provider',kinds:['attached'],reach:'this-device',dir:join(h,name),setupActions:actions});
+  return createGozar({manifest:registry.manifest,root:registry.root,identity,hostCapabilities:{},secretBackend:backend,registryLineage:lineage});
+ };
+ const compatible=[action('provide-secret','token'),action('provide-value','origin')];
+ await (await current('first',compatible)).listProviders({home:h,owner:OWNER,refresh:true});
+ assert.ok(backend.log.some(entry=>entry.op==='withSecret'),'the first compatible release adopts and consumes');
+ backend.log.length=0;
+ await (await current('next',compatible)).listProviders({home:h,owner:OWNER,refresh:true});
+ assert.ok(backend.log.some(entry=>entry.op==='withSecret'),'a later compatible release still consumes the stable credential');
+ for(const[name,actions]of [['removed',[action('provide-value','origin')]],['changed',[action('provide-value','token'),action('provide-value','origin')]]]){
+  const snapshot=await stateBytes(h);backend.log.length=0;
+  await (await current(name,actions)).listProviders({home:h,owner:OWNER,refresh:true}).catch(()=>{});
+  assert.equal(backend.log.filter(entry=>entry.op==='withSecret').length,0,`${name}: a prior stable claim does not authorize changed input roles`);
+  assert.equal(await stateBytes(h),snapshot,'schema refusal retains the stable configuration');
+ }
+});
+
 test('public API: a saved input carries forward only when the provider currently declares that id with the same role, proved through real credential consumption',async t=>{
  const action=(kind,id)=>({id,kind,label:id,digest:`${id}-1`,disclosure:{revision:`${id}-1`,text:'Fixture',links:[]},...(kind==='provide-secret'?{secretLabel:id}:{valueFormat:'text'})});
  const cases=[
