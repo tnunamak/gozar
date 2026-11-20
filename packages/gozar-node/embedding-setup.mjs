@@ -1,5 +1,5 @@
 import {needsSetupOperation,safeSetupAction} from './consent-facts.mjs';
-import {configurationFor,hostBoundaryOf} from './embedding-state.mjs';
+import {configurationFor,hostBoundaryOf,inputIdOf} from './embedding-state.mjs';
 import {createHash} from 'node:crypto';
 import {inspectAdapter,detectAdapter,readContextFor, catalogRevisionOf} from './route-catalog.mjs';
 import {bindConfiguration} from './adapter-configuration.mjs';
@@ -27,7 +27,7 @@ export async function runEmbeddingSetup(request,deps){
   if(!action||action.digest!==request.approval.digest||action.disclosure.revision!==request.approval.disclosureRevision)fail('candidate_stale');
   await deps.validateSetupApproval?.({request,action,adapter,inspection:item,readContext:own,configuration:await tx.configuration()});
   if(['open-url','instructions'].includes(action.kind))return {state:'pending',nextAction:action};
-  const inputId=(adapter.definition.inputRequirements??[]).find(i=>i.actionId===action.id)?.id??action.id;
+  const inputId=inputIdOf(adapter,action);
   if(action.kind==='provide-value'){
    if(request.secretHandle!==undefined)fail('invalid_input');if(request.value===undefined)return {state:'pending',nextAction:action};
    const value=checkValue(action.valueFormat,request.value);if(value===null)fail('invalid_input');tx.bindText(inputId,value);return {state:'complete',nextAction:null};

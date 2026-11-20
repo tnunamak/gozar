@@ -3,8 +3,6 @@
 // so changed code is still re-approved. Prior art: Keychain service/account and VS Code extension id name the
 // data; signer or publisher identity authorizes the caller (divan credential-storage entry, commit 3661b2b).
 
-import { readFileSync } from 'node:fs';
-
 export const BUNDLED_LINEAGE_ID = 'gozar-bundled';
 
 // Registry ids of every published release of the bundled registry whose state this package carries forward.
@@ -17,12 +15,8 @@ export const PUBLISHED_REGISTRY_IDS = Object.freeze([
   'registry-v1:95e8ffed8f49f082f266ad801eed598af066c3959e3d11909a4dcbd5d73c2a51',
 ]);
 
-// Every input id that those releases persisted, with its role. Provider data lives with the adapters, not in core.
-// The bundled providers use each id with one role, so a saved binding or value is compatible only when its id is
-// listed there with the matching role.
-export const BUNDLED_INPUT_KINDS = Object.freeze(Object.fromEntries(Object.entries(
-  JSON.parse(readFileSync(new URL('../../adapters/published-input-kinds.json', import.meta.url), 'utf8'))).filter(([id]) => !id.startsWith('$'))));
-
-const bundled = Object.freeze({ id: BUNDLED_LINEAGE_ID, replaces: PUBLISHED_REGISTRY_IDS, inputKinds: BUNDLED_INPUT_KINDS });
+// Which saved inputs a provider may carry forward is not stored here: the provider's own current declaration decides
+// (embedding-state.mjs inputKindsOf). This file names only the earlier registries, to rebuild their old storage scope.
+const bundled = Object.freeze({ id: BUNDLED_LINEAGE_ID, replaces: PUBLISHED_REGISTRY_IDS });
 export const bundledLineage = () => bundled;
 export const isBundledLineage = lineage => lineage === bundled;

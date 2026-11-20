@@ -20,6 +20,7 @@ import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { registryIdentity } from './registry-identity.mjs';
 import { createEmbeddingServices } from './embedding-services.mjs';
 import { bundledLineage } from './registry-lineage.mjs';
+import { inputKindsOf } from './embedding-state.mjs';
 import { validatedRuntimeModuleDeclaration } from './runtime-modules.mjs';
 import { createDetectionCache } from './detection-cache.mjs';
 import { listProviders as inventory } from './embedding-inventory.mjs';
@@ -59,7 +60,9 @@ export function createRouteApi(deps = {}) {
     // The bundled registry keeps one stable storage name across releases. An injected or custom registry has no lineage
     // unless its host declares one: matching definitions are not proof of the same executable.
     const lineage=deps.registryLineage??(deps.adapters||deps.manifest||deps.root?undefined:bundledLineage());
-    return {registryId,embeddingServices:deps.embeddingServices??createEmbeddingServices({registryId,lineage,secretBackend:deps.secretBackend,hostCapabilities:deps.hostCapabilities,identity:deps.identity})};
+    return {registryId,embeddingServices:deps.embeddingServices??createEmbeddingServices({registryId,lineage,secretBackend:deps.secretBackend,hostCapabilities:deps.hostCapabilities,identity:deps.identity,
+      // What an earlier saved input may become is decided by the provider's own current declaration, never by its id alone.
+      currentInputKinds:async providerId=>inputKindsOf((await adapters()).find(adapter=>adapter.id===providerId))})};
   })();
   const shared = async (request={}) => { const resolved=await services(); return ({ adapters: await adapters(), platform: platform(), ...resolved, owner:request.owner,home:request.home,
     ...(deps.manifest ? { registry: { manifest: deps.manifest, root: deps.root } } : {}),
