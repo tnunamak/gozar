@@ -42,6 +42,18 @@ jobs:
             exit 1
           fi
       - run: npm ci
+      # The compiled WASM core is not in git; the package archive must include it.
+      - name: Install wasm-bindgen 0.2.105 and the WASM target
+        run: |
+          rustup target add wasm32-unknown-unknown
+          dir="$RUNNER_TEMP/wasm-bindgen"
+          mkdir -p "$dir"
+          url=https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.105/wasm-bindgen-0.2.105-x86_64-unknown-linux-musl.tar.gz
+          curl -sSfL "$url" -o "$dir/wb.tar.gz"
+          echo "b391448c4926ac4b11425a6752484d85164e72489d97804461d5e868c643b88a  $dir/wb.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/wb.tar.gz" -C "$dir" --strip-components=1
+          echo "$dir" >> "$GITHUB_PATH"
+      - run: bash scripts/build-wasm.sh
       - run: npm run test:node
       - name: Publish
         if: github.ref_type == 'tag'
