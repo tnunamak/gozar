@@ -89,8 +89,23 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
   assert.equal(terminal.state,'released');assert.deepEqual(terminal.handle,resumed.handle);
   assert.equal(terminal.cleanup.state,'confirmed');
   assert.equal(writes,terminalWrites,'stopped replay must remain terminal without a write');
+  if(index===choices.length-1){
+   const terminalPath=join(home,'operations',terminalName);
+   const terminalBytes=await readFile(terminalPath);
+   assert.ok(harness.events.some(e=>e.kind==='local-api'&&e.operation==='request'));
+   await harness.close();
+   harness=await createTestingGozar({effects});
+   const reopened=harness.gozar;
+   const replayedRemoval=await reopened.closeRoute({home,handle:resumed.handle,mode:'remove'});
+   assert.equal(replayedRemoval.state,'released');
+   assert.equal(replayedRemoval.cleanup.state,'confirmed');
+   assert.equal(replayedRemoval.published,null);
+   assert.deepEqual(replayedRemoval.handle,resumed.handle,'fresh facade retains the exact restored generation');
+   assert.deepEqual(await readFile(terminalPath),terminalBytes,'terminal operation bytes are unchanged');
+   assert.equal(writes,terminalWrites,'fresh-facade replay has no provider writes');
+   assert.deepEqual(config,foreign,'foreign forwarding remains intact');
+  }
  }
- assert.ok(harness.events.some(e=>e.kind==='local-api'&&e.operation==='request'));
 }
 test('shipped durable modules parse source observations, conditionally write, prove and remove only their rule',t=>exercise(t));
 test('known partial durable write stays owned and can be recovered after a failed provider response',t=>exercise(t,{partialWrite:true}));
