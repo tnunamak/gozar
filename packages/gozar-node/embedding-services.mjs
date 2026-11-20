@@ -46,18 +46,22 @@ const refuseMigration=reason=>{throw Object.assign(embeddingError('configuration
  conflict:'a configuration already exists here; discard it before adopting an earlier one',
  absent:'no earlier configuration exists for this home, owner and provider under that registry',
  inflight:'a setup draft, setup operation or operation-held credential is still open for the earlier configuration; finish or discard it first',
+ in_use:'a route still holds the earlier configuration; remove that route (or release its exact handle) first. Nothing was changed',
 }[reason]}`});};
-// `lineage` gives the storage a stable custodian name: {id, replaces:[earlier registry ids], inputKinds?}.
-// Only the bundled lineage may use the reserved name and the published registry ids.
+// `lineage` gives the storage a stable custodian name: {id, replaces:[earlier registry ids]}.
+// Only the bundled lineage may use the reserved name and the published registry ids. The lineage names whose scope may be
+// recomputed; it never says which saved inputs are valid. The provider's current declaration does (`currentInputKinds`).
 function checkedLineage(lineage){
  if(lineage===undefined||isBundledLineage(lineage))return lineage;
- const kinds=lineage?.inputKinds;
- if(!plain(lineage)||typeof lineage.id!=='string'||!lineageIdPattern.test(lineage.id)||lineage.id===BUNDLED_LINEAGE_ID||!Array.isArray(lineage.replaces)
-  ||!lineage.replaces.every(id=>typeof id==='string'&&registryIdPattern.test(id)&&!PUBLISHED_REGISTRY_IDS.includes(id))
-  ||(kinds!==undefined&&(!plain(kinds)||!Object.values(kinds).every(kind=>kind==='secret'||kind==='text'))))fail('invalid_input');
+ if(!plain(lineage)||Object.keys(lineage).some(key=>!['id','replaces'].includes(key))||typeof lineage.id!=='string'||!lineageIdPattern.test(lineage.id)||lineage.id===BUNDLED_LINEAGE_ID||!Array.isArray(lineage.replaces)
+  ||!lineage.replaces.every(id=>typeof id==='string'&&registryIdPattern.test(id)&&!PUBLISHED_REGISTRY_IDS.includes(id)))fail('invalid_input');
  return lineage;
 }
-export function createEmbeddingServices({registryId,secretBackend,hostCapabilities={},identity,lineage:declaredLineage}={}){
+// Durable write of the whole state file for the transaction that owns it. Only a migration claim uses it inside a read-only transaction.
+const persisters=new WeakMap();
+// `currentInputKinds(providerId)` is the host-trusted, side-effect-free answer to "which input ids may this provider's
+// current release hold, and in which role ('secret' | 'text')?". Unknown means no carry-forward: it fails closed.
+export function createEmbeddingServices({registryId,secretBackend,hostCapabilities={},identity,lineage:declaredLineage,currentInputKinds}={}){
  const lineage=checkedLineage(declaredLineage);
  // The custodian names the storage owner. Without a lineage it is the content registry id (storage stays per content).
  const custodian=lineage?.id??registryId;
@@ -88,7 +92,8 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   return withExclusiveLock(join(home,'.embedding-lock'),async()=>{
    let state;try{const file=await checkedFile(join(home,'embedding-state.json'),constants.O_RDONLY,'embedding state');try{state=JSON.parse(await file.readFile('utf8'));}finally{await file.close();}}catch(e){if(e.code!=='ENOENT')throw e;state={schemaVersion:1,configs:{},secrets:{},instanceId:fresh()};}
    if(state?.schemaVersion!==1||!state.configs||!state.secrets||typeof state.instanceId!=='string')fail('internal_error');
-   const checkpoint=async()=>{if(readOnly)fail('internal_error');await atomicWrite(join(home,'embedding-state.json'),state);};
+   const persist=()=>atomicWrite(join(home,'embedding-state.json'),state);persisters.set(state,persist);
+   const checkpoint=async()=>{if(readOnly)fail('internal_error');await persist();};
    const result=await run(state,home,checkpoint);if(!readOnly)await checkpoint();return result;
   },{waitSeconds:30});
  }
@@ -105,10 +110,12 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   }
   return found;
  }
- // One atomic in-memory edit of the state file: the caller's single durable write commits all of it or none of it.
- // The earlier record stays as a tombstone, and the retained backend scope keeps every opaque handle usable.
- function adopt(state,scopeId,{R,key,rec}){
-  const kinds=lineage?.inputKinds;
+ // The earlier record moves to the stable scope in one in-memory edit that is made durable by ONE atomic write (the claim)
+ // before the caller may ask the backend for anything. Until that write is renamed nothing changed, so a fault leaves the
+ // earlier state intact and no byte was released. After it, only the claimant can reach the record: a rival lineage sees
+ // the tombstone and is refused. The earlier record stays as a tombstone, and the retained backend scope keeps every
+ // opaque handle usable.
+ async function adopt(state,providerId,scopeId,{R,key,rec}){
   const sound=plain(rec)&&rec.scopeId===key&&plain(rec.bindings)&&plain(rec.values)&&plain(rec.drafts)&&typeof rec.revision==='string'&&Array.isArray(rec.uses)&&rec.uses.every(x=>typeof x==='string');
   if(!sound)refuseMigration('incompatible');
   // Open drafts, setup operations and operation-held credentials are not ordinary bindings: refuse until they are closed.
@@ -116,18 +123,27 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
    ||Object.values(state.setupOperations??{}).some(op=>op?.scopeId===key))refuseMigration('inflight');
   for(const [inputId,handle]of Object.entries(rec.bindings)){
    const ref=typeof handle==='string'?state.secrets[handle]:undefined;
-   if(!ref||ref.registryId!==R||ref.scopeId!==key||ref.inputId!==inputId||ref.draftId||ref.operationId||ref.backendScopeId!==undefined||(kinds&&kinds[inputId]!=='secret'))refuseMigration('incompatible');
+   if(!ref||ref.registryId!==R||ref.scopeId!==key||ref.inputId!==inputId||ref.draftId||ref.operationId||ref.backendScopeId!==undefined)refuseMigration('incompatible');
   }
-  for(const [inputId,value]of Object.entries(rec.values))if(typeof value!=='string'||(kinds&&kinds[inputId]!=='text'))refuseMigration('incompatible');
+  for(const value of Object.values(rec.values))if(typeof value!=='string')refuseMigration('incompatible');
+  // The provider's CURRENT declaration decides: an id must still exist there with the role it was saved in. No declaration, no carry-forward.
+  const kinds=await currentInputKinds?.(providerId);
+  if(!plain(kinds))refuseMigration('incompatible');
+  if(Object.keys(rec.bindings).some(id=>kinds[id]!=='secret')||Object.keys(rec.values).some(id=>kinds[id]!=='text'))refuseMigration('incompatible');
+  // A reservation was made through the earlier registry, and only that registry's release (or the exact handle, see
+  // releaseConfigurationUse) ends it. Copying it would leave the stable scope held after that release.
+  if(rec.uses.length)refuseMigration('in_use');
   for(const handle of Object.values(rec.bindings))Object.assign(state.secrets[handle],{registryId:custodian,scopeId,backendScopeId:key});
   rec.migratedTo=scopeId;
-  return state.configs[scopeId]={scopeId,revision:rec.revision,bindings:clone(rec.bindings),values:clone(rec.values),drafts:{},uses:[...rec.uses],migratedFrom:[key]};
+  const adopted=state.configs[scopeId]={scopeId,revision:rec.revision,bindings:clone(rec.bindings),values:clone(rec.values),drafts:{},uses:[],migratedFrom:[key]};
+  await persisters.get(state)();
+  return adopted;
  }
  const config=async(state,home,providerId,owner)=>{
   const scopeId=scope(home,providerId,owner);if(state.configs[scopeId])return state.configs[scopeId];
   const found=candidates(state,home,providerId,owner,scopeId,lineage?.replaces??[]);
   if(found.length>1)refuseMigration('ambiguous');
-  if(found.length===1)return adopt(state,scopeId,found[0]);
+  if(found.length===1)return adopt(state,providerId,scopeId,found[0]);
   const c={scopeId,revision:fresh(),bindings:{},values:{},drafts:{},uses:[]};
   // Legacy records have home/provider scope only. Never claim them for a named owner.
   if(!secretBackend&&/^[a-z0-9][a-z0-9._-]{0,127}$/.test(providerId)){
@@ -144,7 +160,10 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
     for(const [inputId,value]of Object.entries(legacy.text??{})){if(typeof value!=='string')fail('configuration_migration_required');c.values[inputId]=value;}
    }
   }
-  state.configs[scopeId]=c;return c;
+  state.configs[scopeId]=c;
+  // A record imported with bindings claims those handles: make that durable before any read releases their bytes.
+  if(Object.keys(c.bindings).length)await persisters.get(state)();
+  return c;
  };
  const select=(c,draftId)=>draftId?(c.drafts[draftId]??fail('configuration_stale')):c;
  const compare=(c,revision)=>{if(c.revision!==revision)fail('configuration_stale');};
@@ -235,7 +254,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
     if(!pristine)refuseMigration('conflict');
     delete s.configs[scopeId];
    }
-   return redacted(h,s,adopt(s,scopeId,found));
+   return redacted(h,s,await adopt(s,r.providerId,scopeId,found));
   }),
   resolveIdentity:({home,bootId}={})=>transaction(home,async s=>identity?clone(identity):{instanceId:s.instanceId,bootId:bootId??boot}),
   storeSecret:r=>transaction(r.home,async(s,h)=>{
@@ -337,7 +356,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   },
   releaseConfigurationUse:async r=>{
    if(!r||typeof r.home!=='string'||!r.home)fail('invalid_input');
-   const key=reservationKey(r.handle);
+   const handleKey=reservationKey(r.handle);
    // Validate scope before storage; never call config() or a credential backend.
    scope(r.home,r.providerId,r.owner);
    try{
@@ -348,12 +367,20 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
      catch(error){if(error.code==='ENOENT')return;throw error;}
      let state;try{state=JSON.parse(await file.readFile('utf8'));}finally{await file.close();}
      if(state?.schemaVersion!==1||!state.configs||typeof state.configs!=='object'||Array.isArray(state.configs))fail('secret_backend_unavailable');
-     const scopeId=scope(home,r.providerId,r.owner),c=state.configs[scopeId];
-     if(c===undefined)return;
-     if(c?.scopeId!==scopeId||!Array.isArray(c.uses)||!c.uses.every(x=>typeof x==='string'))fail('secret_backend_unavailable');
-     const uses=c.uses.filter(x=>x!==key);
-     if(uses.length===c.uses.length)return;
-     c.uses=uses;await atomicWrite(join(home,'embedding-state.json'),state);
+     // The stable scope, plus any earlier registry's record that has not moved yet: its reservation was made under that
+     // registry, and migration waits for it. Only the exact handle for this exact home, owner and provider is dropped;
+     // no configuration is removed and no absence is inferred.
+     const scopeId=scope(home,r.providerId,r.owner),keys=[scopeId];
+     for(const R of lineage?.replaces??[]){const key=legacyScope(R,home,r.providerId,r.owner);if(state.configs[key]&&!state.configs[key].migratedTo)keys.push(key);}
+     let changed=false;
+     for(const key of keys){
+      const c=state.configs[key];
+      if(c===undefined)continue;
+      if(c?.scopeId!==key||!Array.isArray(c.uses)||!c.uses.every(x=>typeof x==='string'))fail('secret_backend_unavailable');
+      const uses=c.uses.filter(x=>x!==handleKey);
+      if(uses.length!==c.uses.length){c.uses=uses;changed=true;}
+     }
+     if(changed)await atomicWrite(join(home,'embedding-state.json'),state);
     },{waitSeconds:30});
    }catch(error){if(error?.code==='invalid_input')throw error;throw embeddingError('secret_backend_unavailable');}
   },

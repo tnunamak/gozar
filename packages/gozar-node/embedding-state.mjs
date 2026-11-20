@@ -39,6 +39,31 @@ export function prerequisitesFor(inspection, observedAt) {
   });
 }
 
+/** The stored input id a setup action writes: the declared requirement for that action, else the action id. */
+export const inputIdOf = (adapter, action) => (adapter.definition.inputRequirements ?? []).find(row => row.actionId === action.id)?.id ?? action.id;
+
+/**
+ * The current input contract of an executable provider: the ids and roles its own declared actions can write
+ * (`provide-secret` writes a secret binding, `provide-value` writes plain text). This reads the same static
+ * declaration the catalog shows before any probe, so it needs no live observation, no configuration and no
+ * migration. An unknown provider, a declaration that throws, or one id in two roles has no contract (undefined).
+ */
+export function inputKindsOf(adapter) {
+  if (!adapter?.definition) return undefined;
+  let actions;
+  try { actions = adapter.configurationActions ? adapter.configurationActions() : adapter.setupActions({ setupNeeded: true }); } catch { return undefined; }
+  if (!Array.isArray(actions)) return undefined;
+  const kinds = Object.create(null);
+  for (const action of actions) {
+    const role = { 'provide-secret': 'secret', 'provide-value': 'text' }[action?.kind];
+    if (!role) continue;
+    const id = inputIdOf(adapter, action);
+    if (Object.hasOwn(kinds, id) && kinds[id] !== role) return undefined;
+    kinds[id] = role;
+  }
+  return kinds;
+}
+
 export function configurationFor(actions, saved, declared) {
   const inputRequirements = declared?structuredClone(declared):actions.filter(action => !needsSetupOperation(action) && ['provide-secret', 'provide-value'].includes(action.kind)).map(action => ({
     id: action.id, actionId: action.id, label: action.secretLabel ?? action.valueLabel ?? action.label,

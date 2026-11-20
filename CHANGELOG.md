@@ -8,7 +8,10 @@
   so every release orphaned the saved values and credentials of the one before it (a 0.4.0 `own-address` origin read
   back as unset on 0.5.1). The scope now uses a stable lineage name, one-time carry-forward recomputes the earlier
   scope from the published 0.4.0, 0.5.0 and 0.5.1 registry ids, and `registryLineage` plus `adoptConfiguration`
-  give hosts the same path. Consent still binds the content registry id, so changed code is approved again.
+  give hosts the same path. Consent still binds the content registry id, so changed code is approved again. A saved
+  input carries forward only when the provider's current declaration still names it with the same role, the claim is
+  written durably before any credential is read, and a route reservation made through the earlier registry blocks the
+  move until that route is released (the original service, or `releaseConfigurationUse` with the exact handle).
 - **Proof and observation boundaries under a host acknowledgment.** An explicit check rechecks that the route is live
   and runs its challenge (or a due lease renewal) under the reservation lock, so a close, stop or release cannot commit
   between the recheck and the start of the challenge; the host acknowledgment stays outside that lock. A check whose

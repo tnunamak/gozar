@@ -361,18 +361,32 @@ code or schema is still re-approved. Nothing in the stored state transfers an ol
 
 - The bundled registry uses the fixed custodian `gozar-bundled`. A host registry (custom `manifest`, `root` or
   injected `adapters`) keeps content-bound storage unless the host declares
-  `createGozar({registryLineage:{id,replaces,inputKinds?}})`. Matching provider definitions are not proof of the same
+  `createGozar({registryLineage:{id,replaces}})`. Matching provider definitions are not proof of the same
   executable, so Gozar never infers a lineage. A host lineage cannot use `gozar-bundled` or a published Gozar
   registry id.
 - One time, the first read of a provider recomputes the earlier scope from each trusted earlier registry id plus the
   exact home, owner and provider (bundled: the 0.4.0, 0.5.0 and 0.5.1 ids; host: `replaces`). The state file is not
   scanned. Config-only records carry no reverse metadata, so an unknown earlier registry id cannot be recovered.
-- The carry-forward is one atomic write of `embedding-state.json`: the stable record is created, bound secret
-  metadata is re-stamped and keeps its original backend scope (`backendScopeId`) so delegated backends still find
-  the item, and the earlier record stays as a tombstone (`migratedTo`). Live route reservations move with the record.
+- The carry-forward is one atomic write of `embedding-state.json`, the claim: the stable record is created, bound
+  secret metadata is re-stamped and keeps its original backend scope (`backendScopeId`) so delegated backends still
+  find the item, and the earlier record stays as a tombstone (`migratedTo`). Every path that can migrate (read,
+  resolve, mutate, `adoptConfiguration`) renames the claim before it asks the secret backend for anything, so a
+  fault leaves the earlier state as it was and no bytes were released. A second lineage that declares the same
+  predecessor finds the tombstone and is refused (`taken`) without any backend call. A resolve of an already-stable
+  scope writes nothing.
+- A saved input carries forward only when the provider's own current declaration (its `provide-secret` and
+  `provide-value` actions, read without any live probe) still names that input id with the same role. A provider
+  without such a declaration carries nothing forward. The lineage names which earlier scopes may be recomputed; it
+  never says which inputs are valid, and an input id alone never authorizes use of a credential.
+- A route reservation made through the earlier registry blocks the carry-forward (`in_use`): it is not copied,
+  because only the earlier registry's release (or the exact handle, below) can end it. The original service can
+  release it as before. The new service's `releaseConfigurationUse` also drops that exact handle, for that exact home,
+  owner and provider, from the earlier record when it has not moved; nothing else is removed and no absence is
+  inferred. Retry the read after the last reservation ends.
 - It refuses with `configuration_migration_required` (and never writes) when several earlier scopes match, a saved
-  input has the wrong role or an unknown id, secret metadata disagrees with the record, a draft, setup operation or
-  operation-held credential is open, or the earlier record already moved elsewhere.
+  input is not declared with the same role by the current provider, secret metadata disagrees with the record, a
+  draft, setup operation or operation-held credential is open, a route reservation remains, or the earlier record
+  already moved elsewhere.
 - `adoptConfiguration({home,owner?,providerId,fromRegistryId})` is the trusted host decision for the refusals above
   (choose between candidates, or name a predecessor that no lineage declares). It never overwrites a configuration
   that has values, bindings, drafts or uses.
