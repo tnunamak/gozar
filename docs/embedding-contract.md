@@ -46,6 +46,18 @@ must pin registry identity and host identity separately. Resolver loss must
 withdraw publication through the controller's loss callback. Credentials never
 belong in bootstrap, environment variables, arguments, events or errors.
 
+The broker binds one portable endpoint in a short, owner-private runtime
+directory below a trusted ancestor. Its descriptor is built from that actual
+allocation, not the durable home. The runtime helper owns bind, close and
+empty-directory cleanup; it records both directory and bound socket identity.
+Shutdown destroys accepted clients before the helper asks Node to close its
+listener. If ownership cannot be confirmed, the closed broker rejects new
+connections, leaves the listener unreferenced and retains the uncertain path
+rather than asking Node to unlink it. Cleanup never recurses and does not
+remove unexpected entries. Startup reports the primary error even if cleanup
+also fails. Authentication is unchanged; these ownership checks do not
+introduce a separate same-user trust boundary.
+
 Legacy direct setup calls retain their file-backed path. Migrate embedded callers
 to a configured factory and explicit provider/configuration revision requests.
 The decisive release check is the installed DataConnect integration using public

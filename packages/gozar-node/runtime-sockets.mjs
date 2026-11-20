@@ -1,6 +1,6 @@
 // Short, private IPC endpoint allocation. Durable state and route authority stay in the durable home.
 import {AsyncLocalStorage} from 'node:async_hooks';
-import {lstat,mkdtemp,realpath,rmdir} from 'node:fs/promises';
+import {chmod,lstat,mkdtemp,realpath,rmdir} from 'node:fs/promises';
 import {dirname,isAbsolute,join,resolve} from 'node:path';
 
 const MAX_SOCKET_BYTES=103;
@@ -59,16 +59,53 @@ export async function allocateRuntimeSocket(directory=factorySockets.getStore()?
  catch(error){throw invalidRoot('socketDirectory cannot allocate a private runtime directory',error);}
  const state=await lstat(root);
  const path=join(root,SOCKET_NAME);
+ const sameEntry=(first,next)=>first.dev===next.dev&&first.ino===next.ino&&next.uid===uid;
+ const entry=async path=>lstat(path).catch(error=>{if(error.code!=='ENOENT')throw error;});
+ const rootIsOurs=async()=>{
+  const current=await entry(root);
+  return current?.isDirectory()&&(current.mode&0o777)===0o700&&sameEntry(state,current);
+ };
  const cleanup=async()=>{
-  const current=await lstat(root).catch(error=>{if(error.code!=='ENOENT')throw error;});
-  if(!current||!current.isDirectory()||current.uid!==uid||current.dev!==state.dev||current.ino!==state.ino)return;
-  // Never recurse or unlink arbitrary entries. Node owns its bound endpoint; after server close
-  // this removes only our empty directory and preserves any unexpected entries.
+  if(!await rootIsOurs())return;
+  // Never recurse: preserve a directory that still has any unexpected entries.
   await rmdir(root).catch(error=>{if(!['ENOENT','ENOTEMPTY','EEXIST'].includes(error.code))throw error;});
  };
  if(!state.isDirectory()||state.uid!==uid||(state.mode&0o777)!==0o700||Buffer.byteLength(path,'utf8')>MAX_SOCKET_BYTES){
-  await cleanup();
-  throw invalidRoot('Could not allocate a private runtime socket directory within the path budget');
+  const error=invalidRoot('Could not allocate a private runtime socket directory within the path budget');
+  await cleanup().catch(()=>{});
+  throw error;
  }
- return {path,cleanup};
+ let boundEntry;
+ let boundServer;
+ const bind=async server=>{
+  if(boundServer)throw invalidRoot('Runtime endpoint is single-use');
+  boundServer=server;
+  if(!await rootIsOurs())throw invalidRoot('Runtime socket directory changed before bind');
+  await new Promise((resolve,reject)=>{
+   const fail=error=>{server.off('listening',ready);reject(error);};
+   const ready=()=>{server.off('error',fail);resolve();};
+   server.once('error',fail);
+   server.once('listening',ready);
+   try{server.listen(path);}catch(error){server.off('error',fail);server.off('listening',ready);reject(error);}
+  });
+  const current=await entry(path);
+  if(!current?.isSocket()||current.uid!==uid||!await rootIsOurs()){
+   throw invalidRoot('Could not confirm runtime socket ownership after bind');
+  }
+  boundEntry=current;
+  await chmod(path,0o600);
+ };
+ const close=async()=>{
+  if(boundServer?.listening){
+   // Node removes the socket path on close. Do not ask it to close a path
+   // whose allocation or bound inode cannot be confirmed.
+   boundServer.unref();
+   if(!boundEntry||!await rootIsOurs())return;
+   const current=await entry(path);
+   if(!current?.isSocket()||!sameEntry(boundEntry,current))return;
+   await new Promise((resolve,reject)=>boundServer.close(error=>error?reject(error):resolve()));
+  }
+  await cleanup();
+ };
+ return {path,bind,close,cleanup};
 }

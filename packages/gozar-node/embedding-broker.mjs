@@ -1,8 +1,6 @@
 // Host-owned authenticated, boot-bound resolver. Descriptor contains authority, never credentials.
 import net from 'node:net';
 import {randomBytes,timingSafeEqual} from 'node:crypto';
-import {chmod} from 'node:fs/promises';
-import {join} from 'node:path';
 import {canonicalHome} from './service-state.mjs';
 import {embeddingError} from './embedding-services.mjs';
 import {allocateRuntimeSocket} from './runtime-sockets.mjs';
@@ -10,12 +8,12 @@ const allowed=new Set(['ping','dispatchEffect','acknowledgeOrigin','readConfigur
 const same=(a,b)=>{if(typeof a!=='string'||typeof b!=='string')return false;const left=Buffer.from(a),right=Buffer.from(b);return left.length===right.length&&timingSafeEqual(left,right);};
 export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{},dispatchEffect,acknowledgeOrigin}){
  home=await canonicalHome(home,true);identity??=await services.resolveIdentity({home});
- const descriptor={socketPath:join(home,`resolver-${randomBytes(6).toString('hex')}.sock`),token:randomBytes(32).toString('hex'),...identity};
  const endpoint=await allocateRuntimeSocket();
- descriptor.socketPath=endpoint.path;
+ const descriptor={...identity,socketPath:endpoint.path,token:randomBytes(32).toString('hex')};
  const sockets=new Set();let closed=false,registered=false;
  const admittedBoots=new Set();
  const server=net.createServer(socket=>{
+  if(closed){socket.destroy();return;}
   sockets.add(socket);socket.setEncoding('utf8');let buffer='';let queue=Promise.resolve();
   socket.on('error',()=>{});socket.on('close',()=>{sockets.delete(socket);if(!closed)onLoss(embeddingError('secret_backend_unavailable'));});
   socket.on('data',chunk=>{
@@ -39,13 +37,10 @@ export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{}
  });
  const stop=async()=>{
   for(const socket of sockets)socket.destroy();
-  try{if(server.listening)await new Promise(resolve=>server.close(resolve));}
-  finally{await endpoint.cleanup();}
+  await endpoint.close();
  };
- try{
-  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(descriptor.socketPath,resolve);});
-  await chmod(descriptor.socketPath,0o600);
- }catch(error){closed=true;await stop();throw error;}
+ try{await endpoint.bind(server);}
+ catch(error){closed=true;try{await stop();}catch{/* Preserve the startup failure. */}throw error;}
  return {descriptor,async registerController({identity:nextIdentity}={}){
    if(closed)throw embeddingError('secret_backend_unavailable');
    if(!registered){
