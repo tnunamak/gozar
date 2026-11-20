@@ -801,6 +801,15 @@ export async function runAttachedController(directory, runtime = {}) {
   lease.approvedReview=bootstrap.consentReview??null;
   const reviewTokens=new Map();
   const safeRefresh=()=>!proofSession||typeof proofSession.refresh==='function';
+  const proofAuthorityLost = () => ownerLost || Boolean(releasing) || resolverLost || proofAbort.signal.aborted;
+  const consentObservation = () => ({attempt, receipt, generation:handle.generation, approvedReview:lease.approvedReview});
+  const consentObservationCurrent = observed => !proofAuthorityLost() && observed.attempt===attempt &&
+    observed.receipt===receipt && observed.generation===handle.generation && observed.approvedReview===lease.approvedReview;
+  const commitConsentEvidence = (observed, staged) => {
+    if(!consentObservationCurrent(observed))return false;
+    if(staged)lease.facts=staged.facts;
+    return true;
+  };
   // Before creation, derive current properties from inspection, not the lease's static defaults.
   async function currentConsent(runtimeFacts=receipt?{properties:lease.properties,facts:[...(lease.runtimeFacts??[]),...(lease.proof?.facts??[])]}:undefined){
     if(!lease.approvedReview)return null;
@@ -808,16 +817,17 @@ export async function runAttachedController(directory, runtime = {}) {
     const current=await currentRouteReview({...bootstrap.request,home:bootstrap.home,owner:bootstrap.owner,origin:original.scope.query.expectedOrigin},adapter,
       {...runtime,embeddingServices:resolver,registryId:bootstrap.registryId,platform:bootstrap.platform},
       {runtimeFacts});
-    lease.facts=current.facts;return current.review;
+    return {review:current.review,facts:current.facts};
   }
-  const proofAuthorityLost = () => ownerLost || Boolean(releasing) || resolverLost || proofAbort.signal.aborted;
   async function enforceConsent(){
+    const observed=consentObservation();
     if(ownerLost||releasing)return false;
     if(resolverLost){lease.state='unverified';return false;}
     let current;
     try { current=await currentConsent(); }
-    catch (error) { if(proofAuthorityLost())return false;await withdrawInvalidObservation();throw error; }
-    if(proofAuthorityLost())return false;
+    catch (error) { if(!consentObservationCurrent(observed))return false;await withdrawInvalidObservation();throw error; }
+    if(!commitConsentEvidence(observed,current))return false;
+    current=current?.review;
     if(current&&current.consentFactsDigest!==lease.approvedReview.consentFactsDigest){
       lease.state='unverified';lease.consentChange={oldDigest:lease.approvedReview.consentFactsDigest,newDigest:current.consentFactsDigest,
         nextAction:safeRefresh()?instructionAction('review-route-consent','Review changed route consent','Call reviewRouteConsent with this route handle, show the returned review and approveRouteConsent after approval.'):null,
@@ -878,15 +888,18 @@ export async function runAttachedController(directory, runtime = {}) {
   }
   // What the provider reports now: a consent review shows this, not what the last proof saw.
   async function refreshRuntimeFacts(){
+    const observed=consentObservation();
     try {
       const facts=await adapter.runtimeFacts(read,receipt);
       const properties=canonicalConsentValue(facts.properties);
       if(validateShape('Properties',properties).length)throw gozarError('invalid_input','Invalid runtime properties');
-      await currentConsent({properties,facts:[...(facts.facts??[]),...(lease.proof?.facts??[])]});
-      if(proofAuthorityLost())return;
-      Object.assign(lease,{properties,binding:facts.binding,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
+      if(!consentObservationCurrent(observed))return;
+      const staged=await currentConsent({properties,facts:[...(facts.facts??[]),...(lease.proof?.facts??[])]});
+      if(!commitConsentEvidence(observed,staged))return;
+      Object.assign(lease,{properties,binding:facts.binding,runtimeFacts:facts.facts??[],
+        ...(!staged?{facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]}:{})});
     } catch (error) {
-      if(proofAuthorityLost())return;
+      if(!consentObservationCurrent(observed))return;
       // Keep the last valid disclosures as history, but withdraw authority before refusing the observation.
       await withdrawInvalidObservation();throw error;
     }
@@ -1088,24 +1101,33 @@ export async function runAttachedController(directory, runtime = {}) {
         if (command.generation !== undefined && command.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
         if (command.type === 'status') { if (command.fresh) await verify(); return reply({ view: lastView(),startupComplete:initialSettled }); }
         if(command.type==='review-consent'){
+          const observed=consentObservation();
+          if(!consentObservationCurrent(observed))throw gozarError('consent_mismatch','The route authority changed; request a current review');
           lease.state='unverified';lease.consentChange={reason:safeRefresh()?'review-requested':'proof-refresh-unsupported',nextAction:safeRefresh()?instructionAction('review-route-consent','Review route consent','Approve the current review before publication can resume.'):null};await save();
           if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
           if(receipt&&!resourceRemoval&&!releasing&&initialSettled&&!failure)await refreshRuntimeFacts();
-          const current=await currentConsent();if(!current)throw gozarError('unsupported','This route has no current consent snapshot');
+          if(!consentObservationCurrent(observed))throw gozarError('consent_mismatch','The route authority changed; request a current review');
+          const staged=await currentConsent(),current=staged?.review;
+          if(!current)throw gozarError('unsupported','This route has no current consent snapshot');
           const scope={...current.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation};
           const {consentReview}=await import('./consent-facts.mjs');
           const review=consentReview({...current.canonicalInput,scope,typedDisclosures:current.canonicalInput.typedDisclosures,facts:current.canonicalInput.facts});
+          if(!commitConsentEvidence(observed,staged))throw gozarError('consent_mismatch','The route authority changed; request a current review');
           const token=randomBytes(32).toString('base64url'),expiresAt=new Date(now()+600000).toISOString();
           const snapshot={...consentSnapshot(review),subject:lease.proofSubject??null,approvalToken:token,expiresAt};
           reviewTokens.set(token,{snapshot,current});return reply({review:snapshot});
         }
         if(command.type==='approve-consent'){
+          const observed=consentObservation();
+          if(!consentObservationCurrent(observed))throw gozarError('consent_mismatch','The route authority changed; request a current review');
           lease.state='unverified';await save();
           if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
           const stored=reviewTokens.get(command.approvalToken);reviewTokens.delete(command.approvalToken);
           if(receipt&&!resourceRemoval&&!releasing&&initialSettled&&!failure)await refreshRuntimeFacts();
-          const current=await currentConsent();
+          if(!consentObservationCurrent(observed))throw gozarError('consent_mismatch','The route authority changed; request a current review');
+          const staged=await currentConsent(),current=staged?.review;
           if(!stored||Date.parse(stored.snapshot.expiresAt)<=now()||stored.snapshot.consentFactsDigest!==command.consentFactsDigest||stored.current.consentFactsDigest!==current?.consentFactsDigest||JSON.stringify(stored.snapshot.subject)!==JSON.stringify(lease.proofSubject??null))throw gozarError('consent_mismatch','The runtime review changed; request a new review');
+          if(!commitConsentEvidence(observed,staged))throw gozarError('consent_mismatch','The route authority changed; request a current review');
           lease.approvedReview=current;delete lease.consentChange;await verify();return reply({view:lastView()});
         }
         if(command.type==='finalize-removal'){
