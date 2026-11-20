@@ -880,11 +880,14 @@ export async function runAttachedController(directory, runtime = {}) {
       if (checked.attemptId !== attempt.id || checked.endpoint !== endpoint || attempt.signal.aborted || now() >= attempt.deadlineMs || releasing || ownerLost) {
         return { ...checked, status: 'unverified' };
       }
-      lease.proof = checked;
-      lease.facts = [...new Map([...(adapter.definition.facts ?? []), ...(lease.runtimeFacts ?? []), ...(checked.facts ?? [])].map(fact => [fact.id, fact])).values()];
     }
     const observed=Date.parse(checked.checkedAt);
     if(resolverLost||activeAttempt!==attempt||attempt.signal.aborted||releasing||ownerLost||now()>=attempt.deadlineMs||!proofObservedDuring(checked,started,now()))return {...checked,status:'unverified'};
+    // The observation is staged until every common guard has passed: a stale, malformed or out-of-window observation leaves the prior proof and facts as they were.
+    if (proofSession) {
+      lease.proof = checked;
+      lease.facts = [...new Map([...(adapter.definition.facts ?? []), ...(lease.runtimeFacts ?? []), ...(checked.facts ?? [])].map(fact => [fact.id, fact])).values()];
+    }
     if(!proofSession)lease.proof={...checked,vantage:checked.vantage??'this-device',checks:checked.status==='verified'?[...(endpoint.startsWith('https:')?['tls']:[]),'nonce',...(sse?['sse']:[])]:[],validUntil:new Date(observed+15000).toISOString()};
     lease.proofSubject=bootstrap.identity?{origin:endpoint,target:bootstrap.request.target,...bootstrap.identity,handleGeneration:handle.generation}:null;
     return checked;

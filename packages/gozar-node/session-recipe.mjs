@@ -184,27 +184,45 @@ export function sessionRecipeEffects({ adapter, readContext, request, handle, di
       allocation.driver.spawnProcess = fixtureSpawn(fixture);
     }
     live = allocation;
-    await prepareHost(allocation.driver, definition, { origin: request.origin ?? plan.origin ?? undefined, gate: target, authorities: runtime.hostAuthorities,
-      probeExecutor: sessionProbeExecutor({ runtime, gate: target, now: () => allocation.driver.nowMs() }) });
-    await allocation.command({ type: 'detect' });
-    await allocation.command({ type: 'recommend' });
-    // Another session holding this installation key is a route conflict the app can act on; it is refused before the provider is touched.
-    const started = await allocation.command({ type: 'start', adapterId: definition.id, consent: true }).catch(error => { throw error?.code === 'route_conflict' ? refused(error) : error; });
-    if (!allocation.heldProbe || !started.snapshot.candidate) {
-      // Nothing was announced. The controller removes through the same receipt, so a start that changed nothing ends confirmed and one that did stays debt.
-      const failure = await sessionStartFailure(started.snapshot, { home, adapterId: adapter.id, loadDefinitionFor: runtime.loadDefinition, portHoldersOf: runtime.portHolders, sessionPort: port });
-      throw runtimeFailure(Object.assign(failure, { cleanupReceipt: receipt() }));
+    // From here an owned effect may exist, so no failure leaves without the exact receipt that lets the controller remove it: the receipt names
+    // the session and the journal's owned resources, and removal reads the saved journal, not this process's memory. An unexpected error
+    // (a failed journal write, a core fault) becomes the generic provider failure, as the adapter wrapper would have made it, and carries that receipt.
+    try {
+      await prepareHost(allocation.driver, definition, { origin: request.origin ?? plan.origin ?? undefined, gate: target, authorities: runtime.hostAuthorities,
+        probeExecutor: sessionProbeExecutor({ runtime, gate: target, now: () => allocation.driver.nowMs() }) });
+      await allocation.command({ type: 'detect' });
+      await allocation.command({ type: 'recommend' });
+      // Another session holding this installation key is a route conflict the app can act on; it is refused before the provider is touched.
+      const started = await allocation.command({ type: 'start', adapterId: definition.id, consent: true }).catch(error => { throw error?.code === 'route_conflict' ? refused(error) : error; });
+      if (!allocation.heldProbe || !started.snapshot.candidate) {
+        // Nothing was announced. The controller removes through the same receipt, so a start that changed nothing ends confirmed and one that did stays debt.
+        const failure = await sessionStartFailure(started.snapshot, { home, adapterId: adapter.id, loadDefinitionFor: runtime.loadDefinition, portHoldersOf: runtime.portHolders, sessionPort: port });
+        throw runtimeFailure(Object.assign(failure, { cleanupReceipt: receipt() }));
+      }
+      // The origin names the one provider port this session took; the other candidates are free again for others.
+      const taken = Number(new URL(started.snapshot.candidate).port);
+      if (reservedPorts.length > 1 && reservedPorts.includes(taken)) await narrowSessionReservation({ home, port, providerPorts: [taken] }).catch(() => {});
+      return receipt(started.snapshot.candidate);
+    } catch (error) {
+      if (error?.cleanupReceipt) throw error;
+      throw runtimeFailure(Object.assign(gozarError('provider_unavailable', 'The route could not be started'), { cleanupReceipt: receipt() }));
     }
-    // The origin names the one provider port this session took; the other candidates are free again for others.
-    const taken = Number(new URL(started.snapshot.candidate).port);
-    if (reservedPorts.length > 1 && reservedPorts.includes(taken)) await narrowSessionReservation({ home, port, providerPorts: [taken] }).catch(() => {});
-    return receipt(started.snapshot.candidate);
   }
 
   async function remove(receipt) {
+    // The receipt must name this session and this adapter before anything is read or removed, and a journal recovered from the directory must be
+    // this session's own: a receipt or directory that belongs to another allocation changes nothing and leaves the debt where it is.
+    const sessionId = handle.id.split(':').slice(1).join(':');
+    const unbound = { removed: false, debt: { message: 'The removal receipt does not belong to this session; nothing was changed' } };
+    if (receipt?.adapterId !== adapter.id || receipt.identity?.kind !== 'session-recipe' || receipt.identity.sessionId !== sessionId) return unbound;
     let result;
     try {
-      result = live && live.sessionId === receipt?.identity?.sessionId ? await live.shutdown() : await recoverStop(directory);
+      if (live && live.sessionId === sessionId) result = await live.shutdown();
+      else {
+        const saved = new Journal(directory); await saved.load();
+        if (saved.value.state && saved.value.state.sessionId !== sessionId) return unbound;
+        result = await recoverStop(directory);
+      }
     } catch (error) {
       if (error.code === 'route_not_found') return { removed: true, debt: null };
       throw error;

@@ -59,9 +59,10 @@ const waitFirstOutput = child => new Promise(resolve => { const timer = setTimeo
  * `options.originAckTimeoutMs`  how long the host may hold the acknowledgment before the start fails closed.
  * `options.routeDeps`    extra route-API dependencies (a `publicationCut`, wrapped `embeddingServices`): the world is then built on the route API directly
  *                        with the same fixture effects, not through the public testing factory, so a test can cut or observe the owner process.
+ * `options.before`       an async hook `(effect, input)` run before each declared fixture effect handler (to cut the world at an exact effect)
  * `options.hold`         an async hook run when the library's proof request arrives (after the acknowledgment).
  */
-export async function providerWorld(t, providerId, { acknowledge, hold, tailscale = {}, lifetimeMs = 60_000, originAckTimeoutMs, routeDeps, operationId = `unified-${providerId}-${randomUUID().slice(0, 8)}` } = {}) {
+export async function providerWorld(t, providerId, { acknowledge, hold, tailscale = {}, lifetimeMs = 60_000, originAckTimeoutMs, routeDeps, before, operationId = `unified-${providerId}-${randomUUID().slice(0, 8)}` } = {}) {
   const closing = {}; t.after(async () => { await closing.harness?.close(); for (const child of closing.children ?? []) child.kill(); });
   closing.children = [];
   const home = await scratch(t), owner = 'consumer-owner', events = [], owned = new Map();
@@ -165,6 +166,7 @@ export async function providerWorld(t, providerId, { acknowledge, hold, tailscal
     announced = `https://device.example-tailnet.ts.net:${providerId === 'tailscale-funnel' ? 8443 : 8443}`;
   }
 
+  if (before) effects = effects.map(effect => ({ ...effect, handle: async input => { await before(effect, input); return effect.handle(input); } }));
   const harness = routeDeps ? directHarness({ effects, ...(acknowledgeOrigin ? { acknowledgeOrigin } : {}), ...(originAckTimeoutMs ? { originAckTimeoutMs } : {}), ...harnessOptions, ...routeDeps })
     : await createTestingGozar({ effects, ...(acknowledgeOrigin ? { acknowledgeOrigin } : {}), ...(originAckTimeoutMs ? { originAckTimeoutMs } : {}), ...harnessOptions });
   closing.harness = harness;

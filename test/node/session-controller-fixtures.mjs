@@ -12,7 +12,7 @@ const helperUrl = pathToFileURL(join(root, 'test/node/route-schema-check.mjs')).
 const readContext = { now: () => Date.now(), configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified' }) };
 
 /** A controller module: `tune` edits the stub adapter the controller process holds (e.g. makes create throw or verify fail). */
-export async function sessionWorld(t, tune = '', { port = 8799 } = {}) {
+export async function sessionWorld(t, tune = '', { port = 8799, validation = 'none' } = {}) {
   const home = await attachedScratch(t), tokens = tokenStubs(), module = join(home, 'controller.mjs');
   await writeFile(module, `import { readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -22,7 +22,7 @@ export default async function () {
   writeFileSync(file, JSON.stringify({ ...bootstrap, identity: { instanceId: 'fixture-instance', bootId: randomUUID() } }));
   const adapter = stubAdapter('stub-b');
   ${tune}
-  return { adapters: [adapter], effectContext: () => ({}), validation: 'none',
+  return { adapters: [adapter], effectContext: () => ({}), validation: ${JSON.stringify(validation)},
     readContext: { now: () => Date.now(), configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified' }) } };
 }
 `);

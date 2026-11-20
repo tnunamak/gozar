@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { fixture } from './helpers.mjs';
 import { loadCore } from '../../packages/gozar-node/core.mjs';
 import { recoveryAdapters } from '../../packages/gozar-node/session-recipe.mjs';
-import { closeLegacySession, legacyControllerAlive } from '../../packages/gozar-node/legacy-session-record.mjs';
+import { closeLegacySession, legacyControllerAlive, readLegacySession } from '../../packages/gozar-node/legacy-session-record.mjs';
 import { atomicWrite, processIdentity } from '../../packages/gozar-node/journal.mjs';
 import { EffectDriver } from '../../packages/gozar-node/driver.mjs';
 
@@ -57,6 +57,49 @@ test('a replaced controller birth identity is never signalled; the journal alone
 test('a missing journal is cleanup debt, never confirmed absence', async t => {
   const { directory } = await fixture(t, {});
   await assert.rejects(closeLegacySession(directory, null), { code: 'cleanup_debt' });
+});
+
+// The two historical files must agree on the incarnation they describe; a partial update that left them disagreeing is debt, not a projected record.
+async function recordedFiles(t, { bootstrapId, journalId, owned = {} }) {
+  const { directory, journal } = await fixture(t, {});
+  const step = await loadCore();
+  const initial = step({ command: { type: 'status', sessionId: journalId } });
+  await journal.save({ state: initial.state, snapshot: { ...initial.snapshot, sessionId: journalId, phase: 'cleanup-pending' }, owned });
+  await atomicWrite(join(directory, 'bootstrap.json'), { targetPort: 8123, adapterId: 'fake', sessionId: bootstrapId });
+  return { directory, journal };
+}
+
+test('reader: files that name the same session are returned, and a handle for that session is accepted', async t => {
+  const { directory } = await recordedFiles(t, { bootstrapId: 'same-session', journalId: 'same-session' });
+  const read = await readLegacySession(directory, 'same-session');
+  assert.equal(read.bootstrap.sessionId, 'same-session');
+  assert.equal(read.journal.snapshot.sessionId, 'same-session');
+});
+
+test('reader: files that name different sessions are debt for every handle, project nothing, and are left untouched', async t => {
+  const { directory } = await recordedFiles(t, { bootstrapId: 'session-a', journalId: 'session-b' });
+  const before = [await readFile(join(directory, 'bootstrap.json'), 'utf8'), await readFile(join(directory, 'session.json'), 'utf8')];
+  for (const handleSession of ['session-a', 'session-b', null]) {
+    await assert.rejects(readLegacySession(directory, handleSession), { code: 'cleanup_debt' }, `handle ${handleSession}`);
+    await assert.rejects(closeLegacySession(directory, handleSession), { code: 'cleanup_debt' }, `close ${handleSession}`);
+  }
+  assert.deepEqual([await readFile(join(directory, 'bootstrap.json'), 'utf8'), await readFile(join(directory, 'session.json'), 'utf8')], before);
+});
+
+test('reader: one record that names a session still binds the handle, and the other absent is not a disagreement', async t => {
+  const { directory } = await recordedFiles(t, { bootstrapId: undefined, journalId: 'only-journal' });
+  assert.equal((await readLegacySession(directory, 'only-journal')).journal.snapshot.sessionId, 'only-journal');
+  await assert.rejects(readLegacySession(directory, 'another'), { code: 'route_conflict' });
+});
+
+test('a missing controller identity beside unresolved cleanup evidence is debt, not absence of the controller; nothing is removed', async t => {
+  const { directory, journal } = await recordedFiles(t, { bootstrapId: 'old-session', journalId: 'old-session', owned: { r1: { id: 'r1', kind: 'process', sessionId: 'old-session', pid: 1 } } });
+  assert.deepEqual(await legacyControllerAlive(directory), { alive: false, known: false, pid: null });
+  await assert.rejects(closeLegacySession(directory, 'old-session'), { code: 'cleanup_debt' });
+  await journal.load();
+  assert.deepEqual(Object.keys(journal.value.owned), ['r1'], 'the recorded resource is still recorded');
+  await atomicWrite(join(directory, 'control.json'), { pid: 1, nonce: 'n' });
+  await assert.rejects(closeLegacySession(directory, 'old-session'), { code: 'cleanup_debt' }, 'a partial identity (no birth identity) proves nothing either');
 });
 
 test('a stale handle for a replaced session is route_conflict, not a close', async t => {
