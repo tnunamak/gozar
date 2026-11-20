@@ -761,7 +761,11 @@ export async function runAttachedController(directory, runtime = {}) {
     limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
   let receipt = null, lastBeat = now(), releasing = null, releasingAt = 0, failure = null, gate = null, proofSession = null,initialSettled=false;
   let ownerLost = false, gateClosing = null, proofClosing = null, localCloseUnconfirmed = false;
-  const visibleLease = () => ownerLost && localCloseUnconfirmed ? { ...lease, state: 'uncertain', cleanup: { state: 'unconfirmed', message: 'Local forwarding closure remains unconfirmed; retain this recovery handle' } } : lease;
+  const visibleLease = () => {
+    if (!ownerLost) return lease;
+    if (localCloseUnconfirmed) return { ...lease, state: 'uncertain', cleanup: { state: 'unconfirmed', message: 'Local forwarding closure remains unconfirmed; retain this recovery handle' } };
+    return lease.state === 'usable' ? { ...lease, state: 'unverified' } : lease;
+  };
   const nonce = randomBytes(32).toString('hex');
   const lastView = () => ({...projectAttached(expired()&&visibleLease().state==='usable'?{...visibleLease(),state:'unverified'}:visibleLease(), { handle, now: now() }),operationId:bootstrap.operationId??null,...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
   let resourceRemoval=null;
@@ -806,11 +810,14 @@ export async function runAttachedController(directory, runtime = {}) {
       {runtimeFacts});
     lease.facts=current.facts;return current.review;
   }
+  const proofAuthorityLost = () => ownerLost || Boolean(releasing) || resolverLost || proofAbort.signal.aborted;
   async function enforceConsent(){
+    if(ownerLost||releasing)return false;
     if(resolverLost){lease.state='unverified';return false;}
     let current;
     try { current=await currentConsent(); }
-    catch (error) { await withdrawInvalidObservation();throw error; }
+    catch (error) { if(proofAuthorityLost())return false;await withdrawInvalidObservation();throw error; }
+    if(proofAuthorityLost())return false;
     if(current&&current.consentFactsDigest!==lease.approvedReview.consentFactsDigest){
       lease.state='unverified';lease.consentChange={oldDigest:lease.approvedReview.consentFactsDigest,newDigest:current.consentFactsDigest,
         nextAction:safeRefresh()?instructionAction('review-route-consent','Review changed route consent','Call reviewRouteConsent with this route handle, show the returned review and approveRouteConsent after approval.'):null,
@@ -876,8 +883,10 @@ export async function runAttachedController(directory, runtime = {}) {
       const properties=canonicalConsentValue(facts.properties);
       if(validateShape('Properties',properties).length)throw gozarError('invalid_input','Invalid runtime properties');
       await currentConsent({properties,facts:[...(facts.facts??[]),...(lease.proof?.facts??[])]});
+      if(proofAuthorityLost())return;
       Object.assign(lease,{properties,binding:facts.binding,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
     } catch (error) {
+      if(proofAuthorityLost())return;
       // Keep the last valid disclosures as history, but withdraw authority before refusing the observation.
       await withdrawInvalidObservation();throw error;
     }
@@ -891,7 +900,7 @@ export async function runAttachedController(directory, runtime = {}) {
     if (resolverLost) { lease.state='unverified'; await save(); return; }
     await refreshRuntimeFacts();
     if(!await enforceConsent())return;
-    if (proofSession && !proofSession.refresh) return;
+    if (proofAuthorityLost() || (proofSession && !proofSession.refresh)) return;
     try {
       attempt={id:randomUUID(),nonce:randomBytes(32).toString('hex'),deadlineMs:session?Math.min(bootstrap.expiresAtMs,now()+120000):now()+120000,signal:proofAbort.signal};
       if(!proofSession)gate?.rotate();
@@ -899,6 +908,7 @@ export async function runAttachedController(directory, runtime = {}) {
       const verification = proofSession
         ? await proofSession.refresh({ origin: lease.origin, receipt, attempt })
         : await checkProof(false);
+      if(proofAuthorityLost())return;
       if (proofSession) {
         if (verification.attemptId !== attempt.id || verification.endpoint !== lease.origin || attempt.signal.aborted || now() >= attempt.deadlineMs || releasing) return;
         if (!proofObservedDuring(verification, started, now())) {
@@ -910,8 +920,9 @@ export async function runAttachedController(directory, runtime = {}) {
         lease.proof = verification;
         lease.facts = [...(adapter.definition.facts ?? []), ...(verification.facts ?? [])];
       }
-      if (!releasing&&await enforceConsent()) { lease.state = verification.status === 'verified' ? 'usable' : 'unverified'; lease.checkedAtMs = Date.parse(verification.checkedAt); lease.sseChecked = false; await save(); }
-    } catch { if (!releasing) { lease.state = 'unverified'; await save(); } }
+      if(!await enforceConsent()||proofAuthorityLost())return;
+      lease.state = verification.status === 'verified' ? 'usable' : 'unverified'; lease.checkedAtMs = Date.parse(verification.checkedAt); lease.sseChecked = false; await save();
+    } catch { if (!proofAuthorityLost()) { lease.state = 'unverified'; await save(); } }
   }
   async function removeRoute() {
     let observed;
@@ -946,15 +957,16 @@ export async function runAttachedController(directory, runtime = {}) {
       if (!origin) throw gozarError('provider_unavailable', 'The provider returned no usable origin');
       Object.assign(lease, { properties: facts.properties,binding:facts.binding, ingress: facts.ingress ?? null, limits: facts.limits,runtimeFacts:facts.facts??[], facts: [...new Map([...(adapter.definition.facts ?? []), ...(facts.facts ?? [])].map(f=>[f.id,f])).values()], origin, state: 'unverified' });
       await save();
-      if(!await enforceConsent())return;
+      if(!await enforceConsent()||proofAuthorityLost())return;
       // The host boundary: with a declared acknowledgment handler, verification waits for the host to bind
       // this exact origin. Nothing is reported published until the host has answered and the validation passes.
       if (!await acknowledgeAllocatedOrigin(origin))
         throw gozarError('verification_failed', 'The host did not acknowledge the allocated origin; the route was withdrawn');
       // Nothing is reported published until the validation passes; a failed check withdraws the route.
       const checked = await checkProof(claimsSse);
+      if(proofAuthorityLost())return;
       if (checked.status !== 'verified') throw gozarError('verification_failed', 'The route did not pass publication validation and was withdrawn');
-      if(!await enforceConsent())return;
+      if(!await enforceConsent()||proofAuthorityLost())return;
       lease.state = 'usable'; lease.checkedAtMs = Date.parse(checked.checkedAt); lease.sseChecked = gated && claimsSse;
       await save();
     } catch (cause) {
