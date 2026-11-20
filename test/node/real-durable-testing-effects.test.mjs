@@ -30,7 +30,7 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
   }},
  ];
  harness=await createTestingGozar({effects});const api=harness.gozar;
- const choices=(await api.listProviders({home,owner})).providers.filter(p=>p.availability.durable.state==='available');assert.equal(choices.length,2);
+ const choices=(await api.listProviders({home,owner,refresh:true})).providers.filter(p=>p.availability.durable.state==='available');assert.equal(choices.length,2);
  for(const [index,provider]of choices.entries()){
   const q=query({home,owner,providerId:provider.providerId,operationId:`durable-${index}`,target:`127.0.0.1:${app.address().port}`,usage:{kind:'durable',routeId:`fixture-${index}`},requirements:{reach:provider.reach,transport:'https',payloadAccess:'allow-provider',address:'stable',setup:'allow',protocols:[]}});
   if(adoptExisting){config={...config,TCP:{...config.TCP,'443':{HTTPS:true}},Web:{'fixture.node.invalid:443':{Handlers:{'/':{Proxy:`http://${q.target}`}}}},AllowFunnel:{'fixture.node.invalid:443':true}};q.origin='https://fixture.node.invalid';q.intent='adopt';}

@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { canonicalHome } from './service-state.mjs';
 import { gozarError, normalizeError, instructionAction } from './error-normalizer.mjs';
 import { supportedPlatform } from './platform.mjs';
-import { availabilityFor, prerequisitesFor, configurationFor, features } from './embedding-state.mjs';
+import { availabilityFor, prerequisitesFor, configurationFor, features, hostBoundaryOf } from './embedding-state.mjs';
 import { readConfiguration } from './adapter-configuration.mjs';
 import { bindConfiguration } from './adapter-configuration.mjs';
 import { loopbackTarget } from './durable-route.mjs';
@@ -89,6 +89,7 @@ export async function defaultReadContext() {
 export async function readContextFor(deps, home, platform, owner = deps.owner) {
   return { ...(deps.readContext ?? await defaultReadContext()), home, platform,
     ...(deps.embeddingServices ? {providerConfiguration: providerId => deps.embeddingServices.resolveConfiguration({home,owner,providerId})} : {}),
+    ...(deps.runtimeModules ? { runtimeModules: deps.runtimeModules } : {}),
     ...(deps.dispatchEffect ? {dispatchEffect: deps.dispatchEffect,probe:async recipe=>(await loadRuntime()).probeWithEffects(recipe,deps.dispatchEffect)} : {}) };
 }
 
@@ -125,14 +126,14 @@ const failureFacts = failure => failure ? [{id: 'catalog-observation', label: 'R
 // --- One adapter, observed ----------------------------------------------------------------------
 
 /**
- * Read-only observation of one adapter. A failing probe is an `unknown` state, never a thrown catalog error;
- * on a platform other than Linux nothing is probed and the adapter is `unsupported`.
+ * The live provider observation: one detect with failure capture. This is the part a polling read pays
+ * for; the cheap derivation that follows lives in `inspectionOf`, so a cached detection can be rebuilt
+ * without ever touching the provider. A failing probe is an `unknown` state, never a thrown catalog error.
  */
-export async function inspectAdapter(adapter, context, platform) {
-  const base = { adapter, properties: adapter.definition.capabilities, actions: [] };
-  if (!supportedPlatform(platform)) return { ...base, state: 'unsupported', facts: null, probed: false };
+export async function detectAdapter(adapter, context, platform) {
+  if (!supportedPlatform(platform)) return { state: 'unsupported', facts: null, probed: false, failure: null };
   let detected, failure = null;
-  const observedContext = {...context};
+  const observedContext = { ...context };
   for (const name of ['probe', 'dispatchEffect']) if (typeof context[name] === 'function') {
     observedContext[name] = async (...args) => {
       try { return await context[name](...args); }
@@ -140,22 +141,39 @@ export async function inspectAdapter(adapter, context, platform) {
     };
   }
   try { detected = await adapter.detect(bindConfiguration(observedContext, adapter.id)); }
-  catch (error) { return { ...base, state: 'unknown', facts: null, probed: true, failure: failure ?? catalogFailure(error) }; }
+  catch (error) { return { state: 'unknown', facts: null, probed: true, failure: failure ?? catalogFailure(error) }; }
   const state = failure ? 'unknown' : ['ready', 'action-required', 'unsupported', 'unknown'].includes(detected?.state) ? detected.state : 'unknown';
   if (state === 'unknown') failure ??= catalogFailure(null);
+  return { state, facts: detected.facts, probed: true, failure };
+}
+
+/** The cheap derivation of an inspection from a detection: properties and offered actions, no provider I/O. */
+export function inspectionOf(adapter, detection, platform) {
+  const base = { adapter, properties: adapter.definition.capabilities, actions: [] };
+  if (detection.probed === false) return { ...base, state: detection.state, facts: null, probed: false, failure: detection.failure ?? null };
+  const { state, facts, failure } = detection;
   let properties = base.properties, actions = [];
-  try { properties = adapter.properties(detected.facts); } catch { /* keep the declared capabilities */ }
-  if (state !== 'unsupported') { try { actions = adapter.configurationActions ? adapter.configurationActions() : adapter.setupActions({ ...detected.facts, setupNeeded: true }); } catch { /* no usable actions */ } }
+  try { properties = adapter.properties(facts); } catch { /* keep the declared capabilities */ }
+  if (state !== 'unsupported') { try { actions = adapter.configurationActions ? adapter.configurationActions() : adapter.setupActions({ ...facts, setupNeeded: true }); } catch { /* no usable actions */ } }
   let missingActions = [];
-  try { missingActions = adapter.setupActions(detected.facts); } catch {}
-  actions=[...new Map([...actions,...missingActions].map(action=>[action.id,action])).values()];
-  return { ...base, state, facts: detected.facts, properties, actions, missingActions, probed: true, failure };
+  try { missingActions = adapter.setupActions(facts); } catch {}
+  actions = [...new Map([...actions, ...missingActions].map(action => [action.id, action])).values()];
+  return { ...base, state, facts, properties, actions, missingActions, probed: true, failure };
+}
+
+/**
+ * Read-only observation of one adapter. A failing probe is an `unknown` state, never a thrown catalog error;
+ * on a platform other than Linux nothing is probed and the adapter is `unsupported`.
+ */
+export async function inspectAdapter(adapter, context, platform) {
+  if (!supportedPlatform(platform)) return { ...{ adapter, properties: adapter.definition.capabilities, actions: [] }, state: 'unsupported', facts: null, probed: false };
+  return inspectionOf(adapter, await detectAdapter(adapter, context, platform), platform);
 }
 
 /** One revision for the provider-side state: it changes when a setup state, an action or a property changes. */
-export function catalogRevisionOf(inspections, platform) {
+export function catalogRevisionOf(inspections, platform, host) {
   const view = inspections.map(item => ({ id: item.adapter.id, state: item.state, ownership: ownershipFor(item.adapter.definition), properties: item.properties,
-    facts: [...catalogFactsFor(item), ...failureFacts(item.failure)], availability: availabilityFor(item.adapter.definition),
+    facts: [...catalogFactsFor(item), ...failureFacts(item.failure)], availability: availabilityFor(item.adapter.definition, { adapter: item.adapter, host }),
     actions: item.actions.map(action => [action.id, action.digest, action.disclosure.revision]), disclosure: item.adapter.definition.disclosure.revision }));
   return `catrev_${sha(JSON.stringify([platform, view])).slice(0, 32)}`;
 }
@@ -200,6 +218,9 @@ async function collect(query, deps) {
   const context = { ...await readContextFor(deps, home, platform, query.owner), origin: query.origin ?? null };
   // An unknown named route is an error before any provider is asked.
   if (query.route !== undefined && supportedPlatform(platform)) await context.configuration(query.route);
+  // The catalog issues single-use consent tokens bound to what Gozar actually observed, so its detection
+  // sweep is always live: it is an action read, not a routine poll. The cached surfaces are the provider
+  // inventory and offered configuration; redemption re-proves the provider independently.
   const inspections = await Promise.all(selectAdapters(adapters, query.providerId).map(adapter => inspectAdapter(adapter, context, platform)));
   const pinned = deps.pinnedAdapterId ? await deps.pinnedAdapterId(query) : null;
 
@@ -263,7 +284,7 @@ async function collect(query, deps) {
       if (setup) setup.actual = {known: false, reason: failure.reason};
       inspection.failure = failure;
     }
-    const availability = availabilityFor(definition);
+    const availability = availabilityFor(definition, { adapter, host: hostBoundaryOf(deps) });
     if(unavailableHost)for(const kind of Object.keys(availability))if(availability[kind].state==='available')availability[kind]={state:'unsupported',reason:`host-capability-${unavailableHost.state}`};
     if (supportedPlatform(platform) && availability[query.usage.kind].state === 'detect-only') setupState = 'detect-only';
     const eligible = unmet.length === 0 && availability[query.usage.kind].state === 'available';
@@ -338,7 +359,7 @@ export async function catalogRoutes(query, deps = {}) {
     const adapters = deps.adapters ?? await runtime.loadAdapters();
     const { candidates, inspections } = await collect(query, { ...deps, adapters, platform, issue, durablePlanFacts, preferences: preferenceRecord.adapterPreference });
     const unmetNames = [...new Set(candidates.flatMap(candidate => candidate.unmet.map(item => item.requirement)))].sort();
-    return { schemaVersion: 2, features: [...features], catalogRevision: catalogRevisionOf(inspections, platform), observedAt: new Date((deps.now ?? Date.now)()).toISOString(),
+    return { schemaVersion: 2, features: [...features], catalogRevision: catalogRevisionOf(inspections, platform, hostBoundaryOf(deps)), observedAt: new Date((deps.now ?? Date.now)()).toISOString(),
       preferenceRevision: preferenceRecord.revision, candidates,
       noMatch: candidates.some(candidate => candidate.eligible) ? null : { code: 'requirements_unsatisfied', requirements: unmetNames } };
   } catch (error) { throw normalizeError(error); }

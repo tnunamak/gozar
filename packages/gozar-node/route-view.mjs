@@ -175,9 +175,9 @@ export async function propertiesFor(adapterId, deps, kind) {
 
 const defaults = {
   durable: {
-    async status({ home, handle }, { adapters } = {}) {
+    async status({ home, handle }, { adapters, observe } = {}) {
       const { statusRoutes } = await import('./durable-route.mjs');
-      const route = (await statusRoutes({ routeId: handle.id, home }, { adapters })).routes[0];
+      const route = (await statusRoutes({ routeId: handle.id, home }, { adapters, observe })).routes[0];
       if (!route) throw gozarError('route_not_found', `No durable route ${handle.id}`);
       return route;
     },
@@ -187,11 +187,13 @@ const defaults = {
     },
   },
   session: {
-    async status({ home, handle }) {
-      const { control } = await import('./daemon.mjs');
+    // `observe` is the watch's and the internal close read's: the daemon's authenticated, read-only `observe` command
+    // (daemon.mjs observeSession) instead of `status`, which runs the controller's own health probe.
+    async status({ home, handle }, { observe = false } = {}) {
+      const { control, observeSession } = await import('./daemon.mjs');
       const [directory, sessionId] = checkedSession(handle.id);
       let reply;
-      try { reply = await control(join(home, directory), { type: 'status' }, 30_000); }
+      try { reply = observe ? await observeSession(join(home, directory), { sessionId, handleGeneration: handle.generation }) : await control(join(home, directory), { type: 'status' }, 30_000); }
       catch (cause) { if(cause.code&&cause.code!=='ENOENT'&&cause.code!=='ECONNREFUSED')throw cause;throw gozarError('route_not_found', `No running session ${handle.id}`, null, cause); }
       if (sessionId && reply.snapshot?.sessionId !== sessionId) throw gozarError('route_conflict', 'The session was replaced; this handle is stale');
       return reply;
@@ -207,7 +209,8 @@ const defaults = {
   external: {
     async status({ home, handle }) {
       const { statusServices } = await import('./service.mjs');
-      const route = (await statusServices({ home, origin: handle.id })).routes.find(item => item.ownership === 'external-owned');
+      // Only the owner-kept record: the unfiltered listing also re-proves every durable route in the home.
+      const route = (await statusServices({ home, origin: handle.id, ownerKeptOnly: true })).routes.find(item => item.ownership === 'external-owned');
       if (!route) throw gozarError('route_not_found', 'No external service record for this origin');
       return route;
     },
@@ -220,24 +223,34 @@ const defaults = {
 export const splitSession = id => { const at = id.indexOf(':'); return at < 0 ? [id, null] : [id.slice(0, at), id.slice(at + 1)]; };
 function checkedSession(id){const parts=splitSession(id);if(!/^port-[0-9]+$/.test(parts[0])||!parts[1]||!/^[A-Za-z0-9_-]+$/.test(parts[1]))throw gozarError('invalid_input','Invalid session handle');return parts;}
 
-/** Fresh proof for one handle. An external service is read with handle {kind:'external', id:<origin>}. */
+/**
+ * Fresh proof for one handle. An external service is read with handle {kind:'external', id:<origin>}.
+ * `deps.observe` is the watch's and close's read, set only when the host declared an acknowledgment handler: every
+ * allocated-origin route is then observed, never proven, so that no acknowledgment is asked outside a call the host opened.
+ * Durable reads the recorded state and the latest remembered proof (durable-route.mjs, lastProofs); attached and generic
+ * session routes ask their own controller's authenticated `observe` command; a legacy session asks the daemon's `observe`.
+ * An owner-kept external route has no allocation and is proven against its one exact owner-supplied origin (no acknowledgment).
+ */
 export async function routeStatus(request, deps = {}) {
   const handle = checkRef(request);
   const now = deps.now?.() ?? Date.now();
   try {
     switch (handle.kind) {
       case 'durable': {
-        const reply = await (deps.durable ?? defaults.durable).status(request, { adapters: deps.adapters });
+        const reply = await (deps.durable ?? defaults.durable).status(request, { adapters: deps.adapters, observe: deps.observe });
         if (Number.isInteger(reply.generation) && reply.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
         return projectDurable(reply, { handle, now, ...await propertiesFor(reply.adapterId, deps, 'durable') });
       }
       case 'session': {
         const generic=await defaults.attached();
-        if(await generic.genericSessionRecord(request))return await generic.attachedStatus(request,deps.attachedDeps);
-        const reply = await (deps.session ?? defaults.session).status(request);
+        if(await generic.genericSessionRecord(request))return await (deps.observe?generic.observeAttachedRoute(request,{asStatus:true}):generic.attachedStatus(request,deps.attachedDeps));
+        const reply = await (deps.session ?? defaults.session).status(request, { observe: deps.observe });
         return projectSession(reply, { handle, now, ...await propertiesFor(reply.snapshot?.adapterId, deps, 'session') });
       }
-      case 'attached': return await (deps.attached ?? await defaults.attached()).attachedStatus(request, deps.attachedDeps);
+      case 'attached': {
+        const attached = deps.attached ?? await defaults.attached();
+        return await (deps.observe && attached.observeAttachedRoute ? attached.observeAttachedRoute(request, { asStatus: true }) : attached.attachedStatus(request, deps.attachedDeps));
+      }
       case 'external': return projectExternal(await (deps.external ?? defaults.external).status(request), { handle, now });
     }
   } catch (error) { throw normalizeError(error); }
@@ -252,7 +265,7 @@ export async function closeRoute(request, deps = {}) {
     switch (handle.kind) {
       case 'durable': {
         let before;
-        try { before = await routeStatus({ home: request.home, handle }, deps); }
+        try { before = await routeStatus({ home: request.home, handle }, { ...deps, observe: true }); }
         catch { /* Exact retained ownership is checked again by release; fresh proof is not cleanup authority. */ }
         const reply = await (deps.durable ?? defaults.durable).close(request, { adapters: deps.adapters });
         const debt = reply?.cleanupDebt ?? null;

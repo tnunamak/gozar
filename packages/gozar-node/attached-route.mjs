@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { atomicWrite, processIdentity } from './journal.mjs';
 import { canonicalHome, trustedDirectory, privateDirectory, withExclusiveLock } from './service-state.mjs';
 import { gozarError, instructionAction, normalizeError } from './error-normalizer.mjs';
+import { cleanupRecovery } from './embedding-projections.mjs';
 import { cliCommand } from './cli-command.mjs';
 import { createGate } from './gate.mjs';
 import { projectAttached, projectSession, releasedView, recoveryHistory, checkRef, projectControllerObservation, unknownProperties } from './route-view.mjs';
@@ -33,6 +34,7 @@ import {catalogFactsFor} from './catalog-facts.mjs';
 import {ownershipFor,planMatchesOwnership,validateShape} from './adapter-runtime.mjs';
 import {currentRouteReview} from './route-consent.mjs';
 import {capabilityPrerequisites} from './embedding-prerequisites.mjs';
+import {hostBoundaryOf,sessionBlockedByBoundary} from './embedding-state.mjs';
 import {releaseRecordedConfigurationUse} from './runtime-configuration-use.mjs';
 
 export const HEARTBEAT_MS = 5_000;
@@ -60,6 +62,8 @@ function checkExpose(request, kind) {
   if (!['allocated', 'verified'].includes(request.wait)) throw gozarError('invalid_input', "wait must be 'allocated' or 'verified'");
 }
 
+const SESSION_BOUNDARY_REFUSAL = 'This session controller does not implement the declared origin acknowledgment boundary; use a provider on the generic session runtime';
+
 // Static availability is an execution boundary, not an approval. Never redeem or
 // inspect provider state to reject a named detect-only choice.
 export async function preflightExpose(request, deps = {}) {
@@ -73,6 +77,9 @@ export async function preflightExpose(request, deps = {}) {
     if (adapter && (!adapter.definition.supportedKinds.includes(request.usage.kind) ||
         availability === 'detect-only' || availability === 'unsupported'))
       throw gozarError('unsupported', 'This usage is not admitted for execution in this release');
+    // Named before any approval is redeemed: the catalog never offered this session under the declared boundary.
+    if (adapter && request.usage.kind === 'session' && sessionBlockedByBoundary(adapter, hostBoundaryOf(deps)))
+      throw gozarError('unsupported', SESSION_BOUNDARY_REFUSAL);
   }
   checkExpose(request, request.usage.kind);
 }
@@ -247,13 +254,15 @@ export async function openAttachedRoute(request, deps = {}) {
         hostTouched = true;
         const hostIdentity=await deps.embeddingServices.resolveIdentity({home:redeemed.home});
         broker=await startEmbeddingBroker({services:deps.embeddingServices,home:redeemed.home,identity:hostIdentity,
-          dispatchEffect:deps.dispatchEffect,onLoss:()=>{if(brokers.has(id))void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
+          dispatchEffect:deps.dispatchEffect,acknowledgeOrigin:deps.acknowledgeOrigin,onLoss:()=>{if(brokers.has(id))void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
         const descriptor=await broker.registerController({identity:hostIdentity});
         identity={instanceId:descriptor.instanceId,bootId:descriptor.bootId};
         brokers.set(id,broker);
       }
       bootstrap = { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
         operationId:request.operationId??null,
+        ...(deps.acknowledgeOrigin ? { originAcknowledgment: true, originAckTimeoutMs: deps.originAckTimeoutMs ?? 10_000 } : {}),
+        ...(deps.runtimeModules ? { runtimeModules: deps.runtimeModules } : {}),
         ...(session ? {execution:'generic-session-v1',handle,expiresAtMs:session.expiresAtMs} : {}),
         ...(broker?{resolver:broker.descriptor,identity,registryId:deps.registryId,owner:request.owner,consentReview:redeemed.consentReview,fixtureEffects:!!deps.dispatchEffect}:{}),
         ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) };
@@ -383,23 +392,36 @@ async function viewFromRecord(directory, handle) {
   return state;
 }
 
-/** Private authenticated controller observation; never asks for fresh proof or cleanup. */
-export async function observeAttachedRoute(request) {
+/**
+ * Private authenticated controller observation; never asks for fresh proof or cleanup. The scope check binds home, handle,
+ * generation and the controller's recorded owner; the controller itself checks its process identity and the same handle.
+ * `asStatus` is the watch's and the internal close read's use of it (route-view.mjs): the caller is the host's own ordinary
+ * status/watch request, which names no owner, so the recorded owner is the scope (a given owner must still equal it), and a
+ * controller that is gone answers like `attachedStatus` does (released stays released), still without any effect.
+ */
+export async function observeAttachedRoute(request,{asStatus=false}={}) {
   const handle=checkRef(request);
   if(!['attached','session'].includes(handle.kind))throw gozarError('unsupported','Not a generic controller handle');
   const home=await canonicalHome(request.home,false),directory=await routeDirectory(home,handle);
   const bootstrap=await readJson(join(directory,'bootstrap.json'));
   const bound=handle.kind==='attached'?{kind:'attached',id:bootstrap?.id,generation:1}:bootstrap?.handle;
-  if(!bootstrap||bootstrap.home!==home||typeof request.owner!=='string'||request.owner!==bootstrap.owner||
+  const owner=asStatus&&request.owner===undefined?bootstrap?.owner:request.owner;
+  if(!bootstrap||bootstrap.home!==home||typeof owner!=='string'||owner!==bootstrap.owner||
       bound?.kind!==handle.kind||bound.id!==handle.id||bound.generation!==handle.generation)
     throw gozarError('route_conflict','Observation scope does not match the current controller');
   try {
     return (await controlAttached(directory,{type:'observe',handleKind:handle.kind,handleId:handle.id,generation:handle.generation})).view;
   } catch(error) {
-    if(!error.gone&&error.code!=='provider_unavailable')throw error;
-    const state=await viewFromRecord(directory,handle);
-    return recoveryHistory(state.lastView,'Current controller observation unavailable; historical evidence only');
+    if(!error.gone&&(asStatus||error.code!=='provider_unavailable'))throw error;
+    return recordedView(directory,handle,asStatus,'Current controller observation unavailable; historical evidence only');
   }
+}
+
+// What the saved record says when no controller answers: a finished route stays released, anything else is history only.
+async function recordedView(directory,handle,releasedStaysReleased,message) {
+  const state=await viewFromRecord(directory,handle);
+  if(releasedStaysReleased&&(state.phase==='released'||state.lastView?.cleanup.state==='confirmed'))return releasedView(state.lastView,handle);
+  return recoveryHistory(state.lastView,message);
 }
 
 /**
@@ -430,9 +452,7 @@ export async function attachedStatus(request, deps = {}) {
   try { return (await controlAttached(directory, { type: 'status', fresh: true, generation: handle.generation, handleId:handle.id }, 60_000)).view; }
   catch (error) {
     if (!error.gone) throw error;
-    const state = await viewFromRecord(directory, handle);
-    if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') return releasedView(state.lastView, handle);
-    return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
+    return recordedView(directory, handle, true, 'The route controller stopped before it removed the route');
   }
 }
 
@@ -568,8 +588,8 @@ export async function attachedRemovalEvidence(request,scope) {
       state.adapterId!==scope.providerId||state.lastView?.handle?.kind!==handle.kind||
       state.lastView.handle.id!==handle.id||state.lastView.handle.generation!==handle.generation)
     throw gozarError('cleanup_debt','Resource-removal evidence does not match cleanup scope');
-  return {...state.lastView,handle:structuredClone(handle),state:'released',routeState:'released',
-    published:null,ingress:null,verification:{...state.lastView.verification,status:'unverified'},cleanup:{state:'confirmed'}};
+  return {...state.lastView,handle:structuredClone(handle),state:'released',routeState:'inactive',
+    published:null,ingress:null,verification:{...state.lastView.verification,status:'unverified'},cleanup:cleanupRecovery({state:'confirmed'},handle)};
 }
 // --- The controller -----------------------------------------------------------------------------
 
@@ -722,6 +742,9 @@ export async function runAttachedController(directory, runtime = {}) {
     throw gozarError('artifact_integrity_failed','The controller registry content changed');
   }
   if(resolver)runtime={...runtime,embeddingServices:resolver,owner:bootstrap.owner,...(bootstrap.fixtureEffects?{dispatchEffect:resolver.dispatchEffect.bind(resolver)}:{})};
+  // The trusted host declaration of packaged runtime modules crosses as data; the detached controller
+  // re-validates identity, version and load through the same shared helper as the host factory.
+  if(bootstrap.runtimeModules)runtime={...runtime,runtimeModules:bootstrap.runtimeModules};
   if(bootstrap.fixtureEffects)runtime.fetch=testingFetch(runtime.dispatchEffect);
   const adapters = runtime.adapters ?? await (await loadRuntime())?.loadAdapters?.(bootstrap.registry);
   const adapter = adapters?.find(item => item.id === bootstrap.adapterId);
@@ -817,6 +840,29 @@ export async function runAttachedController(directory, runtime = {}) {
     return checked;
   }
 
+  // The awaited exact-origin host boundary (0.5.2). When the embedding host declared `acknowledgeOrigin`, no
+  // publication verification may run until the host has acknowledged THIS exact validated origin for this
+  // route, generation and proof attempt, over the authenticated broker. A missing, refused, malformed,
+  // stale, aborted or timed-out acknowledgment withdraws the route exactly like a failed verification: it
+  // can never publish, never approve a foreign Host (any echo naming another origin, handle or attempt is
+  // refused), never revive a lost owner, and never disturbs the retained cleanup receipt.
+  const acknowledgeAllocatedOrigin = async origin => {
+    if (!bootstrap.originAcknowledgment) return true;
+    if (!resolver || resolverLost || ownerLost || releasing || expired()) return false;
+    const request = { owner: bootstrap.owner, providerId: adapter.id,
+      handle: { kind: handle.kind, id: handle.id, generation: handle.generation },
+      operationId: bootstrap.operationId ?? null, target: bootstrap.request.target, origin, attemptId: attempt.id };
+    const bounded = new Promise(resolve => { const timer = setTimeout(resolve, bootstrap.originAckTimeoutMs ?? 10_000, null); timer.unref?.(); });
+    const aborted = new Promise(resolve => { if (proofAbort.signal.aborted) return resolve(); proofAbort.signal.addEventListener('abort', () => resolve(), { once: true }); });
+    let reply;
+    try { reply = await Promise.race([resolver.acknowledgeOrigin(request), bounded, aborted]); }
+    catch { return false; }
+    if (resolverLost || ownerLost || releasing || expired() || proofAbort.signal.aborted) return false;
+    return reply?.acknowledged === true && reply.origin === origin &&
+      reply.handle?.id === handle.id && reply.handle?.generation === handle.generation &&
+      reply.attemptId === attempt.id;
+  };
+
   async function withdrawInvalidObservation(){
     lease.state='unverified';lease.consentChange={reason:'runtime-observation-invalid',
       oldDigest:lease.approvedReview?.consentFactsDigest??'',newDigest:'',
@@ -901,6 +947,10 @@ export async function runAttachedController(directory, runtime = {}) {
       Object.assign(lease, { properties: facts.properties,binding:facts.binding, ingress: facts.ingress ?? null, limits: facts.limits,runtimeFacts:facts.facts??[], facts: [...new Map([...(adapter.definition.facts ?? []), ...(facts.facts ?? [])].map(f=>[f.id,f])).values()], origin, state: 'unverified' });
       await save();
       if(!await enforceConsent())return;
+      // The host boundary: with a declared acknowledgment handler, verification waits for the host to bind
+      // this exact origin. Nothing is reported published until the host has answered and the validation passes.
+      if (!await acknowledgeAllocatedOrigin(origin))
+        throw gozarError('verification_failed', 'The host did not acknowledge the allocated origin; the route was withdrawn');
       // Nothing is reported published until the validation passes; a failed check withdraws the route.
       const checked = await checkProof(claimsSse);
       if (checked.status !== 'verified') throw gozarError('verification_failed', 'The route did not pass publication validation and was withdrawn');
@@ -1132,6 +1182,10 @@ export async function openSessionRoute(request, deps = {}) {
       if (!Number.isFinite(expiresAtMs)||request.usage.lifetimeMs<=0) throw gozarError('invalid_input','A session needs a finite positive lifetime');
       return await openAttachedRoute(request,{...deps,sessionExecution:{redeemed,handle:stableHandle,directory,expiresAtMs}});
     }
+    // The legacy daemon session controller does not implement the declared exact-origin acknowledgment
+    // boundary. A host that declared the boundary gets a refusal, never a silent unacknowledged verification.
+    if (deps.acknowledgeOrigin) throw gozarError('unsupported',
+      SESSION_BOUNDARY_REFUSAL);
     // The adapter turns what its owner chose into the exact session-engine inputs, from live observation, before anything starts.
     const hostChoices = typeof redeemed.adapter.hostChoices === 'function'
       ? await redeemed.adapter.hostChoices(await readContextFor(deps, home, deps.platform ?? process.platform, request.owner)).catch(error => { throw refusedBeforeStart(error, stableHandle, request); })

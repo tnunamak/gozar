@@ -13,7 +13,7 @@ Use Node >=22.13. Install locally in your walk directory; run the local binary
 below, not a potentially different global installation:
 
 ```sh
-npm install @tnunamak/gozar@0.5.1
+npm install @tnunamak/gozar@0.5.2
 ```
 
 Only for an SDK adapter, also install its optional dependency:
@@ -24,7 +24,7 @@ npm install @ngrok/ngrok@1.7.0
 
 For a named connector, install the official `cloudflared` executable instead of
 the optional SDK.
-Public raw TCP/TLS profiles are detect-only in 0.4.0; this walk exercises HTTP(S).
+Public raw TCP/TLS profiles are detect-only in 0.5.2; this walk exercises HTTP(S).
 Gozar reports missing local
 prerequisites as data and never runs an installer.
 
@@ -53,7 +53,7 @@ in the commands below; `./node_modules/.bin/gozar catalog --query-file query.jso
 ```
 
 
-## Collect the input requirements
+## Collect inputs for an existing connector or SDK adapter
 
 ```sh
 ./node_modules/.bin/gozar configure --query-file query.json --provider-id ID --json
@@ -71,7 +71,7 @@ Use the assigned free development domain from [Domains](https://dashboard.ngrok.
 your account's endpoint policy. Gozar does not inspect its effective grants or
 entitlement; those remain unknown until the provider accepts the request.
 
-For the named connector, use the tunnel-specific connector token from
+For an **existing Cloudflare tunnel** you manage in the dashboard, use the tunnel-specific connector token from
 [Zero Trust](https://one.dash.cloudflare.com/), Networks → Connectors →
 Cloudflare Tunnels → your tunnel → configure/install connector. This is a run
 token for an existing remotely managed tunnel, not a broad account API token.
@@ -81,6 +81,47 @@ target to `http://127.0.0.1:18479`, then supply 18479 and the published HTTPS or
 through Gozar's descriptors. Remote dashboard configuration overrides a local
 origin assumption; Gozar publishes nothing unless its gate proof passes.
 See [tunnel-token handling](https://developers.cloudflare.com/tunnel/reference/tunnel-tokens/).
+
+## Alternative: managed Cloudflare setup
+
+Choose this path only when the account/zone owner wants Gozar to provision and
+track its own tunnel in an existing Cloudflare DNS zone. Start from the named
+Cloudflare provider in `catalog` and its managed offer. Use a Cloudflare Custom
+API token scoped to **Cloudflare Tunnel Edit** for one account and **Zone Read**
+and **DNS Edit** for one zone, with expiry long enough to finish cleanup.
+`cloudflared login` and an existing tunnel run token do not establish this
+management or DNS-removal authority. The managed token and the tunnel-specific
+connector token serve different purposes.
+
+Use owner-only regular files (mode 0600). `setup-ref.json` is the same
+`{ home, owner, providerId, operationId }` reference throughout the operation:
+use the query's home and owner, the named provider ID returned by catalog, and
+a new operation ID for this walk. In `setup-reserve.json`, add
+`expectedSetupRevision: 0`, the current `expectedConfigurationRevision`,
+and the offered reservation action's `actionId` and setup approval. In
+`setup-run.json`, use the operation's current positive revision as
+`expectedSetupRevision`, its configuration revision and draft ID when present,
+and its current action ID and approval. The setup approval is
+`{ kind: "setup", digest, disclosureRevision, consentFactsDigest }`, taken
+from the exact reviewed action; it does not approve exposure or the next action.
+
+```sh
+./node_modules/.bin/gozar setup-operation reserve --request-file setup-reserve.json --json
+./node_modules/.bin/gozar setup-operation read --request-file setup-ref.json --json
+./node_modules/.bin/gozar setup-operation run --request-file setup-run.json --secret-file scoped-api-token.txt --json
+./node_modules/.bin/gozar setup-operation run --request-file setup-run.json --json
+```
+
+Use the secret-file form only for the current `provide-secret` offer
+(`managed-api-token`); do not also set `value` or `secretHandle`. Keep the
+operator-created input file private, never log or share its contents, and
+remove that temporary input file after intake. For a non-secret value put
+`value` in the request file and use the form without `--secret-file`. Review
+each fresh offer and obtain separate owner approval before running it. The
+managed operation can select account, zone, hostname and gate port, then offer
+to create and configure its tunnel, create a proxied CNAME and save its run
+token. Leave a conflicting DNS record alone. Use the returned state and evidence,
+not exit 0 alone, to determine readiness before asking for route approval.
 
 ## Approve and start
 
@@ -123,7 +164,34 @@ its lease, but that process exiting successfully alone is not cleanup evidence.
 If status/close cannot establish cleanup, retain unknown/unconfirmed and reconcile;
 `route_not_found` is not proof of remote absence.
 
-Perform cleanup in this order:
+Choose the cleanup path before changing dashboard resources or local state.
+For an existing connector, use the numbered sequence below. For a managed
+setup, complete cancellation and its separately approved cleanup first:
+
+For a managed setup, close the exact route first and check cleanup; cancelling
+setup is separate. Keep the setup journal, operation reference and management
+token until the returned cleanup offers and reconciliation are complete. Do not
+perform the general dashboard cleanup or delete local state before then.
+
+```sh
+./node_modules/.bin/gozar setup-operation cancel --request-file setup-ref.json --json
+./node_modules/.bin/gozar setup-operation read --request-file setup-ref.json --json
+```
+
+Follow the returned cleanup offers. The zone owner manually removes DNS only
+after matching the proxied CNAME's exact name, target, record ID and last
+modified time in the correct zone. If any detail changed, leave it in place
+and reconcile. Re-read the operation so Gozar can verify exact absence. Rotate
+the owned tunnel run token when instructed and re-read; rotation is not proof
+that existing connectors stopped. Review and separately approve the fresh
+machine offer to remove the exact owned tunnel; use the non-secret `run`
+command above. Do not force-disconnect other connectors. Follow the offers to
+forget local credential references; that is separate from revoking the imported
+API token in Cloudflare. Record unresolved states as unknown or unconfirmed,
+and retain the paired public/local controls below.
+
+
+After the applicable setup cleanup is settled, perform this sequence:
 
 1. Close only this walk's owned route/connector and gate, retaining its exact
    handle and generation. Check cleanup state. Leave the independent app running.
@@ -146,7 +214,8 @@ Perform cleanup in this order:
    delete this walk's local state. Preserve redacted evidence first. If the
    check is not run or remains unknown, do not label the walk cleaned up.
 
-For a named connector, stopping Gozar does **not** delete the remotely managed
+
+For an existing named connector, stopping Gozar does **not** delete the remotely managed
 tunnel, DNS record or token. Its tunnel-specific run token is not a broad account
 API key. Dashboard cleanup and credential revocation are separate operations.
 For SDK adapters, reserved domains and agent credentials remain account-owned;
@@ -162,9 +231,9 @@ dashboard does not establish them. Local file deletion is not remote revocation.
 ## Operator evidence and signoff
 
 Record provider, actual account plan, platform/architecture, Node version and
-installed package version (0.4.0 for this walk), plus optional SDK version if used.
+installed package version (0.5.2 for this walk), plus optional SDK version if used.
 Use a sanitized record for **each** step: install/prerequisites, local control,
-configure, catalog/approval, expose/proof, intended-client positive request,
+configure or managed setup operation, catalog/approval, expose/proof, intended-client positive request,
 owned close/status, dashboard changes, paired post-dashboard probes, and final
 app/state cleanup.
 
@@ -189,5 +258,5 @@ normal private authentication without logging its values. A command's exit code
 is not a substitute for the observed response and cleanup state.
 
 No real provider exposure, account test, token request, probe or cleanup was
-performed while authoring this document. Every live result remains not-run until
+performed while authoring this document. Every live result remains NOT_RUN until
 an operator supplies evidence; do not infer acceptance from fixture tests.

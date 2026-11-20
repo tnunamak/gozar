@@ -7,10 +7,24 @@ export const features = ['structured-state', 'open-facts', 'input-requirements',
   'configuration-revisions', 'consent-facts-digest', 'proof-subject', 'host-secret-backend',
   'prerequisite-actions', 'provider-inventory', 'route-binding', 'cleanup-recovery'];
 
-export function availabilityFor(definition) {
-  return Object.fromEntries(['session', 'attached', 'durable'].map(kind => [kind,
+/**
+ * What the host's declared boundary means for one adapter. A host that declared `acknowledgeOrigin` is told, before any
+ * consent, which usage cannot run through that boundary: the legacy recipe session controller never asks the host to
+ * acknowledge its allocated origin, so a session on it is refused at execution (openSessionRoute). Advertising it as
+ * available would let the owner consent to a start that can only fail. Generic-runtime sessions, attached and durable
+ * routes all ask, and stay available. One rule, read by the catalog, the provider inventory and the execution preflight.
+ */
+export const ORIGIN_ACKNOWLEDGMENT_UNSUPPORTED = 'origin-acknowledgment-unsupported';
+export const hostBoundaryOf = deps => ({ acknowledgesOrigin: typeof deps?.acknowledgeOrigin === 'function' });
+export const sessionBlockedByBoundary = (adapter, host) => host?.acknowledgesOrigin === true && adapter?.sessionExecution === 'recipe';
+
+export function availabilityFor(definition, { adapter, host } = {}) {
+  const availability = Object.fromEntries(['session', 'attached', 'durable'].map(kind => [kind,
     definition.availability?.[kind] ?? (definition.supportedKinds.includes(kind)
       ? { state: 'available', reason: 'admitted' } : { state: 'unsupported', reason: 'usage-not-supported' })]));
+  if (availability.session.state === 'available' && sessionBlockedByBoundary(adapter, host))
+    availability.session = { state: 'unsupported', reason: ORIGIN_ACKNOWLEDGMENT_UNSUPPORTED };
+  return availability;
 }
 
 export function prerequisitesFor(inspection, observedAt) {
@@ -23,6 +37,31 @@ export function prerequisitesFor(inspection, observedAt) {
       state: observed === true ? 'present' : observed === false ? 'missing' : observed === 'denied' ? 'denied' : 'unknown',
       observedAt, version: unknown(), remedy: item.actionId ? actions.find(action => action.id === item.actionId) ?? null : actions[0] ?? null };
   });
+}
+
+/** The stored input id a setup action writes: the declared requirement for that action, else the action id. */
+export const inputIdOf = (adapter, action) => (adapter.definition.inputRequirements ?? []).find(row => row.actionId === action.id)?.id ?? action.id;
+
+/**
+ * The current input contract of an executable provider: the ids and roles its own declared actions can write
+ * (`provide-secret` writes a secret binding, `provide-value` writes plain text). This reads the same static
+ * declaration the catalog shows before any probe, so it needs no live observation, no configuration and no
+ * migration. An unknown provider, a declaration that throws, or one id in two roles has no contract (undefined).
+ */
+export function inputKindsOf(adapter) {
+  if (!adapter?.definition) return undefined;
+  let actions;
+  try { actions = adapter.configurationActions ? adapter.configurationActions() : adapter.setupActions({ setupNeeded: true }); } catch { return undefined; }
+  if (!Array.isArray(actions)) return undefined;
+  const kinds = Object.create(null);
+  for (const action of actions) {
+    const role = { 'provide-secret': 'secret', 'provide-value': 'text' }[action?.kind];
+    if (!role) continue;
+    const id = inputIdOf(adapter, action);
+    if (Object.hasOwn(kinds, id) && kinds[id] !== role) return undefined;
+    kinds[id] = role;
+  }
+  return kinds;
 }
 
 export function configurationFor(actions, saved, declared) {

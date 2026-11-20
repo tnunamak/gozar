@@ -120,7 +120,7 @@ async function addServiceUnguarded({ origin, target, verifyCmd = null, home = de
   });
   return { schemaVersion: 1, route: await present(route) };
 }
-async function statusServicesUnguarded({ origin, home = defaultHome() } = {}) {
+async function statusServicesUnguarded({ origin, home = defaultHome(), ownerKeptOnly = false } = {}) {
   const normalized = origin === undefined ? null : originValue(origin);
   // Resolve the home once; a missing home has no routes of either kind.
   try { home = await canonicalHome(home); }
@@ -137,8 +137,9 @@ async function statusServicesUnguarded({ origin, home = defaultHome() } = {}) {
     if (!name.endsWith('.json') || (normalized && name !== filename(normalized))) continue;
     routes.push(await stored(join(directory(home), name), name));
   }
-  // One place to ask which long-lived routes exist: owner-managed and Gozar-owned durable routes.
-  const durable = (await statusRoutes({ home, canonical: true })).routes.filter(route => !normalized || route.origin === normalized);
+  // One place to ask which long-lived routes exist: owner-managed and Gozar-owned durable routes. A caller that wants only
+  // the owner-kept record (the route handle's own status read) must not re-prove every durable route of the home.
+  const durable = ownerKeptOnly ? [] : (await statusRoutes({ home, canonical: true })).routes.filter(route => !normalized || route.origin === normalized);
   return { schemaVersion: 1, routes: [...await Promise.all(routes.map(present)), ...durable] };
 }
 async function removeServiceUnguarded({ origin, home = defaultHome(),expectedGeneration }) {

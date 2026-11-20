@@ -192,7 +192,10 @@ test('win32: detect reports unsupported without loading the SDK', async () => {
 
 test('the default adapter needs the optional SDK: without it detect asks for installation', async () => {
   const { default: adapter } = await import('../../adapters/providers/ngrok-https-edge/index.mjs');
-  const detected = await adapter.detect(context());
+  // Installing is offered only when the host declared its install location writable; omission offers nothing.
+  const omitted = await adapter.detect(context());
+  if (!omitted.facts.sdk) assert.ok(!adapter.setupActions(omitted.facts).some(action => action.id === 'install-sdk'), 'omission never authorizes an install');
+  const detected = await adapter.detect({ ...context(), runtimeModules: { '@ngrok/ngrok': { kind: 'runtime-install' } } });
   assert.ok(['ready', 'action-required'].includes(detected.state));
   if (!detected.facts.sdk) assert.ok(adapter.setupActions(detected.facts).some(action => action.id === 'install-sdk'));
 });

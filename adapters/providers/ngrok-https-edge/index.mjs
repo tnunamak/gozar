@@ -7,6 +7,7 @@
 // output: every failure below uses a fixed message and never the SDK's own text.
 import { recipeAdapter, effectError } from '../../../packages/gozar-node/adapter-runtime.mjs';
 import { supportedPlatform } from '../../../packages/gozar-node/platform.mjs';
+import { loadBundledModule } from '../../../packages/gozar-node/runtime-modules.mjs';
 import { createHash } from 'node:crypto';
 import {createListenerLifecycle} from '../_shared/sdk-lifecycle.mjs';
 import {listenerSdk} from '../_shared/listener-effects.mjs';
@@ -14,6 +15,37 @@ import {listenerSdk} from '../_shared/listener-effects.mjs';
 import { domainPattern, ngrokSetup } from './setup.mjs';
 const decode = bytes => new TextDecoder().decode(bytes).trim();
 const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+// The optional runtime module this adapter embeds, and the release its listener interface is tested
+// against. A host that cannot install peers at runtime (a packaged read-only installation) declares a
+// tested bundle through createGozar's `runtimeModules`; a host that explicitly says its install location
+// is writable declares `{ kind: 'runtime-install' }`; a host that provides its own dependencies declares
+// `{ kind: 'host-managed' }`. With host-managed or no declaration a missing SDK is unavailable with a fixed
+// plain reason and NO install step: omission never authorizes an install. The ngrok CLI is NOT a supported substitute for the
+// SDK listener on this adapter: the CLI and the embedded SDK are different agent forms, and the CLI's
+// default local API (127.0.0.1:4040) is unauthenticated.
+const SDK_PACKAGE = '@ngrok/ngrok';
+const SDK_VERSION = '1.7.0';
+
+const declaredRuntime = ctx => ctx?.runtimeModules?.[SDK_PACKAGE] ?? null;
+// The bundle load: identity, exact version and importability are re-proved on every load, in the host
+// factory process and in the detached controller alike. A bad or missing bundle refuses this provider; it
+// never falls back to another location and never installs anything. The package named here is the
+// adapter's own declaration, never host input.
+const sdkLoaderFor = loadSdk => ctx => {
+  const declared = declaredRuntime(ctx);
+  return declared?.kind === 'bundled'
+    ? () => loadBundledModule({ package: SDK_PACKAGE, version: declared.version, path: declared.path }, { expectedVersion: SDK_VERSION, requiredFunctions: ['forward'] })
+    : loadSdk;
+};
+// Installing is offered ONLY when the host explicitly declared its install location writable. Omitting the
+// declaration never authorizes an install (the host may be a read-only package).
+const runtimeInstallable = ctx => declaredRuntime(ctx)?.kind === 'runtime-install';
+const sdkUnavailableReason = declared => declared?.kind === 'bundled'
+  ? 'The declared bundled ngrok SDK is unavailable in this host installation'
+  : declared?.kind === 'runtime-install'
+    ? 'The optional ngrok SDK is missing. Confirm installation and refresh after the host can load it'
+    : 'The ngrok SDK is unavailable in this host installation. The host application provides the tested SDK; Gozar cannot install it here';
 
 // The setup values, trimmed as the setup action validated them; each is null until it is set.
 const read = config => {
@@ -24,6 +56,7 @@ const read = config => {
 const settings = config => { const values = read(config); return values.authToken && values.reservedDomain ? values : null; };
 
 export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok'), fetchManagement = fetch } = {}) {
+  const sdkLoader = sdkLoaderFor(loadSdk);
   const lifecycle=createListenerLifecycle({adapterId:'ngrok-https-edge'});
   const keyFor = domain => `ngrok-https-edge:${domain}`;
 
@@ -46,7 +79,7 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok'), fet
         return { ...body, digest: sha(body) };
       })();
 
-      const sdkAvailable = ctx => listenerSdk(ctx, loadSdk).then(
+      const sdkAvailable = ctx => listenerSdk(ctx, sdkLoader(ctx)).then(
         module => typeof (module?.forward ?? module?.default?.forward) === 'function', () => false);
       const domainError = message => Object.assign(effectError('setup_required', message), { nextAction: structuredClone(domainAction) });
       const refusal = code => ({
@@ -59,20 +92,33 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok'), fet
         '6025': 'Another endpoint already uses this hostname. Choose an unused hostname or ask the endpoint owner to release it.',
       })[code];
 
-      const { entry, ...setup } = ngrokSetup({ definition, authAction, domainAction, sdkAvailable, fetchManagement });
+      const { entry, ...setup } = ngrokSetup({ definition, authAction, domainAction, sdkAvailable, fetchManagement, runtimeInstallable, sdkUnavailableReason: ctx => sdkUnavailableReason(declaredRuntime(ctx)) });
       return {
         ...setup,
         async detect(ctx) {
           const os = platformOf(ctx);
           if (!supportedPlatform(os)) return { state: 'unsupported', facts: { platform: os, sdk: false, authSet: false, domainSet: false, configured: false, setupNeeded: false } };
-          const sdk = await sdkAvailable(ctx);
+          const declared = declaredRuntime(ctx);
+          let sdk = false, sdkReason = null;
+          try {
+            const module = await listenerSdk(ctx, sdkLoader(ctx));
+            sdk = typeof (module?.forward ?? module?.default?.forward) === 'function';
+            if (!sdk) sdkReason = 'The available ngrok SDK does not expose the tested listener interface';
+          } catch (error) {
+            sdk = false;
+            sdkReason = sdkUnavailableReason(declared);
+          }
           const values = read(await ctx.configuration(null).catch(() => null));
           const configured = values.authToken !== null && values.reservedDomain !== null, ready = sdk && configured;
           return { state: ready ? 'ready' : 'action-required',
-            facts: { platform: os, sdk, authSet: values.authToken !== null, domainSet: values.reservedDomain !== null, configured, setupNeeded: !ready } };
+            facts: { platform: os, sdk, authSet: values.authToken !== null, domainSet: values.reservedDomain !== null, configured, setupNeeded: !ready,
+              runtimeInstall: runtimeInstallable(ctx), ...(sdkReason ? { sdkReason } : {}) } };
         },
 
-        setupActions: facts => (!facts?.setupNeeded ? [] : [...(facts.sdk ? [] : [installAction]), ...(facts.authSet ? [] : [authAction]), ...(facts.domainSet ? [] : [domainAction]), entry]),
+        setupActions: facts => (!facts?.setupNeeded ? [] : [
+          ...(!facts.sdk && facts.runtimeInstall === true ? [installAction] : []),
+          ...(facts.authSet ? [] : [authAction]),
+          ...(facts.domainSet ? [] : [domainAction]), entry]),
 
         async setup(ctx, actionId, secretHandle) {
           // The reserved domain is a provide-value action: Gozar checks and keeps it, and asks the adapter nothing.
@@ -106,7 +152,7 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok'), fet
           if (!Number.isSafeInteger(ctx.generation)) throw effectError('provider_unavailable', 'The context carries no generation');
           const config = settings(await ctx.configuration(effect.configurationRef).catch(() => null));
           if (!config || `https://${config.reservedDomain}` !== effect.origin) throw effectError('setup_required', 'Set up the ngrok agent authtoken and assigned development or reserved domain first');
-          const sdk = await listenerSdk(ctx, loadSdk);
+          const sdk = await listenerSdk(ctx, sdkLoader(ctx));
           // SDK 1.7.0 exposes this exact lookup for listeners in the current host.
           if (typeof sdk.getListenerByUrl === 'function') {
             let existing;

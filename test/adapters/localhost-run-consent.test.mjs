@@ -26,6 +26,39 @@ test('consent copy names the requested lifetime and states no default number of 
   }
 });
 
+test('localhost.run definitions and generated provider row do not declare a fixed provider cap', async () => {
+  const { adapter: declared } = JSON.parse(await readFile(join(root, 'adapters/providers/localhost-run/definition.json'), 'utf8'));
+  const { definition: plan } = JSON.parse(await readFile(join(root, 'adapters/localhost-run.definition.json'), 'utf8'));
+  const docs = await readFile(join(root, 'docs/providers.md'), 'utf8');
+  const row = docs.split('\n').find(line => line.startsWith('| `localhost-run` |'));
+  assert.ok(row, 'the generated localhost.run row is present');
+  const cells = row.split('|').slice(1, -1).map(cell => cell.trim());
+  assert.equal(cells[1], declared.label);
+  assert.equal(cells[5], declared.capabilities.address.stability);
+  assert.equal(plan.label, declared.label);
+
+  const clocks = declared.facts.filter(fact => fact.id === 'provider-clocks');
+  assert.equal(clocks.length, 1, 'provider expiry has one stable fact identity');
+  assert.equal(clocks[0].known, false, 'the provider expiry has not been observed');
+  assert.equal(clocks[0].value, null, 'no numeric vendor expiry is asserted');
+  assert.equal(clocks[0].group, 'limits');
+
+  const unsupportedCap = /the plan limits a session to 15 minutes/i;
+  for (const [source, value] of [['normalized', declared], ['wrapped', plan], ['generated row', row]]) {
+    assert.doesNotMatch(JSON.stringify(value), unsupportedCap, `${source} repeats the removed provider cap`);
+  }
+
+  const trialUncertainty = 'uptime and URL lifetime are not guaranteed';
+  assert.ok(declared.capabilities.address.conditions.includes(`trial: ${trialUncertainty}`));
+  assert.ok(declared.facts.some(fact => fact.known && fact.group === 'address' &&
+    fact.value === `trial: ${trialUncertainty}`));
+  assert.ok(plan.unknowns.includes(`Trial ${trialUncertainty}.`));
+  assert.match(declared.disclosure.text, /for the requested lifetime\./);
+  assert.match(plan.copy.consent, /for the requested lifetime\./);
+  // The plan's owned-process duration is not a statement about the remote provider's limit.
+  assert.equal(plan.recipes.create.process.lifetimeMs, 900000);
+});
+
 test('a one-hour request is offered consent with no conflicting 15-minute default and a refreshed revision', async t => {
   const tokens = tokenStubs();
   const catalog = await catalogRoutes(hourRequest(await scratch(t)), { adapters, platform: 'linux', readContext, issue: tokens.issue, consentBinding: tokens.consentBinding, now: () => 0 });

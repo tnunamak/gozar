@@ -1,7 +1,7 @@
 import {needsSetupOperation,safeSetupAction} from './consent-facts.mjs';
-import {configurationFor} from './embedding-state.mjs';
+import {configurationFor,hostBoundaryOf,inputIdOf} from './embedding-state.mjs';
 import {createHash} from 'node:crypto';
-import {inspectAdapter,readContextFor, catalogRevisionOf} from './route-catalog.mjs';
+import {inspectAdapter,detectAdapter,readContextFor, catalogRevisionOf} from './route-catalog.mjs';
 import {bindConfiguration} from './adapter-configuration.mjs';
 import {checkValue} from './route-setup.mjs';
 import {embeddingError} from './embedding-services.mjs';
@@ -27,7 +27,7 @@ export async function runEmbeddingSetup(request,deps){
   if(!action||action.digest!==request.approval.digest||action.disclosure.revision!==request.approval.disclosureRevision)fail('candidate_stale');
   await deps.validateSetupApproval?.({request,action,adapter,inspection:item,readContext:own,configuration:await tx.configuration()});
   if(['open-url','instructions'].includes(action.kind))return {state:'pending',nextAction:action};
-  const inputId=(adapter.definition.inputRequirements??[]).find(i=>i.actionId===action.id)?.id??action.id;
+  const inputId=inputIdOf(adapter,action);
   if(action.kind==='provide-value'){
    if(request.secretHandle!==undefined)fail('invalid_input');if(request.value===undefined)return {state:'pending',nextAction:action};
    const value=checkValue(action.valueFormat,request.value);if(value===null)fail('invalid_input');tx.bindText(inputId,value);return {state:'complete',nextAction:null};
@@ -44,7 +44,18 @@ export async function runEmbeddingSetup(request,deps){
   if(!['complete','pending','blocked'].includes(result?.state))fail('internal_error');
   if(result.state==='complete'){if(action.kind==='provide-secret')await tx.bindSecret(inputId,request.secretHandle);else tx.markChanged();}return result;
  },{mutatesConfiguration:!nonMutating});
- return {schemaVersion:1,state:outcome.result.state,nextAction:needsSetupOperation(outcome.result.nextAction)?safeSetupAction(outcome.result.nextAction):outcome.result.nextAction??null,configuration:await offeredConfiguration(request,outcome.configuration,deps),configurationRevision:outcome.configuration.revision,scopeId:outcome.configuration.scopeId,catalogRevision:catalogRevisionOf(await Promise.all(deps.adapters.map(a=>inspectAdapter(a,{...read,providerConfiguration:providerId=>services.resolveConfiguration({...request,providerId,draftId:providerId===request.providerId?request.draftId:undefined})},platform))),platform)};
+ // The completed action changed what detection observes: drop the scope's retained entries now, so the
+ // catalog revision sweep below reflects the new state and the next polling read awaits fresh detection.
+ deps.detection?.invalidate({registryId:deps.registryId,home:request.home,owner:request.owner,providerId:request.providerId});
+ return {schemaVersion:1,state:outcome.result.state,nextAction:needsSetupOperation(outcome.result.nextAction)?safeSetupAction(outcome.result.nextAction):outcome.result.nextAction??null,configuration:(await offeredConfiguration(request,outcome.configuration,deps)).configuration,configurationRevision:outcome.configuration.revision,scopeId:outcome.configuration.scopeId,catalogRevision:catalogRevisionOf(await Promise.all(deps.adapters.map(async a=>{
+  const scopedRead={...read,providerConfiguration:providerId=>services.resolveConfiguration({...request,providerId,draftId:providerId===request.providerId?request.draftId:undefined})};
+  if(!deps.detection)return inspectAdapter(a,scopedRead,platform);
+  const cached=await deps.detection.provider({scope:{registryId:deps.registryId,home:request.home,owner:request.owner,
+   providerId:a.id,platform,adapter:a,draftId:a.id===request.providerId?request.draftId??null:null},
+   readConfiguration:()=>services.readConfiguration({...request,owner:request.owner,providerId:a.id,draftId:a.id===request.providerId?request.draftId:undefined}),
+   detect:()=>detectAdapter(a,scopedRead,platform)});
+  return cached.inspection;
+ })),platform,hostBoundaryOf(deps))};
 }
 
 export function clearInputActions(configuration){
@@ -62,22 +73,35 @@ export async function clearConfigurationInput(request,deps){
   const read=await readContextFor(deps,request.home,deps.platform??process.platform);
   const own={...read,providerConfiguration:()=>tx.resolveConfiguration()};const inspection=await inspectAdapter(adapter,own,deps.platform??process.platform);
   await deps.validateSetupApproval?.({request,action,adapter,configuration,inspection,readContext:own});tx.clearInput(request.inputId);
- });return offeredConfiguration(request,outcome.configuration,deps);
+ });const offered=await offeredConfiguration(request,outcome.configuration,deps);
+ return {...offered.configuration,...(offered.detection?{detection:offered.detection}:{})};
 }
 
 // Rebuild offered actions from the persisted scope; hosts never reconstruct consent metadata.
-export async function offeredConfiguration(request,snapshot,deps){
+export async function offeredConfiguration(request,snapshot,deps,admission){
  const adapter=deps.adapters.find(a=>a.id===request.providerId);if(!adapter)fail('candidate_stale');
  const platform=deps.platform??process.platform;const read=await readContextFor(deps,request.home,platform);
- const inspection=await inspectAdapter(adapter,{...read,providerConfiguration:providerId=>deps.embeddingServices.resolveConfiguration({...request,providerId})},platform);
+ const scopedRead={...read,providerConfiguration:providerId=>deps.embeddingServices.resolveConfiguration({...request,providerId})};
+ let inspection,detection=null;
+ if(deps.detection){
+  // The offered-action inspection runs on the cached detection: the draft scope keys it, a cold or
+  // expired read answers retained or declared-unknown state (a poll never probes), and an explicit
+  // refresh request owns the probes. The declared inputs and action decoration below stay live.
+  const cached=await deps.detection.provider({scope:{registryId:deps.registryId,home:request.home,owner:request.owner,
+   providerId:adapter.id,platform,adapter,draftId:request.draftId??null},
+   readConfiguration:()=>Promise.resolve(snapshot),detect:()=>detectAdapter(adapter,scopedRead,platform),explicit:request.refresh===true,admission});
+  inspection=cached.inspection;detection=cached.detection;
+ }else inspection=await inspectAdapter(adapter,scopedRead,platform);
  // A failed observation (a locked secret backend) leaves the inspection without actions, but the draft's declared inputs still exist.
  let declared=[];if(inspection.failure&&!inspection.actions.length){try{declared=adapter.configurationActions?adapter.configurationActions():adapter.setupActions({setupNeeded:true});}catch{declared=[];}}
  const raw=[...new Map([...inspection.actions,...(inspection.missingActions??[]),...declared,...clearInputActions(snapshot)].map(a=>[a.id,a])).values()];
  const actions=await Promise.all(raw.map(action=>deps.decorateSetupAction?deps.decorateSetupAction({action,adapter,configuration:snapshot,draftId:request.draftId??null,inspection}):action));
  const configuration={...snapshot,...configurationFor(actions,snapshot,adapter.definition.inputRequirements),actions};
- return configuration;
+ // `{configuration, detection}`: the honest detection freshness this offered scope was served from.
+ return detection?{configuration,detection}:{configuration};
 }
-export async function readConfigurationDraft(request,deps){
+export async function readConfigurationDraft(request,deps,admission){
  const draft=await deps.embeddingServices.readConfigurationDraft(request);
- return {...draft,configuration:await offeredConfiguration(request,draft.configuration,deps)};
+ const offered=await offeredConfiguration(request,draft.configuration,deps,admission);
+ return {...draft,configuration:offered.configuration,...(offered.detection?{detection:offered.detection}:{})};
 }

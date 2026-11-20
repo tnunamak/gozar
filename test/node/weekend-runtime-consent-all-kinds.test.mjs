@@ -120,7 +120,7 @@ test('public durable runtime review preserves all rows and refreshes proof witho
     }},
   ];
   const harness=await createTestingGozar({effects});const api=harness.gozar;
-  const providers=(await api.listProviders({home,owner})).providers.filter(p=>p.availability.durable.state==='available');
+  const providers=(await api.listProviders({home,owner,refresh:true})).providers.filter(p=>p.availability.durable.state==='available');
   assert.ok(providers.length);
   let retained;t.after(async()=>{try{if(retained)await api.closeRoute({home,handle:retained,mode:'remove'});}finally{await harness.close();}});
   for(const [index,provider]of providers.entries()){
@@ -198,7 +198,7 @@ test('public attached review preserves disclosures without another SDK allocatio
     }},
   ]});
   const api=harness.gozar;
-  const provider=(await api.listProviders({home,owner})).providers.find(p=>p.transport==='https'&&p.availability.attached.state!=='unsupported'&&!p.configuration.inputRequirements.some(i=>i.kind==='https-origin'));
+  const provider=(await api.listProviders({home,owner,refresh:true})).providers.find(p=>p.transport==='https'&&p.availability.attached.state!=='unsupported'&&!p.configuration.inputRequirements.some(i=>i.kind==='https-origin'));
   assert.ok(provider);let config=provider.configuration;
   for(const requirement of config.inputRequirements){
     const action=config.actions.find(a=>a.id===requirement.actionId);assert.ok(action);let input;

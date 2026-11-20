@@ -66,7 +66,7 @@ async function listDomains(bytes, request) {
   return { state: 'unavailable' };
 }
 
-export function ngrokSetup({ definition, authAction, domainAction, sdkAvailable, fetchManagement }) {
+export function ngrokSetup({ definition, authAction, domainAction, sdkAvailable, fetchManagement, runtimeInstallable = () => true, sdkUnavailableReason = () => 'The optional ngrok SDK is missing. Confirm installation and refresh after the host can load it.' }) {
   const action = (fields, actor, permission, verification, purpose, options) => {
     const { digest: _digest, ...body } = fields;
     const result = { disclosure: definition.disclosure, ...body, step: { actor,
@@ -139,8 +139,13 @@ export function ngrokSetup({ definition, authAction, domainAction, sdkAvailable,
       if (recovery) return recovery;
     }
     if (!supportedPlatform(ctx.platform)) return outcome('blocked', null, 'The ngrok runtime is unavailable on this platform.', 'ngrok-platform');
-    if (!await sdkAvailable(ctx)) return outcome('blocked', artifact(ctx.platform, ctx.architecture ?? process.arch),
-      'The optional ngrok SDK is missing. Confirm installation and refresh after the host can load it.');
+    if (!await sdkAvailable(ctx)) {
+      // The host said whether Gozar may offer a runtime install. Without that explicit authority the
+      // SDK prerequisite is unavailable with a fixed plain reason and no impossible install action.
+      if (runtimeInstallable(ctx)) return outcome('blocked', artifact(ctx.platform, ctx.architecture ?? process.arch),
+        'The optional ngrok SDK is missing. Confirm installation and refresh after the host can load it.');
+      return outcome('blocked', null, sdkUnavailableReason(ctx), 'ngrok-sdk');
+    }
     const agent = configuration?.credentials?.auth;
     if (!agent?.known || agent.value !== true) return outcome('authorization-required', auth, 'Agent credential intake is required. Browser sign-in alone supplies no agent credential.');
     if (selected !== 'dashboard' && selected !== 'inventory') return outcome('authorization-required', source, source.help);

@@ -75,7 +75,7 @@ capability is denied, which is distinct from missing software.
 
 For the default file backend only, the first configuration read with owner omitted
 imports checked ownerless 0.3 setup references and text without copying bytes.
-A named owner returns `configuration_migration_required`; no migration API or
+A named owner returns `configuration_migration_required`; no ownerless-0.3 migration API or
 import command assigns the legacy bindings to that owner. Custom backends never
 import or fall back to legacy files.
 
@@ -98,6 +98,154 @@ The broker optionally accepts a host `dispatchEffect` callback and exposes
 `proxy.dispatchEffect({kind,operation,input})` for the public testing factory's
 exact fixture handlers. Without an explicitly supplied handler it returns
 `unsupported`. Awaiting connection includes a token/boot authentication handshake.
+
+## Exact-origin host acknowledgment (0.5.2)
+
+Declare `acknowledgeOrigin` on the factory to hold the awaited exact-origin
+boundary between a provider allocation and publication verification. The
+callback stays in the host process: a detached route controller reaches it over
+the authenticated, boot-bound broker (a new `acknowledgeOrigin` method with the
+host's home injected server-side) and awaits a JSON reply; nothing callable is
+ever serialized into the bootstrap.
+
+After the provider allocates and Gozar validates the exact credential-free
+origin, the controller sends one typed request per start attempt, scoped with
+`owner`, `providerId`, `handle {kind,id,generation}`, `operationId`, `target`,
+the exact `origin` and the proof `attemptId`. Publication verification (and
+therefore the published address) runs only after the reply echoes the exact
+origin, handle and attempt. A missing reply, `acknowledged` not true, a thrown
+or refused handler, an aborted or timed-out call (bounded by `originAckTimeoutMs`,
+default 10s), or a stale echo naming another origin, handle, generation or
+attempt withdraws the route exactly like a failed verification: the unverified
+state and the retained cleanup receipt are preserved, nothing publishes, a lost
+owner is not revived and a foreign Host is never approved. Durable starts await
+the same typed request in-process before publication verification.
+
+Scope. The boundary covers origins a provider assigns after allocation, which a
+host cannot know in advance. An owner-kept route (`ownership: external-owned`, for
+example `own-address`) has no allocation: its origin is the exact credential-free
+https origin the owner supplied before the call. Gozar asks no acknowledgment for
+it; every proof request names exactly that origin, so the host allows that one
+origin up front and needs no wildcard.
+
+Cancellation. After the callback returns and before any proof starts, a durable
+proof on the unlocked status path rechecks that the route is still the same
+generation and is not releasing, suspended or stopped; a cancel, close or stop
+that committed while the callback was held starts no proof. Paths that hold the
+reservation lock (start, adopt, consent approval) need no recheck: every
+cancelling mutation takes the same exclusive lock, so it cannot commit until the
+call ends.
+
+A host that declares no handler keeps the pre-0.5.2 behavior: verification starts
+immediately after allocation. Hosts that widen a service verifier's Host
+allowance during start should adopt this boundary instead; Gozar never requires
+or implies a wildcard Host allowance. The legacy daemon session controller does
+not implement the boundary, so under a declared handler a provider that runs sessions
+on it is advertised `unsupported` with reason `origin-acknowledgment-unsupported` for
+the `session` usage kind only (in `listProviders` and `catalogRoutes`, so no candidate
+token exists and the owner cannot consent to it). `expose` refuses it `unsupported`
+before any approval is redeemed or any effect runs, never silently verified without
+acknowledgment. Generic-runtime sessions, attached and durable routes, and every host
+that declares no handler are unchanged.
+
+Observation versus proof. With a declared handler, `routeStatus`, `startRoute`/`ensureRoute`
+and adoption are the proofs: each asks the host to acknowledge a fresh attempt, inside the
+call the host opened. `watchRoutes` (and the read `closeRoute` makes of the route before it
+ends it) is an observation, for every handle kind that carries an allocated origin:
+
+| Handle kind | Explicit `routeStatus` | `watchRoutes` and the internal close read |
+| --- | --- | --- |
+| durable | fresh proof, acknowledgment asked inside the call | recorded state, plus the latest proof of this process for that exact generation while its own validity window lasts, then unverified |
+| attached | controller `status`: fresh verification, may release or write | authenticated controller `observe`: the last view the controller recorded; a gone controller reports the saved record |
+| generic session | same as attached | same as attached |
+| external, owner-kept | one exact-origin proof request, no acknowledgment (the owner supplied the origin) | the same single proof request of that one handle; no other route of the home is read, proved or acknowledged |
+
+An observation asks no acknowledgment, starts no challenge request for an allocated origin,
+allocates nothing, publishes nothing and renews no lease, so it can never take the attempt of
+an explicit check that overlaps it. The `observe` command runs only after the handle kind, id,
+generation, owner and controller boot identity checks of the explicit read.
+
+One exception is deliberate and defensive. A durable observation reads the route's current
+consent facts; when they differ from what the person approved it persists a fail-closed
+withdrawal (the route reports `consentChange` and is no longer published). It never creates or
+widens authority, and it is the only write an observation makes. An attached or session
+`observe` reports the last controller view and never detects this drift; the next explicit
+status does. Foreign routes, foreign listeners and provider rules are never touched. A host that
+declares a handler therefore schedules its own explicit checks, which also renew a leased
+rule. Hosts that declare no handler keep the earlier polling watch, which proves, publishes and
+renews. A legacy daemon session carrying no `embedding.handle` cannot be observed passively;
+under a declared handler such sessions are not created.
+
+## Packaged runtime modules (0.5.2)
+
+An embedded adapter that uses an optional runtime module (the ngrok HTTPS edge
+embeds `@ngrok/ngrok` 1.7.0) takes its dependency mode from explicit trusted
+factory declarations, in order:
+
+1. `runtimeModules: { '@ngrok/ngrok': { kind: 'bundled', version, path } }` —
+   the host packages a TESTED read-only bundle (an AppImage, a read-only
+   installation) and hands its absolute module directory. Gozar proves the
+   bundle's package manifest names the exact package and the exact declared
+   version, loads the module entry, and marks the declared install prerequisite
+   satisfied — no install, no write, no restart. The load is re-proved in the
+   detached route controller from the same declaration (it crosses as validated
+   data in the private bootstrap; a closure never serializes). The bundle must
+   include the module's native platform dependencies for the host's
+   platform/architecture: package the full install tree, not the bare tarball.
+   A missing, unloadable, wrong-version or wrong-interface bundle leaves the
+   provider unavailable with a fixed plain reason and no install action.
+2. `{ kind: 'runtime-install' }` — the host explicitly says its install
+   location is writable; Gozar may offer the approved artifact install step
+   (host executor, `installer.execute` capability, pinned SHA-256, restart).
+3. `{ kind: 'host-managed' }` — the host provides its own dependencies; a
+   missing module is a fixed plain unavailability and no install step is
+   offered.
+
+Without any declaration the SDK is still detected by the ordinary installed
+check, but omission never authorizes an install: a missing module is
+unavailable with a fixed plain reason and no install action. Declare
+`runtime-install` to offer the install step.
+Satisfying the prerequisite never claims account, route or address readiness.
+The ngrok CLI is NOT supported as a substitute for the embedded SDK on this
+adapter: the CLI and the embedded SDK are different agent forms with different
+behavior, and the CLI's default local agent API at 127.0.0.1:4040 is
+unauthenticated. A CLI transport proposal is pending and nothing here
+implements it.
+
+## Cached polling reads (0.5.2)
+
+`listProviders`, `beginConfigurationDraft` and `readConfigurationDraft` answer
+from a short-TTL retained detection per full scope (registry identity, home,
+owner, provider, platform, draft and the configuration revision it observed;
+`detectionTtlMs` tunes the TTL, default 15s). The route catalog is NOT cached:
+it issues single-use consent tokens bound to what Gozar actually observed, so
+its detection sweep is always live. The contract is strict:
+
+- A poll NEVER runs a live provider probe, cold or expired. A fresh hit serves
+  the retained projection. An expired hit serves it with its ACTUAL
+  `detection.checkedAt` and `fresh: false`. A cold read answers declared unknown
+  (`checkedAt: null`) and still offers the adapter's declared configuration
+  inputs. No poll starts a background refresh.
+- Only `refresh: true` (on `listProviders`, `beginConfigurationDraft` or
+  `readConfigurationDraft`) owns and awaits the probes. Overlapping refreshes of
+  one scope share one probe.
+- A completed setup, clear, commit, discard, secret store or artifact install
+  drops the scope's retained entries (every platform and draft). The next read
+  answers declared unknown until an explicit refresh; a refresh that was in
+  flight for the old state is never stored and never served.
+- The retained projection is closed: derived state, properties and the scalar
+  facts the adapter definition declares. Raw probe output is dropped. A
+  retained row never feeds setup consent: its consent decoration treats facts
+  as unknown. Consent for an adapter whose declared facts come from a probe is
+  decorated from the read that owns a fresh probe (`refresh: true`), and setup
+  approval is always re-validated live.
+- Consequently a cold poll reports provider availability and facts as unknown.
+  A host that needs observed availability, or that is about to show an
+  actionable setup step for an adapter with probe-derived consent facts, calls
+  the read once with `refresh: true`.
+- Authority never reads the cache: consent redemption, approved effects and
+  route allocation revalidate live state (candidate_stale / consent_mismatch as
+  before), and the catalog's plan and observation reads stay live.
 
 ## Draft input removal and controller incarnations
 
@@ -220,3 +368,53 @@ separate. Shipped execution is HTTP(S); ngrok TLS/TCP profiles remain detect-onl
 Ngrok HTTPS needs its optional SDK and account/domain prerequisites; Cloudflare
 named uses an existing owner-managed tunnel/DNS route. Neither is implied ready
 by saved inputs. No future release or provider expansion is promised here.
+
+## Stable configuration storage
+
+A configuration is stored under `scopeId = sha256([custodian, canonical home, owner, providerId])`. The custodian
+is a lineage name, not the registry content id, so a new release keeps the same scope and the same saved values and
+credentials. The content registry id stays in every consent scope, setup journal and route bootstrap, so changed
+code or schema is still re-approved. Nothing in the stored state transfers an old approval.
+
+- The bundled registry uses the fixed custodian `gozar-bundled`. A host registry (custom `manifest`, `root` or
+  injected `adapters`) keeps content-bound storage unless the host declares
+  `createGozar({registryLineage:{id,replaces}})`. Matching provider definitions are not proof of the same
+  executable, so Gozar never infers a lineage. A host lineage cannot use `gozar-bundled` or a published Gozar
+  registry id.
+- One time, the first read of a provider recomputes the earlier scope from each trusted earlier registry id plus the
+  exact home, owner and provider (bundled: the 0.4.0, 0.5.0 and 0.5.1 ids; host: `replaces`). The state file is not
+  scanned. Config-only records carry no reverse metadata, so an unknown earlier registry id cannot be recovered.
+- The carry-forward is one atomic write of `embedding-state.json`, the claim: the stable record is created, bound
+  secret metadata is re-stamped and keeps its original backend scope (`backendScopeId`) so delegated backends still
+  find the item, and the earlier record becomes a data-free tombstone: no bindings, no values, no
+  drafts, no uses, a fresh revision and `migratedTo`. Only the authorized stable record holds the bindings. Every path that can migrate (read,
+  resolve, mutate, `adoptConfiguration`) renames the claim before it asks the secret backend for anything, so a
+  fault leaves the earlier state as it was and no bytes were released. A second lineage that declares the same
+  predecessor finds the tombstone and is refused (`taken`) without any backend call. A resolve of an already-stable
+  scope writes nothing.
+- Retirement. After the claim the earlier registry gets nothing from that scope. The current SDK refuses any
+  replacement-aware access to the tombstone with `configuration_migration_required` (reason `retired`), including
+  read, resolve, draft, setup, secret intake, `registerUse`, adoption and exact-use cleanup, and calls no backend. The
+  original published 0.4.0 writer, which ignores `migratedTo`, reads an empty configuration and resolves nothing. A
+  0.4.0 writer that saves its own configuration afterwards writes only into the old scope and never reaches the stable
+  record. Before the claim renames (a fault or kill), the 0.4.0 writer still reads everything; after it, only the
+  successor does. Limit: the physical secret is not deleted, and bytes a trusted earlier host already read before the
+  claim are not recalled.
+- A saved input carries forward only when the provider's own current declaration (its `provide-secret` and
+  `provide-value` actions, read without any live probe) still names that input id with the same role. A provider
+  without such a declaration carries nothing forward. The lineage names which earlier scopes may be recomputed; it
+  never says which inputs are valid, and an input id alone never authorizes use of a credential.
+- A route reservation made through the earlier registry blocks the carry-forward (`in_use`): it is not copied,
+  because only the earlier registry's release (or the exact handle, below) can end it. The original service can
+  release it as before. The new service's `releaseConfigurationUse` also drops that exact handle, for that exact home,
+  owner and provider, from the earlier record when it has not moved; nothing else is removed and no absence is
+  inferred. Retry the read after the last reservation ends.
+- It refuses with `configuration_migration_required` (and never writes) when several earlier scopes match, a saved
+  input is not declared with the same role by the current provider, secret metadata disagrees with the record, a
+  draft, setup operation or operation-held credential is open, a route reservation remains, or the earlier record
+  already moved elsewhere.
+- `adoptConfiguration({home,owner?,providerId,fromRegistryId})` is the trusted host decision for the refusals above
+  (choose between candidates, or name a predecessor that no lineage declares). It never overwrites a configuration
+  that has values, bindings, drafts or uses.
+- Limit: when no lineage names the earlier registry, the earlier state stays untouched but unreferenced; the host
+  sees an unconfigured provider until it declares `replaces` or calls `adoptConfiguration`.

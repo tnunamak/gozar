@@ -19,6 +19,10 @@ import { resolveClientAddress } from './ingress.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { registryIdentity } from './registry-identity.mjs';
 import { createEmbeddingServices } from './embedding-services.mjs';
+import { bundledLineage } from './registry-lineage.mjs';
+import { inputKindsOf } from './embedding-state.mjs';
+import { validatedRuntimeModuleDeclaration } from './runtime-modules.mjs';
+import { createDetectionCache } from './detection-cache.mjs';
 import { listProviders as inventory } from './embedding-inventory.mjs';
 import { setupConsentReview,consentSnapshot,safeSetupAction,needsSetupOperation } from './consent-facts.mjs';
 import { runSetupOperation, readSetupOperation, cancelSetupOperation } from './setup-operations.mjs';
@@ -36,19 +40,40 @@ const runtime = lazy(() => import('./adapter-runtime.mjs'));
 
 export function createRouteApi(deps = {}) {
   const platform = () => deps.platform ?? process.platform;
+  // Trusted host declarations of packaged runtime modules. Structural validation is synchronous; the
+  // identity, version and load check happen on every load, in this process and in a detached controller.
+  const runtimeModules = deps.runtimeModules === undefined || deps.runtimeModules === null ? undefined
+    : Object.fromEntries(Object.entries(deps.runtimeModules)
+      .map(([name, declaration]) => [name, validatedRuntimeModuleDeclaration(name, declaration)]));
+  // Short-TTL cached detection per full scope (registry, home, owner, provider, platform, configuration
+  // revision). Routine cold or expired polls run ZERO live provider probes; an explicit refresh request
+  // and the read after a mutation own the probes. Authority paths never read it.
+  const detection = deps.detectionCache ?? createDetectionCache({ ttlMs: deps.detectionTtlMs ?? 15_000, now: () => (deps.now ?? Date.now)() });
   let loaded;
+  // A read is admitted at the public boundary, before the registry and configuration awaits: refresh reads that
+  // overlap share one probe per scope (detection-cache.mjs). The admission ends with the call.
+  const admitted = async (request, run) => { const admission = detection.admit(request?.refresh === true); try { return await run(admission); } finally { admission.release(); } };
   const adapters = async () => deps.adapters ?? (loaded ??= runtime().then(module => module.loadAdapters(deps.manifest ? { manifest: deps.manifest, root: deps.root } : undefined)).catch(error => { loaded = undefined; throw error; }));
   let servicesPromise;
   const services = () => servicesPromise ??= (async()=>{
     const registryId = await registryIdentity({...deps,adapters:deps.adapters});
-    return {registryId,embeddingServices:deps.embeddingServices??createEmbeddingServices({registryId,secretBackend:deps.secretBackend,hostCapabilities:deps.hostCapabilities,identity:deps.identity})};
+    // The bundled registry keeps one stable storage name across releases. An injected or custom registry has no lineage
+    // unless its host declares one: matching definitions are not proof of the same executable.
+    const lineage=deps.registryLineage??(deps.adapters||deps.manifest||deps.root?undefined:bundledLineage());
+    return {registryId,embeddingServices:deps.embeddingServices??createEmbeddingServices({registryId,lineage,secretBackend:deps.secretBackend,hostCapabilities:deps.hostCapabilities,identity:deps.identity,
+      // What an earlier saved input may become is decided by the provider's own current declaration, never by its id alone.
+      currentInputKinds:async providerId=>inputKindsOf((await adapters()).find(adapter=>adapter.id===providerId))})};
   })();
   const shared = async (request={}) => { const resolved=await services(); return ({ adapters: await adapters(), platform: platform(), ...resolved, owner:request.owner,home:request.home,
     ...(deps.manifest ? { registry: { manifest: deps.manifest, root: deps.root } } : {}),
     hostCapabilities:deps.hostCapabilities??{}, ...(deps.dispatchEffect?{dispatchEffect:deps.dispatchEffect}:{}),
+    ...(runtimeModules ? { runtimeModules } : {}),
+    ...(deps.acknowledgeOrigin ? { acknowledgeOrigin: deps.acknowledgeOrigin } : {}),
+    detection,
+    ...(Number.isFinite(deps.originAckTimeoutMs) ? { originAckTimeoutMs: deps.originAckTimeoutMs } : {}),
     ...(deps.readContext ? { readContext: deps.readContext } : {}),
     decorateSetupAction:({action,adapter,configuration,draftId=null,inspection})=>{
-      const review=setupConsentReview({registryId:resolved.registryId,providerId:adapter.id,configuration,draftId,action,facts:catalogFactsFor(inspection??{adapter})});
+      const review=setupConsentReview({registryId:resolved.registryId,providerId:adapter.id,configuration,draftId,action,facts:catalogFactsFor(inspection&&inspection.live!==false?inspection:{adapter})});
       return {...safeSetupAction(action),consent:consentSnapshot(review),...(!needsSetupOperation(action)&&{review:{canonicalInput:review.canonicalInput}})};
     } }); };
   const publicError=cause=>{const normalized=normalizeError(cause),error=gozarError(normalized.code,normalized.message,normalized.nextAction?(needsSetupOperation(normalized.nextAction)?safeSetupAction(normalized.nextAction):structuredClone(normalized.nextAction)):null);if(normalized.route)error.route=structuredClone(normalized.route);return error;};
@@ -122,13 +147,15 @@ export function createRouteApi(deps = {}) {
     }
   }
 
-  const routeStatus = request => verified(async () => {
+  // Observation replaces proof only for a host that declared the acknowledgment handler; without one, the earlier polling watch keeps proving.
+  const observing = () => typeof deps.acknowledgeOrigin === 'function';
+  const statusOf = (request, observe) => verified(async () => {
     const retained=await cleanupReferenceRecord(request,await services());
     if(retained){
       if(retained.phase!=='prepared')return retained.view;
       // Preparation is intent, not proof of removal. Consult the actual controller.
       let observed;
-      try{observed=await viewStatus(request,{adapters:await adapters(),...deps.view});}
+      try{observed=await viewStatus(request,{adapters:await adapters(),...deps.view,...(observe&&observing()?{observe}:{})});}
       catch(error){if(error.code!=='route_not_found')throw error;}
       const current=await cleanupReferenceRecord(request,await services());
       if(current?.phase!=='prepared')return current?.view??retained.view;
@@ -137,8 +164,11 @@ export function createRouteApi(deps = {}) {
         throw gozarError('route_conflict','Current observation belongs to another handle');
       return observed;
     }
-    return viewStatus(request,{adapters:await adapters(),...deps.view});
+    return viewStatus(request,{adapters:await adapters(),...deps.view,...(observe&&observing()?{observe}:{})});
   },request);
+  const routeStatus = request => statusOf(request, false);
+  // The watch's read (internal, not part of the public API): the same view, observed rather than proven when a host acknowledgment is declared.
+  const observeRoute = request => guard(async () => withRouteGuidance(request, await statusOf(request, true)));
 
   const api = {
     catalogRoutes: query => guard(()=>verified(async () => buildCatalog(query, { ...await shared(query), profileHome: deps.profileHome,
@@ -165,7 +195,7 @@ export function createRouteApi(deps = {}) {
       const view = await verified(async () => {
         const context=await services();
         const cleanupRuntime={...context,afterReferenceRelease:async()=>{
-          try{await viewClose(request,{adapters:await adapters(),...deps.view});}
+          try{await viewClose(request,{adapters:await adapters(),...deps.view,...(observing()?{observe:true}:{})});}
           catch(error){if(error.code!=='route_not_found')throw error;}
           await finishCleanupController(request);
         }};
@@ -204,7 +234,7 @@ export function createRouteApi(deps = {}) {
         const removed=await reconcileRemoval();
         if(removed)return removed;
         let view;
-        try{view=await viewClose(request,{adapters:await adapters(),...deps.view});}
+        try{view=await viewClose(request,{adapters:await adapters(),...deps.view,...(observing()?{observe:true}:{})});}
         catch(error){
           if(error.code!=='route_not_found')throw error;
           if(retainedCleanup)return retainedCleanup.view;
@@ -244,16 +274,20 @@ export function createRouteApi(deps = {}) {
       return withRouteGuidance(request,view,reference);
     }),
     suspendRoute: request => guard(() => verified(async () => viewSuspend(request, { adapters: await adapters(), ...deps.view }),request)),
-    watchRoutes:async function*(request){try{for await(const event of pollRoutes(request,{routeStatus:api.routeStatus,...deps.watch}))yield structuredClone(event);}catch(error){throw publicError(error);}},
+    watchRoutes:async function*(request){try{for await(const event of pollRoutes(request,{routeStatus:observeRoute,...deps.watch}))yield structuredClone(event);}catch(error){throw publicError(error);}},
     getRoutePreferences, setRoutePreferences,
     runSetupAction: request => guard(async () => {
       const context=await setupDeps(request);
-      return request && typeof request === 'object' && ('operationId' in request || 'expectedSetupRevision' in request)
-        ? runSetupOperation(request,context) : runSetup(request,context);
+      const outcome = request && typeof request === 'object' && ('operationId' in request || 'expectedSetupRevision' in request)
+        ? await runSetupOperation(request,context) : await runSetup(request,context);
+      // A completed setup or artifact action changed what detection observes: the scope's next read
+      // answers declared unknown until an explicit refresh.
+      detection.invalidate({ registryId: context.registryId, home: request.home, owner: request.owner, providerId: request.providerId });
+      return outcome;
     }),
     readSetupOperation: request => guard(async () => readSetupOperation(request,await setupDeps(request))),
     cancelSetupOperation: request => guard(async () => cancelSetupOperation(request,await setupDeps(request))),
-    listProviders: request => guard(async()=>inventory(request,await shared(request))),
+    listProviders: request => guard(()=>admitted(request,async admission=>inventory(request,await shared(request),admission))),
     listRoutes:request=>guard(async()=>{
       const context=await shared(request);
       const base=await listRecordedRoutes(request,context),retained=await listCleanupReferences(request);
@@ -270,11 +304,19 @@ export function createRouteApi(deps = {}) {
       }
       return {routes:[...views.values()]};
     }),
-    ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft'].map(method=>[method,request=>guard(async()=> (await services()).embeddingServices[method](request))])),
-    beginConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const draft=await context.embeddingServices.beginConfigurationDraft(request);return {...draft,configuration:await offeredConfiguration({...request,draftId:draft.draftId},draft.configuration,context)};}),
-    readConfigurationDraft:request=>guard(async()=>readConfigurationDraft(request,await shared(request))),
-    commitConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const snapshot=await context.embeddingServices.commitConfigurationDraft(request);return offeredConfiguration({...request,draftId:undefined},snapshot,context);}),
-    clearConfigurationInput:request=>guard(async()=>clearConfigurationInput(request,await setupDeps(request))),
+    ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft','adoptConfiguration'].map(method=>[method,request=>guard(async()=>{const resolved=await services();const result=await resolved.embeddingServices[method](request);
+      // A stored or discarded secret or draft changes what a scope offers: its retained detection is dropped.
+      detection.invalidate({registryId:resolved.registryId,home:request.home,owner:request.owner,providerId:request.providerId});return result;})])),
+    beginConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const draft=await context.embeddingServices.beginConfigurationDraft(request);
+      const offered=await offeredConfiguration({...request,draftId:draft.draftId},draft.configuration,context);
+      return {...draft,configuration:offered.configuration,...(offered.detection?{detection:offered.detection}:{})};}),
+    readConfigurationDraft:request=>guard(()=>admitted(request,async admission=>readConfigurationDraft(request,await shared(request),admission))),
+    commitConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const snapshot=await context.embeddingServices.commitConfigurationDraft(request);
+      // The applied configuration moved: the scope's next read answers declared unknown until an explicit refresh.
+      detection.invalidate({ registryId: context.registryId, home: request.home, owner: request.owner, providerId: request.providerId });
+      const offered=await offeredConfiguration({...request,draftId:undefined},snapshot,context);
+      return {...offered.configuration,...(offered.detection?{detection:offered.detection}:{})};}),
+    clearConfigurationInput:request=>guard(async()=>{const context=await setupDeps(request);const result=await clearConfigurationInput(request,context);detection.invalidate({registryId:context.registryId,home:request.home,owner:request.owner,providerId:request.providerId});return result;}),
     reviewRouteConsent:request=>guard(async()=>request.handle?.kind==='external'?verified(()=>reviewExternalConsent(request),request):request.handle?.kind==='session'?sessionConsent(request,{adapters:await adapters()}):request.handle?.kind==='durable'?verified(async()=>(await engine()).reviewDurableConsent(request),request):reviewAttachedConsent(request)),
     approveRouteConsent:request=>guard(async()=>request.handle?.kind==='external'?verified(async()=>projectExternal(await approveExternalConsent(request),{handle:request.handle}),request):request.handle?.kind==='session'?sessionConsent(request,{approve:true,adapters:await adapters()}):request.handle?.kind==='durable'?verified(async()=>durableView(await (await engine()).approveDurableConsent(request)),request):approveAttachedConsent(request)),
     resolveClientAddress,

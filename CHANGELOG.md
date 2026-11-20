@@ -1,5 +1,88 @@
 # Changelog
 
+## 0.5.2
+
+### Fixed
+
+- **Saved configuration survives a release upgrade.** Storage scope was a hash that included the content registry id,
+  so every release orphaned the saved values and credentials of the one before it (a 0.4.0 `own-address` origin read
+  back as unset on 0.5.1). The scope now uses a stable lineage name, one-time carry-forward recomputes the earlier
+  scope from the published 0.4.0, 0.5.0 and 0.5.1 registry ids, and `registryLineage` plus `adoptConfiguration`
+  give hosts the same path. Consent still binds the content registry id, so changed code is approved again. A saved
+  input carries forward only when the provider's current declaration still names it with the same role, the claim is
+  written durably before any credential is read, and a route reservation made through the earlier registry blocks the
+  move until that route is released (the original service, or `releaseConfigurationUse` with the exact handle).
+- **Proof and observation boundaries under a host acknowledgment.** An explicit check rechecks that the route is live
+  and runs its challenge (or a due lease renewal) under the reservation lock, so a close, stop or release cannot commit
+  between the recheck and the start of the challenge; the host acknowledgment stays outside that lock. A check whose
+  acknowledgment is refused or fails ends the earlier remembered proof for that route generation, newest-started attempt
+  wins, and ending one home's route no longer forgets another home's proof for the same route ID.
+
+### Added
+
+- **Awaited exact-origin host acknowledgment for embedded starts.** A host that
+  declares `createGozar({acknowledgeOrigin})` receives one typed, authenticated
+  request per route start attempt, naming the exact validated origin, its handle
+  and generation, the operation and the proof attempt. Publication verification
+  (and therefore the published address) waits for a well-formed acknowledgment
+  that echoes the exact origin, handle and attempt. A missing, refused,
+  throwing, aborted, timed-out or stale acknowledgment withdraws the route with
+  its retained cleanup receipt: nothing publishes, an acknowledgment naming
+  another origin never approves a foreign Host, and a late acknowledgment
+  cannot revive a lost owner. The request crosses the detached controller over
+  the authenticated embedding broker (a new `acknowledgeOrigin` method); generic
+  session and attached starts await it in the controller, durable starts await
+  the same typed request in-process. A host that declares no handler keeps the
+  0.5.1 behavior of verifying immediately after allocation, and a declared
+  handler plus a legacy recipe-session provider is refused `unsupported` rather
+  than verified without acknowledgment.
+- **Trusted host declarations of packaged runtime modules.** `createGozar({runtimeModules})`
+  names an explicit dependency mode per module: a bundled read-only module
+  directory (whose package identity, exact declared version and loadability are
+  re-proved both in the host process and in the detached route controller; the
+  declared install prerequisite is satisfied with no install, write or restart),
+  an explicitly writable runtime-install location, or host-managed dependencies.
+  The ngrok HTTPS edge accepts a tested `@ngrok/ngrok` 1.7.0 bundle this way, so
+  a packaged read-only host no longer sees an impossible install step: a
+  missing, unloadable, wrong-version or wrong-interface bundle leaves the
+  provider unavailable with a fixed plain reason and no install action. Without
+  a declaration the SDK is still detected by the ordinary installed check, but
+  omission never authorizes an install (a missing module is unavailable with no
+  install action; declare `runtime-install` for the install step). The ngrok
+  CLI is not a substitute for the embedded SDK on this adapter; a CLI
+  transport is a pending proposal and is not implemented.
+- **Polling reads never probe.** `listProviders`, `beginConfigurationDraft` and
+  `readConfigurationDraft` answer from a short-TTL retained projection per scope
+  (`detectionTtlMs`, default 15s) keyed by registry, home, owner, provider,
+  platform, draft and the configuration revision. No poll runs a live provider
+  probe, cold or expired: a cold read answers declared unknown, an expired read
+  answers the retained projection with its actual `detection.checkedAt` and
+  `fresh: false`. Only `refresh: true` owns and awaits the probes (refreshes that
+  overlap, judged at request admission before any configuration read, share one
+  probe per provider; a refresh admitted after a probe finished runs a new one). Setup, clear, commit, discard, secret and install
+  changes drop the scope. The projection holds no raw probe output and never
+  feeds setup consent. A cold poll reports availability and facts as unknown;
+  call the read once with `refresh: true` to observe them. The route catalog is not cached, and consent redemption,
+  approved effects and route allocation keep revalidating live state.
+
+### Fixed
+
+- Under a declared `acknowledgeOrigin`, a provider that runs sessions on the legacy
+  daemon controller is advertised `unsupported` (`origin-acknowledgment-unsupported`)
+  for the session kind before consent, matching the refusal `expose` always gave.
+- Under a declared `acknowledgeOrigin`, `watchRoutes` observes instead of proving: it
+  no longer asks the host for acknowledgments outside the host's own calls, no longer
+  takes the attempt of an overlapping explicit check, and no longer publishes or
+  renews leases. Explicit `routeStatus` checks verify with a watch open.
+- Views returned after a confirmed resource removal (the attached
+  removal-evidence and reference-cleanup records) reported `routeState:
+  'released'`, which the frozen route contract does not define, and dropped the
+  cleanup `nextAction` field. They now carry `routeState: 'inactive'` with the
+  same closed `cleanup` shape as every other route view.
+- The localhost.run provider no longer declares a fifteen-minute address cap
+  it cannot enforce; its disclosure separates the relay's uncertainty from the
+  local runtime limit (900000), which a prior approval now reflects.
+
 ## 0.5.1
 
 - Resolve exact adapter IDs before display names, and reject ambiguous display
