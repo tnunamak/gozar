@@ -85,6 +85,15 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
   assert.deepEqual(terminalJournal.view.handle,resumed.handle,'terminal journal follows exact committed restoration');
   assert.equal(terminalJournal.view.cleanup.state,'confirmed');
   assert.deepEqual(config,foreign);assert.equal(writes,afterResume+1,'Stop removes exactly the resumed rule');
+  const retainedTerminalBytes=await readFile(join(home,'operations',terminalName),'utf8');
+  const beforeStaleClose=writes;
+  await assert.rejects(api.closeRoute({home,handle:route.handle,mode:'remove'}),
+   error=>['route_conflict','route_not_found'].includes(error?.code),
+   'the pre-suspend generation must not receive a successful removal after the restored generation is gone');
+  assert.equal(writes,beforeStaleClose,'a stale close does not write through the provider');
+  assert.deepEqual(config,foreign);
+  assert.equal(await readFile(join(home,'operations',terminalName),'utf8'),retainedTerminalBytes,
+   'a stale close leaves the exact restored generation receipt unchanged');
   const terminalWrites=writes,terminal=await api.ensureRoute(request);
   assert.equal(terminal.state,'released');assert.deepEqual(terminal.handle,resumed.handle);
   assert.equal(terminal.cleanup.state,'confirmed');
