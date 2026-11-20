@@ -43,12 +43,13 @@ async function fixture(t, { holdConsentRead = 4, armPublicationOnStartup = true,
   const iso = () => new Date(clock.now).toISOString();
   const seen = { configurationReads: 0, initialProofVerified: false, refreshProofVerified: false, ownerListenerArmed: false,
     ownerLossRequested: false, localCloseSucceeded: false, runtimeFactsCalls: 0, removeCalls: 0, releaseCalls: 0,
-    releaseRequests: [], resourceRemovalWrites: 0, journalWrites: [] };
+    runtimeFactsReceipt: null, runtimeFactsReturned: false, releaseRequests: [], resourceRemovalWrites: 0, journalWrites: [] };
   const finalConsentRead = settled(), consentReply = settled(), ownerListenerArmed = settled();
   const localClosed = settled(), initialProof = settled(), refreshProof = settled(), heldUsableWrite = settled();
   const allowUsableWrite = settled(), initialUsableSaved = settled(), removalStarted = settled(), allowRemoval = settled();
   const runtimeFactsStarted = settled(), runtimeFactsGate = settled(), ownerLossDeadlineJournal = settled();
   const removalRecordedJournal = settled(), terminalReleasedJournal = settled(), cleanupResolutionJournal = settled();
+  const finalResourceRemovalJournal = settled();
   const brokerSocketClosed = settled();
 
   const configurationServices = {
@@ -79,9 +80,11 @@ async function fixture(t, { holdConsentRead = 4, armPublicationOnStartup = true,
   adapter.runtimeFacts = async (...args) => {
     seen.runtimeFactsCalls++;
     if (!holdRuntimeFacts) return originalRuntimeFacts(...args);
+    seen.runtimeFactsReceipt = structuredClone(args[1]);
     runtimeFactsStarted.resolve();
     const response = await runtimeFactsGate.promise;
     if (response.error) throw response.error;
+    seen.runtimeFactsReturned = true;
     return response.facts;
   };
   const proofServer = net.createServer(socket => { socket.on('error', () => {}); socket.end('local proof endpoint'); });
@@ -133,7 +136,7 @@ async function fixture(t, { holdConsentRead = 4, armPublicationOnStartup = true,
     if (candidate) {
       const milestone = { phase: candidate.phase, state: candidate.lastView?.state,
         cleanup: candidate.lastView?.cleanup?.state, resourceRemoval: candidate.resourceRemoval ?? null,
-        facts: candidate.lastView?.facts ?? [] };
+        receipt: candidate.receipt ?? null, published: candidate.lastView?.published ?? null, facts: candidate.lastView?.facts ?? [] };
       seen.journalWrites.push(milestone);
       if (milestone.phase === 'uncertain' && milestone.cleanup === 'unconfirmed' && !milestone.resourceRemoval)
         ownerLossDeadlineJournal.resolve(milestone);
@@ -144,6 +147,7 @@ async function fixture(t, { holdConsentRead = 4, armPublicationOnStartup = true,
           seen.cleanupResolutionIndex = seen.journalWrites.length - 1;
           cleanupResolutionJournal.resolve(milestone);
         }
+        if (seen.resourceRemovalWrites === 2) finalResourceRemovalJournal.resolve(milestone);
       }
       if (milestone.phase === 'released' && milestone.cleanup === 'confirmed' && milestone.resourceRemoval)
         terminalReleasedJournal.resolve(milestone);
@@ -205,6 +209,7 @@ async function fixture(t, { holdConsentRead = 4, armPublicationOnStartup = true,
   return { directory, statePath, proofServer, adapter, bootstrap, seen, finalConsentRead, initialProof, refreshProof,
     ownerListenerArmed, localClosed, initialUsableSaved, removalStarted, heldUsableWrite, allowUsableWrite, allowRemoval,
     runtimeFactsStarted, ownerLossDeadlineJournal, removalRecordedJournal, terminalReleasedJournal, cleanupResolutionJournal,
+    finalResourceRemovalJournal,
     brokerSocketClosed,
     run, get runSettled() { return runSettled; }, status, triggerOwnerLoss, releaseConsent, armPublication,
     setObservation(value) { observation = value; },
@@ -421,4 +426,107 @@ test('late startup failure waits for owner-loss deadline and retains cleanup deb
     final: { phase: terminal.phase, cleanup: terminal.cleanup, resourceRemoval: terminal.resourceRemoval },
     localCloseSucceeded: s.seen.localCloseSucceeded, milestones: s.seen.journalWrites.map(({phase,state,cleanup,resourceRemoval}) => ({phase,state,cleanup,resourceRemoval:Boolean(resourceRemoval)})) };
   process.stdout.write(`late-cleanup-witness ${JSON.stringify({ ...witness, serviceReleaseRequests: s.seen.releaseRequests })}\n`);
+});
+
+const lateRuntimeMarker = { id: 'fixture.initial-runtime-late', label: 'Late runtime observation', group: 'runtime',
+  source: 'local-observation:/runtime-facts', known: true, value: 'after-owner-loss', reason: null,
+  asOf: '2026-11-20T12:00:00.000Z', affectsConsent: false };
+const runtimeFactsWithLateMarker = () => ({ properties: properties(), ingress: null,
+  limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, facts: [structuredClone(lateRuntimeMarker)] });
+
+test('late successful initial runtime facts cannot overwrite owner-loss retirement', async t => {
+  const s = await fixture(t, { holdRuntimeFacts: true, ownerLossTeardownMs: 120, armPublicationOnStartup: false });
+  await bounded(s.runtimeFactsStarted.promise, 'initial runtime facts after create');
+  await bounded(s.ownerListenerArmed.promise, 'stdin owner-loss listener');
+  const receipt = s.seen.runtimeFactsReceipt;
+  let journalAtFactsStart = null;
+  try { journalAtFactsStart = await json(s.statePath); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  assert.equal(s.seen.runtimeFactsCalls, 1);
+  assert.equal(receipt.adapterId, s.adapter.id);
+  assert.equal(receipt.resourceKey, s.bootstrap.plan.resourceKey);
+  assert.equal(receipt.generation, 1);
+
+  s.triggerOwnerLoss();
+  await bounded(s.localClosed.promise, 'successful local proof close');
+  assert.equal(s.seen.localCloseSucceeded, true);
+  assert.equal(s.proofServer.listening, false);
+  const deadline = await bounded(s.ownerLossDeadlineJournal.promise, 'owner-loss deadline journal');
+  assert.deepEqual({ phase: deadline.phase, cleanup: deadline.cleanup, resourceRemoval: deadline.resourceRemoval },
+    { phase: 'uncertain', cleanup: 'unconfirmed', resourceRemoval: null });
+  const retired = await bounded(s.run, 'owner-loss controller retirement');
+  assert.equal(retired.view.state, 'uncertain');
+  await bounded(s.brokerSocketClosed.promise, 'resolver client socket close');
+
+  s.resolveRuntimeFacts(runtimeFactsWithLateMarker());
+  await bounded(s.removalStarted.promise, 'held owned provider removal');
+  const journal = await json(s.statePath);
+  const deadlineIndex = s.seen.journalWrites.findIndex(write => write.phase === 'uncertain' &&
+    write.cleanup === 'unconfirmed' && write.resourceRemoval === null);
+  assert.ok(deadlineIndex >= 0, 'the owner-loss deadline write is witnessed');
+  const afterDeadline = s.seen.journalWrites.slice(deadlineIndex + 1);
+  const lateFact = journal.lastView.facts.find(fact => fact.id === lateRuntimeMarker.id);
+  const witness = { deadline, lateRuntimeFactsReturned: s.seen.runtimeFactsReturned,
+    receiptAtFactsStart: journalAtFactsStart?.receipt ?? null, receiptRetained: Boolean(journal.receipt), phase: journal.phase, state: journal.lastView.state,
+    cleanup: journal.lastView.cleanup.state, resourceRemoval: journal.resourceRemoval,
+    lateFact: lateFact ?? null, published: journal.lastView.published,
+    postDeadlineWrites: afterDeadline.map(({ phase, state, cleanup, published, facts }) => ({
+      phase, state, cleanup, published, hasLateFact: facts.some(fact => fact.id === lateRuntimeMarker.id) })) };
+  s.allowRemoval.resolve();
+  const finalRemoval = await bounded(s.finalResourceRemovalJournal.promise, 'final unconfirmed removal journal');
+  const expectedRemoval = { schemaVersion: 1, registryId: s.bootstrap.registryId, owner: OWNER,
+    providerId: s.adapter.id, handle: { kind: 'attached', id: HANDLE_ID, generation: 1 } };
+  const finalWitness = { ...witness, finalRemoval, removeCalls: s.seen.removeCalls, releaseCalls: s.seen.releaseCalls };
+  process.stdout.write(`late-runtimefacts-witness ${JSON.stringify(finalWitness)}\n`);
+  assert.equal(s.seen.runtimeFactsReturned, true);
+  assert.equal(s.seen.removeCalls, 1);
+  assert.deepEqual(deadline.receipt, receipt, 'validated receipt was journaled before optional runtime facts');
+  assert.ok(journal.receipt, 'the validated owned receipt remains available for cleanup');
+  assert.equal(journal.resourceRemoval, null, 'a held removal has not claimed absence');
+  assert.equal(journal.lastView.cleanup.state, 'unconfirmed');
+  assert.notEqual(journal.phase, 'usable');
+  assert.notEqual(journal.lastView.state, 'usable');
+  assert.equal(journal.lastView.published, null);
+  assert.equal(lateFact, undefined, `late runtime facts were journaled after retirement: ${JSON.stringify(finalWitness)}`);
+  assert.ok(afterDeadline.every(write => !write.facts.some(fact => fact.id === lateRuntimeMarker.id)),
+    `a post-deadline journal write contains the late marker: ${JSON.stringify(finalWitness)}`);
+  assert.ok(afterDeadline.every(write => write.phase !== 'unverified'),
+    `late runtime facts replaced the retired phase: ${JSON.stringify(finalWitness)}`);
+  assert.ok(afterDeadline.every(write => write.state !== 'usable' && write.published === null),
+    `a post-deadline journal write became usable or published: ${JSON.stringify(finalWitness)}`);
+  assert.deepEqual(journalAtFactsStart?.receipt, receipt, 'validated receipt must be journaled before optional runtime facts');
+  assert.deepEqual(finalRemoval?.resourceRemoval, expectedRemoval);
+  assert.equal(finalRemoval?.cleanup, 'unconfirmed');
+  assert.equal(s.seen.removeCalls, 1);
+  assert.equal(s.seen.releaseCalls, 0, 'the retired resolver cannot confirm reference release');
+});
+
+test('initial runtime facts still commit while the owner remains present', async t => {
+  const s = await fixture(t, { holdRuntimeFacts: true, armPublicationOnStartup: false });
+  await bounded(s.runtimeFactsStarted.promise, 'initial runtime facts after create');
+  await bounded(s.ownerListenerArmed.promise, 'stdin owner-loss listener');
+  const receipt = s.seen.runtimeFactsReceipt;
+  assert.equal(receipt.adapterId, s.adapter.id);
+  assert.equal(receipt.resourceKey, s.bootstrap.plan.resourceKey);
+  s.resolveRuntimeFacts(runtimeFactsWithLateMarker());
+  const finalConsent = await bounded(s.finalConsentRead.promise, 'final ordinary startup consent read');
+  assert.equal(finalConsent.call, 4);
+  s.releaseConsent();
+  const startup = await bounded(waitForStartupComplete(s), 'ordinary startup completion');
+  const journal = await json(s.statePath);
+  assert.equal(startup.view.state, 'usable');
+  assert.equal(journal.lastView.state, 'usable');
+  assert.equal(journal.lastView.facts.find(fact => fact.id === lateRuntimeMarker.id)?.value, lateRuntimeMarker.value);
+  assert.notEqual(journal.lastView.published, null);
+
+  const closing = controlAttached(s.directory,
+    { type: 'close', handleId: HANDLE_ID, generation: 1 }, 4_000);
+  await bounded(s.removalStarted.promise, 'ordinary owned provider removal');
+  s.allowRemoval.resolve();
+  const closed = await bounded(closing, 'ordinary route close');
+  const terminal = await bounded(s.terminalReleasedJournal.promise, 'confirmed ordinary cleanup journal');
+  await bounded(s.run, 'ordinary controller close');
+  assert.equal(closed.view.cleanup.state, 'confirmed');
+  assert.equal(terminal.cleanup, 'confirmed');
+  assert.equal(s.seen.removeCalls, 1);
 });

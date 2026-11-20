@@ -965,7 +965,11 @@ export async function runAttachedController(directory, runtime = {}) {
       if(receipt?.adapterId!==adapter.id||receipt.resourceKey!==plan.resourceKey||receipt.generation!==context.generation||
         receipt.operationId!==undefined&&receipt.operationId!==(bootstrap.operationId??null))throw gozarError('provider_unavailable','The adapter returned a receipt for another allocation');
       if(expired())throw gozarError('verification_failed','The session lifetime has expired');
+      // Keep allocation custody even when the owner retires before optional observations finish.
+      await save();
+      if(proofAuthorityLost())return;
       const facts = await adapter.runtimeFacts(read, receipt);
+      if(proofAuthorityLost())return;
       const origin = credentialFreeOrigin(receipt.origin, facts.properties, adapter.definition.originSchemes);
       if (!origin) throw gozarError('provider_unavailable', 'The provider returned no usable origin');
       Object.assign(lease, { properties: facts.properties,binding:facts.binding, ingress: facts.ingress ?? null, limits: facts.limits,runtimeFacts:facts.facts??[], facts: [...new Map([...(adapter.definition.facts ?? []), ...(facts.facts ?? [])].map(f=>[f.id,f])).values()], origin, state: 'unverified' });
