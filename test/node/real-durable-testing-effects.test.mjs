@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {createServiceVerifier} from '@tnunamak/gozar';
 import {createTestingGozar} from '@tnunamak/gozar/testing';
 import {scratch,query} from './route-schema-check.mjs';
-export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJournal=false}={}){
+export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJournal=false,removeWhileSuspended=false}={}){
  let harness,app;t.after(async()=>{try{await harness?.close();}finally{if(app)await new Promise(resolve=>app.close(resolve));}});
  const home=await scratch(t),owner='durable-effects';
  const verifier=createServiceVerifier();app=http.createServer((req,res)=>{if(!verifier(req,res))res.end('app');});await new Promise(resolve=>app.listen(0,'127.0.0.1',resolve));
@@ -44,7 +44,22 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
   await assert.rejects(api.approveRouteConsent({home,handle:route.handle,approvalToken:review.approvalToken,consentFactsDigest:'changed'}),{code:'consent_mismatch'});
   const restored=await api.approveRouteConsent({home,handle:route.handle,approvalToken:review.approvalToken,consentFactsDigest:review.consentFactsDigest});assert.equal(restored.verification.status,'verified');assert.deepEqual(restored.handle,route.handle);assert.equal(writes,written);
   assert.deepEqual((await api.ensureRoute(request)).handle,route.handle);assert.equal(writes,written);
-  await api.suspendRoute({home,handle:route.handle});
+  const suspended=await api.suspendRoute({home,handle:route.handle});
+  if(removeWhileSuspended){
+   assert.equal(suspended.state,'suspended');assert.equal(suspended.published,null);
+   assert.deepEqual(suspended.handle,route.handle);
+   assert.deepEqual(config,foreign,'suspension withdraws only the owned rule');
+   const afterSuspend=writes;
+   const removed=await api.closeRoute({home,handle:suspended.handle,mode:'remove'});
+   assert.deepEqual(removed.handle,route.handle);assert.equal(removed.cleanup.state,'confirmed');
+   assert.equal(removed.published,null);
+   const terminal=await api.ensureRoute(request);
+   assert.equal(terminal.state,'released');assert.equal(terminal.published,null);
+   assert.equal(terminal.operationId,q.operationId);assert.deepEqual(terminal.handle,route.handle);
+   assert.equal(terminal.cleanup.state,'confirmed');assert.equal(writes,afterSuspend);
+   assert.deepEqual(config,foreign);
+   return;
+  }
   const beforeResume=writes;
   const resumed=await api.ensureRoute({...q,operationId:undefined});assert.equal(resumed.handle.generation,route.handle.generation+1);
   assert.equal(writes,beforeResume+1,'resume restores the pinned rule exactly once');
@@ -83,3 +98,4 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
 test('shipped durable modules parse source observations, conditionally write, prove and remove only their rule',t=>exercise(t));
 test('known partial durable write stays owned and can be recovered after a failed provider response',t=>exercise(t,{partialWrite:true}));
 test('public adoption binds current configuration and proof before claiming an existing rule',t=>exercise(t,{adoptExisting:true}));
+test('explicit removal of a suspended durable route is confirmed without another provider write',t=>exercise(t,{removeWhileSuspended:true}));
