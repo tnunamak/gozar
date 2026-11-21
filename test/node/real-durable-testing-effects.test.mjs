@@ -11,7 +11,7 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
  let harness,app;t.after(async()=>{try{await harness?.close();}finally{if(app)await new Promise(resolve=>app.close(resolve));}});
  const home=await scratch(t),owner='durable-effects';
  const verifier=createServiceVerifier();app=http.createServer((req,res)=>{if(!verifier(req,res))res.end('app');});await new Promise(resolve=>app.listen(0,'127.0.0.1',resolve));
- const foreign={TCP:{'9000':{TCPForward:'127.0.0.1:9001'}}};let config=structuredClone(foreign),version=1,writes=0;
+ const foreign={TCP:{'9000':{TCPForward:'127.0.0.1:9001'}}};let config=structuredClone(foreign),version=1,writes=0,publicProofs=0;
  const node={BackendState:'Running',Self:{DNSName:'fixture.node.invalid.',ID:'fixture-node',CapMap:{https:[],funnel:[],'https://tailscale.com/cap/funnel-ports?ports=443,8443,10000':[]}},CurrentTailnet:{MagicDNSEnabled:true,MagicDNSSuffix:'node.invalid'},CertDomains:['fixture.node.invalid']};
  const effects=[
   {kind:'recipe',operation:'probe',handle:async({recipe})=>({stdout:JSON.stringify(recipe.args[0]==='serve'?config:node),stderr:'',exitCode:0})},
@@ -26,6 +26,7 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
    const url=new URL(request.url),port=url.port||'443';
    const proxy=url.protocol==='http:'?`http://${url.host}`:config.Web?.[`${url.hostname}:${port}`]?.Handlers?.['/']?.Proxy;
    assert.ok(proxy,'public proof must traverse the independently stored forwarding rule');
+   if(url.protocol==='https:')publicProofs++;
    return new Promise((resolve,reject)=>{const pending=http.get(proxy+url.pathname+url.search,{headers:request.headers},response=>{const chunks=[];response.on('data',chunk=>chunks.push(chunk));response.on('error',reject);response.on('end',()=>resolve({status:response.statusCode,headers:response.headers,chunks:[{data:Buffer.concat(chunks).toString('base64'),delayMs:0}]}));});pending.on('error',reject);});
   }},
  ];
@@ -53,10 +54,13 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
    Object.values(config.Web??{}).some(host=>Object.values(host.Handlers??{}).some(rule=>rule.Proxy===`http://${q.target}`)),false,
    'suspend removes the fixture target forwarding');
   assert.deepEqual(config.TCP?.['9000'],foreign.TCP['9000'],'suspend preserves the foreign rule');
-  const beforeResume=writes;
+  const beforeResume=writes,beforeResumeProofs=publicProofs;
   const resumed=await api.ensureRoute({...q,operationId:undefined});assert.equal(resumed.handle.generation,route.handle.generation+1);
   assert.equal(resumed.origin,route.origin);
   assert.equal(resumed.verification.status,'verified');
+  assert.equal(resumed.verification.subject.target,q.target);
+  assert.equal(resumed.verification.subject.handleGeneration,resumed.handle.generation);
+  assert.ok(publicProofs>beforeResumeProofs,'resume must observe the restored forwarding rule, not reuse the previous proof');
   assert.ok(resumed.origin,'resume retains a public origin');
   assert.equal(resumed.published,resumed.origin);
   assert.equal(writes,beforeResume+1,'resume restores the pinned rule exactly once');
