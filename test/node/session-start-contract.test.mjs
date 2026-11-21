@@ -30,6 +30,11 @@ test('a conflicting unbootstrapped session start carries confirmed cleanup for o
       return true;
     });
     assert.equal(await w.alive(), true, 'the retained controller is unaffected');
+    await assert.rejects(w.run({ reservedHandle: retained.handle }), error => {
+      assert.equal(error.code, 'route_conflict');
+      assert.notEqual(error.route?.cleanup?.state, 'confirmed', 'retrying the retained identity is not proof of its removal');
+      return true;
+    });
   } finally {
     const closed = await closeAttachedRoute({ home: w.home, handle: retained.handle });
     assert.equal(closed.cleanup.state, 'confirmed');

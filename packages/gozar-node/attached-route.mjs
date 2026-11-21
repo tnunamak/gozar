@@ -236,7 +236,11 @@ export async function openAttachedRoute(request, deps = {}) {
         if(prior) {
           const state=await readJson(join(directory,'state.json')),control=await readJson(join(directory,'control.json'));
           const live=control?.startIdentity&&await processIdentity(control.pid)===control.startIdentity;
-          if(prior.execution!=='generic-session-v1'||state?.handle?.id!==prior.handle?.id||state?.handle?.generation!==prior.handle?.generation||state?.lastView?.cleanup?.state!=='confirmed'||live)throw refusedBeforeStart(gozarError('route_conflict','A retained session already owns this directory'),handle,request);
+          if(prior.execution!=='generic-session-v1'||state?.handle?.id!==prior.handle?.id||state?.handle?.generation!==prior.handle?.generation||state?.lastView?.cleanup?.state!=='confirmed'||live){
+            const refusal=gozarError('route_conflict','A retained session already owns this directory');
+            const retainedIdentity=prior.handle?.kind===handle.kind&&prior.handle.id===handle.id&&prior.handle.generation===handle.generation;
+            throw retainedIdentity?refusal:refusedBeforeStart(refusal,handle,request);
+          }
           for(const name of ['state.json','failure.json','control.json'])await unlink(join(directory,name)).catch(error=>{if(error.code!=='ENOENT')throw error;});
         }
       } else {
