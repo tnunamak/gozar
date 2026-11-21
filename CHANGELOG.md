@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.4
+
+### Fixed
+
+- A verification failure no longer emits a consent-change event when the consent digest is unchanged. Real consent changes still request review.
+- Closing a session after its controller dies now persists confirmed cleanup after resource removal and configuration-reference release, so another session can use the same directory. A refused new start carries its own cleanup view without declaring the retained route removed.
+- An exiting controller terminates its directly owned provider children. Controller stderr is retained in a private file for diagnosis.
+- Closing a testing harness closes its local resolver brokers even when provider cleanup remains debt. That debt and its recovery handle remain available.
+
 ## 0.5.2
 
 ### Fixed

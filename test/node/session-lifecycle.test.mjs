@@ -170,3 +170,42 @@ for (const providerId of PROVIDERS) {
     assert.equal(w.ownedNow(), 0);
   });
 }
+
+test('dead fixture session settles exact close on disk and allows a new session on the same port', async t => {
+  const w = await providerWorld(t, 'tailscale-funnel');
+  // Recovery runs the persisted recipe in this process, outside the live
+  // controller's fixture dispatcher. It must find this world's inert CLI.
+  const savedPath=process.env.PATH;
+  process.env.PATH=w.fake.bin+':'+savedPath;
+  try {
+  const route = await w.expose(await w.approvedRequest());
+  const directory = join(w.home, `port-${w.target.split(':')[1]}`);
+  const identity = await controllerOf(w);
+  assert.ok(identity?.pid && identity.startIdentity);
+  assert.equal(await processIdentity(identity.pid), identity.startIdentity, 'signal only this fixture-owned controller');
+  process.kill(identity.pid, 'SIGKILL');
+  await until(async () => await processIdentity(identity.pid) !== identity.startIdentity, 'owned controller stopped');
+  await w.fake.update(state => { state.failServeStatus = true; });
+  try {
+    const refusal = await w.host.close(w.api, route.handle).catch(error => error.route);
+    assert.notEqual(refusal?.cleanup?.state, 'confirmed', 'an unreadable provider is not successful removal');
+    const retained = JSON.parse(await readFile(join(directory, 'state.json'), 'utf8'));
+    assert.notEqual(retained.phase, 'released');
+    assert.deepEqual(retained.handle, route.handle);
+  } finally {
+    await w.fake.update(state => { state.failServeStatus = false; });
+  }
+  const result = await w.host.close(w.api, route.handle);
+  assert.equal(result.cleanup.state, 'confirmed', JSON.stringify(result.cleanup));
+  const persisted = JSON.parse(await readFile(join(directory, 'state.json'), 'utf8'));
+  assert.equal(persisted.phase, 'released');
+  assert.deepEqual(persisted.handle, route.handle);
+  assert.equal(persisted.lastView.cleanup.state, 'confirmed');
+  await assert.rejects(readFile(join(directory, 'control.json'), 'utf8'), { code: 'ENOENT' });
+
+  const next = await w.expose(await w.approvedRequest({ operationId: 'replacement-on-the-same-port' }));
+  assert.notEqual(next.handle.id, route.handle.id);
+  assert.equal(next.verification.status, 'verified');
+  assert.equal((await w.host.close(w.api, next.handle)).cleanup.state, 'confirmed');
+  } finally { process.env.PATH=savedPath; }
+});

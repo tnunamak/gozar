@@ -10,6 +10,7 @@
 // openSessionRoute is the same redemption over the existing session machinery.
 import net from 'node:net';
 import { spawn } from 'node:child_process';
+import { constants as fsConstants } from 'node:fs';
 import { readFile, chmod, unlink, open, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -163,14 +164,27 @@ export function controlAttached(directory, command, timeoutMs = 15_000) {
 
 const leases = new Map();
 const brokers = new Map();
-function holdLease(directory, id, heartbeatMs) {
+const localKey = (home, {kind,id,generation}) => JSON.stringify([home,kind,id,generation]);
+function holdLease(directory, id, heartbeatMs, owner) {
   const beat = () => controlAttached(directory, { type: 'heartbeat' }, 5_000).catch(() => {});
   // Unref'd: the lease never keeps the owner alive. When the owner exits the beats stop and the expiry ends the route.
   const timer = setInterval(beat, heartbeatMs); timer.unref();
-  leases.set(id, timer); beat();
+  leases.set(id, {timer,owner}); beat();
 }
-function dropLease(id) { clearInterval(leases.get(id)); leases.delete(id); }
-async function dropBroker(id){const broker=brokers.get(id);brokers.delete(id);await broker?.close();}
+function dropLease(id) { clearInterval(leases.get(id)?.timer); leases.delete(id); }
+async function dropBroker(id){const entry=brokers.get(id);brokers.delete(id);await entry?.broker.close();}
+
+// Fixture-host disposal is not route removal. Only resources created with
+// this exact effect dispatcher are ours, independent of a route's debt.
+export async function disposeTestingRouteHosts(owner) {
+  if (typeof owner !== 'function') return;
+  for (const [id, entry] of leases) if (entry.owner === owner) dropLease(id);
+  const results = await Promise.allSettled([...brokers]
+    .filter(([,entry]) => entry.owner === owner)
+    .map(([id]) => dropBroker(id)));
+  const failed = results.find(result => result.status === 'rejected');
+  if (failed) throw failed.reason;
+}
 
 async function attachedRoot(home, create = true) {
   const directory = join(home, 'attached');
@@ -213,10 +227,12 @@ export async function openAttachedRoute(request, deps = {}) {
     checkExpose(request, session ? 'session' : 'attached');
     if (!supportedPlatform(deps.platform ?? process.platform)) throw gozarError('unsupported', 'Gozar 0.2 does not support routes on this platform');
     const adapters = await adaptersOf(deps);
-    const root = await attachedRoot(await canonicalHome(request.home, true));
+    const localHome = await canonicalHome(request.home, true);
+    const root = await attachedRoot(localHome);
     const id = session?.handle.id ?? deps.reservedHandle?.id??`att_${randomBytes(8).toString('hex')}`;
     const directory = session?.directory ?? join(root, id);
     const handle = session?.handle ?? {kind:'attached',id,generation:1};
+    const hostKey = localKey(localHome,handle);
     // Redeem, re-observe and start the controller under one reservation, so two opens cannot both win one resource.
     const controller = await withExclusiveLock(join(root, '.open.lock'), async () => {
       const redeemed = session?.redeemed ?? await redeemApproval(request, { ...deps, adapters }).catch(error => { throw refusedBeforeStart(error, handle, request); });
@@ -252,10 +268,10 @@ export async function openAttachedRoute(request, deps = {}) {
         hostTouched = true;
         const hostIdentity=await deps.embeddingServices.resolveIdentity({home:redeemed.home});
         broker=await startEmbeddingBroker({services:deps.embeddingServices,home:redeemed.home,identity:hostIdentity,
-          dispatchEffect:deps.dispatchEffect,acknowledgeOrigin:deps.acknowledgeOrigin,onLoss:()=>{if(brokers.has(id))void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
+          dispatchEffect:deps.dispatchEffect,acknowledgeOrigin:deps.acknowledgeOrigin,onLoss:()=>{if(brokers.get(hostKey)?.broker===broker)void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
         const descriptor=await broker.registerController({identity:hostIdentity});
         identity={instanceId:descriptor.instanceId,bootId:descriptor.bootId};
-        brokers.set(id,broker);
+        brokers.set(hostKey,{broker,owner:deps.dispatchEffect});
       }
       bootstrap = { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
         operationId:request.operationId??null,
@@ -289,15 +305,20 @@ export async function openAttachedRoute(request, deps = {}) {
         }
       }
       await cut('spawn');
-      const child = spawn(process.execPath, [here, '--controller', directory], { detached: true, stdio: 'ignore',
-        env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
-      child.unref();
-      await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+      const stderr=await open(join(directory,'controller-stderr.log'),fsConstants.O_WRONLY|fsConstants.O_CREAT|fsConstants.O_APPEND|fsConstants.O_NOFOLLOW,0o600);
+      let child;
+      try {
+        await stderr.chmod(0o600);
+        child = spawn(process.execPath, [here, '--controller', directory], { detached: true, stdio: ['ignore','ignore',stderr.fd],
+          env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
+        child.unref();
+        await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+      } finally { await stderr.close(); }
       // The owned ChildProcess is kept before any awaited identity lookup: once a child is spawned it is
       // potentially effectful, and no later failure can be treated as a start that refused before any effect.
       return { pid: child.pid, startIdentity: null, child };
       } catch (error) {
-      if (brokers.get(id) === broker) await dropBroker(id); else await broker?.close().catch(() => {});
+      if (brokers.get(hostKey)?.broker === broker) await dropBroker(hostKey); else await broker?.close().catch(() => {});
       if (session) {
         // A session registers the host's configuration reference before its controller exists. A failure after that registration owes a
         // release of the exact registered handle, or exact retryable debt in the session's own record; it must not leave an orphaned use.
@@ -324,7 +345,7 @@ export async function openAttachedRoute(request, deps = {}) {
     // a confirmed absence in its place.
     try { Object.assign(controller, await recordController(controller.child, deps.identityRecorder ? { identity: deps.identityRecorder } : undefined)); }
     catch (error) {
-      if (brokers.has(id)) await dropBroker(id);
+      if (brokers.has(hostKey)) await dropBroker(hostKey);
       const stopped = await stopController(controller);
       const record = await readJson(join(directory, 'state.json')).catch(() => null);
       // Normalize before attaching, so the frozen surface error carries the teardown outcome and the
@@ -333,7 +354,7 @@ export async function openAttachedRoute(request, deps = {}) {
       if (record?.lastView && !carried.route) carried.route = startupHistory(record, handle, 'Controller startup identity failed; historical evidence only, retain this handle for cleanup');
       throw carried;
     }
-    if (!session) holdLease(directory, id, deps.heartbeatMs ?? HEARTBEAT_MS);
+    if (!session) holdLease(directory, hostKey, deps.heartbeatMs ?? HEARTBEAT_MS, deps.dispatchEffect);
     const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
     try {
       for (;;) {
@@ -354,7 +375,7 @@ export async function openAttachedRoute(request, deps = {}) {
         await new Promise(resolve => setTimeout(resolve, 150));
       }
     } catch (error) {
-      dropLease(id);
+      dropLease(hostKey);
       const cleanup=await controlAttached(directory, { type: 'close', generation:handle.generation, handleId:handle.id }, 60_000).catch(() => null);
       if (cleanup?.view) error.route=cleanup.view;
       if(cleanup?.view?.cleanup.state==='unconfirmed'){
@@ -373,7 +394,7 @@ export async function openAttachedRoute(request, deps = {}) {
       } catch(recoveryError) { error=recoveryError; }
       // Only validated cleanup debt may retain the controller. A saved-record refusal still owes owned teardown.
       if(retainedDebt)throw error;
-      const stopped=await stopController(controller);await dropBroker(id);
+      const stopped=await stopController(controller);await dropBroker(hostKey);
       throw withCleanupOutcome(error, stopped);
     }
   } catch (error) { throw normalizeError(error); }
@@ -466,8 +487,9 @@ export async function attachedStatus(request, deps = {}) {
 export async function closeAttachedRoute(request, deps = {}) {
   const handle = checkRef(request);
   const directory = await routeDirectory(request.home, handle);
-  dropLease(handle.id);
-  try { const result=(await controlAttached(directory, { type: 'close', generation: handle.generation, handleId:handle.id }, 120_000)).view;if(result.cleanup.state==='confirmed')await dropBroker(handle.id);return result; }
+  const hostKey = localKey(await canonicalHome(request.home,false),handle);
+  dropLease(hostKey);
+  try { const result=(await controlAttached(directory, { type: 'close', generation: handle.generation, handleId:handle.id }, 120_000)).view;if(result.cleanup.state==='confirmed')await dropBroker(hostKey);return result; }
   catch (error) {
     if (!error.gone) throw error;
     const state = await viewFromRecord(directory, handle);
@@ -480,21 +502,61 @@ export async function closeAttachedRoute(request, deps = {}) {
       const settled = await settleUnstartedReference(request, directory, handle, deps);
       if (settled) return settled;
     }
-    // Without an owned receipt, retain debt without loading transient runtime. A session removes through the session recipe's
-    // journal-only recovery (no gate, no create path); other routes need the effect context their caller supplies.
-    const createSessionContext = handle.kind === 'session' ? (await loadRuntime())?.createAttachedEffectContext : null;
-    const effectContext = deps.effectContext ?? (createSessionContext ? ({ adapter, readContext, generation }) => createSessionContext({ generation, adapter, readContext,
-      session: { request: state.request, handle, directory, gate: () => { throw gozarError('internal_error', 'A dead controller has no gate'); }, runtime: {}, operationId: state.lastView?.operationId ?? null } }) : null);
-    if (!state.receipt || !effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
-    // The controller died with the route up: remove it from the saved receipt, in this process.
-    const adapters = await adaptersOf(deps);
-    const adapter = adapters.find(item => item.id === state.adapterId);
-    if (!adapter) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
-    const read = bindConfiguration(await readContextFor(deps, await canonicalHome(request.home), deps.platform ?? process.platform), adapter.id);
-    const observed = await adapter.observe(read, state.request);
-    const removal = await adapter.remove(bindConfiguration({ ...read, generation: state.handle.generation, ...effectContext({ adapter, readContext: read, request: state.request, plan: state.plan, generation: state.handle.generation }) }, adapter.id), state.receipt, observed);
-    return removal.removed && !removal.debt ? releasedView(state.lastView, handle)
-      : { ...releasedView(state.lastView, handle), state: 'uncertain', cleanup: { state: 'unconfirmed', message: removal.debt?.message ?? 'The route could not be removed' } };
+    const home=await canonicalHome(request.home,false);
+    const root=await attachedRoot(home,false);
+    return withExclusiveLock(join(root,'.open.lock'),async()=>{
+      // Session replacement also needs this open lock. Re-read the exact owner
+      // before touching its saved receipt, and do not recover a controller
+      // that is still alive merely because its socket did not answer.
+      const state=await viewFromRecord(directory,handle);
+      if(state.phase==='released'||state.lastView?.cleanup.state==='confirmed')return releasedView(state.lastView,handle);
+      if(state.resourceRemoval)return recoveryHistory(state.lastView,'Resource removed; exact configuration reference release remains unconfirmed');
+      if(state.unstarted===true)return recoveryHistory(state.lastView,'The pending route start has not settled');
+      const bootstrap=await readJson(join(directory,'bootstrap.json'));
+      const bound=handle.kind==='session'?bootstrap?.handle:{kind:'attached',id:bootstrap?.id,generation:1};
+      if(bootstrap?.home!==home||bootstrap.id!==handle.id||bootstrap.adapterId!==state.adapterId||
+         bound?.kind!==handle.kind||bound.id!==handle.id||bound.generation!==handle.generation||
+         (request.owner!==undefined&&bootstrap.owner!==request.owner))
+        throw gozarError('route_conflict','Recovery scope does not match the retained route');
+      const controlPath=join(directory,'control.json'),control=await readJson(controlPath);
+      const controllerStillRunning=async value=>Number.isInteger(value?.pid)&&!!value.startIdentity&&
+        await processIdentity(value.pid)===value.startIdentity;
+      if(await controllerStillRunning(control))throw gozarError('route_conflict','The route controller is still running');
+      const managed=['resolver','registryId','owner','consentReview'].some(key=>Object.hasOwn(bootstrap,key));
+      if(managed&&(typeof bootstrap.owner!=='string'||!bootstrap.owner||typeof bootstrap.registryId!=='string'||!bootstrap.registryId))
+        return recoveryHistory(state.lastView,'Exact configuration reference recovery scope is unavailable');
+      // Without an owned receipt, retain debt without loading transient runtime. A session removes through the session recipe's
+      // journal-only recovery (no gate, no create path); other routes need the effect context their caller supplies.
+      const createSessionContext = handle.kind === 'session' ? (await loadRuntime())?.createAttachedEffectContext : null;
+      const effectContext = deps.effectContext ?? (createSessionContext ? ({ adapter, readContext, generation }) => createSessionContext({ generation, adapter, readContext,
+        session: { request: state.request, handle, directory, gate: () => { throw gozarError('internal_error', 'A dead controller has no gate'); }, runtime: {}, operationId: state.lastView?.operationId ?? null } }) : null);
+      if (!state.receipt || !effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
+      // The controller died with the route up: remove it from the saved receipt, in this process.
+      const adapters = await adaptersOf(deps);
+      const adapter = adapters.find(item => item.id === state.adapterId);
+      if (!adapter) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
+      const read = bindConfiguration(await readContextFor(deps, await canonicalHome(request.home), deps.platform ?? process.platform), adapter.id);
+      const observed = await adapter.observe(read, state.request);
+      const removal = await adapter.remove(bindConfiguration({ ...read, generation: state.handle.generation, ...effectContext({ adapter, readContext: read, request: state.request, plan: state.plan, generation: state.handle.generation }) }, adapter.id), state.receipt, observed);
+      if(!removal.removed||removal.debt)
+        return { ...releasedView(state.lastView, handle), state: 'uncertain', cleanup: { state: 'unconfirmed', message: removal.debt?.message ?? 'The route could not be removed' } };
+      const released=releasedView(state.lastView,handle);
+      // Persist the provider removal before returning its successful receipt.
+      // Managed routes still owe their exact configuration use until the host
+      // cleanup continuation confirms release; do not mark that debt settled here.
+      if(managed){
+        const resourceRemoval={schemaVersion:1,registryId:bootstrap.registryId,owner:bootstrap.owner,providerId:adapter.id,handle:structuredClone(handle)};
+        const lastView=recoveryHistory(released,'Resource removed; exact configuration reference release remains unconfirmed');
+        await atomicWrite(join(directory,'state.json'),{...state,phase:'uncertain',lastView,resourceRemoval,receipt:null,recoveredRemoval:true});
+      }else{
+        await atomicWrite(join(directory,'state.json'),{...state,phase:'released',lastView:released,receipt:null,resourceRemoval:null});
+      }
+      const currentControl=await readJson(controlPath);
+      if(Number.isInteger(control?.pid)&&currentControl?.pid===control.pid&&currentControl.startIdentity===control.startIdentity&&
+         currentControl.nonce===control.nonce&&!await controllerStillRunning(currentControl))
+        await unlink(controlPath).catch(error=>{if(error.code!=='ENOENT')throw error;});
+      return released;
+    },{waitSeconds:30});
   }
 }
 
@@ -504,16 +566,16 @@ export async function releaseAttachedConfiguration(request,{embeddingServices,re
   const handle=checkRef(request),directory=await routeDirectory(request.home,handle);
   const bootstrap=await readJson(join(directory,'bootstrap.json'));
   await releaseRecordedConfigurationUse({registryId:bootstrap?.registryId,home:request.home,owner:bootstrap.owner,providerId:bootstrap.adapterId,handle:{...handle,generation:1}},{embeddingServices,registryId});
-  await dropBroker(handle.id);
+  await dropBroker(localKey(await canonicalHome(request.home,false),handle));
 }
 export async function releaseSessionConfiguration(request,runtime){
   const generic=await genericSessionRecord(request);
-  if(generic){await releaseRecordedConfigurationUse({registryId:generic.bootstrap.registryId,home:request.home,owner:generic.bootstrap.owner,providerId:generic.bootstrap.adapterId,handle:request.handle},runtime);await dropBroker(request.handle.id);return;}
+  if(generic){await releaseRecordedConfigurationUse({registryId:generic.bootstrap.registryId,home:request.home,owner:generic.bootstrap.owner,providerId:generic.bootstrap.adapterId,handle:request.handle},runtime);await dropBroker(localKey(await canonicalHome(request.home,false),request.handle));return;}
   const handle=checkRef(request),directory=join(request.home,handle.id.split(':')[0]);
   const bootstrap=await readJson(join(directory,'bootstrap.json'));
   if(bootstrap?.embedding?.handle.id!==handle.id)return;
   await releaseRecordedConfigurationUse({registryId:bootstrap.embedding.registryId,home:request.home,owner:bootstrap.owner,providerId:bootstrap.adapterId,handle},runtime);
-  await dropBroker(handle.id);
+  await dropBroker(localKey(await canonicalHome(request.home,false),handle));
 }
 export async function sessionConsent(request,{approve=false}={}){
  const handle=checkRef(request);if(handle.kind!=='session')throw gozarError('unsupported','This handle is not a session');
@@ -538,8 +600,10 @@ export async function genericSessionRecord(request) {
 
 /** Dispose controller ownership after exact recorded reference release. */
 export async function finishCleanupController(request){
-  const handle=checkRef(request);dropLease(handle.id);await dropBroker(handle.id);
+  const handle=checkRef(request);
   if(!['attached','session'].includes(handle.kind))return;
+  const hostKey=localKey(await canonicalHome(request.home,false),handle);
+  dropLease(hostKey);await dropBroker(hostKey);
   if(handle.kind==='session'&&!await genericSessionRecord(request))return; // An earlier version's session has no controller here to finalize.
   const home=await canonicalHome(request.home,false);
   const directory=handle.kind==='attached'?await routeDirectory(home,handle):join(home,handle.id.split(':')[0]);
@@ -579,6 +643,26 @@ export async function attachedCleanupReference(request,runtime,operationReferenc
     throw gozarError('cleanup_debt','Cleanup scope cannot be verified');
   if(request.owner!==undefined&&request.owner!==owner)throw gozarError('route_conflict','Cleanup owner does not match');
   return {home,owner,providerId,registryId,handle:structuredClone(handle)};
+}
+
+/** Persist the route view only after the caller has released its exact managed configuration use. */
+export async function finalizeRecoveredRemoval(scope) {
+  const {home,handle,owner,providerId,registryId}=scope;
+  const directory=handle.kind==='attached'?await routeDirectory(home,handle):join(home,handle.id.split(':')[0]);
+  if(!(await readJson(join(directory,'state.json')))?.recoveredRemoval)return;
+  const root=await attachedRoot(home,false);
+  return withExclusiveLock(join(root,'.open.lock'),async()=>{
+    const state=await readJson(join(directory,'state.json'));
+    if(!state?.recoveredRemoval)return;
+    const evidence=state.resourceRemoval;
+    const matches=h=>h?.kind===handle.kind&&h.id===handle.id&&h.generation===handle.generation;
+    if(!matches(state.handle)||!matches(state.lastView?.handle)||!matches(evidence?.handle))return;
+    if(state.adapterId!==providerId||evidence.schemaVersion!==1||evidence.owner!==owner||
+       evidence.providerId!==providerId||evidence.registryId!==registryId)
+      throw gozarError('cleanup_debt','The recovered removal does not match released configuration use');
+    const lastView=releasedView(state.lastView,handle);
+    await atomicWrite(join(directory,'state.json'),{...state,phase:'released',lastView,resourceRemoval:null,recoveredRemoval:undefined});
+  },{waitSeconds:30});
 }
 
 /** Only the controller's persisted post-removal receipt can advance metadata-only recovery. */
@@ -1285,6 +1369,7 @@ if (process.argv[2] === '--controller' && process.argv[1] === here) {
   } catch (cause) {
     const error = normalizeError(cause);
     await atomicWrite(join(directory, 'failure.json'), { code: error.code, message: error.message }).catch(() => {});
+    process.stderr.write(`${error.code}: ${error.message}\n`);
     process.exit(1);
   }
 }

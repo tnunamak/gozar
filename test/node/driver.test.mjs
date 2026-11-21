@@ -1,3 +1,4 @@
+import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -118,6 +119,7 @@ test('owned child survives driver restart, exact stop preserves unrelated proces
   await new Promise(resolve => unrelated.once('spawn', resolve));
   t.after(() => unrelated.kill('SIGKILL'));
   const unrelatedIdentity = await processIdentity(unrelated.pid);
+  const exitListeners = process.listenerCount('exit');
   await persist(driver);
   const created = await driver.execute(effect(recipe, 'create', 'child'));
   assert.equal(created.ok, true);
@@ -133,6 +135,9 @@ test('owned child survives driver restart, exact stop preserves unrelated proces
   assert.equal(await processIdentity(owned.pid), null);
   assert.equal(await processIdentity(unrelated.pid), unrelatedIdentity);
   assert.equal(Object.keys(restartedJournal.value.owned).length, 0);
+  assert.deepEqual(await restarted.closeLocal(), []);
+  assert.deepEqual(await restarted.closeLocal(), []);
+  assert.equal(process.listenerCount('exit'), exitListeners, 'cleanup detaches the exit hook');
 });
 
 test('PID identity mismatch never kills an unrelated process', async t => {
@@ -274,3 +279,80 @@ test('initial create URL is handled by the core result and never re-emitted as a
     clearTimeout(timeout);
   }
 });
+
+async function exactChildStillRunning(pid, identity) {
+  if (await processIdentity(pid) !== identity) return false;
+  if (process.platform !== 'linux') return true;
+  // Linux may retain a reparented zombie briefly; a zombie is already dead.
+  const stat = await readFile(`/proc/${pid}/stat`, 'utf8').catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  return stat !== null && stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3) !== 'Z';
+}
+
+for (const mode of ['normal', 'handled termination']) {
+  test(`driver exit retires exact owned child only (${mode})`, { timeout: 6500 }, async t => {
+    const { directory } = await fixture(t, {});
+    // Bounded independent sibling; never signal it, even during test cleanup.
+    const foreign = spawn(process.execPath, ['-e', 'setTimeout(()=>{},7500)'], { stdio: 'ignore' });
+    await once(foreign, 'spawn');
+    foreign.unref();
+    const foreignIdentity = await processIdentity(foreign.pid);
+    assert.ok(foreignIdentity);
+    const code = `
+import { Journal } from ${JSON.stringify(new URL('../../packages/gozar-node/journal.mjs', import.meta.url).href)};
+import { EffectDriver } from ${JSON.stringify(new URL('../../packages/gozar-node/driver.mjs', import.meta.url).href)};
+import { effect, persist } from ${JSON.stringify(new URL('./helpers.mjs', import.meta.url).href)};
+const journal = new Journal(process.argv[1]); await journal.load();
+const recipe = { kind: 'spawn', program: process.execPath, longRunning: true, collectMs: 15,
+  timeoutMs: 3000, maxOutputBytes: 1024,
+  args: ['-e', 'console.log("ready");setTimeout(()=>{},8000)'] };
+const adapter = { id: 'fake', audience: 'local', ownership: 'owned', capabilities: { https: false }, recipes: { create: recipe } };
+const driver = new EffectDriver({ adapters: [adapter], journal, sessionId: 'test' });
+driver.authorize('fake');
+const before = process.listenerCount('exit');
+await persist(driver);
+const created = await driver.execute(effect(recipe, 'create', 'child'));
+if (!created.ok) throw new Error('fixture child did not start: ' + JSON.stringify(created));
+const record = journal.value.owned[created.result.resourceId];
+process.once('SIGTERM', () => process.exit(143));
+process.stdin.once('data', () => process.exit(0));
+console.log(JSON.stringify({ id: record.id, pid: record.pid, startIdentity: record.startIdentity,
+  exitHooks: process.listenerCount('exit') - before }));
+`;
+    const controller = spawn(process.execPath, ['--input-type=module', '-e', code, directory],
+      { stdio: ['pipe', 'pipe', 'pipe'] });
+    const closed = once(controller, 'close');
+    t.after(async () => {
+      if (controller.exitCode === null && controller.signalCode === null) controller.kill('SIGKILL');
+      await closed;
+    });
+    let stderr = '';
+    controller.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
+    controller.stdout.setEncoding('utf8');
+    const ready = (async () => {
+      let output = '';
+      for await (const chunk of controller.stdout) {
+        output += chunk;
+        if (output.includes('\n')) return JSON.parse(output.slice(0, output.indexOf('\n')));
+      }
+      throw new Error('controller did not report its owned child: ' + stderr);
+    })();
+    const owned = await ready;
+    assert.ok(await exactChildStillRunning(owned.pid, owned.startIdentity));
+    if (mode === 'normal') controller.stdin.end('exit\n');
+    else controller.kill('SIGTERM');
+    assert.deepEqual(await closed, [mode === 'normal' ? 0 : 143, null]);
+    const deadline = Date.now() + 1000;
+    while (await exactChildStillRunning(owned.pid, owned.startIdentity) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(await exactChildStillRunning(owned.pid, owned.startIdentity), false, 'owned child must not outlive its controller');
+    assert.equal(owned.exitHooks, 1, 'one process-exit hook covers live owned children');
+    assert.equal(await processIdentity(foreign.pid), foreignIdentity, 'independent sibling remains unchanged');
+    const journal = new Journal(directory); await journal.load();
+    assert.equal(journal.value.owned[owned.id]?.startIdentity, owned.startIdentity, 'exit does not certify cleanup');
+    assert.notEqual(journal.value.owned[owned.id]?.retired, true);
+  });
+}

@@ -83,6 +83,8 @@ test('runtime drift withdraws and requires the exact current snapshot before sam
  await f.api.approveRouteConsent({home:f.home,handle:route.handle,approvalToken:same.approvalToken,consentFactsDigest:same.consentFactsDigest});
  await f.observe({decision:true,display:'second'});
  const withdrawn=await f.api.routeStatus({home:f.home,handle:route.handle});assert.equal(withdrawn.published,null);assert.ok(withdrawn.consentChange);assert.equal(withdrawn.facts.find(row=>row.id==='decision').value,true);
+ assert.notEqual(withdrawn.consentChange.oldDigest,withdrawn.consentChange.newDigest);
+ assert.equal(withdrawn.verification.status,'unverified');assert.deepEqual(withdrawn.handle,route.handle);
  const review=await f.api.reviewRouteConsent({home:f.home,handle:route.handle});assert.equal(review.facts.find(row=>row.id==='decision').value,true);assert.deepEqual(review.subject,route.verification.subject);
  review.facts[0].value='caller mutation';
  await f.observe({decision:'',display:'third'});
@@ -400,7 +402,10 @@ for(const kind of ['attached','session'])test('invalid Cost retained withdrawal 
   }
   if(finished&&!failures.length)await rm(home,{recursive:true,force:true});
   else t.diagnostic('Retained evidence at '+home+'; exact handle '+JSON.stringify(route?.handle??null)+'; route cleanup '+stopped);
-  if(failures.length)throw new AggregateError(primary?[primary,...failures]:failures,'Reader/route cleanup debt');
+  if(failures.length){
+   t.diagnostic([primary,...failures].filter(Boolean).map(error=>error.stack).join('\n'));
+   throw new AggregateError(primary?[primary,...failures]:failures,'Reader/route cleanup debt');
+  }
  }
  if(primary)throw primary;
 });

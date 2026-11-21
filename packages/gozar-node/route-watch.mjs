@@ -56,7 +56,11 @@ export function watchRoutes(request, deps = {}) {
         if (terminal) { yield { schemaVersion: 1, sequence: sequence++, type: 'terminal', route: view }; return; }
         if (last === null) yield { schemaVersion: 1, sequence: sequence++, type: 'snapshot', route: view };
         else if (next !== key) yield { schemaVersion: 1, sequence: sequence++, type: 'changed', route: view };
-        if(view.consentChange&&view.consentChange.newDigest!==consentDigest){consentDigest=view.consentChange.newDigest;yield {schemaVersion:1,sequence:sequence++,type:'consent_changed',route:view,...view.consentChange};}
+        const consent = view.consentChange;
+        if (consent && consent.oldDigest !== consent.newDigest && consent.newDigest !== consentDigest) {
+          consentDigest = consent.newDigest;
+          yield { schemaVersion: 1, sequence: sequence++, type: 'consent_changed', route: view, ...consent };
+        }
         last = view; key = next;
         intervalMs ??= request.intervalMs ?? view.limits.recommendedPollIntervalMs ?? 1000;
       }

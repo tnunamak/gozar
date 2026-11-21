@@ -199,8 +199,29 @@ export async function operationReferenceForRoute({home,handle}={}){
  if(typeof home!=='string'||!handle)return null;
  let record,owner,operationId,currentHandle=handle;
  if(handle.kind==='durable'){record=await optionalRead(join(home,'routes',hash(handle.id)+'.json'));owner=record?.owner;operationId=record?.operationId;if(record)currentHandle={...handle,generation:record.generation};}
- else if(handle.kind==='attached'){if(!/^att_[a-f0-9]{16}$/.test(handle.id))return null;record=await optionalRead(join(home,'attached',handle.id,'bootstrap.json'));owner=record?.owner;operationId=record?.operationId;}
- else if(handle.kind==='session'){const name=handle.id.split(':')[0];if(!/^port-[0-9]+$/.test(name))return null;record=await optionalRead(join(home,name,'bootstrap.json'));owner=record?.owner;operationId=record?.operationId;}
+ else if(handle.kind==='attached'){
+  if(!/^att_[a-f0-9]{16}$/.test(handle.id))return null;
+  record=await optionalRead(join(home,'attached',handle.id,'bootstrap.json'));
+  if(record?.id!==handle.id||
+     !sameHandle(record.handle??{kind:record.kind??'attached',id:record.id,generation:record.generation??1},handle))return null;
+  owner=record.owner;operationId=record.operationId;
+ }
+ else if(handle.kind==='session'){
+  const name=handle.id.split(':')[0];if(!/^port-[0-9]+$/.test(name))return null;
+  const root=join(home,name);
+  record=await optionalRead(join(root,'bootstrap.json'));
+  if(!record)return null;
+  if(record.execution==='generic-session-v1'){
+   if(record.id!==handle.id||!sameHandle(record.handle,handle))return null;
+  }else if(record.handle||record.embedding?.handle){
+   if(!sameHandle(record.handle??record.embedding.handle,handle))return null;
+  }else{
+   const journal=await optionalRead(join(root,'session.json'));
+   const id=journal?.snapshot?.sessionId;
+   if(typeof id!=='string'||!id||!sameHandle({kind:'session',id:name+':'+id,generation:1},handle))return null;
+  }
+  owner=record.owner;operationId=record.operationId;
+ }
  else if(handle.kind==='external'){record=await optionalRead(join(home,'services',hash(handle.id)+'.json'));owner=record?.embedding?.request.owner;operationId=record?.embedding?.operationId;}
  return typeof owner==='string'&&typeof operationId==='string'?{owner,operationId,handle:currentHandle}:null;
 }
@@ -320,7 +341,12 @@ export async function retryRecordedReferenceCleanup({home,handle,owner}={},runti
      canonicalDigest(pending.scope)!==canonicalDigest(expected)||!sameHandle(pending.resourceView?.handle,handle)||
      pending.resourceView?.cleanup?.state!=='confirmed'||pending.resourceView.operationId!==record.operationId)
    throw gozarError('cleanup_debt','Recorded resource-removal evidence does not match this reference');
-  try{await releaseRecordedConfigurationUse(pending.scope,runtime);await runtime.afterReferenceRelease?.();}
+  try{
+   await releaseRecordedConfigurationUse(pending.scope,runtime);
+   await runtime.afterReferenceRelease?.();
+   const {finalizeRecoveredRemoval}=await import('./attached-route.mjs');
+   await finalizeRecoveredRemoval(pending.scope);
+  }
   catch(cause){
    record.view=referenceCleanupDebt(pending.resourceView);record.phase='recovery';await atomicWrite(path,record);
    const error=gozarError('cleanup_debt','Resource removal is confirmed but configuration reference release failed',record.view.cleanup.nextAction,cause);
@@ -567,7 +593,12 @@ export async function retryCleanupReference(request,runtime){
   if(record.scopeDigest!==found.scopeDigest)throw gozarError('cleanup_debt','Cleanup scope changed during retry');
   if(record.phase==='terminal')return structuredClone(record.view);
   if(record.phase!=='resource-removed')return null;
-  try{await releaseRecordedConfigurationUse(record.scope,runtime);await runtime.afterReferenceRelease?.();}
+  try{
+   await releaseRecordedConfigurationUse(record.scope,runtime);
+   await runtime.afterReferenceRelease?.();
+   const {finalizeRecoveredRemoval}=await import('./attached-route.mjs');
+   await finalizeRecoveredRemoval(record.scope);
+  }
   catch(cause){const error=gozarError('cleanup_debt','Resource removed but exact configuration reference remains',record.view.cleanup.nextAction,cause);error.route=structuredClone(record.view);throw error;}
   record.view={...record.resourceView,state:'released',routeState:'inactive',cleanup:cleanupRecovery({state:'confirmed'},record.resourceView?.handle)};
   record.phase='terminal';await atomicWrite(join(dir,name),record);return structuredClone(record.view);
