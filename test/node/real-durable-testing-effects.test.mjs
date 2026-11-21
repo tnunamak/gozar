@@ -51,6 +51,7 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
    assert.deepEqual(config,foreign,'suspension withdraws only the owned rule');
    const afterSuspend=writes;
    const removed=await api.closeRoute({home,handle:suspended.handle,mode:'remove'});
+   assert.equal(removed.state,'released','confirmed explicit removal is immediately public as released');
    assert.deepEqual(removed.handle,route.handle);assert.equal(removed.cleanup.state,'confirmed');
    assert.equal(removed.published,null);
    const terminal=await api.ensureRoute(request);
