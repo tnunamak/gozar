@@ -4,6 +4,7 @@ import lan from '../../adapters/providers/lan/index.mjs';
 import localhost from '../../adapters/providers/localhost-run/index.mjs';
 import ownAddress from '../../adapters/providers/own-address/index.mjs';
 import tunnl from '../../adapters/providers/tunnl-gg/index.mjs';
+import cloudflareNamed from '../../adapters/providers/cloudflare-named/index.mjs';
 
 const target = '127.0.0.1:45670';
 const gateTarget = '127.0.0.1:45541';
@@ -35,6 +36,32 @@ const context = ({ values = {}, interfaces = inventory, detected = true, keygen 
   localPort,
 });
 
+
+test('named provider setup actions identify the invalid field independently', async () => {
+  const good = { token: 'synthetic-placeholder', origin: 'https://fixture.example', 'gate-port': '45443' };
+  for (const [input, expected, authSet, originSet, portSet] of [
+    [{ ...good, origin: 'not-an-origin' }, ['origin'], true, false, true],
+    [{ ...good, token: '' }, ['token'], false, true, true],
+    [{ ...good, 'gate-port': '1023' }, ['gate-port'], true, true, false],
+    [good, [], true, true, true],
+  ]) {
+    const probes = [];
+    const ctx = {
+      ...context({ values: input }),
+      dispatchEffect: async effect => {
+        assert.equal(effect.operation, 'detect');
+        probes.push(effect.input.program);
+        return { available: true };
+      },
+    };
+    const { state, facts } = await cloudflareNamed.detect(ctx);
+    assert.deepEqual(probes, ['cloudflared', 'bash']);
+    assert.equal(state, expected.length ? 'action-required' : 'ready');
+    assert.deepEqual([facts.authSet, facts.originSet, facts.portSet], [authSet, originSet, portSet]);
+    assert.deepEqual(cloudflareNamed.setupActions(facts).map(action => action.id)
+      .filter(id => ['token', 'origin', 'gate-port'].includes(id)), expected);
+  }
+});
 for (const adapter of [localhost, tunnl]) {
   test(`${adapter.id} detects missing OpenSSH and offers a truthful approved dependency step`, async () => {
     const ctx = context({ detected: false });
