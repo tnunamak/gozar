@@ -17,10 +17,11 @@ test('owner-kept route with a declared acknowledgeOrigin: no acknowledgment is a
   app = http.createServer((req, res) => { if (!verifier(req, res)) res.end('owner app'); });
   await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
   const target = `127.0.0.1:${app.address().port}`, origin = 'https://owner.fixture.invalid';
-  const asked = [], probed = new Set();
+  const asked = [], probed = new Set(); let proofAvailable = true;
   harness = await createTestingGozar({
     acknowledgeOrigin: async request => { asked.push(request); return { acknowledged: false }; },
     effects: [{ kind: 'network', operation: 'fetch', handle: async request => {
+      if (!proofAvailable) return { status: 503, headers: {}, chunks: [] };
       const url = new URL(request.url); probed.add(url.origin);
       const forwarded = await new Promise((resolve, reject) => http.get(`http://${target}${url.pathname}${url.search}`, { headers: request.headers }, response => {
         const chunks = []; response.on('data', chunk => chunks.push(chunk)); response.once('error', reject);
@@ -37,5 +38,14 @@ test('owner-kept route with a declared acknowledgeOrigin: no acknowledgment is a
   assert.equal(route.verification.status, 'verified', 'the owner-kept proof runs without a host acknowledgment');
   assert.deepEqual(asked, [], 'no acknowledgment was asked: the origin is owner-supplied, not provider-assigned');
   assert.deepEqual([...probed].filter(seen => seen !== `http://${target}`), [origin], 'every public proof request named exactly the owner-supplied origin (the other is the local target itself), so the host can allow that one origin up front');
+  proofAvailable = false;
+  const unverified = await api.routeStatus({ home, handle: route.handle });
+  assert.equal(unverified.verification.status, 'unverified');
+  assert.equal(unverified.consentChange, undefined, 'proof failure does not change consent');
+  const abort = new AbortController();
+  const watch = api.watchRoutes({ home, handle: route.handle, signal: abort.signal })[Symbol.asyncIterator]();
+  assert.equal((await watch.next()).value.type, 'snapshot');
+  abort.abort();
+  assert.equal((await watch.next()).done, true, 'the initial unverified snapshot has no extra consent event');
   await api.closeRoute({ home, handle: route.handle, mode: 'remove' });
 });

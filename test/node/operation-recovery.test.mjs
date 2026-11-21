@@ -10,7 +10,7 @@ import {createGozar} from '@tnunamak/gozar';
 import {fakeRegistry} from '@tnunamak/gozar/testing';
 import {query} from './route-schema-check.mjs';
 import {loadAdapters} from '../../packages/gozar-node/adapter-runtime.mjs';
-import {listRecordedRoutes} from '../../packages/gozar-node/route-operations.mjs';
+import {listRecordedRoutes,operationReferenceForRoute} from '../../packages/gozar-node/route-operations.mjs';
 import {projectControllerObservation} from '../../packages/gozar-node/route-view.mjs';
 
  // One ownership boundary replaces competing after hooks and scratch's eager deletion.
@@ -125,4 +125,24 @@ test('concurrent operation replay allocates once, conflicts before effects and s
  const events=await readFile(join(registry.root,'providers','operation-replay','events.jsonl'),'utf8');assert.equal(events.split('"start"').length-1,1);
  const files=await readdir(join(home,'operations'));const record=files.find(name=>name.endsWith('.json'));await writeFile(join(home,'operations',record),'{unreadable');
  await assert.rejects(api.listRoutes({home,owner:q.owner}),error=>typeof error.code==='string');
+}));
+
+test('operation bootstrap association requires the exact session and attached handle',async t=>withRecoveryCleanup(t,async ({home})=>{
+ const sessionDir=join(home,'port-12345'),attachedId='att_0000000000000001';
+ const session={kind:'session',id:'port-12345:dummy-session',generation:1};
+ const attached={kind:'attached',id:attachedId,generation:1};
+ const attachedDir=join(home,'attached',attachedId);
+ await mkdir(sessionDir,{recursive:true,mode:0o700});
+ await mkdir(attachedDir,{recursive:true,mode:0o700});
+ const fixture={owner:'fixture-owner',operationId:'fixture-operation'};
+ const bootstrap=(path,record)=>writeFile(join(path,'bootstrap.json'),JSON.stringify({...fixture,...record}),{mode:0o600});
+ await bootstrap(sessionDir,{execution:'generic-session-v1',id:session.id,handle:session});
+ await bootstrap(attachedDir,{id:attached.id});
+ assert.deepEqual(await operationReferenceForRoute({home,handle:session}),{...fixture,handle:session});
+ assert.deepEqual(await operationReferenceForRoute({home,handle:attached}),{...fixture,handle:attached});
+ assert.equal(await operationReferenceForRoute({home,handle:{...session,id:'port-12345:another'}}),null);
+ assert.equal(await operationReferenceForRoute({home,handle:{...session,generation:2}}),null);
+ assert.equal(await operationReferenceForRoute({home,handle:{...attached,generation:2}}),null);
+ await bootstrap(attachedDir,{id:'att_0000000000000002'});
+ assert.equal(await operationReferenceForRoute({home,handle:attached}),null);
 }));

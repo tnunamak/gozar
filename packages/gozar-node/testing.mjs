@@ -18,14 +18,15 @@ import { gozarError } from './error-normalizer.mjs';
 import { projectSession, projectDurable, projectAttached } from './route-view.mjs';
 import { enrichRoute } from './embedding-state.mjs';
 import {testingFetch} from './testing-network.mjs';
-import {verification} from './service-state.mjs';
+import {canonicalHome,verification} from './service-state.mjs';
+import {disposeTestingRouteHosts} from './attached-route.mjs';
 
 export { createReadContext };
 
 /** Explicit fixture effects for the shipped trusted adapters. No ambient switch enables this. */
 export async function createTestingGozar({effects,...options}={}){
   if(!Array.isArray(effects))throw gozarError('invalid_input','Testing effects must be an explicit mapping array');
-  const handlers=new Map(),events=[],active=new Map(),abort=new AbortController();let closing;
+  const handlers=new Map(),events=[],active=new Map(),starting=new Set(),abort=new AbortController();let closing;
   for(const effect of effects){
     if(typeof effect?.kind!=='string'||!effect.kind||typeof effect.operation!=='string'||!effect.operation||typeof effect.handle!=='function')throw gozarError('invalid_input','A testing effect needs kind, operation and handler');
     const key=JSON.stringify([effect.kind,effect.operation]);if(handlers.has(key))throw gozarError('invalid_input','Duplicate testing effect mapping');handlers.set(key,effect.handle);
@@ -44,13 +45,48 @@ export async function createTestingGozar({effects,...options}={}){
   const mark=value=>{const copy=structuredClone(value);copy.facts??=[];copy.facts.push({id:'gozar-testing-effects',label:'Fixture evidence',value:'Synthetic provider effects and isolated local transport; real provider acceptance is unverified.',known:true,group:'proof',affectsConsent:false,source:'@tnunamak/gozar/testing',asOf:null});return copy;};
   gozar.catalogRoutes=async request=>{const result=await api.catalogRoutes(request);return {...result,candidates:result.candidates.map(mark)};};
   gozar.listProviders=async request=>{const result=await api.listProviders(request);return {...result,providers:result.providers.map(mark)};};
-  const track=(home,route)=>{for(const[key,prior]of active)if(prior.home===home&&prior.handle.kind===route.handle.kind&&prior.handle.id===route.handle.id&&prior.handle.generation<=route.handle.generation)active.delete(key);if(route.cleanup.state!=='confirmed')active.set(JSON.stringify(route.handle),{home,handle:route.handle,mode:'remove'});};
-  for(const method of ['expose','ensureRoute','adoptRoute'])gozar[method]=async request=>{try{const route=mark(await api[method](request));track(request.home,route);return route;}catch(error){if(error.route){error.route=mark(error.route);track(request.home,error.route);}throw error;}};
+  const keyOf=(home,handle)=>JSON.stringify([home,handle.kind,handle.id,handle.generation]);
+  const track=(home,route)=>{for(const[key,prior]of active)if(prior.home===home&&prior.handle.kind===route.handle.kind&&prior.handle.id===route.handle.id&&prior.handle.generation<=route.handle.generation)active.delete(key);if(route.cleanup.state!=='confirmed')active.set(keyOf(home,route.handle),{home,handle:route.handle,mode:'remove'});};
+  for(const method of ['expose','ensureRoute','adoptRoute'])gozar[method]=async request=>{
+    if(closing)throw gozarError('unsupported','This testing harness is disposed');
+    const start=(async()=>{
+      let home=request.home;
+      try{const route=mark(await api[method](request));home=await canonicalHome(home,false);track(home,route);return route;}
+      catch(error){if(error.route){error.route=mark(error.route);const resolved=await canonicalHome(home,false).catch(()=>null);if(resolved)track(resolved,error.route);}throw error;}
+    })();
+    starting.add(start);
+    try{return await start;}finally{starting.delete(start);}
+  };
   for(const method of ['routeStatus','suspendRoute','approveRouteConsent'])gozar[method]=async request=>mark(await api[method](request));
   gozar.listRoutes=async request=>{const result=await api.listRoutes(request);return {routes:result.routes.map(mark)};};
   gozar.watchRoutes=async function*(request){for await(const event of api.watchRoutes(request))yield event.route?{...event,route:mark(event.route)}:event;};
-  gozar.closeRoute=async request=>{const route=mark(await api.closeRoute(request));if(route.cleanup.state==='confirmed')active.delete(JSON.stringify(route.handle));return route;};
-  return {gozar,events,close:()=>closing??=(async()=>{const errors=[];for(const request of [...active.values()])try{const route=await gozar.closeRoute(request);if(route.cleanup.state!=='confirmed'){const error=gozarError('cleanup_debt','Fixture cleanup is unconfirmed; retain the route handle and retry');error.route=route;errors.push(error);}}catch(error){errors.push(error);}if(errors.length)throw errors[0];abort.abort();})().catch(error=>{closing=null;throw error;})};
+  gozar.closeRoute=async request=>{
+    const route=mark(await api.closeRoute(request));
+    if(route.cleanup.state==='confirmed'){
+      const home=await canonicalHome(request.home,false).catch(()=>null);
+      if(home)active.delete(keyOf(home,route.handle));
+    }
+    return route;
+  };
+  return {gozar,events,close:()=>closing??=(async()=>{
+    const errors=[];
+    await Promise.allSettled([...starting]);
+    try {
+      for(const request of [...active.values()])try{
+        const route=await gozar.closeRoute(request);
+        if(route.cleanup.state!=='confirmed'){
+          const error=gozarError('cleanup_debt','Fixture cleanup is unconfirmed; retain the route handle for explicit recovery');
+          error.route=route;errors.push(error);
+        }
+      }catch(error){errors.push(error);}
+    } finally {
+      abort.abort();
+      try{await disposeTestingRouteHosts(dispatchEffect);}catch(error){errors.push(error);}
+    }
+    // Repeated disposal returns the same outcome. Exact explicit recovery
+    // remains an API operation; it cannot resurrect this fixture dispatcher.
+    if(errors.length)throw errors[0];
+  })()};
 }
 
 /** Deterministic lifecycle projections for every admitted usage kind; no provider or process is started. */

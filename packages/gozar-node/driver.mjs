@@ -36,6 +36,29 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // How long stop re-reads a provider that still shows an entry for a watcher that has exited (see proveProcessAbsent). Inside the 5 s receipt validity.
 const ABSENCE_SETTLE_MS = 3000, ABSENCE_POLL_MS = 100;
 
+// The synchronous process-exit edge cannot await graceful removal/readback.
+// Track only actual direct children whose birth identity was established in
+// this process, never recovered journal PIDs or injected fixture handles.
+const exitOwnedChildren = new Set();
+function retireOwnedChildrenOnExit() {
+  for (const child of exitOwnedChildren) {
+    if (child.exitCode !== null || child.signalCode !== null) continue;
+    // Use the still-live ChildProcess handle, not a numeric PID. The normal
+    // closeLocal path remains graceful; exit has no time to wait or escalate.
+    try { child.kill('SIGKILL'); } catch { /* leave journal cleanup debt intact */ }
+  }
+  exitOwnedChildren.clear();
+}
+function trackOwnedChildUntilExit(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (exitOwnedChildren.size === 0) process.once('exit', retireOwnedChildrenOnExit);
+  exitOwnedChildren.add(child);
+  child.once('exit', () => {
+    exitOwnedChildren.delete(child);
+    if (exitOwnedChildren.size === 0) process.removeListener('exit', retireOwnedChildrenOnExit);
+  });
+}
+
 export class EffectDriver {
   constructor({ adapters, journal, sessionId, targetPort, origin, consent = false, handles = {}, bindAddresses = [], firewallApproved = false, recoveryOnly = false, resolveCredential, observeProcessOutput = false, onProcessOutput, resolveProgram = createProgramResolver(), host = { features: [], bindings: {}, facts: {} }, onExit = () => {} }) {
     this.adapters = structuredClone(adapters);
@@ -386,6 +409,7 @@ export class EffectDriver {
         lifetime.unref(); child.once('exit', () => clearTimeout(lifetime));
       }
       this.children.set(id, child);
+      if (!this.spawnProcess) trackOwnedChildUntilExit(child);
       try {
         await this.journal.own(resource);
         if (privateMaterialized) {

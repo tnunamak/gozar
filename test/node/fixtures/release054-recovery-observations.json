@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "source": "DataConnect fresh-profile Gozar 0.5.3 walk and sdk-refusal gate, 2026-11-21",
+  "sourceReport": "Retained report at walk679b/repro/REPORT.md; credentials, addresses and raw profile deliberately excluded",
+  "observations": {
+    "A": {
+      "sequence": [
+        "app SIGKILL with live localhost-run session",
+        "controller later exits",
+        "reconcile reports confirmed removal",
+        "next expose in same port directory returns route_conflict",
+        "stop of replacement handle reports bootstrap mismatch"
+      ],
+      "persisted": {
+        "phase": "unverified",
+        "cleanup": "none",
+        "control": "dead controller identity retained"
+      },
+      "expected": "Confirmed exact removal persists released/confirmed; later same-directory start and stop work; a different handle cannot borrow old bootstrap"
+    },
+    "B": {
+      "sequence": [
+        "controller alive after host death",
+        "controller exits between 40 and 50 seconds",
+        "its ssh child remains alive and reparented at 120 seconds"
+      ],
+      "expected": "Controlled controller exit retires only its own SSH child; stderr retained in private diagnostic file; no guessed remote absence"
+    },
+    "C": {
+      "source": "DataConnect sdk-refusal gate",
+      "observed": "harness.close() with cleanup debt leaves its embedding broker resolver socket listening and process does not exit",
+      "expected": "Harness disposal closes local brokers even when removal debt remains; cleanup debt stays unconfirmed and retryable"
+    }
+  }
+}

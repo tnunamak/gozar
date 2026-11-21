@@ -5,10 +5,12 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { closeAttachedRoute } from '../../packages/gozar-node/attached-route.mjs';
 import { acquireInstallKeyLease } from '../../packages/gozar-node/key-route-lease.mjs';
 import { routeMain } from '../../packages/gozar-node/route-cli.mjs';
@@ -16,7 +18,70 @@ import { providerWorld } from './session-provider-fixtures.mjs';
 import { attachedScratch } from './route-schema-check.mjs';
 import { gone, sessionWorld } from './session-controller-fixtures.mjs';
 
+test('a conflicting unbootstrapped session start carries confirmed cleanup for only its refused handle', async t => {
+  const w = await sessionWorld(t);
+  const retained = await w.run();
+  try {
+    await assert.rejects(w.run(), error => {
+      assert.equal(error.code, 'route_conflict');
+      assert.ok(error.route, 'a refusal before bootstrap owes no cleanup');
+      assert.equal(error.route.cleanup.state, 'confirmed');
+      assert.equal(error.route.state, 'released');
+      assert.notEqual(error.route.handle.id, retained.handle.id);
+      assert.equal(error.route.published, null);
+      return true;
+    });
+    assert.equal(await w.alive(), true, 'the retained controller is unaffected');
+    await assert.rejects(w.run({ reservedHandle: retained.handle }), error => {
+      assert.equal(error.code, 'route_conflict');
+      assert.notEqual(error.route?.cleanup?.state, 'confirmed', 'retrying the retained identity is not proof of its removal');
+      return true;
+    });
+  } finally {
+    const closed = await closeAttachedRoute({ home: w.home, handle: retained.handle });
+    assert.equal(closed.cleanup.state, 'confirmed');
+    assert.equal(await gone(w), true);
+  }
+});
+
 const root = fileURLToPath(new URL('../../', import.meta.url));
+
+test('detached controller stderr is retained in a private file', async t => {
+  const w = await sessionWorld(t, "process.stderr.write('fixture controller diagnostic\\n');");
+  const route = await w.run();
+  try {
+    const path = join(w.directory, 'controller-stderr.log');
+    assert.match(await readFile(path, 'utf8'), /fixture controller diagnostic/);
+    assert.equal((await stat(path)).mode & 0o777, 0o600);
+  } finally {
+    await closeAttachedRoute({ home: w.home, handle: route.handle });
+    assert.equal(await gone(w), true);
+  }
+});
+
+test('a parent diagnostic-close fault after spawn does not roll back the running controller', async t => {
+  const w = await sessionWorld(t);
+  const originalOpen=fsPromises.open;
+  let injected=0,route;
+  fsPromises.open=async(...args)=>{
+    const file=await originalOpen(...args);
+    if(String(args[0])===join(w.directory,'controller-stderr.log')){
+      const close=file.close.bind(file);
+      file.close=async()=>{await close();injected++;throw new Error('fixture diagnostic-close fault');};
+    }
+    return file;
+  };
+  syncBuiltinESMExports();
+  try {
+    route=await w.run();
+    assert.equal(injected,1);
+    assert.equal(route.verification.status,'verified');
+    assert.equal(await w.alive(),true);
+  } finally {
+    fsPromises.open=originalOpen;syncBuiltinESMExports();
+    if(route)assert.equal((await closeAttachedRoute({home:w.home,handle:route.handle})).cleanup.state,'confirmed');
+  }
+});
 
 test('red: wait verified on a start whose create fails rejects with a code, and the controller that holds the cleanup debt stays authenticated', async t => {
   const world = await sessionWorld(t, "adapter.create = async () => { throw Object.assign(new Error('no auth'), { code: 'setup_required' }); };");
