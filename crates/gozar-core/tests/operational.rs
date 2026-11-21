@@ -816,6 +816,28 @@ fn nonce_budget_receipt(probe: &Value, host: &Value) -> Value {
         "remote":false,"networkPath":"public-relay","publicDns":true,"resolvedIp":"1.1.1.1"
     }})
 }
+#[test]
+fn finish_probe_preserves_valid_candidate_and_earliest_expiry_timer() {
+    let a = definition("external");
+    let now = 1000;
+    let host = nonce_budget_host(now, "finish-probe-positive");
+    let initial = begin(&a, &host);
+    let challenge_deadline = initial["effects"][0]["probe"]["expiresAtMs"]
+        .as_u64()
+        .unwrap();
+    for receipt_deadline in [now + 1, challenge_deadline + 1] {
+        let mut result = nonce_budget_receipt(&initial, &host);
+        result["probeReceipt"]["expiresAtMs"] = json!(receipt_deadline);
+        let ready = ack(&initial, result, &host);
+        let expires = receipt_deadline.min(challenge_deadline);
+        assert_eq!(ready["snapshot"]["phase"], "candidate-ready", "{ready}");
+        assert!(ready["snapshot"]["published"].is_null());
+        assert_eq!(ready["effects"].as_array().unwrap().len(), 1, "{ready}");
+        assert_eq!(ready["effects"][0]["kind"], "timer");
+        assert_eq!(ready["effects"][0]["expiresAtMs"], json!(expires));
+        assert_eq!(ready["effects"][0]["delayMs"], json!(expires - now));
+    }
+}
 fn nonce_budget_publish(probe: &Value, host: &Value) -> (Value, Value) {
     assert_eq!(probe["effects"][0]["kind"], "http-probe", "{probe}");
     let ready = ack(probe, nonce_budget_receipt(probe, host), host);
