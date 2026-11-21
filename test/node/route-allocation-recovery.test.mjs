@@ -567,7 +567,8 @@ test('controller death after saved usable proof returns only historical recovery
 for(const part of ['record','view'])for(const field of ['kind','id','generation'])
  test(`startup refuses ${part} ${field} mismatch instead of transferring cleanup authority`,async t=>{
   let directory,original;
-  const w=await world(t,null,{identityRecorder:async()=>{
+  const w=await world(t,null,{identityRecorder:async pid=>{
+   const identity=await processIdentity(pid);assert.ok(identity);
    const [id]=await entries(w.home);assert.ok(id);
    directory=join(w.home,'attached',id);
    for(let i=0;i<1000;i++){
@@ -576,6 +577,13 @@ for(const part of ['record','view'])for(const field of ['kind','id','generation'
     await new Promise(resolve=>setTimeout(resolve,10));
    }
    assert.ok(original?.receipt);
+   // The controller can still save its ordinary startup progress after the first receipt.
+   // Retire this exact fixture writer before corrupting its record, otherwise that later
+   // save can replace the injected mismatch and turn this into an unrelated lookup failure.
+   assert.equal(await processIdentity(pid),identity,'only this fixture controller may be signalled');
+   process.kill(pid,'SIGKILL');
+   for(let i=0;i<1000&&await processIdentity(pid)!==null;i++)await new Promise(resolve=>setTimeout(resolve,10));
+   assert.equal(await processIdentity(pid),null,'the fixture writer is gone before record corruption');
    const bad=structuredClone(original);
    const handle=part==='record'?bad.handle:bad.lastView.handle;
    handle[field]=field==='kind'?'session':field==='id'?'att_ffffffffffffffff':2;
@@ -583,6 +591,7 @@ for(const part of ['record','view'])for(const field of ['kind','id','generation'
    bad.lastView.cleanup={state:'confirmed'};
    await writeFile(join(directory,'state.json'),JSON.stringify(bad),{mode:0o600});
    await chmod(directory,0o500);
+   assert.deepEqual(await json(join(directory,'state.json')),bad,'the intended mismatch remains the recovery input');
    throw new Error('fixture identity lookup failure with mismatched saved evidence');
   }});
   try{
