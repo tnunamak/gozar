@@ -506,8 +506,16 @@ export async function closeAttachedRoute(request, deps = {}) {
       const settled = await settleUnstartedReference(request, directory, handle, deps);
       if (settled) return settled;
     }
+    // A historical record without a removal receipt carries debt only. It
+    // cannot authenticate provider recovery, and needs no bootstrap to say so.
+    if (!state.receipt) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
     const home=await canonicalHome(request.home,false);
-    const root=await attachedRoot(home,false);
+    let root;
+    try { root=await attachedRoot(home,false); }
+    catch(error){
+      if(error.code==='ENOENT')return recoveryHistory(state.lastView,'The route controller stopped before it removed the route');
+      throw error;
+    }
     return withExclusiveLock(join(root,'.open.lock'),async()=>{
       // Session replacement also needs this open lock. Re-read the exact owner
       // before touching its saved receipt, and do not recover a controller
@@ -652,7 +660,9 @@ export async function attachedCleanupReference(request,runtime,operationReferenc
 /** Persist the route view only after the caller has released its exact managed configuration use. */
 export async function finalizeRecoveredRemoval(scope) {
   const {home,handle,owner,providerId,registryId}=scope;
-  const directory=handle.kind==='attached'?await routeDirectory(home,handle):join(home,handle.id.split(':')[0]);
+  let directory;
+  try { directory=handle.kind==='attached'?await routeDirectory(home,handle):join(home,handle.id.split(':')[0]); }
+  catch(error){if(error.code==='route_not_found')return;throw error;}
   if(!(await readJson(join(directory,'state.json')))?.recoveredRemoval)return;
   const root=await attachedRoot(home,false);
   return withExclusiveLock(join(root,'.open.lock'),async()=>{
