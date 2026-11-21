@@ -313,7 +313,11 @@ export async function openAttachedRoute(request, deps = {}) {
           env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
         child.unref();
         await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-      } finally { await stderr.close(); }
+      } finally {
+        // Diagnostic disposal must not turn an already spawned controller
+        // into a resource-free start refusal. Its ownership is returned below.
+        await stderr.close().catch(()=>{});
+      }
       // The owned ChildProcess is kept before any awaited identity lookup: once a child is spawned it is
       // potentially effectful, and no later failure can be treated as a start that refused before any effect.
       return { pid: child.pid, startIdentity: null, child };

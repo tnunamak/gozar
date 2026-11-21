@@ -9,6 +9,8 @@ import { chmod, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { closeAttachedRoute } from '../../packages/gozar-node/attached-route.mjs';
 import { acquireInstallKeyLease } from '../../packages/gozar-node/key-route-lease.mjs';
 import { routeMain } from '../../packages/gozar-node/route-cli.mjs';
@@ -54,6 +56,30 @@ test('detached controller stderr is retained in a private file', async t => {
   } finally {
     await closeAttachedRoute({ home: w.home, handle: route.handle });
     assert.equal(await gone(w), true);
+  }
+});
+
+test('a parent diagnostic-close fault after spawn does not roll back the running controller', async t => {
+  const w = await sessionWorld(t);
+  const originalOpen=fsPromises.open;
+  let injected=0,route;
+  fsPromises.open=async(...args)=>{
+    const file=await originalOpen(...args);
+    if(String(args[0])===join(w.directory,'controller-stderr.log')){
+      const close=file.close.bind(file);
+      file.close=async()=>{await close();injected++;throw new Error('fixture diagnostic-close fault');};
+    }
+    return file;
+  };
+  syncBuiltinESMExports();
+  try {
+    route=await w.run();
+    assert.equal(injected,1);
+    assert.equal(route.verification.status,'verified');
+    assert.equal(await w.alive(),true);
+  } finally {
+    fsPromises.open=originalOpen;syncBuiltinESMExports();
+    if(route)assert.equal((await closeAttachedRoute({home:w.home,handle:route.handle})).cleanup.state,'confirmed');
   }
 });
 
