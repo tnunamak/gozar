@@ -206,6 +206,19 @@ test('3. a pinned origin with a different node DNS name gives address_changed an
   assert.equal((await w.run('status', {})).result.routes[0].state, 'address_changed');
 });
 
+test('a normal status read with a missing owned rule reports lost without cleanup debt or a write', async t => {
+  const w = await world(t);
+  const created = await w.ensure();
+  assert.equal(created.result.route.state, 'usable');
+  w.edit(state => { state.config = {}; });
+  const writes = w.writes().length;
+  const status = (await w.run('status', {})).result.routes[0];
+  assert.equal(status.state, 'lost');
+  assert.equal(status.cleanupDebt, null);
+  assert.equal(status.binding, undefined);
+  assert.equal(w.writes().length, writes);
+});
+
 test('3b. after a node rename, release removes the rule under the recorded name', async t => {
   const w = await world(t);
   await w.ensure();

@@ -2001,15 +2001,19 @@ fn finish_probe(out: &mut Output, p: &Pending, cmd: &Value) {
     let vantage = str_field(&json!(p.effect.fields), "vantage").to_owned();
     let required = &out.state.requirements;
     let now = out.state.host.now_ms;
-    let valid = cmd.get("ok") == Some(&Value::Bool(true))
-        && p.effect.generation == out.state.generation
-        && !out.state.stop_requested
-        && out.state.candidate.as_deref() == Some(url)
-        && str_field(receipt, "nonceRef") == str_field(challenge, "nonceRef")
-        && str_field(receipt, "verifierRef") == str_field(challenge, "verifierRef")
-        && str_field(receipt, "origin") == url
-        && str_field(receipt, "vantage") == vantage
-        && receipt
+    let current_candidate = || {
+        p.effect.generation == out.state.generation
+            && !out.state.stop_requested
+            && out.state.candidate.as_deref() == Some(url)
+    };
+    let matching_challenge = || {
+        str_field(receipt, "nonceRef") == str_field(challenge, "nonceRef")
+            && str_field(receipt, "verifierRef") == str_field(challenge, "verifierRef")
+            && str_field(receipt, "origin") == url
+            && str_field(receipt, "vantage") == vantage
+    };
+    let fresh_proof = || {
+        receipt
             .get("observedAtMs")
             .and_then(Value::as_u64)
             .is_some_and(|t| {
@@ -2019,20 +2023,28 @@ fn finish_probe(out: &mut Output, p: &Pending, cmd: &Value) {
                         .and_then(Value::as_u64)
                         .is_none_or(|issued| t >= issued)
             })
-        && receipt
-            .get("expiresAtMs")
-            .and_then(Value::as_u64)
-            .is_some_and(|t| t > now)
-        && challenge
-            .get("expiresAtMs")
-            .and_then(Value::as_u64)
-            .is_some_and(|t| t > now)
-        && receipt.get("instanceMatched") == Some(&Value::Bool(true))
-        && valid_network_path(&vantage, receipt, challenge)
-        && (!url.starts_with("https://") || receipt.get("tls") == Some(&Value::Bool(true)))
-        && (!required.sse || receipt.get("sse") == Some(&Value::Bool(true)))
-        && (!required.streamable_http || receipt.get("streamableHttp") == Some(&Value::Bool(true)))
-        && (!required.oauth_dcr || receipt.get("oauthDcr") == Some(&Value::Bool(true)));
+            && receipt
+                .get("expiresAtMs")
+                .and_then(Value::as_u64)
+                .is_some_and(|t| t > now)
+            && challenge
+                .get("expiresAtMs")
+                .and_then(Value::as_u64)
+                .is_some_and(|t| t > now)
+    };
+    let required_capabilities = || {
+        receipt.get("instanceMatched") == Some(&Value::Bool(true))
+            && valid_network_path(&vantage, receipt, challenge)
+            && (!url.starts_with("https://") || receipt.get("tls") == Some(&Value::Bool(true)))
+            && (!required.sse || receipt.get("sse") == Some(&Value::Bool(true)))
+            && (!required.streamable_http || receipt.get("streamableHttp") == Some(&Value::Bool(true)))
+            && (!required.oauth_dcr || receipt.get("oauthDcr") == Some(&Value::Bool(true)))
+    };
+    let valid = cmd.get("ok") == Some(&Value::Bool(true))
+        && current_candidate()
+        && matching_challenge()
+        && fresh_proof()
+        && required_capabilities();
     out.state.pending.remove(&p.effect.id);
     if !valid {
         if p.effect.generation == out.state.generation && !out.state.stop_requested {

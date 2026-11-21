@@ -410,21 +410,39 @@ function matchesEmptyIntent(record, facet, observed, current) {
 }
 
 async function reconcile(record, facet, observed, { verify = true } = {}) {
-  if (['releasing', 'handing-back', 'address_changed'].includes(record.state)) return { state: record.state };
-  const pin = record.receipt ?? record.intent;
-  if (observed.identity !== pin.dnsName) return { state: 'address_changed' };
-  if (record.state === 'suspended') return { state: 'suspended' };
+  const state = record.state;
+  const preserveRecordedState = ['releasing', 'handing-back', 'address_changed'].includes(state);
+  if (preserveRecordedState) return { state };
+
+  const receipt = record.receipt;
+  const pin = receipt ?? record.intent;
+  const identityChanged = observed.identity !== pin.dnsName;
+  if (identityChanged) return { state: 'address_changed' };
+  if (state === 'suspended') return { state: 'suspended' };
+
   const current = facet.read(observed.snapshot, pin.port);
-  // An exact intent match is a recoverable create; publication still requires a receipt and verification.
-  if (!record.receipt && matchesEmptyIntent(record, facet, observed, current)) return { state: 'creating' };
-  if (!record.receipt) return current === null ? { state: 'lost' } : { state: 'uncertain', cleanupDebt: { reason: 'unattributed-rule', port: pin.port } };
-  if (current === null) return { state: 'lost' };
-  if (!isDeepStrictEqual(current, record.receipt.rule)) return { state: 'uncertain', cleanupDebt: { reason: 'rule-changed', port: pin.port } };
-  const binding={authority:'adapter',target:facet.slots(observed.snapshot,{target:record.target}).some(slot=>String(slot.slot)===String(pin.port)&&slot.forwards===true)?{known:true,value:record.target}:{known:false,reason:'effective-target-not-observed'},remedy:null};
-  if (!verify || record.state === 'suspending') return { state: record.state };
-  if(!await consentCurrent(record))return {state:'unverified',consentChange:record.consentChange};
+  const ruleMissing = current === null;
+  if (!receipt) {
+    // An exact intent match is recoverable, not permission to publish.
+    if (matchesEmptyIntent(record, facet, observed, current)) return { state: 'creating' };
+    if (ruleMissing) return { state: 'lost' };
+    return { state: 'uncertain', cleanupDebt: { reason: 'unattributed-rule', port: pin.port } };
+  }
+  if (ruleMissing) return { state: 'lost' };
+  const ruleChanged = !isDeepStrictEqual(current, receipt.rule);
+  if (ruleChanged) return { state: 'uncertain', cleanupDebt: { reason: 'rule-changed', port: pin.port } };
+
+  // Keep this observation before the verification/consent decisions.
+  const slots = facet.slots(observed.snapshot, { target: record.target });
+  const forwardsAtPinnedSlot = slots.some(slot => String(slot.slot) === String(pin.port) && slot.forwards === true);
+  const effectiveTarget = forwardsAtPinnedSlot
+    ? { known: true, value: record.target }
+    : { known: false, reason: 'effective-target-not-observed' };
+  const binding = { authority: 'adapter', target: effectiveTarget, remedy: null };
+  if (!verify || state === 'suspending') return { state };
+  if (!await consentCurrent(record)) return { state: 'unverified', consentChange: record.consentChange };
   const checked = await verifyRecord(record);
-  return { state: checked.status === 'verified' ? 'usable' : 'unverified', verification: checked,binding };
+  return { state: checked.status === 'verified' ? 'usable' : 'unverified', verification: checked, binding };
 }
 
 // Live check of what answers on the target right now, independent of the provider.
