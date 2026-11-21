@@ -58,6 +58,26 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
    assert.equal(terminal.operationId,q.operationId);assert.deepEqual(terminal.handle,route.handle);
    assert.equal(terminal.cleanup.state,'confirmed');assert.equal(writes,afterSuspend);
    assert.deepEqual(config,foreign);
+   const path=join(home,'operations',createHash('sha256').update(JSON.stringify([owner,q.operationId])).digest('hex')+'.json');
+   const receipt=await readFile(path,'utf8');
+   const journal=JSON.parse(receipt);
+   assert.equal(journal.phase,'terminal');
+   assert.deepEqual(journal.view.handle,route.handle);
+   assert.deepEqual(journal.view.cleanup,terminal.cleanup);
+
+   await harness.close();
+   harness=await createTestingGozar({effects});
+   const fresh=harness.gozar;
+   const replay=await fresh.ensureRoute(request);
+   assert.equal(replay.state,'released');assert.equal(replay.published,null);
+   assert.equal(replay.operationId,terminal.operationId);
+   assert.deepEqual(replay.handle,terminal.handle);
+   assert.deepEqual(replay.cleanup,terminal.cleanup);
+   assert.equal(await readFile(path,'utf8'),receipt,'replay keeps the exact terminal journal');
+   assert.equal((await fresh.listRoutes({home,owner})).routes.some(row=>
+    row.handle.id===route.handle.id&&row.state!=='released'),false,'no owned route reappears');
+   assert.equal(writes,afterSuspend,'reopen and replay make no further provider writes');
+   assert.deepEqual(config,foreign,'unrelated forwarding remains exact');
    return;
   }
   const beforeResume=writes;
