@@ -143,6 +143,23 @@ test('LAN separates exact firewall permission from independent client verificati
   assert.doesNotMatch(admin.nextAction.instructions, /disable (?:the |your )?firewall/i);
 });
 
+test('own-address separates app-fixed input from owner setup', async () => {
+  const fixed = { ...context({ values: { origin: 'https://saved.example' } }), origin: 'not an address' };
+  for (const step of [operation, { ...operation, lastActionId: null }]) {
+    const blocked = await ownAddress.observeSetup(fixed, step);
+    assert.equal(blocked.state, 'blocked');
+    assert.equal(blocked.nextAction, null);
+    assert.equal(blocked.evidence.reason, 'app-fixed-https-origin-invalid');
+  }
+  const valid = await ownAddress.observeSetup({ ...fixed, origin: 'https://fixed.example' }, operation);
+  assert.equal(valid.state, 'complete');
+  assert.equal(valid.nextAction.id, 'map-adopted-origin');
+  assert.ok(valid.nextAction.instructions.includes('https://fixed.example'));
+  const unresolved = await ownAddress.observeSetup(context(), operation);
+  assert.equal(unresolved.state, 'authorization-required');
+  assert.equal(unresolved.nextAction.id, 'origin');
+});
+
 test('own-address completes configured setup, then waits for exact route mapping and proof', async () => {
   const origin = 'https://owner.example';
   assert.equal((await ownAddress.observeSetup(context(), operation)).nextAction.id, 'origin');
