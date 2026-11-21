@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
+import {createHash} from 'node:crypto';
 import {existsSync,statSync,readFileSync} from 'node:fs';
 import {mkdir,writeFile,readFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -14,6 +15,7 @@ import {scratch,query} from './route-schema-check.mjs';
 // The real tunnl-gg adapter through the public API only. The fixture host speaks the relay's source-shaped protocol:
 // `ssh ... -R 80:127.0.0.1:PORT stable@proxy.tunnl.gg output=json` answers one JSON event line with a *.tunnl.gg URL.
 const EVENT=url=>JSON.stringify({event:'tunnel',url,upgrade:'https://tunnl.gg/pricing'})+'\n';
+const keyDigest=path=>createHash('sha256').update(readFileSync(path)).digest('hex');
 const optionOf=(args,name)=>args.find(arg=>arg.startsWith(name+'='))?.slice(name.length+1);
 
 async function world(t,{announce,providerId='tunnl-gg',registry}={}){
@@ -30,7 +32,8 @@ async function world(t,{announce,providerId='tunnl-gg',registry}={}){
    const knownHosts=optionOf(input.args.filter((_,i)=>input.args[i-1]==='-o'),'UserKnownHostsFile'),identity=optionOf(input.args.filter((_,i)=>input.args[i-1]==='-o'),'IdentityFile');
    const seen={knownHosts,identity,knownHostsExists:existsSync(knownHosts??''),identityExists:existsSync(identity??''),
     identityMode:identity&&existsSync(identity)?statSync(identity).mode&0o777:null,knownHostsMode:knownHosts&&existsSync(knownHosts)?statSync(knownHosts).mode&0o777:null,
-    identityHead:identity&&existsSync(identity)?readFileSync(identity,'utf8').split('\n')[0]:null};
+    identityHead:identity&&existsSync(identity)?readFileSync(identity,'utf8').split('\n')[0]:null,
+     identityDigest:identity&&existsSync(identity)?keyDigest(identity):null};
    runs.at(-1).seen=seen;
    const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});
    const handle='fixture-ssh-'+ledger.size;ledger.set(handle,{child});
@@ -59,6 +62,8 @@ test('tunnl.gg starts, proves, stops and cleans up through the generic operation
  const c=await w.candidate();assert.equal(c.eligible,true,JSON.stringify(c.unmet));assert.ok(c.candidateToken);
  await assert.rejects(w.api.expose({...w.q,wait:'verified'}),{code:'consent_required'});
  assert.equal(w.runs.length,0,'an unknown host key is never accepted without route approval');
+ const retainedIdentity=join(w.home,'identities','ed25519');
+ assert.equal(existsSync(retainedIdentity),false,'the rejected route must not create an installation identity');
  const route=await w.api.expose({...w.q,wait:'verified',approval:w.approval(c)});
  assert.equal(route.verification.status,'verified');
  assert.equal(route.published,'https://wild-fox-10bf6aa2.tunnl.gg');
@@ -90,7 +95,7 @@ test('tunnl.gg starts, proves, stops and cleans up through the generic operation
  assert.equal(await readFile(foreignKey,'utf8'),'foreign-key-sentinel');
  assert.equal(existsSync(run.seen.knownHosts),false,'private files are removed with the session');
  assert.equal(existsSync(run.seen.identity),false);
- assert.equal(readFileSync(join(w.home,'identities','ed25519'),'utf8').split('\n')[0],run.seen.identityHead);
+ assert.equal(keyDigest(retainedIdentity),run.seen.identityDigest,'retained installation key matches the full bytes of the temporary session copy');
 });
 
 test('the invalid canned hostname of a generic fixture is refused: no route is published and nothing stays owned',async t=>{
