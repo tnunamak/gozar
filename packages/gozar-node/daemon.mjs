@@ -1,4 +1,5 @@
 import net from 'node:net';
+import {requestController} from './controller-transport.mjs';
 import { cliCommand } from './cli-command.mjs';
 import { chmod, readFile, unlink, open, mkdir } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
@@ -23,7 +24,7 @@ import {connectSessionEmbedding} from './session-embedding.mjs';
 /** What a failed controller leaves for its starter: the message, and the contract code and next action when it has them. */
 export const failureRecord = error => ({ message: error.message, ...(typeof error.code === 'string' ? { code: error.code, nextAction: error.nextAction ?? null } : {}) });
 export const socketPath = directory => join(directory, 'control.sock');
-export async function control(directory, command, timeoutMs = 15_000) {
+export async function control(directory, command, timeoutMs = 15_000, transport = {}) {
   let operational=false;
   if(!['stop','reconcile'].includes(command?.type)){
     let bootstrap;try{bootstrap=JSON.parse(await readFile(join(directory,'bootstrap.json'),'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
@@ -34,22 +35,18 @@ export async function control(directory, command, timeoutMs = 15_000) {
   }
   const identity = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8'));
   if (!identity.startIdentity || await processIdentity(identity.pid) !== identity.startIdentity) throw new Error('Controller is not running; readiness withdrawn');
-  return new Promise((resolve, reject) => {
-    let output = '', settled = false;
-    const socket = net.createConnection(socketPath(directory));
-    const finish = (error, result) => { if (settled) return; settled = true; clearTimeout(deadline); socket.destroy(); error ? reject(error) : resolve(result); };
-    const deadline = setTimeout(() => finish(new Error('Controller timed out; readiness unknown')), timeoutMs);
-    socket.once('connect', () => socket.write(`${JSON.stringify({ nonce: identity.nonce, command, ...(command.type==='observe'?{controllerIdentity:{pid:identity.pid,startIdentity:identity.startIdentity}}:{}) })}\n`));
-    socket.on('data', chunk => {
-      output += chunk;
-      if (output.length > 1_048_576) return finish(new Error('Controller response exceeds limit'));
-      if (output.includes('\n')) {
-        try { const reply = JSON.parse(output.split('\n')[0]);if(!operational&&!['stop','reconcile'].includes(command.type)&&(reply.snapshot?.published||reply.snapshot?.phase==='published-ready'))throw gozarError('unsupported','Legacy or unidentified controller publication is not supported in 0.4'); reply.error ? finish(Object.assign(new Error(reply.error), reply.code ? { code: reply.code, nextAction: reply.nextAction ?? null } : {})) : finish(null, reply); }
-        catch (error) { finish(error); }
-      }
-    });
-    socket.on('error', error => finish(error));
-    socket.on('end', () => { if (!settled) finish(new Error('Controller closed without a result')); });
+  return requestController({
+    prepare:()=>({path:socketPath(directory),identity}),command,timeoutMs,
+    timeoutError:()=>new Error('Controller timed out; readiness unknown'),
+    oversizeError:()=>new Error('Controller response exceeds limit'),
+    endError:()=>new Error('Controller closed without a result'),
+    replyValue(reply){
+      if(!operational&&!['stop','reconcile'].includes(command.type)&&(reply.snapshot?.published||reply.snapshot?.phase==='published-ready'))
+        throw gozarError('unsupported','Legacy or unidentified controller publication is not supported in 0.4');
+      if(reply.error)throw Object.assign(new Error(reply.error),reply.code?{code:reply.code,nextAction:reply.nextAction??null}:{});
+      return reply;
+    },
+    connect:transport.connect,schedule:transport.schedule,unschedule:transport.unschedule,
   });
 }
 

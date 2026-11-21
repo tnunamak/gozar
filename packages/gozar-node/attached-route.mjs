@@ -8,6 +8,7 @@
 // hold the lease on stdin instead (runAttachedController with lease 'stdin'): EOF removes the route at once.
 // openSessionRoute is the same redemption over the existing session machinery.
 import net from 'node:net';
+import {requestController} from './controller-transport.mjs';
 import { spawn } from 'node:child_process';
 import { readFile, chmod, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -139,36 +140,29 @@ export async function redeemApproval(request, deps) {
 
 // --- The control channel (owner <-> controller): one JSON line each way, authenticated by a private nonce ---
 
-export function controlAttached(directory, command, timeoutMs = 15_000) {
-  return new Promise((resolve, reject) => {
-    let output = '', settled = false, socket;
-    const finish = (error, value) => { if (settled) return; settled = true; clearTimeout(deadline); socket?.destroy(); error ? reject(error) : resolve(value); };
-    const deadline = setTimeout(() => finish(gozarError('provider_unavailable', 'The route controller did not answer in time')), timeoutMs);
-    readFile(join(directory, 'control.json'), 'utf8').then(async text => {
-      const identity = JSON.parse(text);
+export function controlAttached(directory, command, timeoutMs = 15_000, transport = {}) {
+  return requestController({
+    async prepare(){
+      const identity=JSON.parse(await readFile(join(directory,'control.json'),'utf8'));
       if(command.type==='observe'){
         if(!Number.isInteger(identity.pid)||!identity.startIdentity)
           throw gozarError('route_conflict','Incomplete controller process identity');
         const actual=await processIdentity(identity.pid);
         if(!actual)throw Object.assign(new Error('The route controller is not running'),{gone:true});
         if(actual!==identity.startIdentity)throw gozarError('route_conflict','Controller process identity changed');
-      } else if (!identity.startIdentity || await processIdentity(identity.pid) !== identity.startIdentity) {
-        throw Object.assign(new Error('The route controller is not running'), { gone: true });
+      }else if(!identity.startIdentity||await processIdentity(identity.pid)!==identity.startIdentity){
+        throw Object.assign(new Error('The route controller is not running'),{gone:true});
       }
-      socket = net.createConnection(join(directory, 'control.sock'));
-      socket.once('connect', () => socket.write(`${JSON.stringify({ nonce: identity.nonce, command, ...(command.type==='observe'?{controllerIdentity:{pid:identity.pid,startIdentity:identity.startIdentity}}:{}) })}\n`));
-      socket.on('data', chunk => {
-        output += chunk;
-        if (output.length > 1_048_576) return finish(gozarError('internal_error', 'The controller reply is too large'));
-        if (!output.includes('\n')) return;
-        try {
-          const reply = JSON.parse(output.split('\n')[0]);
-          reply.error ? finish(gozarError(reply.error.code, reply.error.message)) : finish(null, reply);
-        } catch (error) { finish(error); }
-      });
-      socket.on('error', error => finish(Object.assign(error, { gone: true })));
-      socket.on('end', () => finish(Object.assign(new Error('The controller closed without a reply'), { gone: true })));
-    }).catch(error => finish(Object.assign(error, { gone: error.gone ?? error.code === 'ENOENT' })));
+      return {path:join(directory,'control.sock'),identity};
+    },
+    command,timeoutMs,
+    timeoutError:()=>gozarError('provider_unavailable','The route controller did not answer in time'),
+    oversizeError:()=>gozarError('internal_error','The controller reply is too large'),
+    endError:()=>Object.assign(new Error('The controller closed without a reply'),{gone:true}),
+    socketError:error=>Object.assign(error,{gone:true}),
+    prepareError:error=>Object.assign(error,{gone:error.gone??error.code==='ENOENT'}),
+    replyValue(reply){if(reply.error)throw gozarError(reply.error.code,reply.error.message);return reply;},
+    connect:transport.connect,schedule:transport.schedule,unschedule:transport.unschedule,
   });
 }
 
