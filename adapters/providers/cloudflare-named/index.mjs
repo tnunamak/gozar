@@ -11,14 +11,20 @@ import {testingFetch} from '../../../packages/gozar-node/testing-network.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-function settings(config) {
-  const port = Number(config?.['gate-port']); let origin;
+function settingFields(config) {
+  const token = typeof config?.token === 'string' ? config.token.trim() : '';
+  const value = Number(config?.['gate-port']);
+  const port = Number.isInteger(value) && value > 1023 && value < 65536 ? value : null;
+  let origin;
   try {
     const url = new URL(config?.origin);
     if (url.protocol === 'https:' && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash) origin = url.origin;
   } catch { /* incomplete input */ }
-  return typeof config?.token === 'string' && config.token.trim() && origin && Number.isInteger(port) && port > 1023 && port < 65536
-    ? { token: config.token.trim(), origin, port } : null;
+  return { token, origin, port };
+}
+function settings(config) {
+  const fields = settingFields(config);
+  return fields.token && fields.origin && fields.port !== null ? fields : null;
 }
 
 const startConnector=({token})=>startTokenProcess({program:'cloudflared',args:['tunnel','--no-autoupdate','--metrics','127.0.0.1:0','run'],token});
@@ -55,8 +61,9 @@ export function createNamedAdapter({ detectBinary = async () => findOnPath('clou
         if(!supportedPlatform(ctx.platform))return {state:'unsupported',facts:{platform:ctx.platform}};
         const config=await ctx.configuration(null),binary=ctx.dispatchEffect?(await ctx.dispatchEffect({kind:'process-runtime',operation:'detect',input:{program:'cloudflared'}})).available===true:await detectBinary();
         const supervisor=ctx.dispatchEffect?(await ctx.dispatchEffect({kind:'process-runtime',operation:'detect',input:{program:'bash'}})).available===true:findOnPath('bash',process.env.PATH)!==null;
-        return { state: binary && supervisor && settings(config) ? 'ready' : 'action-required', facts: { detected: binary,supervisor,
-          authSet: typeof config?.token === 'string' && config.token.trim().length > 0, originSet: typeof config?.origin === 'string', portSet: settings(config) !== null } };
+        const { token, origin, port } = settingFields(config);
+        return { state: binary && supervisor && token && origin && port !== null ? 'ready' : 'action-required', facts: { detected: binary,supervisor,
+          authSet: Boolean(token), originSet: Boolean(origin), portSet: port !== null } };
       },
       setupActions: facts => facts?.platform && !supportedPlatform(facts.platform) ? [] : [...(!facts?.authSet ? [initial()] : []),...(facts?.detected ? [] : [install]),...(facts?.supervisor?[]:[supervisorAction]), ...(facts?.authSet ? [] : [inputs[0]]), ...(facts?.originSet ? [] : [inputs[1]]), ...(facts?.portSet ? [] : [inputs[2]])],
       async setup(ctx, id, handle) {
