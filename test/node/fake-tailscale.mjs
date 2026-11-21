@@ -1,7 +1,7 @@
 // A fake `tailscale` CLI for session tests: it answers `status`, `serve status --json` and the foreground `funnel`
 // watcher from one state file, so the real core and the real effect driver run the Funnel recipe against it.
 //
-//   - `funnel` registers a Foreground entry for its port and stays alive. A port that is visible already is refused.
+//   - `funnel` (and the private `serve`, without the AllowFunnel row) registers a Foreground entry for its port and stays alive. A port that is visible already is refused.
 //   - On SIGTERM the watcher records when it exited and leaves. The entry stays visible for `lingerMs` after that,
 //     which is how a tailscaled that tears a foreground session down late looks to `serve status`.
 //   - With `failServeStatus` set in the state, `serve status` fails, as a tailscaled that stops answering does.
@@ -36,16 +36,16 @@ const takenPort = (state, port) => portsOf(state.config).includes(port) || Objec
 const state = load();
 if (args[0] === 'status') { record(state); console.log(JSON.stringify(state.status)); process.exit(0); }
 if (args[0] === 'serve' && args[1] === 'status') { record(state); if (state.failServeStatus) { console.error('error: tailscaled is not responding'); process.exit(1); } console.log(JSON.stringify(config(state))); process.exit(0); }
-if (args[0] === 'funnel') {
+if (args[0] === 'funnel' || (args[0] === 'serve' && args[1] !== 'status')) {
   const port = Number(args.find(arg => arg.startsWith('--https='))?.slice(8)), target = args.at(-1), host = state.status.Self.DNSName.replace(/\\.$/, '');
   record(state);
   if (state.refuseFunnel || takenPort(state, port)) { console.error('error: listener already exists for port ' + port); process.exit(1); }
   const id = 'session-' + process.pid;
   const fresh = load();
-  (fresh.foreground ??= {})[id] = { config: { TCP: { [port]: { HTTPS: true } }, Web: { [host + ':' + port]: { Handlers: { '/': { Proxy: target } } } }, AllowFunnel: { [host + ':' + port]: true } } };
+  (fresh.foreground ??= {})[id] = { config: { TCP: { [port]: { HTTPS: true } }, Web: { [host + ':' + port]: { Handlers: { '/': { Proxy: target } } } }, ...(args[0] === 'funnel' ? { AllowFunnel: { [host + ':' + port]: true } } : {}) } };
   save(fresh);
   process.on('SIGTERM', () => { const current = load(); current.foreground[id].exitedAt = Date.now(); save(current); process.exit(0); });
-  console.log('Available on the internet:\\n\\nhttps://' + host + (port === 443 ? '' : ':' + port) + '/\\n|-- proxy ' + target + '\\n\\nPress Ctrl+C to exit.');
+  console.log((args[0] === 'funnel' ? 'Available on the internet:' : 'Available within your tailnet:') + '\\n\\nhttps://' + host + (port === 443 ? '' : ':' + port) + '/\\n|-- proxy ' + target + '\\n\\nPress Ctrl+C to exit.');
   setInterval(() => {}, 1000);
 } else { record(state); console.error('unsupported fake tailscale call: ' + args.join(' ')); process.exit(2); }
 `;

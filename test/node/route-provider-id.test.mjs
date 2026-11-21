@@ -39,7 +39,7 @@ test('ngrok import failure leaves an eligible candidate with an install-SDK setu
   const { candidates: [candidate] } = await catalog(await withHome(t, {
     providerId: 'ngrok-https-edge', usage: { kind: 'attached' },
     requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'stable', setup: 'allow', protocols: [] },
-  }), { adapters: [ngrok] });
+  }), { adapters: [ngrok], runtimeModules: { '@ngrok/ngrok': { kind: 'runtime-install' } } });
   assert.equal(candidate.eligible, true);
   assert.equal(candidate.setup.state, 'action-required');
   assert.ok(candidate.setup.actions.some(action => action.id === 'install-sdk'));

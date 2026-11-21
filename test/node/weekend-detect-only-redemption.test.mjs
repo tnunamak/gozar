@@ -18,7 +18,7 @@ test('detect-only metadata refuses before consent, configuration, SDK or allocat
   }};
   const adapter = { id, definition, detect: forbidden, plan: forbidden, observe: forbidden, create: forbidden, close: forbidden };
   const deps = { adapters: [adapter], platform: 'linux', redeem: forbidden, dispatchEffect: forbidden,
-    startSession: forbidden, readContext: { configuration: forbidden },
+    readContext: { configuration: forbidden },
     embeddingServices: { resolveConfiguration: forbidden, readConfiguration: forbidden } };
   try {
     for (const transport of ['tcp', 'tls']) for (const kind of ['attached', 'session']) {

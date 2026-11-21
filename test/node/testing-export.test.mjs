@@ -25,8 +25,7 @@ test('red: a fake registry provider is listed by the testing route API, and expo
   const requested = { ...session(home), requirements: { ...session(home).requirements, transport: 'tcp', protocols: [] } };
   let api, handle, bodyFailure, bodyFailed = false;
   try {
-    api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home }),
-      expose: { startSession: undefined } }); // Exercise a real owned lifecycle, including close.
+    api = createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home }) }); // A real owned lifecycle, including close: the generic session controller runs.
     const catalog = await api.catalogRoutes(requested);
     assertShape('Catalog', catalog);
     assert.deepEqual(catalog.candidates.map(item => item.providerId), [id], 'the fake is the whole registry');

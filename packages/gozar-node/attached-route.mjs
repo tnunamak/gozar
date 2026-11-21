@@ -4,18 +4,20 @@
 //   owner (the calling process)  --heartbeat every 5 s, unref'd timer-->  controller (detached child)
 //                                                                          holds adapter.create's runtime
 // The controller removes the route 20 s after the last heartbeat, or at once on closeRoute. A crashed owner
-// therefore costs at most the expiry. A foreground CLI owner can run the controller in its own process and
-// hold the lease on stdin instead (runAttachedController with lease 'stdin'): EOF removes the route at once.
+// therefore costs at most the expiry. Owner loss is final: forwarding closes, one bounded removal is attempted,
+// and the controller exits with whatever it still owes (resource or configuration reference) in its journal.
+// A foreground CLI owner can run the controller in its own process and hold the lease on stdin instead (runAttachedController with lease 'stdin'): EOF removes the route at once.
 // openSessionRoute is the same redemption over the existing session machinery.
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { readFile, chmod, unlink } from 'node:fs/promises';
+import { readFile, chmod, unlink, open, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { atomicWrite, processIdentity } from './journal.mjs';
 import { canonicalHome, trustedDirectory, privateDirectory, withExclusiveLock } from './service-state.mjs';
 import { gozarError, instructionAction, normalizeError } from './error-normalizer.mjs';
+import { cleanupRecovery } from './embedding-projections.mjs';
 import { cliCommand } from './cli-command.mjs';
 import { createGate } from './gate.mjs';
 import { projectAttached, projectSession, releasedView, recoveryHistory, checkRef, projectControllerObservation, unknownProperties } from './route-view.mjs';
@@ -42,6 +44,10 @@ export function proofObservedDuring(checked, started, ended) {
   return Number.isFinite(observed) && observed >= started && observed <= ended;
 }
 export const LEASE_EXPIRY_MS = 20_000;
+// After the owner is lost, owned removal gets this long, and each local forwarding close gets LOCAL_CLOSE_MS.
+// The controller then exits whatever is still owed; the debt stays in its journal.
+const OWNER_LOSS_TEARDOWN_MS = 30_000, LOCAL_CLOSE_MS = 5_000;
+const within = (ms, work) => { let timer; return Promise.race([Promise.resolve().then(work).then(() => true, () => false), new Promise(resolve => { timer = setTimeout(resolve, ms, false); })]).finally(() => clearTimeout(timer)); };
 const idPattern = /^att_[0-9a-f]{16}$/;
 const here = fileURLToPath(import.meta.url);
 
@@ -178,7 +184,7 @@ const routeDirectory = async (home, handle) => {
   const id=handle.id;
   if (handle.kind==='session') {
     const record=await genericSessionRecord({home,handle});
-    if (!record) throw gozarError('route_conflict','This session is not owned by the generic controller');
+    if (!record) throw gozarError('route_conflict','This session was recorded by an earlier Gozar version; this version does not run its controller');
     return record.directory;
   }
   if (!idPattern.test(id)) throw gozarError('route_not_found', 'Not an attached route id');
@@ -214,9 +220,18 @@ export async function openAttachedRoute(request, deps = {}) {
     // Redeem, re-observe and start the controller under one reservation, so two opens cannot both win one resource.
     const controller = await withExclusiveLock(join(root, '.open.lock'), async () => {
       const redeemed = session?.redeemed ?? await redeemApproval(request, { ...deps, adapters }).catch(error => { throw refusedBeforeStart(error, handle, request); });
-      await trustedDirectory(directory, true);
-      await privateDirectory(directory);
+      // A published attached directory always holds its complete recovery pair: it is built in a private staging name no listing
+      // enumerates, then renamed into place. The durable host registration follows that publication, so a hidden stale staging
+      // directory owes no registered use and every registered use has exact published custody. A session keeps its own directory,
+      // its own lifecycle and its registration inside the broker setup, where the session authority model keeps it.
+      const staging = session ? null : join(root, `.staging-${id}-${randomBytes(6).toString('hex')}`);
+      const cut = async stage => { await deps.publicationCut?.(stage); };
+      let broker, identity, bootstrap = null, published = false, hostTouched = false;
+      let hostRegistered = false;
+      try {
       if (session) {
+        await trustedDirectory(directory, true);
+        await privateDirectory(directory);
         const prior=await readJson(join(directory,'bootstrap.json'));
         if(prior) {
           const state=await readJson(join(directory,'state.json')),control=await readJson(join(directory,'control.json'));
@@ -224,29 +239,96 @@ export async function openAttachedRoute(request, deps = {}) {
           if(prior.execution!=='generic-session-v1'||state?.handle?.id!==prior.handle?.id||state?.handle?.generation!==prior.handle?.generation||state?.lastView?.cleanup?.state!=='confirmed'||live)throw gozarError('route_conflict','A retained session already owns this directory');
           for(const name of ['state.json','failure.json','control.json'])await unlink(join(directory,name)).catch(error=>{if(error.code!=='ENOENT')throw error;});
         }
+      } else {
+        await cut('directory');
+        await trustedDirectory(staging, true);
+        await privateDirectory(staging);
       }
-      let broker,identity;
       if(deps.embeddingServices){
+        hostTouched = true;
         const hostIdentity=await deps.embeddingServices.resolveIdentity({home:redeemed.home});
         broker=await startEmbeddingBroker({services:deps.embeddingServices,home:redeemed.home,identity:hostIdentity,
-          dispatchEffect:deps.dispatchEffect,onLoss:()=>{if(brokers.has(id))void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
+          dispatchEffect:deps.dispatchEffect,acknowledgeOrigin:deps.acknowledgeOrigin,onLoss:()=>{if(brokers.has(id))void controlAttached(directory,{type:'resolver-lost'}).catch(()=>{});}});
         const descriptor=await broker.registerController({identity:hostIdentity});
         identity={instanceId:descriptor.instanceId,bootId:descriptor.bootId};
         brokers.set(id,broker);
-        try{await deps.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle});}
-        catch(error){await dropBroker(id);throw error;}
       }
-      await atomicWrite(join(directory, 'bootstrap.json'), { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
+      bootstrap = { schemaVersion: 1, id, home: redeemed.home, platform: deps.platform ?? process.platform, adapterId: redeemed.adapter.id, request: redeemed.request, plan: redeemed.plan,
         operationId:request.operationId??null,
+        ...(deps.acknowledgeOrigin ? { originAcknowledgment: true, originAckTimeoutMs: deps.originAckTimeoutMs ?? 10_000 } : {}),
+        ...(deps.runtimeModules ? { runtimeModules: deps.runtimeModules } : {}),
         ...(session ? {execution:'generic-session-v1',handle,expiresAtMs:session.expiresAtMs} : {}),
         ...(broker?{resolver:broker.descriptor,identity,registryId:deps.registryId,owner:request.owner,consentReview:redeemed.consentReview,fixtureEffects:!!deps.dispatchEffect}:{}),
-        ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) });
+        ...(deps.registry ? { registry: deps.registry } : {}), leaseExpiryMs: deps.leaseExpiryMs ?? LEASE_EXPIRY_MS, ...(deps.controllerModule ? { controllerModule: deps.controllerModule } : {}) };
+      if (session) {
+        if(deps.embeddingServices){
+          hostRegistered = true;
+          await deps.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle});
+        }
+        await atomicWrite(join(directory, 'bootstrap.json'), bootstrap);
+      } else {
+        await cut('bootstrap');
+        await atomicWrite(join(staging, 'bootstrap.json'), bootstrap);
+        // The recovery identity is persisted, authenticated by the bootstrap beside it, before any controller or provider effect can exist.
+        await cut('state');
+        await recordPendingStart(staging, JSON.parse(await readFile(join(staging, 'bootstrap.json'), 'utf8')));
+        await cut('publish');
+        await rename(staging, directory);
+        published = true;
+        const parent = await open(root, 'r');
+        try { await parent.sync(); } finally { await parent.close(); }
+        // Complete durable custody is published before the first durable host registration: a use that is
+        // registered from here on is always recoverable from the final attached path.
+        if(deps.embeddingServices){
+          hostRegistered = true;
+          await deps.embeddingServices.registerConfigurationUse({home:redeemed.home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle});
+        }
+      }
+      await cut('spawn');
       const child = spawn(process.execPath, [here, '--controller', directory], { detached: true, stdio: 'ignore',
         env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
       child.unref();
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-      return await recordController(child);
+      // The owned ChildProcess is kept before any awaited identity lookup: once a child is spawned it is
+      // potentially effectful, and no later failure can be treated as a start that refused before any effect.
+      return { pid: child.pid, startIdentity: null, child };
+      } catch (error) {
+      if (brokers.get(id) === broker) await dropBroker(id); else await broker?.close().catch(() => {});
+      if (session) {
+        // A session registers the host's configuration reference before its controller exists. A failure after that registration owes a
+        // release of the exact registered handle, or exact retryable debt in the session's own record; it must not leave an orphaned use.
+        if (bootstrap && hostRegistered) {
+          const view = await unwindUnstartedSession({ directory, bootstrap, services: deps.embeddingServices }).catch(() => null);
+          if (view && !error.route) error.route = view;
+        }
+        throw error;
+      }
+      // No controller has run, so no provider effect exists. Release what the host registered, or keep exact debt for a later owner.
+      if (bootstrap) {
+        const view = await unwindUnstartedAttached({ directory, staging, published, bootstrap, services: deps.embeddingServices, hostRegistered }).catch(() => null);
+        if (view && !error.route) error.route = view;
+      }
+      else if (!hostTouched) refusedBeforeStart(error, handle, request);
+      throw error;
+      } finally {
+        if (!session && !published) await rm(staging, { recursive: true, force: true }).catch(() => {});
+      }
     }, { waitSeconds: 30 });
+    // The controller identity is recorded after the reservation ends, so the controller may already be
+    // starting when the lookup fails. That is a post-spawn failure: stop the exact owned handle, let the
+    // controller's own saved record state what exists, and never journal a refused start, a null receipt or
+    // a confirmed absence in its place.
+    try { Object.assign(controller, await recordController(controller.child, deps.identityRecorder ? { identity: deps.identityRecorder } : undefined)); }
+    catch (error) {
+      if (brokers.has(id)) await dropBroker(id);
+      const stopped = await stopController(controller);
+      const record = await readJson(join(directory, 'state.json')).catch(() => null);
+      // Normalize before attaching, so the frozen surface error carries the teardown outcome and the
+      // controller's saved view as historical recovery; teardown attests neither current proof nor provider absence.
+      const carried = withCleanupOutcome(normalizeError(error), stopped);
+      if (record?.lastView && !carried.route) carried.route = startupHistory(record, handle, 'Controller startup identity failed; historical evidence only, retain this handle for cleanup');
+      throw carried;
+    }
     if (!session) holdLease(directory, id, deps.heartbeatMs ?? HEARTBEAT_MS);
     const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
     try {
@@ -275,42 +357,73 @@ export async function openAttachedRoute(request, deps = {}) {
         error.route=cleanup.view;
         throw error;
       }
-      const recorded=await readJson(join(directory,'state.json'));
-      if (!cleanup && recorded?.handle?.id===handle.id && recorded.handle.generation===handle.generation) error.route=recorded.lastView;
-      if(!cleanup&&recorded?.lastView?.cleanup.state==='unconfirmed'){
-        error.route=recorded.lastView;
-        throw error;
-      }
+      let retainedDebt=false;
+      try {
+        if(!cleanup){
+          const recorded=await readJson(join(directory,'state.json'));
+          if(recorded?.lastView){
+            error.route=startupHistory(recorded, handle, 'Controller unavailable during startup; historical evidence only, retain this handle for cleanup');
+            retainedDebt=recorded.lastView.cleanup?.state==='unconfirmed';
+          }
+        }
+      } catch(recoveryError) { error=recoveryError; }
+      // Only validated cleanup debt may retain the controller. A saved-record refusal still owes owned teardown.
+      if(retainedDebt)throw error;
       const stopped=await stopController(controller);await dropBroker(id);
       throw withCleanupOutcome(error, stopped);
     }
   } catch (error) { throw normalizeError(error); }
 }
 
+/**
+ * Saved view after the controller was lost during startup. Stale publication, ingress and proof always clear; the controller's own
+ * journaled cleanup confirmation for this exact handle survives, because it is evidence about the resource, not about the process.
+ */
+function startupHistory(record, handle, message) {
+  const last = record.lastView;
+  if (![record.handle, last?.handle].every(saved => saved?.kind === handle.kind && saved.id === handle.id && saved.generation === handle.generation))
+    throw gozarError('route_conflict', 'Saved startup recovery does not match this route handle');
+  return last.cleanup?.state === 'confirmed' ? releasedView(last, handle) : recoveryHistory(last, message);
+}
+
 async function viewFromRecord(directory, handle) {
   const state = await readJson(join(directory, 'state.json'));
   if (!state) throw gozarError('route_not_found', `No attached route ${handle.id}`);
-  if (state.handle.id !== handle.id || state.handle.kind !== handle.kind || state.handle.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
+  if (![state.handle, state.lastView?.handle].every(saved => saved?.kind === handle.kind && saved.id === handle.id && saved.generation === handle.generation))
+    throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
   return state;
 }
 
-/** Private authenticated controller observation; never asks for fresh proof or cleanup. */
-export async function observeAttachedRoute(request) {
+/**
+ * Private authenticated controller observation; never asks for fresh proof or cleanup. The scope check binds home, handle,
+ * generation and the controller's recorded owner; the controller itself checks its process identity and the same handle.
+ * `asStatus` is the watch's and the internal close read's use of it (route-view.mjs): the caller is the host's own ordinary
+ * status/watch request, which names no owner, so the recorded owner is the scope (a given owner must still equal it), and a
+ * controller that is gone answers like `attachedStatus` does (released stays released), still without any effect.
+ */
+export async function observeAttachedRoute(request,{asStatus=false}={}) {
   const handle=checkRef(request);
   if(!['attached','session'].includes(handle.kind))throw gozarError('unsupported','Not a generic controller handle');
   const home=await canonicalHome(request.home,false),directory=await routeDirectory(home,handle);
   const bootstrap=await readJson(join(directory,'bootstrap.json'));
   const bound=handle.kind==='attached'?{kind:'attached',id:bootstrap?.id,generation:1}:bootstrap?.handle;
-  if(!bootstrap||bootstrap.home!==home||typeof request.owner!=='string'||request.owner!==bootstrap.owner||
+  const owner=asStatus&&request.owner===undefined?bootstrap?.owner:request.owner;
+  if(!bootstrap||bootstrap.home!==home||typeof owner!=='string'||owner!==bootstrap.owner||
       bound?.kind!==handle.kind||bound.id!==handle.id||bound.generation!==handle.generation)
     throw gozarError('route_conflict','Observation scope does not match the current controller');
   try {
     return (await controlAttached(directory,{type:'observe',handleKind:handle.kind,handleId:handle.id,generation:handle.generation})).view;
   } catch(error) {
-    if(!error.gone&&error.code!=='provider_unavailable')throw error;
-    const state=await viewFromRecord(directory,handle);
-    return recoveryHistory(state.lastView,'Current controller observation unavailable; historical evidence only');
+    if(!error.gone&&(asStatus||error.code!=='provider_unavailable'))throw error;
+    return recordedView(directory,handle,asStatus,'Current controller observation unavailable; historical evidence only');
   }
+}
+
+// What the saved record says when no controller answers: a finished route stays released, anything else is history only.
+async function recordedView(directory,handle,releasedStaysReleased,message) {
+  const state=await viewFromRecord(directory,handle);
+  if(releasedStaysReleased&&(state.phase==='released'||state.lastView?.cleanup.state==='confirmed'))return releasedView(state.lastView,handle);
+  return recoveryHistory(state.lastView,message);
 }
 
 /**
@@ -341,9 +454,7 @@ export async function attachedStatus(request, deps = {}) {
   try { return (await controlAttached(directory, { type: 'status', fresh: true, generation: handle.generation, handleId:handle.id }, 60_000)).view; }
   catch (error) {
     if (!error.gone) throw error;
-    const state = await viewFromRecord(directory, handle);
-    if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') return releasedView(state.lastView, handle);
-    return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
+    return recordedView(directory, handle, true, 'The route controller stopped before it removed the route');
   }
 }
 
@@ -358,15 +469,26 @@ export async function closeAttachedRoute(request, deps = {}) {
     const state = await viewFromRecord(directory, handle);
     if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') return releasedView(state.lastView, handle);
     if (state.resourceRemoval) return recoveryHistory(state.lastView, 'Resource removed; exact configuration reference release remains unconfirmed');
-    // Without an owned receipt or recovery effects, retain debt without loading transient runtime.
-    if (!state.receipt || !deps.effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
+    if (state.unstarted === true) {
+      // A start whose controller never persisted past its first act cannot have run a provider effect: the
+      // registered configuration reference is the only custody. Settle it exactly under the open lock; a
+      // refused release stays recorded debt, never a fabricated confirmation.
+      const settled = await settleUnstartedReference(request, directory, handle, deps);
+      if (settled) return settled;
+    }
+    // Without an owned receipt, retain debt without loading transient runtime. A session removes through the session recipe's
+    // journal-only recovery (no gate, no create path); other routes need the effect context their caller supplies.
+    const createSessionContext = handle.kind === 'session' ? (await loadRuntime())?.createAttachedEffectContext : null;
+    const effectContext = deps.effectContext ?? (createSessionContext ? ({ adapter, readContext, generation }) => createSessionContext({ generation, adapter, readContext,
+      session: { request: state.request, handle, directory, gate: () => { throw gozarError('internal_error', 'A dead controller has no gate'); }, runtime: {}, operationId: state.lastView?.operationId ?? null } }) : null);
+    if (!state.receipt || !effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
     // The controller died with the route up: remove it from the saved receipt, in this process.
     const adapters = await adaptersOf(deps);
     const adapter = adapters.find(item => item.id === state.adapterId);
-    if (!adapter || !state.receipt || !deps.effectContext) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
+    if (!adapter) return recoveryHistory(state.lastView, 'The route controller stopped before it removed the route');
     const read = bindConfiguration(await readContextFor(deps, await canonicalHome(request.home), deps.platform ?? process.platform), adapter.id);
     const observed = await adapter.observe(read, state.request);
-    const removal = await adapter.remove(bindConfiguration({ ...read, generation: state.handle.generation, ...deps.effectContext({ adapter, readContext: read, request: state.request, plan: state.plan, generation: state.handle.generation }) }, adapter.id), state.receipt, observed);
+    const removal = await adapter.remove(bindConfiguration({ ...read, generation: state.handle.generation, ...effectContext({ adapter, readContext: read, request: state.request, plan: state.plan, generation: state.handle.generation }) }, adapter.id), state.receipt, observed);
     return removal.removed && !removal.debt ? releasedView(state.lastView, handle)
       : { ...releasedView(state.lastView, handle), state: 'uncertain', cleanup: { state: 'unconfirmed', message: removal.debt?.message ?? 'The route could not be removed' } };
   }
@@ -389,16 +511,12 @@ export async function releaseSessionConfiguration(request,runtime){
   await releaseRecordedConfigurationUse({registryId:bootstrap.embedding.registryId,home:request.home,owner:bootstrap.owner,providerId:bootstrap.adapterId,handle},runtime);
   await dropBroker(handle.id);
 }
-export async function sessionConsent(request,{approve=false,adapters}={}){
+export async function sessionConsent(request,{approve=false}={}){
  const handle=checkRef(request);if(handle.kind!=='session')throw gozarError('unsupported','This handle is not a session');
  const generic=await genericSessionRecord(request);
  if(generic)return approve?approveAttachedConsent(request):reviewAttachedConsent(request);
- const directory=join(request.home,handle.id.split(':')[0]),bootstrap=await readJson(join(directory,'bootstrap.json'));
- if(bootstrap?.embedding?.handle.id!==handle.id)throw gozarError('route_conflict','This session handle is stale or has no current consent authority');
- const {control}=await import('./daemon.mjs');
- const result=await control(directory,{type:approve?'approve-consent':'review-consent',approvalToken:request.approvalToken,consentFactsDigest:request.consentFactsDigest},60000);
- if(!approve)return result.review;
- const adapter=adapters.find(a=>a.id===bootstrap.adapterId);return projectSession(result,{handle,properties:adapter.definition.capabilities,facts:adapter.definition.facts});
+ // A session recorded by an earlier version has no controller this version runs, so it has no current consent authority.
+ throw gozarError('route_conflict','This session handle is stale or has no current consent authority');
 }
 
 /** Persisted dispatch, never provider-name inference or lookup-failure fallback. */
@@ -418,7 +536,7 @@ export async function genericSessionRecord(request) {
 export async function finishCleanupController(request){
   const handle=checkRef(request);dropLease(handle.id);await dropBroker(handle.id);
   if(!['attached','session'].includes(handle.kind))return;
-  if(handle.kind==='session'&&!await genericSessionRecord(request))return; // A legacy session daemon has its own control protocol.
+  if(handle.kind==='session'&&!await genericSessionRecord(request))return; // An earlier version's session has no controller here to finalize.
   const home=await canonicalHome(request.home,false);
   const directory=handle.kind==='attached'?await routeDirectory(home,handle):join(home,handle.id.split(':')[0]);
   // The reference release is confirmed, so the controller may end. Its own persisted removal milestone, the handle, the generation
@@ -472,8 +590,8 @@ export async function attachedRemovalEvidence(request,scope) {
       state.adapterId!==scope.providerId||state.lastView?.handle?.kind!==handle.kind||
       state.lastView.handle.id!==handle.id||state.lastView.handle.generation!==handle.generation)
     throw gozarError('cleanup_debt','Resource-removal evidence does not match cleanup scope');
-  return {...state.lastView,handle:structuredClone(handle),state:'released',routeState:'released',
-    published:null,ingress:null,verification:{...state.lastView.verification,status:'unverified'},cleanup:{state:'confirmed'}};
+  return {...state.lastView,handle:structuredClone(handle),state:'released',routeState:'inactive',
+    published:null,ingress:null,verification:{...state.lastView.verification,status:'unverified'},cleanup:cleanupRecovery({state:'confirmed'},handle)};
 }
 // --- The controller -----------------------------------------------------------------------------
 
@@ -502,15 +620,112 @@ function refusedBeforeStart(error, handle, request) {
 }
 
 /**
+ * The first durable state of an attached allocation: creating, no receipt, nothing published. It is written after the bootstrap
+ * and before the controller starts, so a listing never sees a bootstrap without the state that binds it. `unstarted` is the
+ * explicit pre-controller phase: the controller's first durable act retires it under the open lock, before any resolver or
+ * provider effect, so while it is present no controller has ever persisted past its start and the registered configuration
+ * reference is the only custody a later owner must recover. If no controller ever answers, the recorded view is read back as
+ * unconfirmed history, never as a removal.
+ */
+async function recordPendingStart(directory,bootstrap){
+  const handle={kind:'attached',id:bootstrap.id,generation:1};
+  const lease={target:bootstrap.request.target,state:'creating',origin:null,properties:unknownProperties(),ingress:null,identity:bootstrap.identity??null,
+    limits:{recommendedPollIntervalMs:5_000,idleTimeoutMs:null},checkedAtMs:null,cleanup:{state:'none'}};
+  await atomicWrite(join(directory,'state.json'),{schemaVersion:1,adapterId:bootstrap.adapterId,request:bootstrap.request,plan:bootstrap.plan,receipt:null,handle,phase:'creating',unstarted:true,
+    lastView:{...projectAttached(lease,{handle,now:Date.now()}),operationId:bootstrap.operationId??null,consentFactsDigest:bootstrap.consentReview?.consentFactsDigest??null},resourceRemoval:null});
+}
+
+/**
+ * A controller's first durable act: retire the owner's pre-controller marker under the open lock, before any resolver,
+ * provider or network effect. The owner's refused-start unwind and this retirement serialize on the same lock, and while
+ * the marker is present no controller has ever persisted past this point, so settling the registered reference risks
+ * no provider custody. A pending record that belongs to another bootstrap is refused, never adopted.
+ */
+async function clearPendingStart(directory,bootstrap){
+  const handle={kind:'attached',id:bootstrap.id,generation:1};
+  await withExclusiveLock(join(dirname(directory),'.open.lock'),async()=>{
+    const state=await readJson(join(directory,'state.json'));
+    // Close may win this lock while the spawned controller is still queued for its first act.
+    if(state?.phase==='released'||state?.lastView?.cleanup?.state==='confirmed'||state?.resourceRemoval)
+      throw gozarError('route_conflict','The pending attached start has already been closed');
+    if(!state?.unstarted)return;
+    if(state.handle?.kind!==handle.kind||state.handle.id!==handle.id||state.handle.generation!==handle.generation)
+      throw gozarError('route_conflict','The pending start record does not match this bootstrap');
+    await atomicWrite(join(directory,'state.json'),{...state,unstarted:undefined});
+  },{waitSeconds:30});
+}
+
+/**
+ * Fresh-owner recovery of the after-registration, before-spawn state, under the same open lock the owner's
+ * start holds. The surviving pre-controller marker proves no controller ever persisted past its first act,
+ * so the registered configuration reference is the only custody: release it exactly and journal a confirmed,
+ * resource-free settlement, or keep the refused release as recorded debt. A record that changed meanwhile, or
+ * one that no longer matches its bootstrap, is retained or refused, never adopted as evidence.
+ */
+async function settleUnstartedReference(request, directory, handle, deps) {
+  const bootstrap = await readJson(join(directory, 'bootstrap.json'));
+  if (bootstrap?.id !== handle.id || bootstrap.home !== await canonicalHome(request.home, false) ||
+      typeof bootstrap.owner !== 'string' || !bootstrap.owner || typeof bootstrap.adapterId !== 'string' || !bootstrap.adapterId ||
+      typeof bootstrap.registryId !== 'string' || !bootstrap.registryId)
+    throw gozarError('cleanup_debt', 'Cleanup authority is unavailable for the unstarted binding');
+  const resolver = { releaseConfigurationUse: use => releaseRecordedConfigurationUse({ registryId: bootstrap.registryId, home: bootstrap.home, ...use },
+    { embeddingServices: deps.embeddingServices, registryId: deps.registryId }) };
+  return await withExclusiveLock(join(dirname(directory), '.open.lock'), async () => {
+    const current = await readJson(join(directory, 'state.json'));
+    if (current?.unstarted !== true) return null;
+    if (current.handle?.kind !== handle.kind || current.handle.id !== handle.id || current.handle.generation !== handle.generation ||
+        current.receipt !== null || current.resourceRemoval)
+      throw gozarError('route_conflict', 'The pending start record does not match its bootstrap');
+    await recordRefusedStart(directory, bootstrap, resolver, () => false);
+    const settled = JSON.parse(await readFile(join(directory, 'state.json'), 'utf8'));
+    return settled.lastView.cleanup.state === 'confirmed' ? settled.lastView
+      : recoveryHistory(settled.lastView, 'Resource removal is not confirmed; retry close with the exact retained handle');
+  }, { waitSeconds: 30 });
+}
+
+/**
  * A start refused before any adapter loaded has no provider resource to remove. This controller knows that first-hand, so the record
  * says so; only the configuration reference the host registered remains, and its release is confirmed or left as retryable debt.
  */
-async function recordRefusedStart(directory,bootstrap,resolver,lost){
+/**
+ * An attached start that failed before its controller existed. Nothing ran, so the host's configuration reference is the only thing
+ * to settle: released once and confirmed, or kept as exact debt in a complete published pair for a later owner to retry.
+ */
+async function unwindUnstartedAttached({directory,staging,published,bootstrap,services,hostRegistered=false}){
+  const resolver={releaseConfigurationUse:use=>services.releaseConfigurationUse({home:bootstrap.home,...use})};
+  if(!published){
+    await trustedDirectory(staging,true);await privateDirectory(staging);
+    await atomicWrite(join(staging,'bootstrap.json'),bootstrap);
+  }
+  const target=published?directory:staging;
+  await recordRefusedStart(target,bootstrap,resolver,()=>false,hostRegistered);
+  const state=JSON.parse(await readFile(join(target,'state.json'),'utf8'));
+  // Confirmed removal of the only host reference leaves nothing to retain; an unconfirmed one is published as debt.
+  if(!published&&state.lastView.cleanup.state==='confirmed')return state.lastView;
+  if(!published)await rename(staging,directory);
+  return state.lastView;
+}
+
+/**
+ * A session start that failed after its host registration and before its controller ran. Nothing ran, so the registered reference is the only
+ * thing to settle: released and confirmed, or kept as exact debt beside the complete bootstrap so a later close retries the exact handle.
+ */
+async function unwindUnstartedSession({directory,bootstrap,services}){
+  const resolver={releaseConfigurationUse:use=>services.releaseConfigurationUse({home:bootstrap.home,...use})};
+  await atomicWrite(join(directory,'bootstrap.json'),bootstrap);
+  await recordRefusedStart(directory,bootstrap,resolver,()=>false,true);
+  return JSON.parse(await readFile(join(directory,'state.json'),'utf8')).lastView;
+}
+
+async function recordRefusedStart(directory,bootstrap,resolver,lost,hostRegistered=true){
   const session=bootstrap.execution==='generic-session-v1';
   const handle=session?bootstrap.handle:{kind:'attached',id:bootstrap.id,generation:1};
   const managed=['resolver','registryId','owner','consentReview'].some(name=>Object.hasOwn(bootstrap,name));
-  let released=!managed;
-  if(managed){
+  // Only a registration the owner attempted can owe a release: before it, nothing is registered and
+  // nothing is retained. A release is exact and idempotent, so an attempt after a committed registration
+  // is always safe whether or not the registration's own reply failed.
+  let released=!managed||!hostRegistered;
+  if(managed&&hostRegistered){
     try{
       if(lost()||!resolver||typeof resolver.releaseConfigurationUse!=='function'||typeof bootstrap.owner!=='string'||!bootstrap.owner||typeof bootstrap.registryId!=='string'||!bootstrap.registryId)throw new Error('reference release unavailable');
       await resolver.releaseConfigurationUse({owner:bootstrap.owner,providerId:bootstrap.adapterId,handle});released=true;
@@ -530,6 +745,8 @@ async function recordRefusedStart(directory,bootstrap,resolver,lost){
  */
 export async function runAttachedController(directory, runtime = {}) {
   const bootstrap = JSON.parse(await readFile(join(directory, 'bootstrap.json'), 'utf8'));
+  // First durable act, before any resolver or provider effect: retire the owner's pre-controller marker.
+  if (bootstrap.execution !== 'generic-session-v1') await clearPendingStart(directory, bootstrap);
   let resolverLost=false,onResolverLoss=()=>{};
   const resolver=bootstrap.resolver?await connectEmbeddingBroker({descriptor:bootstrap.resolver,identity:bootstrap.identity,onLoss:()=>{resolverLost=true;onResolverLoss();}}):null;
   // Adapter code from a changed registry is never loaded. The refusal is recorded first so the retained directory stays enumerable.
@@ -538,6 +755,9 @@ export async function runAttachedController(directory, runtime = {}) {
     throw gozarError('artifact_integrity_failed','The controller registry content changed');
   }
   if(resolver)runtime={...runtime,embeddingServices:resolver,owner:bootstrap.owner,...(bootstrap.fixtureEffects?{dispatchEffect:resolver.dispatchEffect.bind(resolver)}:{})};
+  // The trusted host declaration of packaged runtime modules crosses as data; the detached controller
+  // re-validates identity, version and load through the same shared helper as the host factory.
+  if(bootstrap.runtimeModules)runtime={...runtime,runtimeModules:bootstrap.runtimeModules};
   if(bootstrap.fixtureEffects)runtime.fetch=testingFetch(runtime.dispatchEffect);
   const adapters = runtime.adapters ?? await (await loadRuntime())?.loadAdapters?.(bootstrap.registry);
   const adapter = adapters?.find(item => item.id === bootstrap.adapterId);
@@ -552,19 +772,29 @@ export async function runAttachedController(directory, runtime = {}) {
   const expired=()=>session&&now()>=bootstrap.expiresAtMs;
   const lease = { ...(session?{expiresAtMs:bootstrap.expiresAtMs}:{}), target: bootstrap.request.target, state: 'creating', origin: null, properties: adapter.definition.capabilities, ingress: null, identity:bootstrap.identity??null,
     limits: { recommendedPollIntervalMs: 5_000, idleTimeoutMs: null }, cleanup: { state: 'none' }, checkedAtMs: null };
-  let receipt = null, lastBeat = now(), releasing = null, failure = null, gate = null, proofSession = null,initialSettled=false;
+  let receipt = null, lastBeat = now(), releasing = null, releasingAt = 0, failure = null, gate = null, proofSession = null,initialSettled=false;
+  let ownerLost = false, gateClosing = null, proofClosing = null, localCloseUnconfirmed = false;
+  const visibleLease = () => {
+    if (!ownerLost) return lease;
+    if (localCloseUnconfirmed) return { ...lease, state: 'uncertain', cleanup: { state: 'unconfirmed', message: 'Local forwarding closure remains unconfirmed; retain this recovery handle' } };
+    return lease.state === 'usable' ? { ...lease, state: 'unverified' } : lease;
+  };
   const nonce = randomBytes(32).toString('hex');
-  const lastView = () => ({...projectAttached(expired()&&lease.state==='usable'?{...lease,state:'unverified'}:lease, { handle, now: now() }),operationId:bootstrap.operationId??null,...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
+  const lastView = () => ({...projectAttached(expired()&&visibleLease().state==='usable'?{...visibleLease(),state:'unverified'}:visibleLease(), { handle, now: now() }),operationId:bootstrap.operationId??null,...(lease.consentChange?{consentChange:lease.consentChange}:{}),consentFactsDigest:lease.approvedReview?.consentFactsDigest??bootstrap.consentReview?.consentFactsDigest??null});
   let resourceRemoval=null;
-  const save = () => atomicWrite(join(directory, 'state.json'), { schemaVersion: 1, adapterId: adapter.id, request: bootstrap.request, plan: bootstrap.plan,
-    receipt, handle, phase: lease.state, lastView: lastView(), resourceRemoval });
+  let saving = Promise.resolve();
+  const save = () => saving = saving.catch(() => {}).then(() => atomicWrite(join(directory, 'state.json'), { schemaVersion: 1, adapterId: adapter.id, request: bootstrap.request, plan: bootstrap.plan,
+    receipt, handle, phase: visibleLease().state, lastView: lastView(), resourceRemoval }));
   async function recordRemoval(){
     resourceRemoval={schemaVersion:1,registryId:bootstrap.registryId,owner:bootstrap.owner,providerId:adapter.id,handle:structuredClone(handle)};
     lease.state='uncertain';lease.cleanup={state:'unconfirmed',message:'Resource removed; configuration reference release remains unconfirmed'};
     await save();
   }
 
-  const admitted = (runtime.effectContext ?? (await loadRuntime())?.createAttachedEffectContext)?.({ adapter, readContext: read, request: bootstrap.request, plan: bootstrap.plan, generation: 1 });
+  const admitted = (runtime.effectContext ?? (await loadRuntime())?.createAttachedEffectContext)?.({ adapter, readContext: read, request: bootstrap.request, plan: bootstrap.plan, generation: 1,
+    ...(session ? { session: { request: bootstrap.request, handle, directory, gate: () => gate, runtime, operationId: bootstrap.operationId ?? null, owner: bootstrap.owner ?? null,
+      // An owned provider process that exits by itself ends the session through the same removal as an explicit close.
+      onProviderLoss: async () => { await release(); if (lease.cleanup.state === 'confirmed') finish(); } } } : {}) });
   // The effect is admitted for generation 1: a new route. Receipts carry the generation create returns.
   const context = bindConfiguration({ ...read, generation: 1, ...(admitted ?? {}) }, adapter.id);
 
@@ -572,34 +802,65 @@ export async function runAttachedController(directory, runtime = {}) {
   // gate recipe routes use). Through the public origin the gate proves the origin reaches this instance and,
   // when the route claims SSE, that a timed stream arrives unbuffered. `verifyChallenge` is that proof, so
   // adapter.verify is the one verification path. `validation: 'none'` exists only for controller test modules.
-  const claimsSse = adapter.definition.capabilities?.protocols?.sse === true;
+  // A recipe session is proven by the driver's authorized-vantage probe (`admitted.prove`); every other route is proven from this device through the gate.
+  const recipeSession = session && Boolean(adapter.operationalDefinition?.recipes?.create);
+  // A recipe session is timed for SSE only when its request asked for SSE (the 0.5.1 session rule: the proof matches the requested protocols);
+  // every other route is timed for what its provider claims.
+  const claimsSse = recipeSession
+    ? adapter.definition.capabilities?.protocols?.sse === true && bootstrap.request.requirements?.protocols?.includes('sse') === true
+    : adapter.definition.capabilities?.protocols?.sse === true;
   const gateChecked = sse => async origin => {
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), sse ? 15_000 : 5_000);
-    try { await gate.verify(origin, { sse, signal: controller.signal, fetch: runtime.fetch }); return { status: 'verified', checkedAt: new Date(now()).toISOString() }; }
+    try {
+      // A recipe session is proven through the driver's authorized-vantage probe (exact origin, the vantage the core asked for, this attempt's nonce, SSE,
+      // protocols). Every other route is proven from this device through the gate.
+      const vantage = recipeSession
+        ? (await admitted.prove({ origin, signal: controller.signal, deadlineMs: bootstrap.expiresAtMs })).vantage
+        : (await gate.verify(origin, { sse, signal: controller.signal, fetch: runtime.fetch }), 'this-device');
+      return { status: 'verified', checkedAt: new Date(now()).toISOString(), vantage };
+    }
     catch { return { status: 'unverified', checkedAt: new Date(now()).toISOString() }; }
     finally { clearTimeout(timer); }
   };
   const gated = runtime.validation !== 'none';
   const proofAbort = new AbortController();
   let attempt = { id: bootstrap.id, nonce: randomBytes(32).toString('hex'), deadlineMs: session?Math.min(bootstrap.expiresAtMs,now()+120000):now()+120000, signal: proofAbort.signal };
-  onResolverLoss=()=>{if(lease.cleanup.state!=='confirmed'){lease.state='unverified';proofAbort.abort();void save().catch(()=>{});}};
+  onResolverLoss=()=>{if(!ownerLost&&!releasing&&lease.cleanup.state!=='confirmed'){lease.state='unverified';proofAbort.abort();void save().catch(()=>{});}};
   Object.assign(context,{signal:attempt.signal,deadlineMs:attempt.deadlineMs,attemptId:attempt.id,operationId:bootstrap.operationId??null});
   lease.approvedReview=bootstrap.consentReview??null;
   const reviewTokens=new Map();
   const safeRefresh=()=>!proofSession||typeof proofSession.refresh==='function';
-  async function currentConsent(runtimeFacts={properties:lease.properties,facts:[...(lease.runtimeFacts??[]),...(lease.proof?.facts??[])]}){
+  const proofAuthorityLost = () => ownerLost || Boolean(releasing) || resolverLost || proofAbort.signal.aborted;
+  // Commands run concurrently on one controller and interleave at every await, so an observation also names the exact inputs it read
+  // (proof, properties, runtime facts). A result computed from inputs another command has since replaced is dropped, never committed over the newer ones.
+  const consentObservation = () => ({attempt, receipt, generation:handle.generation, approvedReview:lease.approvedReview,
+    proof:lease.proof, properties:lease.properties, runtimeFacts:lease.runtimeFacts});
+  const consentObservationCurrent = observed => !proofAuthorityLost() && !resourceRemoval && !expired() && observed.attempt===attempt &&
+    observed.receipt===receipt && observed.generation===handle.generation && observed.approvedReview===lease.approvedReview &&
+    observed.proof===lease.proof && observed.properties===lease.properties && observed.runtimeFacts===lease.runtimeFacts;
+  const commitConsentEvidence = (observed, staged) => {
+    if(!consentObservationCurrent(observed))return false;
+    if(staged)lease.facts=staged.facts;
+    return true;
+  };
+  // Before creation, derive current properties from inspection, not the lease's static defaults.
+  async function currentConsent(runtimeFacts=receipt?{properties:lease.properties,facts:[...(lease.runtimeFacts??[]),...(lease.proof?.facts??[])]}:undefined){
     if(!lease.approvedReview)return null;
     const original=lease.approvedReview.canonicalInput;
     const current=await currentRouteReview({...bootstrap.request,home:bootstrap.home,owner:bootstrap.owner,origin:original.scope.query.expectedOrigin},adapter,
       {...runtime,embeddingServices:resolver,registryId:bootstrap.registryId,platform:bootstrap.platform},
       {runtimeFacts});
-    lease.facts=current.facts;return current.review;
+    return {review:current.review,facts:current.facts};
   }
   async function enforceConsent(){
+    const observed=consentObservation();
+    if(ownerLost||releasing)return false;
     if(resolverLost){lease.state='unverified';return false;}
     let current;
     try { current=await currentConsent(); }
-    catch (error) { await withdrawInvalidObservation();throw error; }
+    catch (error) { if(!consentObservationCurrent(observed))return false;await withdrawInvalidObservation();throw error; }
+    if(!commitConsentEvidence(observed,current))return false;
+    current=current?.review;
     if(current&&current.consentFactsDigest!==lease.approvedReview.consentFactsDigest){
       lease.state='unverified';lease.consentChange={oldDigest:lease.approvedReview.consentFactsDigest,newDigest:current.consentFactsDigest,
         nextAction:safeRefresh()?instructionAction('review-route-consent','Review changed route consent','Call reviewRouteConsent with this route handle, show the returned review and approveRouteConsent after approval.'):null,
@@ -616,18 +877,44 @@ export async function runAttachedController(directory, runtime = {}) {
     const checked = proofSession ? await proofSession.verify({ origin: endpoint, receipt, attempt })
       : await adapter.verify(gated ? { ...read, verifyChallenge: gateChecked(sse) } : read, receipt);
     if (proofSession) {
-      if (checked.attemptId !== attempt.id || checked.endpoint !== endpoint || attempt.signal.aborted || now() >= attempt.deadlineMs || releasing) {
+      if (checked.attemptId !== attempt.id || checked.endpoint !== endpoint || attempt.signal.aborted || now() >= attempt.deadlineMs || releasing || ownerLost) {
         return { ...checked, status: 'unverified' };
       }
+    }
+    const observed=Date.parse(checked.checkedAt);
+    if(resolverLost||activeAttempt!==attempt||attempt.signal.aborted||releasing||ownerLost||now()>=attempt.deadlineMs||!proofObservedDuring(checked,started,now()))return {...checked,status:'unverified'};
+    // The observation is staged until every common guard has passed: a stale, malformed or out-of-window observation leaves the prior proof and facts as they were.
+    if (proofSession) {
       lease.proof = checked;
       lease.facts = [...new Map([...(adapter.definition.facts ?? []), ...(lease.runtimeFacts ?? []), ...(checked.facts ?? [])].map(fact => [fact.id, fact])).values()];
     }
-    const observed=Date.parse(checked.checkedAt);
-    if(resolverLost||activeAttempt!==attempt||attempt.signal.aborted||releasing||now()>=attempt.deadlineMs||!proofObservedDuring(checked,started,now()))return {...checked,status:'unverified'};
-    if(!proofSession)lease.proof={...checked,vantage:'this-device',checks:checked.status==='verified'?[...(endpoint.startsWith('https:')?['tls']:[]),'nonce',...(sse?['sse']:[])]:[],validUntil:new Date(observed+15000).toISOString()};
+    if(!proofSession)lease.proof={...checked,vantage:checked.vantage??'this-device',checks:checked.status==='verified'?[...(endpoint.startsWith('https:')?['tls']:[]),'nonce',...(sse?['sse']:[])]:[],validUntil:new Date(observed+15000).toISOString()};
     lease.proofSubject=bootstrap.identity?{origin:endpoint,target:bootstrap.request.target,...bootstrap.identity,handleGeneration:handle.generation}:null;
     return checked;
   }
+
+  // The awaited exact-origin host boundary (0.5.2). When the embedding host declared `acknowledgeOrigin`, no
+  // publication verification may run until the host has acknowledged THIS exact validated origin for this
+  // route, generation and proof attempt, over the authenticated broker. A missing, refused, malformed,
+  // stale, aborted or timed-out acknowledgment withdraws the route exactly like a failed verification: it
+  // can never publish, never approve a foreign Host (any echo naming another origin, handle or attempt is
+  // refused), never revive a lost owner, and never disturbs the retained cleanup receipt.
+  const acknowledgeAllocatedOrigin = async origin => {
+    if (!bootstrap.originAcknowledgment) return true;
+    if (!resolver || resolverLost || ownerLost || releasing || expired()) return false;
+    const request = { owner: bootstrap.owner, providerId: adapter.id,
+      handle: { kind: handle.kind, id: handle.id, generation: handle.generation },
+      operationId: bootstrap.operationId ?? null, target: bootstrap.request.target, origin, attemptId: attempt.id };
+    const bounded = new Promise(resolve => { const timer = setTimeout(resolve, bootstrap.originAckTimeoutMs ?? 10_000, null); timer.unref?.(); });
+    const aborted = new Promise(resolve => { if (proofAbort.signal.aborted) return resolve(); proofAbort.signal.addEventListener('abort', () => resolve(), { once: true }); });
+    let reply;
+    try { reply = await Promise.race([resolver.acknowledgeOrigin(request), bounded, aborted]); }
+    catch { return false; }
+    if (resolverLost || ownerLost || releasing || expired() || proofAbort.signal.aborted) return false;
+    return reply?.acknowledged === true && reply.origin === origin &&
+      reply.handle?.id === handle.id && reply.handle?.generation === handle.generation &&
+      reply.attemptId === attempt.id;
+  };
 
   async function withdrawInvalidObservation(){
     lease.state='unverified';lease.consentChange={reason:'runtime-observation-invalid',
@@ -637,13 +924,18 @@ export async function runAttachedController(directory, runtime = {}) {
   }
   // What the provider reports now: a consent review shows this, not what the last proof saw.
   async function refreshRuntimeFacts(){
+    const observed=consentObservation();
     try {
       const facts=await adapter.runtimeFacts(read,receipt);
       const properties=canonicalConsentValue(facts.properties);
       if(validateShape('Properties',properties).length)throw gozarError('invalid_input','Invalid runtime properties');
-      await currentConsent({properties,facts:[...(facts.facts??[]),...(lease.proof?.facts??[])]});
-      Object.assign(lease,{properties,binding:facts.binding,runtimeFacts:facts.facts??[],facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]});
+      if(!consentObservationCurrent(observed))return;
+      const staged=await currentConsent({properties,facts:[...(facts.facts??[]),...(lease.proof?.facts??[])]});
+      if(!commitConsentEvidence(observed,staged))return;
+      Object.assign(lease,{properties,binding:facts.binding,runtimeFacts:facts.facts??[],
+        ...(!staged?{facts:[...new Map([...(adapter.definition.facts??[]),...(facts.facts??[]),...(lease.proof?.facts??[])].map(f=>[f.id,f])).values()]}:{})});
     } catch (error) {
+      if(!consentObservationCurrent(observed))return;
       // Keep the last valid disclosures as history, but withdraw authority before refusing the observation.
       await withdrawInvalidObservation();throw error;
     }
@@ -652,12 +944,12 @@ export async function runAttachedController(directory, runtime = {}) {
   function verify(){if(verification)return verification;verification=refreshProof().finally(()=>{verification=null;});return verification;}
   async function refreshProof() {
     if (expired()) { await release(); return; }
-    if (!receipt || resourceRemoval || releasing || !initialSettled || failure || lease.cleanup.state==='confirmed') return;
+    if (!receipt || resourceRemoval || releasing || ownerLost || !initialSettled || failure || lease.cleanup.state==='confirmed') return;
     // Without the host resolver, retain a withdrawn recovery view instead of asking for fresh authority.
     if (resolverLost) { lease.state='unverified'; await save(); return; }
     await refreshRuntimeFacts();
     if(!await enforceConsent())return;
-    if (proofSession && !proofSession.refresh) return;
+    if (proofAuthorityLost() || (proofSession && !proofSession.refresh)) return;
     try {
       attempt={id:randomUUID(),nonce:randomBytes(32).toString('hex'),deadlineMs:session?Math.min(bootstrap.expiresAtMs,now()+120000):now()+120000,signal:proofAbort.signal};
       if(!proofSession)gate?.rotate();
@@ -665,6 +957,7 @@ export async function runAttachedController(directory, runtime = {}) {
       const verification = proofSession
         ? await proofSession.refresh({ origin: lease.origin, receipt, attempt })
         : await checkProof(false);
+      if(proofAuthorityLost())return;
       if (proofSession) {
         if (verification.attemptId !== attempt.id || verification.endpoint !== lease.origin || attempt.signal.aborted || now() >= attempt.deadlineMs || releasing) return;
         if (!proofObservedDuring(verification, started, now())) {
@@ -676,8 +969,9 @@ export async function runAttachedController(directory, runtime = {}) {
         lease.proof = verification;
         lease.facts = [...(adapter.definition.facts ?? []), ...(verification.facts ?? [])];
       }
-      if (!releasing&&await enforceConsent()) { lease.state = verification.status === 'verified' ? 'usable' : 'unverified'; lease.checkedAtMs = Date.parse(verification.checkedAt); lease.sseChecked = false; await save(); }
-    } catch { if (!releasing) { lease.state = 'unverified'; await save(); } }
+      if(!await enforceConsent()||proofAuthorityLost())return;
+      lease.state = verification.status === 'verified' ? 'usable' : 'unverified'; lease.checkedAtMs = Date.parse(verification.checkedAt); lease.sseChecked = false; await save();
+    } catch { if (!proofAuthorityLost()) { lease.state = 'unverified'; await save(); } }
   }
   async function removeRoute() {
     let observed;
@@ -685,8 +979,12 @@ export async function runAttachedController(directory, runtime = {}) {
     return adapter.remove(context, receipt, observed);
   }
   const debtOf = removal => ({ state: 'unconfirmed', message: removal.debt?.message ?? 'The route could not be removed' });
+  // Control-ready barrier: the authenticated control channel (control.json) is published before the first provider
+  // effect, so a caller can always reach, observe and close the controller that holds the allocation custody.
+  let controlPublished; const controlReady = new Promise(resolve => { controlPublished = resolve; });
   const creation = (async () => {
     try {
+      if(!await controlReady)throw gozarError('internal_error','The controller could not publish its control channel');
       if(session)await save();
       if(expired())throw gozarError('verification_failed','The session lifetime has expired');
       if (!admitted) throw gozarError('unsupported', 'No admitted effect context is wired for this route');
@@ -702,20 +1000,30 @@ export async function runAttachedController(directory, runtime = {}) {
         plan = retarget(plan, bootstrap.request.target, lease.bindTarget);
       }
       if(expired())throw gozarError('verification_failed','The session lifetime has expired');
+      if(ownerLost){await closeForwarding();throw gozarError('verification_failed','The owner released the lease before the route was created');}
       receipt = await adapter.create(context, plan);
       if(receipt?.adapterId!==adapter.id||receipt.resourceKey!==plan.resourceKey||receipt.generation!==context.generation||
         receipt.operationId!==undefined&&receipt.operationId!==(bootstrap.operationId??null))throw gozarError('provider_unavailable','The adapter returned a receipt for another allocation');
       if(expired())throw gozarError('verification_failed','The session lifetime has expired');
+      // Keep allocation custody even when the owner retires before optional observations finish.
+      await save();
+      if(proofAuthorityLost())return;
       const facts = await adapter.runtimeFacts(read, receipt);
+      if(proofAuthorityLost())return;
       const origin = credentialFreeOrigin(receipt.origin, facts.properties, adapter.definition.originSchemes);
       if (!origin) throw gozarError('provider_unavailable', 'The provider returned no usable origin');
       Object.assign(lease, { properties: facts.properties,binding:facts.binding, ingress: facts.ingress ?? null, limits: facts.limits,runtimeFacts:facts.facts??[], facts: [...new Map([...(adapter.definition.facts ?? []), ...(facts.facts ?? [])].map(f=>[f.id,f])).values()], origin, state: 'unverified' });
       await save();
-      if(!await enforceConsent())return;
+      if(!await enforceConsent()||proofAuthorityLost())return;
+      // The host boundary: with a declared acknowledgment handler, verification waits for the host to bind
+      // this exact origin. Nothing is reported published until the host has answered and the validation passes.
+      if (!await acknowledgeAllocatedOrigin(origin))
+        throw gozarError('verification_failed', 'The host did not acknowledge the allocated origin; the route was withdrawn');
       // Nothing is reported published until the validation passes; a failed check withdraws the route.
       const checked = await checkProof(claimsSse);
+      if(proofAuthorityLost())return;
       if (checked.status !== 'verified') throw gozarError('verification_failed', 'The route did not pass publication validation and was withdrawn');
-      if(!await enforceConsent())return;
+      if(!await enforceConsent()||proofAuthorityLost())return;
       lease.state = 'usable'; lease.checkedAtMs = Date.parse(checked.checkedAt); lease.sseChecked = gated && claimsSse;
       await save();
     } catch (cause) {
@@ -730,7 +1038,13 @@ export async function runAttachedController(directory, runtime = {}) {
       await atomicWrite(join(directory, 'failure.json'), failure);
       await save().catch(() => {});
     }
-  })().finally(()=>{initialSettled=true;});
+  })().finally(async()=>{
+    if(!failure&&proofAuthorityLost()){
+      failure={code:'verification_failed',message:'Route verification ended before publication',nextAction:null};
+      await atomicWrite(join(directory,'failure.json'),failure).catch(()=>{});
+    }
+    initialSettled=true;
+  });
 
   async function releaseUse(){
     // Proof identity alone does not claim custody of a configuration reference.
@@ -746,6 +1060,7 @@ export async function runAttachedController(directory, runtime = {}) {
 
   function release() {
     proofAbort.abort();
+    if(!releasing)releasingAt=now();
     releasing ??= (async () => {
       await creation;
       if (resourceRemoval) {
@@ -761,10 +1076,42 @@ export async function runAttachedController(directory, runtime = {}) {
         const removal = await removeRoute();
         if (removal.removed && !removal.debt) { lease.state = 'released'; lease.cleanup = { state: 'confirmed' };await recordRemoval();await releaseUse();lease.state='released';lease.cleanup={state:'confirmed'}; }
         else { lease.state = 'uncertain'; lease.cleanup = debtOf(removal); }
-      } catch (cause) { lease.state = 'uncertain'; lease.cleanup = { state: 'unconfirmed', message: `Removal failed (${normalizeError(cause).code})` }; }
+      } catch (cause) { lease.state = 'uncertain'; lease.cleanup = { state: 'unconfirmed', message: resourceRemoval ? 'Resource removed; configuration reference release remains unconfirmed' : `Removal failed (${normalizeError(cause).code})` }; }
       await save();
-    })().finally(()=>{if(lease.cleanup.state==='unconfirmed')releasing=null;});
+    })().finally(()=>{if(lease.cleanup.state==='unconfirmed'&&!ownerLost)releasing=null;});
     return releasing;
+  }
+
+  // Local forwarding (the gate, or the adapter's proof session) is the controller's own; closing it needs nothing from the provider
+  // or from the configuration reference. Idempotent.
+  async function closeForwarding(){
+    proofAbort.abort();
+    const bound = runtime.ownerLossLocalCloseMs ?? LOCAL_CLOSE_MS;
+    if(gate)gateClosing ??= within(bound, () => gate.close());
+    if(proofSession)proofClosing ??= within(bound, () => proofSession.close());
+    const confirmed = (await Promise.all([gateClosing ?? true, proofClosing ?? true])).every(Boolean);
+    if(!confirmed)localCloseUnconfirmed=true;
+    return confirmed;
+  }
+  // Owner loss ends forwarding even when remote removal or reference reconciliation remains uncertain.
+  // Failed journal writes retain the previous record and cannot prevent the detached controller from exiting.
+  async function abandonOwnerless(){
+    if(ownerLost)return;
+    ownerLost=true;
+    try {
+      const localClosed = await closeForwarding();
+      const removed = await within(runtime.ownerLossTeardownMs ?? OWNER_LOSS_TEARDOWN_MS, () => release());
+      if(!removed || !localClosed){
+        lease.state='uncertain';
+        lease.cleanup={state:'unconfirmed',message:!localClosed?'Local forwarding closure remains unconfirmed; retain this recovery handle'
+          :resourceRemoval?'Resource removed; configuration reference release remains unconfirmed'
+          :receipt?'The owner was lost and removal or its journal did not complete; retain this recovery handle':'Startup outcome remains unknown; retain this recovery handle'};
+        if(!await within(LOCAL_CLOSE_MS, save))throw new Error('Owner-loss journal unavailable');
+      }
+    } catch {
+      lease.state='uncertain';
+      lease.cleanup={state:'unconfirmed',message:'Owner-loss cleanup could not be journaled; the previous recovery record was retained'};
+    } finally { finish(); }
   }
 
   let finish;
@@ -804,24 +1151,33 @@ export async function runAttachedController(directory, runtime = {}) {
         if (command.generation !== undefined && command.generation !== handle.generation) throw gozarError('route_conflict', 'The route was replaced; this handle is stale');
         if (command.type === 'status') { if (command.fresh) await verify(); return reply({ view: lastView(),startupComplete:initialSettled }); }
         if(command.type==='review-consent'){
+          if(!consentObservationCurrent(consentObservation()))throw gozarError('consent_mismatch','The route authority changed; request a current review');
           lease.state='unverified';lease.consentChange={reason:safeRefresh()?'review-requested':'proof-refresh-unsupported',nextAction:safeRefresh()?instructionAction('review-route-consent','Review route consent','Approve the current review before publication can resume.'):null};await save();
           if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
           if(receipt&&!resourceRemoval&&!releasing&&initialSettled&&!failure)await refreshRuntimeFacts();
-          const current=await currentConsent();if(!current)throw gozarError('unsupported','This route has no current consent snapshot');
+          const observed=consentObservation();
+          if(!consentObservationCurrent(observed))throw gozarError('consent_mismatch','The route authority changed; request a current review');
+          const staged=await currentConsent(),current=staged?.review;
+          if(!current)throw gozarError('unsupported','This route has no current consent snapshot');
           const scope={...current.canonicalInput.scope,reviewHandle:handle.id,handleGeneration:handle.generation};
           const {consentReview}=await import('./consent-facts.mjs');
           const review=consentReview({...current.canonicalInput,scope,typedDisclosures:current.canonicalInput.typedDisclosures,facts:current.canonicalInput.facts});
+          if(!commitConsentEvidence(observed,staged))throw gozarError('consent_mismatch','The route authority changed; request a current review');
           const token=randomBytes(32).toString('base64url'),expiresAt=new Date(now()+600000).toISOString();
           const snapshot={...consentSnapshot(review),subject:lease.proofSubject??null,approvalToken:token,expiresAt};
           reviewTokens.set(token,{snapshot,current});return reply({review:snapshot});
         }
         if(command.type==='approve-consent'){
+          if(!consentObservationCurrent(consentObservation()))throw gozarError('consent_mismatch','The route authority changed; request a current review');
           lease.state='unverified';await save();
           if(!safeRefresh())throw gozarError('proof_refresh_unsupported','This initial-only proof cannot safely refresh; stop the withdrawn route');
           const stored=reviewTokens.get(command.approvalToken);reviewTokens.delete(command.approvalToken);
           if(receipt&&!resourceRemoval&&!releasing&&initialSettled&&!failure)await refreshRuntimeFacts();
-          const current=await currentConsent();
+          const observed=consentObservation();
+          if(!consentObservationCurrent(observed))throw gozarError('consent_mismatch','The route authority changed; request a current review');
+          const staged=await currentConsent(),current=staged?.review;
           if(!stored||Date.parse(stored.snapshot.expiresAt)<=now()||stored.snapshot.consentFactsDigest!==command.consentFactsDigest||stored.current.consentFactsDigest!==current?.consentFactsDigest||JSON.stringify(stored.snapshot.subject)!==JSON.stringify(lease.proofSubject??null))throw gozarError('consent_mismatch','The runtime review changed; request a new review');
+          if(!commitConsentEvidence(observed,staged))throw gozarError('consent_mismatch','The route authority changed; request a current review');
           lease.approvedReview=current;delete lease.consentChange;await verify();return reply({view:lastView()});
         }
         if(command.type==='finalize-removal'){
@@ -834,32 +1190,54 @@ export async function runAttachedController(directory, runtime = {}) {
           proofAbort.abort();lease.state='released';lease.cleanup={state:'confirmed'};await save();
           reply({view:lastView()});finish();return;
         }
-        if (command.type === 'close') { await release(); reply({ view: lastView() }); if(lease.cleanup.state==='confirmed')finish();return; }
+        if (command.type === 'close') {
+          // A close that joins a removal already in flight (an automatic retry after the provider process ended) must not return that older
+          // attempt's debt as its own answer: the provider may have recovered since it started. Debt from a joined attempt earns one fresh attempt.
+          const joined = Boolean(releasing);
+          await release();
+          if (joined && lease.cleanup.state === 'unconfirmed' && !ownerLost) await release();
+          // A removal confirmed to the caller means the local forwarding (the gate, the proof session) no longer accepts either: close it before
+          // answering, not after the reply has left. A closure that cannot be confirmed keeps the recovery handle instead of a false confirmation.
+          if (lease.cleanup.state === 'confirmed' && !await closeForwarding()) {
+            lease.state = 'uncertain';
+            lease.cleanup = { state: 'unconfirmed', message: 'Local forwarding closure remains unconfirmed; retain this recovery handle' };
+            await within(LOCAL_CLOSE_MS, save);
+          }
+          reply({ view: lastView() }); if(lease.cleanup.state==='confirmed')finish();return;
+        }
         throw gozarError('invalid_input', 'Unsupported controller command');
       } catch (error) { const normalized = normalizeError(error); reply({ error: { code: normalized.code, message: normalized.message } }); }
     });
   });
   const socketPath = join(directory, 'control.sock');
-  await unlink(socketPath).catch(() => {});
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
-  await chmod(socketPath, 0o600);
-  await atomicWrite(join(directory, 'control.json'), { pid: process.pid, startIdentity: controllerStartIdentity, nonce });
+  try {
+    await unlink(socketPath).catch(() => {});
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
+    await chmod(socketPath, 0o600);
+    await atomicWrite(join(directory, 'control.json'), { pid: process.pid, startIdentity: controllerStartIdentity, nonce });
+  } catch (cause) { controlPublished(false); throw cause; }
+  controlPublished(true);
 
   let monitor;
   const stdin = !session && runtime.lease?.kind === 'stdin' ? runtime.lease.stream : null;
   if (stdin) {
-    const gone = () => release().then(()=>{if(lease.cleanup.state==='confirmed')finish();});
+    const gone = () => void abandonOwnerless();
     stdin.once('end', gone); stdin.once('close', gone); stdin.resume();
   } else {
-    monitor = setInterval(() => { if (!releasing && (session?expired():now() - lastBeat > expiryMs)) {lastBeat=now();release().then(()=>{if(lease.cleanup.state==='confirmed')finish();});} }, Math.max(20, Math.min(1_000, Math.floor(expiryMs / 4))));
+    monitor = setInterval(() => {
+      if (ownerLost) return;
+      if (session) { if (!releasing && expired()) {lastBeat=now();release().then(()=>{if(lease.cleanup.state==='confirmed')finish();});} return; }
+      // An explicit close still in flight owns the removal; one that has hung past the teardown bound no longer does.
+      if (now() - lastBeat > expiryMs && (!releasing || now() - releasingAt > (runtime.ownerLossTeardownMs ?? OWNER_LOSS_TEARDOWN_MS))) void abandonOwnerless();
+    }, Math.max(20, Math.min(1_000, Math.floor(expiryMs / 4))));
   }
   creation.then(() => { if (failure&&lease.cleanup.state==='confirmed') finish(); });
   await finished;
   clearInterval(monitor);
   // Let the reply to the last command leave before the socket goes away.
   await new Promise(resolve => setTimeout(resolve, 50));
-  await gate?.close().catch(() => {});
-  await proofSession?.close().catch(() => {});
+  await closeForwarding();
+  if(ownerLost && localCloseUnconfirmed)await within(LOCAL_CLOSE_MS, save);
   resolver?.close();
   for (const socket of sockets) socket.destroy();
   await new Promise(resolve => server.close(resolve));
@@ -868,24 +1246,9 @@ export async function runAttachedController(directory, runtime = {}) {
 
 // --- Session usage ------------------------------------------------------------------------------
 
-async function legacyStartSession({ home, directory, adapterId, port, lifetimeMs, origin, requirements,owner,operationId,sessionId,embedding,hostChoices,operationalDefinition }) {
-  const root = fileURLToPath(new URL('../../', import.meta.url));
-  const { loadCatalog, loadDefinition } = await import('./catalog.mjs');
-  const { launch } = await import('./daemon.mjs');
-  const catalog = await loadCatalog(root, { operational: true });
-  // The approved adapter carries its own plan, so a registry that is not the shipped catalog runs on the same generic runtime.
-  const definition = operationalDefinition ?? await loadDefinition(root, adapterId);
-  if (definition.id !== adapterId) throw gozarError('artifact_integrity_failed', 'The approved adapter carries another adapter plan');
-  return launch(directory, { adapters: [...catalog.filter(item => item.id !== definition.id), definition],
-    requirements: { clientReach: requirements.reach, httpsRequired: requirements.transport === 'https', sse: requirements.protocols.includes('sse'),
-      streamableHttp: requirements.protocols.includes('streamable-http'), oauthDcr: requirements.protocols.includes('oauth-dcr') },
-    targetPort: port, adapterId, lifetimeMs,owner,operationId:operationId??null,...(hostChoices??{}),...(sessionId?{sessionId}:{}),...(embedding?{embedding}:{}),origin: origin ?? undefined, operational: definition.planVersion === 1, consent: true, approveOrigin: true },
-  join(root, 'bin', 'gozar.mjs'));
-}
-
 /**
- * Session usage over the existing session machinery. The adapter comes from the redeemed grant, never from the
- * request; the legacy controller (startSession) enforces the lifetime.
+ * Session usage. The adapter comes from the redeemed grant, never from the request. Every session, whichever provider, runs the
+ * generic session controller: the provider differs only in how its resource is allocated and removed (session-recipe.mjs).
  */
 export async function openSessionRoute(request, deps = {}) {
   await preflightExpose(request, deps);
@@ -899,99 +1262,11 @@ export async function openSessionRoute(request, deps = {}) {
     const stableHandle=deps.reservedHandle??{kind:'session',id:`port-${port}:${randomUUID()}`,generation:1};
     const redeemed = await withExclusiveLock(join(await attachedRoot(home), '.open.lock'), () => redeemApproval(request, { ...deps, adapters }).catch(error => { throw refusedBeforeStart(error, stableHandle, request); }), { waitSeconds: 30 });
     const directory = join(home, `port-${port}`);
-    if (!deps.startSession && redeemed.adapter.sessionExecution !== 'recipe') {
-      if (stableHandle.kind!=='session'||stableHandle.generation!==1||!new RegExp(`^port-${port}:[A-Za-z0-9_-]+$`).test(stableHandle.id)) throw gozarError('invalid_input','Invalid reserved session handle');
-      const expiresAtMs=Date.now()+request.usage.lifetimeMs;
-      if (!Number.isFinite(expiresAtMs)||request.usage.lifetimeMs<=0) throw gozarError('invalid_input','A session needs a finite positive lifetime');
-      return await openAttachedRoute(request,{...deps,sessionExecution:{redeemed,handle:stableHandle,directory,expiresAtMs}});
-    }
-    // The adapter turns what its owner chose into the exact session-engine inputs, from live observation, before anything starts.
-    const hostChoices = typeof redeemed.adapter.hostChoices === 'function'
-      ? await redeemed.adapter.hostChoices(await readContextFor(deps, home, deps.platform ?? process.platform, request.owner)).catch(error => { throw refusedBeforeStart(error, stableHandle, request); })
-      : undefined;
-    let embedding;
-    if(deps.embeddingServices){
-      const broker=await startEmbeddingBroker({services:deps.embeddingServices,home,identity:await deps.embeddingServices.resolveIdentity({home}),dispatchEffect:deps.dispatchEffect,
-        onLoss:()=>{void import('./daemon.mjs').then(module=>module.control(directory,{type:'resolver-lost'})).catch(()=>{});}});
-      const descriptor=await broker.registerController();brokers.set(stableHandle.id,broker);
-      try{await deps.embeddingServices.registerConfigurationUse({home,owner:request.owner,providerId:redeemed.adapter.id,revision:redeemed.grant.configurationRevision,handle:stableHandle});}
-      catch(error){await dropBroker(stableHandle.id);throw error;}
-      embedding={resolver:descriptor,identity:{instanceId:descriptor.instanceId,bootId:descriptor.bootId},...(deps.registry?{registry:deps.registry}:{}),registryId:deps.registryId,request:{...redeemed.request,home,owner:request.owner,...(request.intent?{intent:request.intent}:{})},consentReview:redeemed.consentReview,handle:stableHandle,fixtureEffects:!!deps.dispatchEffect};
-    }
-    let reply = await (deps.startSession ?? legacyStartSession)({ home, directory, adapterId: redeemed.adapter.id, port, lifetimeMs: request.usage.lifetimeMs,
-      owner:request.owner,operationId:request.operationId,sessionId:stableHandle.id.split(':').slice(1).join(':'),embedding,hostChoices,operationalDefinition:redeemed.adapter.operationalDefinition,
-      origin: request.origin ?? redeemed.plan.origin ?? null, requirements: request.requirements, wait: request.wait });
-    const sessionId = reply.snapshot?.sessionId;
-    const handle = { kind: 'session', id: sessionId ? `port-${port}:${sessionId}` : `port-${port}`, generation: 1 };
-    const project = value => projectSession(value, { handle, properties: redeemed.adapter.definition.capabilities, now: (deps.now ?? Date.now)() });
-    // Like an attached route, a session returns when `wait` is met and fails, cleaned up, when it cannot be.
-    try {
-      const deadline = Date.now() + (deps.startTimeoutMs ?? 120_000);
-      for (;;) {
-        const view = project(reply);
-        if (['lost', 'released', 'uncertain'].includes(view.state)) throw await sessionStartFailure(reply, { home, adapterId: redeemed.adapter.id, deps });
-        if (request.wait === 'verified' ? view.state === 'usable' : view.origin !== null) return view;
-        if (Date.now() >= deadline) throw gozarError(view.state === 'unverified' ? 'verification_failed' : 'provider_unavailable',
-          view.state === 'unverified' ? 'The route did not pass verification in time' : 'The route did not start in time');
-        await new Promise(resolve => setTimeout(resolve, deps.pollMs ?? 250));
-        try { reply = await (deps.sessionStatus ?? (async () => (await import('./daemon.mjs')).control(directory, { type: 'status' }, 30_000)))(); }
-        catch (cause) { throw gozarError('provider_unavailable', 'The session controller stopped before the route was ready', null, cause); }
-      }
-    } catch (error) { throw await failedSessionStart(directory, error, deps); }
+    if (stableHandle.kind!=='session'||stableHandle.generation!==1||!new RegExp(`^port-${port}:[A-Za-z0-9_-]+$`).test(stableHandle.id)) throw gozarError('invalid_input','Invalid reserved session handle');
+    const expiresAtMs=Date.now()+request.usage.lifetimeMs;
+    if (!Number.isFinite(expiresAtMs)||request.usage.lifetimeMs<=0) throw gozarError('invalid_input','A session needs a finite positive lifetime');
+    return await openAttachedRoute(request,{...deps,sessionExecution:{redeemed,handle:stableHandle,directory,expiresAtMs}});
   } catch (error) { throw normalizeError(error); }
-}
-
-/**
- * What the core says, in `snapshot.limitations`, when it stops a session before it changes anything because every port the
- * route may use is taken. The core owns the sentence; the session-ports test reads it from the real core.
- */
-export const LISTENERS_TAKEN = 'All explicit listener candidates are occupied or protected';
-
-const portList = ports => ports.length === 2 ? `${ports[0]} and ${ports[1]}` : ports.join(', ');
-
-/**
- * The error for a session that ended before it was published. When the core stopped it because every candidate port is
- * taken, the app gets the closest frozen code and a next step that names the ports and, when Gozar knows it, the holder:
- *   route_conflict            another Gozar route or session in this home holds a candidate port: name it, say how to stop it
- *   requirements_unsatisfied  only other listeners hold the ports: nothing Gozar owns can be stopped, and a retry changes nothing
- * Anything else is a plain `provider_unavailable`: provider diagnostics stay inside Gozar.
- */
-async function sessionStartFailure(reply, { home, adapterId, deps }) {
-  const generic = () => gozarError('provider_unavailable', 'The route could not be started');
-  if (!(reply.snapshot?.limitations ?? []).includes(LISTENERS_TAKEN)) return generic();
-  let ports = [], holders = [];
-  try {
-    const definition = await (deps.loadDefinition ?? (async id => (await import('./catalog.mjs')).loadDefinition(fileURLToPath(new URL('../../', import.meta.url)), id)))(adapterId);
-    ports = definition.bindings?.port?.candidates ?? [];
-    if (ports.length) holders = await (deps.portHolders ?? (await import('./durable-route.mjs')).portHolders)({ home, providerResource: definition.providerResource ?? null, ports });
-  } catch { /* the ports are an explanation, not a precondition: without them the generic error stands */ }
-  if (!ports.length) return generic();
-  const named = holders.map(({ port, routeId, sessionPort }) => routeId !== undefined ? `port ${port} is held by route ${routeId}` : `port ${port} is held by the session on port ${sessionPort}`);
-  if (named.length) {
-    const first = holders[0];
-    const step = first.routeId !== undefined ? `Release route ${first.routeId} (or stop the app that owns it)` : `Stop the session on port ${first.sessionPort}`;
-    const how = first.routeId !== undefined ? step : `${step} with: ${cliCommand('stop', first.sessionPort, home)}`;
-    return gozarError('route_conflict', `No port is free for this route (${portList(ports)}): ${named.join('; ')}. Existing listeners were left untouched.`,
-      instructionAction('free-route-port', `Free port ${first.port}`, `${how}, then start this route again.`));
-  }
-  return gozarError('requirements_unsatisfied', `No port is free for this route: ${portList(ports)} are all in use by other listeners. They were left untouched.`,
-    instructionAction('free-route-port', `Free one of ports ${portList(ports)}`, `Stop whatever listens on port ${ports[0]} or ${ports[1] ?? ports[0]}, then start this route again.`));
-}
-
-/**
- * A session that did not reach `wait` must not keep running: stop it through the session's own path (which removes the
- * provider state), then prove the controller process is gone. The reported error stays the original one unless cleanup is unconfirmed.
- */
-async function failedSessionStart(directory, error, deps) {
-  let identity = null;
-  try { identity = JSON.parse(await readFile(join(directory, 'control.json'), 'utf8')); } catch {}
-  let stopped = null, stopFailure = null;
-  try { stopped = await (deps.stopSession ?? (async () => (await import('./daemon.mjs')).stopSession(directory)))(); } catch (cause) { stopFailure = cause; }
-  const outcome = identity?.startIdentity ? await stopController({ pid: identity.pid, startIdentity: identity.startIdentity }) : { state: 'gone' };
-  const unconfirmed = stopFailure || stopped?.snapshot?.phase === 'cleanup-pending' || stopped?.localCleanupFailures?.length;
-  const stop = `Run: ${cliCommand('stop', Number(directory.slice(directory.lastIndexOf('-') + 1)), dirname(directory))}`;
-  return withCleanupOutcome(unconfirmed ? gozarError('cleanup_debt', 'The route failed to start and its cleanup is not confirmed; stop the session again',
-    instructionAction('stop-session', 'Stop the failed session', stop), error) : error, outcome);
 }
 
 // --- Detached controller entry ------------------------------------------------------------------

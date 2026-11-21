@@ -8,7 +8,7 @@ node harness/run.mjs --fake-effects
 node harness/run.mjs --inspect
 ```
 
-The suite covers the real WASM, Controller/EffectDriver, local HTTP/TLS, MCP tool calls, timed SSE, controlled child processes and loopback forwarders. Synthetic core completions and receipt validators use fixtures.
+The suite covers the real WASM, SessionAllocation/EffectDriver, local HTTP/TLS, MCP tool calls, timed SSE, controlled child processes and loopback forwarders. Synthetic core completions and receipt validators use fixtures.
 
 ## Echo demo server
 
@@ -30,7 +30,7 @@ The harness uses the same pinned transport for `tools/list`, a `tools/call` that
 
 ## Live route checks
 
-Live commands create a route through the CLI and stop it after the checks. Run one route at a time with the required provider installed and authenticated:
+Live commands create a route through the earlier session CLI (see the known gap below) and stop it after the checks. Run one route at a time with the required provider installed and authenticated:
 
 ```sh
 node harness/drop1a.mjs --route localhost-run --proof-class public-relay --report ./localhost-run-report.json
@@ -40,15 +40,11 @@ node harness/drop1a.mjs --route own-address --independent-ingress --proof-class 
 
 The harness checks publication, the accepted receipt, pinned-path MCP/SSE, status and stop. Cleanup checks the owned resource ledger and process identities, preserves unrelated routes, and checks that an unrelated child survives stop. Every live entry point shares an exclusive lock. Each run takes a fresh full Tailscale baseline under that lock and compares it after cleanup, including failure paths. Funnel uses only unused 8443. Private Serve uses the first unused port from 9444 and 9445; existing configuration is never reset or restored wholesale.
 
-The own-address check creates a disposable ingress independently of Gozar using the trial recipe. Gozar receives only its HTTPS origin. After `expose` returns the explicit external action, the harness acts as the ingress owner: it points the fixture at the exact gate target and calls `health`. For a real owner-managed address, **you must configure your existing reverse proxy to that printed target, then run `gozar health --port N`**. Validation and stop must preserve the independent process, target, known-hosts file and origin. After stop, the fixture owner reconnects its service and verifies another pinned MCP call and stream before removing its own fixture. No account or DNS provisioning occurs.
+The own-address check creates a disposable ingress independently of Gozar using the trial recipe. Gozar receives only its HTTPS origin. After `expose` returns the explicit external action, the harness acts as the ingress owner: it points the fixture at the exact gate target and calls `health`. (An owner-managed address is now registered as a [service route](../docs/service-routes.md); the temporary external-origin session was removed.) Validation and stop must preserve the independent process, target, known-hosts file and origin. After stop, the fixture owner reconnects its service and verifies another pinned MCP call and stream before removing its own fixture. No account or DNS provisioning occurs.
 
-To record the actual first-run terminal journey with the standalone echo demo, run:
+The first-run terminal walk (`cli-walk.mjs`) was removed with the `gozar expose --port N` command it recorded.
 
-```sh
-node harness/cli-walk.mjs --work-directory "$PRIVATE_AUDIT/no-flag-walk"
-```
-
-This invokes exactly `node bin/gozar.mjs expose --port N` in a terminal, answers `internet` and `yes` only when prompted, and records the raw transcript, pinned public proof, status, stop and baseline comparison. It does not select a provider through flags.
+**Known gap (0.5.2):** `harness/run.mjs` and `harness/drop1a.mjs` still drive the removed `expose --port`, `health` and `detect` commands for their live paths, so those live paths cannot run until they are ported to the route-contract commands. Their offline checks (`--fake-effects`, `--inspect`, and the refusal checks in `test/e2e/drop1-modes.test.mjs`) do not call those commands. No live evidence in this repository was produced by the unified session runtime.
 
 ## Genuine private and LAN peers
 

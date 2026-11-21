@@ -163,6 +163,7 @@ test('ngrok reports the optional SDK and assisted agent credential intake with n
   const config = {};
   let credential = 'synthetic-agent-canary';
   const ctx = setupContext(config, {
+    runtimeModules: { '@ngrok/ngrok': { kind: 'runtime-install' } },
     withInputSecret: async use => use(Buffer.from(credential)),
     bindConnectorSecret: async () => { assert.fail('Imported authtoken should bind the existing intake handle'); },
   });

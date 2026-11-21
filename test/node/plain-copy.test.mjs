@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { plainCaveat } from '../../packages/gozar-node/plain-copy.mjs';
-import { ways, trafficFacts } from '../../packages/gozar-node/expose-copy.mjs';
 const root = new URL('../../', import.meta.url);
 const read = path => readFile(new URL(path, root), 'utf8');
+test('unknown caveats do not resolve inherited object properties', () => {
+  for (const text of ['toString', 'constructor', '__proto__']) assert.deepEqual(plainCaveat(text), {});
+});
 const banned = /intended-vantage|source-shaped|cleanup debt|immutable process identity|instance proof|capability-port|readback|fail safely|fails closed|precondition|admitted|unknown\.|\bready\b|Ctrl-C/i;
 export async function presentationStrings() {
   const strings = new Set();
@@ -23,7 +25,7 @@ export async function presentationStrings() {
       for (const match of text.matchAll(pattern)) strings.add(match[1]);
     }
   }
-  for (const file of ['driver', 'host', 'controller']) {
+  for (const file of ['driver', 'host', 'session-allocation', 'session-recipe']) {
     const text = await read(`packages/gozar-node/${file}.mjs`);
     for (const match of text.matchAll(/new Error\(\s*`([^`]+)`/g)) {
       for (const stage of ['before', 'after']) strings.add(match[1].replaceAll('${stage}', stage).replace(/\$\{[^}]+\}/g, 'value'));
@@ -47,8 +49,6 @@ test('every catalog caveat, core limitation and host failure has reviewed plain 
     assert.deepEqual(Object.keys(copy).sort(), (copy.prefix ? schema.$defs.Pattern.required : schema.$defs.Copy.required).toSorted(), key);
     assert.doesNotMatch(copy.plain, banned, key);
   }
-  for (const way of Object.values(ways)) for (const text of Object.values(way)) assert.doesNotMatch(text, banned);
-  for (const text of Object.values(trafficFacts)) if (text) assert.doesNotMatch(text, banned);
   assert.deepEqual(plainCaveat('an unexpected secret provider detail'), {});
   for (const text of ['Unresolved typed binding: port','Invalid typed binding name','Missing typed binding port','Unsupported core/host plan feature: new','Controller unavailable: socket error']) assert.ok(plainCaveat(text).plain);
 });

@@ -520,10 +520,8 @@ test('16. concurrent ensure, adopt and session for one listener or port with dis
   // Sequential: a second route ID for the same listener is refused, not given a second port.
   await w.ensure();
   assert.equal((await w.run('ensure', { ...w.request, usage: { kind: 'durable', routeId: 'second' } })).error?.code, 'reserved');
-  // A session for the same listener is refused before any detection runs.
-  const session = await w.gozar('expose', '--port', String(w.app.address().port), '--yes', '--json');
-  assert.equal(session.code, 1);
-  assert.match(session.json.error, /already holds this listener/);
+  // A session for the same listener is refused before any detection runs: the session runtime's reservation names the holder.
+  await assert.rejects(reserveSession({ home: w.home, port: w.app.address().port, providerResource: 'tailscale-https-port', providerPorts: [8443, 10000] }), { code: 'reserved' });
   await w.run('release', { routeId: 'coordinator' });
   // Concurrent: three valid contenders for one listener. A previous owner's rule on 10000 is
   // adoptable; the two ensures would create on 8443. Exactly one wins; the others are refused
@@ -711,7 +709,8 @@ test('21. gozar status with no arguments lists a durable route next to sessions 
   await writeFile(join(w.home, 'port-3000', 'session.json'), JSON.stringify({ version: 1, owned: {}, intents: {} }));
   const json = await w.gozar('status', '--json');
   assert.equal(json.code, 0, json.stdout);
-  assert.deepEqual(json.json.sessions, [{ port: 3000, phase: 'not-running', origin: null }]);
+  // A session record with no bootstrap was written by an earlier version: history, never a current session.
+  assert.deepEqual(json.json.sessions, [{ port: 3000, earlierVersion: true, state: 'not-running', origin: null, cleanup: 'none' }]);
   assert.deepEqual(json.json.serviceRoutes, []);
   const [route] = json.json.durableRoutes;
   assert.deepEqual({ routeId: route.routeId, adapterId: route.adapterId, origin: route.origin, owner: route.owner, createdAt: route.createdAt, state: route.state },
@@ -723,31 +722,30 @@ test('21. gozar status with no arguments lists a durable route next to sessions 
   assert.equal(one.json.durableRoutes[0].routeId, 'coordinator');
 });
 
-test('21. when last.json names a session, bare status keeps the session output and exit, and adds the inventory', async t => {
+test('21. bare status lists the inventory with exit 0, --port filters the sessions, and an inventory failure is reported inside the inventory', async t => {
   const w = await world(t);
   await w.ensure();
-  await writeFile(join(w.home, 'last.json'), JSON.stringify({ port: 3000 }));
+  await mkdir(join(w.home, 'port-3000'), { mode: 0o700 });
+  await writeFile(join(w.home, 'port-3000', 'session.json'), JSON.stringify({ version: 1, owned: {}, intents: {} }));
   const json = await w.gozar('status', '--json');
-  // The old session reply: no controller, so phase unknown and exit 1, as before.
-  assert.equal(json.code, 1);
-  assert.equal(json.json.snapshot.phase, 'unknown');
-  assert.equal(json.json.inventory.durableRoutes[0].routeId, 'coordinator');
+  assert.equal(json.code, 0, json.stdout);
+  assert.equal(json.json.durableRoutes[0].routeId, 'coordinator');
+  assert.equal(json.json.sessions.length, 1);
   const text = await w.gozar('status');
-  assert.equal(text.code, 1);
+  assert.equal(text.code, 0, text.stdout);
   assert.ok(text.stdout.indexOf('Durable routes:') > 0, text.stdout);
-  // status --port N is unchanged: no inventory.
-  const port = await w.gozar('status', '--port', '3000', '--json');
-  assert.equal(port.json.inventory, undefined);
-  // An inventory failure is reported inside the inventory; the session reply and exit stay as they were.
+  const port = await w.gozar('status', '--port', '3001', '--json');
+  assert.deepEqual(port.json.sessions, []);
+  assert.equal(port.json.durableRoutes[0].routeId, 'coordinator');
+  // An inventory failure is reported inside the inventory, with a failing exit.
   const routes = (await readdir(w.home)).find(name => ['routes', 'durable-routes'].includes(name)) ?? 'services';
   await chmod(join(w.home, routes), 0o770);
   t.after(() => chmod(join(w.home, routes), 0o700));
   const broken = await w.gozar('status', '--json');
-  assert.equal(broken.code, port.code);
-  assert.deepEqual(broken.json.snapshot, port.json.snapshot);
-  assert.match(broken.json.inventory.error, /./);
+  assert.equal(broken.code, 1);
+  assert.match(broken.json.error, /Unsafe service state path/);
   const brokenText = await w.gozar('status');
-  assert.equal(brokenText.code, port.code);
+  assert.equal(brokenText.code, 1);
   assert.match(brokenText.stdout, /Routes: unavailable/);
 });
 

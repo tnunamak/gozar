@@ -29,7 +29,12 @@ const stateAction = () => ({ id: 'fix-state-permissions', kind: 'instructions', 
   disclosure: { revision: 'gozar-local-1', text: 'Gozar changes nothing; you fix the directory yourself.', links: [] } });
 
 export function normalizeError(error) {
-  if (frozen.has(error?.code)) { error.nextAction ??= null; return error; }
+  if (frozen.has(error?.code)) {
+    if (error.nextAction === undefined && !Reflect.set(error, 'nextAction', null)) {
+      return gozarError(error.code, error.message, null, error);
+    }
+    return error;
+  }
   const target = Object.hasOwn(errorTargets, error?.code) ? errorTargets[error.code] : undefined;
   if (!target) return gozarError('internal_error', 'Unexpected Gozar fault', null, error);
   return gozarError(target, error.message, error.code === 'unsafe_state_path' ? stateAction() : error.nextAction ?? null, error);

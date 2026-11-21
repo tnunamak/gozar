@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadCore } from '../packages/gozar-node/core.mjs';
-import { Controller } from '../packages/gozar-node/controller.mjs';
+import { SessionAllocation } from '../packages/gozar-node/session-allocation.mjs';
 import { EffectDriver } from '../packages/gozar-node/driver.mjs';
 import { Journal } from '../packages/gozar-node/journal.mjs';
 
@@ -40,7 +40,7 @@ export async function operationalFixture(t, { targetPort, kind = 'forwarder', ow
   const step = input => { const output = wasm({ ...input, host: { ...host, nowMs: Date.now() } }); transitions.push({ input, output }); return output; };
   const execute = driver.execute.bind(driver);
   driver.execute = async effect => { dispatched.push(effect); const result = await execute(effect); completions.push(result); return result; };
-  const controller = new Controller({ step, driver, journal, adapters: [adapter], requirements: { clientReach: 'this-device' }, targetPort, sessionId, host });
+  const controller = new SessionAllocation({ step, driver, journal, adapters: [adapter], requirements: { clientReach: 'this-device' }, targetPort, sessionId, host });
   t.after(async () => { await controller.shutdown().catch(() => {}); await driver.closeLocal(); await rm(directory, { recursive: true, force: true }); });
   return { directory, files, route, adapter, host, sessionId, journal, driver, controller, step, transitions, dispatched, completions,
     audit: () => readFile(files.audit, 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return ''; }) };

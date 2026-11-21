@@ -191,19 +191,22 @@ test('red: a controller that never starts is stopped when the open times out, so
   assert.equal(await processIdentity(failure.controllerCleanup.pid), null);
 });
 
-test('openSessionRoute redeems the grant, takes the adapter from it, and projects the session machinery reply', async t => {
-  const home = await scratch(t), tokens = tokenStubs(), started = [];
+test('openSessionRoute redeems the grant, takes the adapter from it, and runs the generic session controller', async t => {
+  const home = await attachedScratch(t), controller = await controllerFixture(t), tokens = tokenStubs();
   const q = query({ home, usage: { kind: 'session', lifetimeMs: 60_000 } });
-  const { token } = await tokens.issue({ home, binding: tokens.consentBinding(q, home, 'disc-stub-b'), grant: grantFor('stub-b', q) });
-  const request = { ...q, adapterId: 'ignored-adapter', approval: { candidateToken: token, disclosureRevision: 'disc-stub-b' }, wait: 'allocated' };
-  const startSession = async options => { started.push(options); return { snapshot: { sessionId: 'sess1', phase: 'candidate-ready', candidate: 'https://example.invalid', expiresAtMs: Date.now() + 60_000 } }; };
-  const view = await openSessionRoute(request, { adapters: [stubAdapter('stub-a'), stubAdapter('stub-b')], redeem: tokens.redeem, consentBinding: tokens.consentBinding, platform: 'linux', readContext, startSession });
+  const { token } = await tokens.issue({ home, binding: tokens.consentBinding(q, home, 'disc-stub-a'), grant: grantFor('stub-a', q) });
+  const request = { ...q, adapterId: 'ignored-adapter', approval: { candidateToken: token, disclosureRevision: 'disc-stub-a' }, wait: 'verified' };
+  const deps = depsFor(tokens, controller.module, { adapters: [stubAdapter('stub-b'), stubAdapter('stub-a')] });
+  const view = await openSessionRoute(request, deps);
   assertShape('RouteView', view);
-  assert.equal(started.length, 1);
-  assert.equal(started[0].adapterId, 'stub-b');
-  assert.equal(started[0].port, 8799);
-  assert.deepEqual([view.handle.kind, view.handle.id], ['session', 'port-8799:sess1']);
-  assert.equal(await codeOf(openSessionRoute(request, { adapters: [stubAdapter('stub-b')], redeem: tokens.redeem, consentBinding: tokens.consentBinding, platform: 'linux', readContext, startSession })), 'consent_unknown');
+  assert.deepEqual(await controller.read(), ['created'], 'the adapter named by the grant, not the request, created the route');
+  assert.equal(view.handle.kind, 'session');
+  assert.match(view.handle.id, /^port-8799:[A-Za-z0-9_-]+$/);
+  assert.equal(view.state, 'usable');
+  assert.equal(await codeOf(openSessionRoute(request, depsFor(tokens, controller.module))), 'consent_unknown', 'the spent token cannot be replayed');
+  const closed = await closeAttachedRoute({ home, handle: view.handle, mode: 'remove' });
+  assert.equal(closed.state, 'released');
+  assert.deepEqual(await controller.read(), ['created', 'removed']);
 });
 
 test('URL targets ending in a port remain accepted for session and attached usage', async t => {
@@ -212,17 +215,10 @@ test('URL targets ending in a port remain accepted for session and attached usag
     const tokens = tokenStubs();
     const q = query({ home, target: 'http://127.0.0.1:8799', usage: kind === 'session' ? { kind, lifetimeMs: 60_000 } : { kind } });
     const { token } = await tokens.issue({ home, binding: tokens.consentBinding(q, home, 'disc-stub-a'), grant: grantFor('stub-a', q) });
-    const request = { ...q, approval: { candidateToken: token, disclosureRevision: 'disc-stub-a' }, wait: 'allocated' };
-    if (kind === 'session') {
-      const view = await openSessionRoute(request, { ...depsFor(tokens, controller.module), startSession: async ({ port }) => {
-        assert.equal(port, 8799);
-        return { snapshot: { sessionId: 'url', phase: 'candidate-ready', candidate: 'https://example.invalid' } };
-      } });
-      assert.equal(view.origin, 'https://example.invalid');
-    } else {
-      const view = await openAttachedRoute(request, depsFor(tokens, controller.module));
-      assert.equal(view.handle.kind, 'attached');
-      await closeAttachedRoute({ home, handle: view.handle, mode: 'remove' });
-    }
+    const request = { ...q, approval: { candidateToken: token, disclosureRevision: 'disc-stub-a' }, wait: 'verified' };
+    const view = await (kind === 'session' ? openSessionRoute : openAttachedRoute)(request, depsFor(tokens, controller.module));
+    assert.equal(view.handle.kind, kind);
+    if (kind === 'session') assert.match(view.handle.id, /^port-8799:/);
+    await closeAttachedRoute({ home, handle: view.handle, mode: 'remove' });
   }
 });

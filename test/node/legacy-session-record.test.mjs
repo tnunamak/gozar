@@ -1,0 +1,129 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { fixture } from './helpers.mjs';
+import { loadCore } from '../../packages/gozar-node/core.mjs';
+import { recoveryAdapters } from '../../packages/gozar-node/session-recipe.mjs';
+import { closeLegacySession, legacyControllerAlive, readLegacySession } from '../../packages/gozar-node/legacy-session-record.mjs';
+import { atomicWrite, processIdentity } from '../../packages/gozar-node/journal.mjs';
+import { EffectDriver } from '../../packages/gozar-node/driver.mjs';
+
+async function oldController(t, stopRequested = true) {
+  const { directory, journal } = await fixture(t, {});
+  const step = await loadCore();
+  const initial = step({ command: { type: 'status', sessionId: 'old-session' } });
+  await journal.save({ state: { ...initial.state, stopRequested, phase: 'cleanup-pending' }, snapshot: { ...initial.snapshot, phase: 'cleanup-pending' } });
+  const child = spawn(process.execPath, [fileURLToPath(new URL('./fixtures/old-controller.mjs', import.meta.url)), directory], { stdio: ['ignore', 'pipe', 'pipe'] });
+  await once(child.stdout, 'data');
+  t.after(async () => { if (await processIdentity(child.pid)) { const exit = once(child, 'exit'); child.kill('SIGTERM'); await exit; } });
+  return { directory, journal, child };
+}
+
+// Sessions an earlier version started leave a journal and a controller record. This version never runs that controller's
+// protocol: a live one is a named debt for its owner, a dead or replaced one is recovered from the journal alone.
+
+test('a live earlier controller is never asked, handed over or signalled: close is cleanup debt and its record is untouched', async t => {
+  const { directory, journal, child } = await oldController(t);
+  assert.equal((await legacyControllerAlive(directory)).alive, true);
+  await assert.rejects(closeLegacySession(directory, null), { code: 'cleanup_debt' });
+  assert.ok(await processIdentity(child.pid), 'the earlier controller still runs');
+  await assert.rejects(readFile(join(directory, 'handed-over')), { code: 'ENOENT' });
+  await journal.load();
+  assert.equal(journal.value.snapshot.phase, 'cleanup-pending', 'the recorded phase is not rewritten');
+});
+
+test('a controller that has not durably fenced stop is preserved the same way', async t => {
+  const { directory, child } = await oldController(t, false);
+  await assert.rejects(closeLegacySession(directory, null), { code: 'cleanup_debt' });
+  assert.ok(await processIdentity(child.pid));
+  await assert.rejects(readFile(join(directory, 'handed-over')), { code: 'ENOENT' });
+});
+
+test('a replaced controller birth identity is never signalled; the journal alone is recovered', async t => {
+  const { directory, journal, child } = await oldController(t);
+  await atomicWrite(join(directory, 'control.json'), { pid: child.pid, startIdentity: 'replaced', nonce: 'old-controller-nonce' });
+  assert.equal((await legacyControllerAlive(directory)).alive, false);
+  const result = await closeLegacySession(directory, null);
+  assert.equal(result.snapshot.phase, 'stopped');
+  assert.ok(await processIdentity(child.pid), 'the process under the replaced identity is not ours to stop');
+  await assert.rejects(readFile(join(directory, 'handed-over')), { code: 'ENOENT' });
+  await journal.load(); assert.deepEqual(journal.value.owned, {});
+});
+
+test('a missing journal is cleanup debt, never confirmed absence', async t => {
+  const { directory } = await fixture(t, {});
+  await assert.rejects(closeLegacySession(directory, null), { code: 'cleanup_debt' });
+});
+
+// The two historical files must agree on the incarnation they describe; a partial update that left them disagreeing is debt, not a projected record.
+async function recordedFiles(t, { bootstrapId, journalId, owned = {} }) {
+  const { directory, journal } = await fixture(t, {});
+  const step = await loadCore();
+  const initial = step({ command: { type: 'status', sessionId: journalId } });
+  await journal.save({ state: initial.state, snapshot: { ...initial.snapshot, sessionId: journalId, phase: 'cleanup-pending' }, owned });
+  await atomicWrite(join(directory, 'bootstrap.json'), { targetPort: 8123, adapterId: 'fake', sessionId: bootstrapId });
+  return { directory, journal };
+}
+
+test('reader: files that name the same session are returned, and a handle for that session is accepted', async t => {
+  const { directory } = await recordedFiles(t, { bootstrapId: 'same-session', journalId: 'same-session' });
+  const read = await readLegacySession(directory, 'same-session');
+  assert.equal(read.bootstrap.sessionId, 'same-session');
+  assert.equal(read.journal.snapshot.sessionId, 'same-session');
+});
+
+test('reader: files that name different sessions are debt for every handle, project nothing, and are left untouched', async t => {
+  const { directory } = await recordedFiles(t, { bootstrapId: 'session-a', journalId: 'session-b' });
+  const before = [await readFile(join(directory, 'bootstrap.json'), 'utf8'), await readFile(join(directory, 'session.json'), 'utf8')];
+  for (const handleSession of ['session-a', 'session-b', null]) {
+    await assert.rejects(readLegacySession(directory, handleSession), { code: 'cleanup_debt' }, `handle ${handleSession}`);
+    await assert.rejects(closeLegacySession(directory, handleSession), { code: 'cleanup_debt' }, `close ${handleSession}`);
+  }
+  assert.deepEqual([await readFile(join(directory, 'bootstrap.json'), 'utf8'), await readFile(join(directory, 'session.json'), 'utf8')], before);
+});
+
+test('reader: one record that names a session still binds the handle, and the other absent is not a disagreement', async t => {
+  const { directory } = await recordedFiles(t, { bootstrapId: undefined, journalId: 'only-journal' });
+  assert.equal((await readLegacySession(directory, 'only-journal')).journal.snapshot.sessionId, 'only-journal');
+  await assert.rejects(readLegacySession(directory, 'another'), { code: 'route_conflict' });
+});
+
+test('a stale handle for a replaced session is route_conflict, not a close', async t => {
+  const { directory } = await oldController(t);
+  await assert.rejects(closeLegacySession(directory, 'a-different-session'), { code: 'route_conflict' });
+});
+
+test('legacy cleanup metadata requires an exact installed recipe and binding match', () => {
+  const saved = { id: 'fixture', planVersion: 1, ownership: 'owned', admission: { state: 'admitted', requiredFeatures: [] }, bindings: {}, recipes: { create: { kind: 'spawn' }, remove: { kind: 'owned-process' } } };
+  const installed = { ...structuredClone(saved), endpointLifetime: 'owned-process' };
+  assert.equal(recoveryAdapters([saved], [installed])[0].endpointLifetime, 'owned-process');
+  for (const edit of [value => { value.recipes.create.program = 'changed'; }, value => { value.bindings.changed = {}; }, value => { value.admission.state = 'blocked'; }]) {
+    const changed = structuredClone(installed); edit(changed);
+    assert.equal(recoveryAdapters([saved], [changed])[0].endpointLifetime, undefined);
+  }
+});
+
+test('a declared process-lifetime endpoint needs genuine birth absence and exact ledger agreement', async t => {
+  const { journal } = await fixture(t, {});
+  const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
+  await once(child, 'spawn');
+  const startIdentity = await processIdentity(child.pid);
+  const exit = once(child, 'exit'); child.kill('SIGTERM'); await exit;
+  const resource = { id: 'owned-child', kind: 'process', sessionId: 'test', adapterId: 'fixture', pid: child.pid, startIdentity,
+    nonce: 'fixture-nonce', continuityRef: 'fixture-continuity', bindings: {}, details: {} };
+  const adapter = { id: 'fixture', ownership: 'owned', planVersion: 1, endpointLifetime: 'owned-process', admission: { state: 'admitted', requiredFeatures: [] },
+    recipes: { create: { kind: 'spawn', process: { mode: 'owned-long-running' } }, remove: { kind: 'owned-process', before: [], after: [], requires: [] } } };
+  await journal.save({ state: { resources: [{ id: resource.id, ledger: { handleRef: resource.id, continuityRef: resource.continuityRef, bindings: {}, details: {} } }] } });
+  const driver = new EffectDriver({ journal, adapters: [adapter], sessionId: 'test' });
+  const receipt = await driver.proveProcessAbsent(resource);
+  assert.equal(receipt.processGone, true); assert.equal(receipt.providerAbsent, true);
+  assert.equal(receipt.continuous, undefined);
+  await assert.rejects(driver.proveProcessAbsent({ ...resource, details: { changed: true } }), /durable ownership ledger/);
+  await assert.rejects(driver.proveProcessAbsent({ ...resource, pid: process.pid, startIdentity: await processIdentity(process.pid) }), /still running/);
+  delete driver.adapters[0].endpointLifetime;
+  await assert.rejects(driver.proveProcessAbsent(resource), /No admitted identity and absence readbacks/);
+});

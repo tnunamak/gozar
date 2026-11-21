@@ -32,15 +32,15 @@ async function world(t,{interfaces=inventory(row(SYNTHETIC))}={}){
  ]});
  t.after(()=>harness.close());
  const api=harness.gozar,target='127.0.0.1:'+app.address().port;
- const q=()=>query({home,owner,target,providerId:'lan',usage:{kind:'session',lifetimeMs:60000},requirements:{reach:'lan',transport:'any',payloadAccess:'allow-provider',address:'any',setup:'allow',protocols:[]}});
- const provider=async()=>(await api.listProviders({home,owner})).providers.find(p=>p.providerId==='lan');
+ const q=(protocols=[])=>query({home,owner,target,providerId:'lan',usage:{kind:'session',lifetimeMs:60000},requirements:{reach:'lan',transport:'any',payloadAccess:'allow-provider',address:'any',setup:'allow',protocols}});
+ const provider=async()=>(await api.listProviders({home,owner,refresh:true})).providers.find(p=>p.providerId==='lan');
  const provide=async(inputId,value)=>{
   const config=(await provider()).configuration,action=config.actions.find(a=>a.id===inputId&&a.kind==='provide-value');assert.ok(action,'the adapter offers a provide-value action for '+inputId);
   return api.runSetupAction({home,owner,providerId:'lan',expectedConfigurationRevision:config.revision,actionId:action.id,value,
    approval:{kind:'setup',digest:action.digest,disclosureRevision:action.disclosure.revision,consentFactsDigest:action.consent.consentFactsDigest}});
  };
- const candidate=async()=>(await api.catalogRoutes(q())).candidates[0];
- const expose=async c=>api.expose({...q(),operationId:randomUUID(),wait:'verified',approval:{kind:'route',candidateToken:c.candidateToken,disclosureRevision:c.disclosure.revision,consentFactsDigest:c.consentFactsDigest}});
+ const candidate=async(protocols=[])=>(await api.catalogRoutes(q(protocols))).candidates[0];
+ const expose=async(c,protocols=[])=>api.expose({...q(protocols),operationId:randomUUID(),wait:'verified',approval:{kind:'route',candidateToken:c.candidateToken,disclosureRevision:c.disclosure.revision,consentFactsDigest:c.consentFactsDigest}});
  return {api,home,owner,ledger,opens,fetched,provider,provide,candidate,expose,q,forward,observe:value=>{current=value;}};
 }
 
@@ -87,6 +87,16 @@ test('a chosen interface and exact firewall confirmation reach the real owned tr
  assert.equal(closed.cleanup.state,'confirmed');
  assert.equal([...w.ledger.values()].find(item=>item!==foreign).present,false);
  assert.equal(foreign.present,true,'cleanup addresses the exact owned fixture handle');
+});
+
+test('a session is timed for SSE only when it asked for SSE: a transport that buffers frames is then refused and withdrawn',async t=>{
+ const w=await world(t);
+ await w.provide('interface',SYNTHETIC);await w.provide('firewall',SYNTHETIC);
+ const asked=await w.candidate(['sse']);assert.ok(asked.candidateToken,'the LAN provider offers SSE, so the request is executable');
+ const error=await w.expose(asked,['sse']).then(()=>null,e=>e);
+ assert.equal(error?.code,'verification_failed',error?.message);
+ assert.equal(error.route?.cleanup?.state,'confirmed','the refused route was removed');
+ assert.equal([...w.ledger.values()].every(item=>item.present===false),true,'nothing the refused session opened is left');
 });
 
 test('a changed choice after approval refuses with the old token and creates nothing',async t=>{

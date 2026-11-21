@@ -4,12 +4,12 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { fileURLToPath } from 'node:url';
-import { launch } from '../../packages/gozar-node/daemon.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { openAttachedRoute } from '../../packages/gozar-node/attached-route.mjs';
+import { attachedScratch, query, stubAdapter, tokenStubs } from './route-schema-check.mjs';
 import { processIdentity } from '../../packages/gozar-node/process-identity.mjs';
 import { recordController, stopController, withCleanupOutcome } from '../../packages/gozar-node/controller-start.mjs';
 
-const fakeController = fileURLToPath(new URL('./fixtures/fake-controller.mjs', import.meta.url));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function scratch(t) {
@@ -33,49 +33,67 @@ async function groupExists(pid) {
   return groupNow(pid);
 }
 
-async function failedLaunch(t, mode, options = {}) {
-  const directory = join(await scratch(t), 'port-18765');
-  await mkdir(directory, { recursive: true });
-  await writeFile(join(directory, 'mode'), mode);
-  const error = await launch(directory, { adapters: [], targetPort: 18765, probeWaitMs: 1 }, fakeController, { startupTimeoutMs: 600, graceMs: 2000, ...options })
-    .then(() => assert.fail('launch should have failed'), failure => failure);
+const helperUrl = pathToFileURL(fileURLToPath(new URL('./route-schema-check.mjs', import.meta.url))).href;
+const readContext = { now: () => Date.now(), configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified' }) };
+
+// The real start path: `openAttachedRoute` spawns the detached generic controller from `controllerModule`. A controller
+// module that never settles stands in for a controller that never acknowledges; one that throws stands in for a failed start.
+async function failedStart(t, moduleSource, deps = {}) {
+  const home = await attachedScratch(t), dir = await scratch(t), module = join(dir, 'controller.mjs'), tokens = tokenStubs();
+  await writeFile(module, moduleSource);
+  const q = query({ home, usage: { kind: 'attached' } });
+  const { token } = await tokens.issue({ home, binding: tokens.consentBinding(q, home, 'disc-stub-a'), grant: { adapterId: 'stub-a', planDigest: `plan-stub-a-${q.target}`, observedResource: 'res-stub-a' } });
+  const request = { ...q, approval: { candidateToken: token, disclosureRevision: 'disc-stub-a' }, wait: 'verified' };
+  const error = await openAttachedRoute(request, { adapters: [stubAdapter('stub-a')], redeem: tokens.redeem, consentBinding: tokens.consentBinding, platform: 'linux', readContext,
+    controllerModule: module, leaseExpiryMs: 1500, heartbeatMs: 200, startTimeoutMs: 1500, ...deps }).then(() => assert.fail('the start should have failed'), failure => failure);
   const pid = error.controllerCleanup?.pid ?? error.cause?.controllerCleanup?.pid;
-  assert.ok(pid, 'the launch error names the controller it cleaned up');
+  assert.ok(pid, 'the start error names the controller it cleaned up');
   t.after(() => { try { process.kill(-pid, 'SIGKILL'); } catch {} });
-  return { error, pid, directory };
+  return { error, pid };
 }
+const HANGING = 'export default () => new Promise(() => { setInterval(() => {}, 1000); });\n';
 
 test('a controller that never acknowledges is stopped, with its process group, when startup times out', async t => {
-  const { error, pid } = await failedLaunch(t, 'silent');
-  assert.match(error.message, /startup still pending/);
-  assert.equal(error.controllerCleanup.state, 'stopped');
+  const { error, pid } = await failedStart(t, HANGING);
+  assert.equal(error.code, 'provider_unavailable');
+  assert.match(error.message, /did not start in time/);
+  assert.ok(['stopped', 'killed'].includes(error.controllerCleanup.state), error.controllerCleanup.state);
   assert.equal(await groupExists(pid), false, 'the controller process group is still running');
   assert.equal(await processIdentity(pid), null);
 });
 
 test('a controller that ignores SIGTERM is killed after the grace period', async t => {
-  const { error, pid } = await failedLaunch(t, 'stubborn', { graceMs: 300 });
-  assert.equal(error.controllerCleanup.state, 'killed');
-  assert.equal(await groupExists(pid), false);
+  // The grace period is stopController's own parameter; the controller start path uses its default, so this is asserted on the function.
+  // The child says so once its SIGTERM handler is installed; a fixed sleep raced the interpreter's start-up under load.
+  const child = spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{});process.stdout.write('ready');setInterval(()=>{},1000)"], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  t.after(async () => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} await exited; });
+  await new Promise((resolve, reject) => { child.stdout.once('data', resolve); child.once('error', reject); });
+  const record = await recordController(child);
+  const outcome = await stopController(record, { graceMs: 300, killWaitMs: 5000 });
+  assert.equal(outcome.state, 'killed');
+  assert.equal(await groupExists(child.pid), false);
 });
 
-test('a controller that reports a failure and exits: the original error is reported and nothing is left', async t => {
-  const { error, pid } = await failedLaunch(t, 'failure', { startupTimeoutMs: 5000 });
-  assert.equal(error.message, 'fake controller failed to start');
+test('a controller whose module throws at startup: the original error is reported and nothing is left', async t => {
+  const { error, pid } = await failedStart(t, "export default async function () { throw Object.assign(new Error('fake controller failed to start'), { code: 'provider_unavailable' }); }\n", { startTimeoutMs: 15_000 });
+  assert.match(error.message, /fake controller failed to start/);
   assert.equal(await groupExists(pid), false);
 });
 
 test('an identity that cannot be read after spawn still stops the controller', async t => {
   const failing = async () => { throw new Error('Cannot read process identity: ps failed (timed out)'); };
-  const { error, pid } = await failedLaunch(t, 'silent', { identity: failing });
-  assert.match(error.message, /Cannot read process identity/);
+  const { error, pid } = await failedStart(t, HANGING, { identityRecorder: failing });
+  // The public surface sanitizes an unknown fault to internal_error; the original stays as the cause.
+  assert.equal(error.code, 'internal_error');
+  assert.match(error.cause?.message ?? '', /Cannot read process identity/);
   assert.equal(await groupExists(pid), false, 'an unreadable identity was taken for a dead controller');
 });
 
 test('a live controller with a null identity is not mistaken for an exited one (the macOS failure)', async t => {
   // The start fails before any acknowledgement because the identity of a LIVE child reads as null.
-  const { error, pid } = await failedLaunch(t, 'silent', { identity: async () => null });
-  assert.match(error.message, /startup still pending/, 'a null identity must not read as "controller exited"');
+  const { error, pid } = await failedStart(t, HANGING, { identityRecorder: async () => null });
+  assert.match(error.message, /did not start in time/, 'a null identity must not read as "controller exited"');
   assert.equal(await groupExists(pid), false);
 });
 

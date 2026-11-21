@@ -3,59 +3,31 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { parseArgs } from '../../bin/gozar.mjs';
 import { createGate } from '../../packages/gozar-node/gate.mjs';
-import { serve, launch, control } from '../../packages/gozar-node/daemon.mjs';
-import { atomicWrite } from '../../packages/gozar-node/journal.mjs';
+import { readFile } from 'node:fs/promises';
+import { openSessionRoute } from '../../packages/gozar-node/attached-route.mjs';
 import { fixture, effect, persist } from './helpers.mjs';
+import { codeOf, query, scratch } from './route-schema-check.mjs';
+import { providerWorld } from './session-provider-fixtures.mjs';
 
-test('daemon gate remains open beyond the default lifetime until the host deadline', async t => {
-  const { directory } = await fixture(t, {});
-  const adapter = { id: 'external-fixture', planVersion: 1, audience: 'public', ownership: 'external-owned', capabilities: { https: null },
-    admission: { state: 'admitted', requiredFeatures: ['typed-bindings', 'probe-assertions', 'client-vantage-probe'] },
-    bindings: { externalOrigin: { type: 'credential-free-https-origin' } }, endpointTemplate: '{externalOrigin}', recipes: {}, setup: { requiresProxyTarget: true } };
-  await atomicWrite(join(directory, 'bootstrap.json'), { adapters: [adapter], requirements: { clientReach: 'internet', httpsRequired: true }, targetPort: 18765,
-    adapterId: adapter.id, origin: 'https://owner.fixture.invalid', consent: true, lifetimeMs: 1_800_000 });
-  const originalSetTimeout = globalThis.setTimeout;
-  const timers = [];
-  globalThis.setTimeout = (callback, delay, ...args) => {
-    if (delay === 900_000 || delay === 1_800_000) {
-      const timer = { callback: () => callback(...args), delay, unref() {} };
-      timers.push(timer); return timer;
-    }
-    return originalSetTimeout(callback, delay, ...args);
-  };
-  t.after(() => { globalThis.setTimeout = originalSetTimeout; });
-  const running = await serve(directory);
-  t.after(() => running.terminate());
-  const advance = ms => { for (const timer of timers.filter(timer => timer.delay <= ms)) timer.callback(); };
-  advance(900_001);
-  const identity = await fetch(`${running.gate.target}${running.gate.challenge().identityPath}`);
-  assert.equal(identity.status, 200);
-  assert.equal(timers[0].delay, 1_800_000);
-  const status = await control(directory, { type: 'status' });
-  assert.equal(status.lifetimeMs, 1_800_000);
-  assert.equal(running.controller.driver.lifetimeMs, 1_800_000);
-  assert.ok(Number.isInteger(status.expiresAtMs));
-  running.gate.rotate();
-  assert.equal((await control(directory, { type: 'status' })).expiresAtMs, status.expiresAtMs);
-  assert.equal(running.gate.expiresAtMs, status.expiresAtMs);
-  advance(1_800_000);
-  const expired = await fetch(`${running.gate.target}${running.gate.challenge().identityPath}`).then(response => response.status, () => 'closed');
-  assert.ok(expired === 503 || expired === 'closed');
+test('a session keeps its host deadline beyond the 15-minute default, and its proof gate does not close before it', async t => {
+  const lifetimeMs = 1_800_000, before = Date.now();
+  const w = await providerWorld(t, 'localhost-run', { lifetimeMs });
+  const route = await w.expose(await w.approvedRequest());
+  const bootstrap = JSON.parse(await readFile(join(w.home, `port-${w.target.split(':')[1]}`, 'bootstrap.json'), 'utf8'));
+  assert.ok(bootstrap.expiresAtMs >= before + lifetimeMs && bootstrap.expiresAtMs <= Date.now() + lifetimeMs, 'the controller holds the host deadline, not the 15-minute default');
+  assert.equal(route.verification.status, 'verified');
+  assert.equal((await w.host.close(w.api, route.handle)).cleanup.state, 'confirmed');
 });
 
-
-test('lifetime boundaries are enforced by CLI, launch, daemon, and gate', async t => {
-  const { directory } = await fixture(t, {});
+test('lifetime boundaries are enforced by the session request, the CLI parser and the gate', async t => {
+  const home = await scratch(t);
   for (const value of [0, -1, 1.5, 2_147_483_648, '12', null]) {
     await assert.rejects(createGate(1, { lifetimeMs: value }), /lifetimeMs/);
-    await assert.rejects(launch(directory, { lifetimeMs: value }), /lifetimeMs/);
-    await atomicWrite(join(directory, 'bootstrap.json'), { lifetimeMs: value });
-    await assert.rejects(serve(directory), /lifetimeMs/);
+    // A refused lifetime reaches no provider effect and starts no controller.
+    assert.equal(await codeOf(openSessionRoute(query({ home, usage: { kind: 'session', lifetimeMs: value } }), { adapters: [], platform: 'linux' })), 'invalid_input', String(value));
   }
-  for (const value of ['0', '-1', '1.5', '2147483648', 'abc']) assert.throws(() => parseArgs(['expose', '--lifetime-ms', value]), /lifetime/);
-  assert.throws(() => parseArgs(['status', '--lifetime-ms', '1']), /lifetime/);
+  for (const value of ['0', '-1', '1.5', '2147483648', 'abc']) assert.throws(() => parseArgs(['expose', '--lifetime-ms', value]), /was removed|Unknown option/);
   for (const value of [1, 2_147_483_647]) {
-    assert.equal(parseArgs(['expose', '--lifetime-ms', String(value)]).lifetimeMs, value);
     const gate = await createGate(1, { lifetimeMs: value });
     assert.equal(gate.lifetimeMs, value);
     await gate.close();

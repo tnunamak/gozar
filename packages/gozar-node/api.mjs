@@ -1,13 +1,15 @@
-import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { validateLifetimeMs } from './gate.mjs';
+import { canonicalHome } from './service-state.mjs';
+import { defaultHome } from './default-home.mjs';
+import { gozarError } from './error-normalizer.mjs';
 
 import { createRouteApi } from './route-api.mjs';
 
 // The route API: by requirement, never by provider. See route-contract.d.ts.
 const routes = createRouteApi();
 /** Load a trusted provider registry. Modules execute with the host process authority. */
-export function createGozar({ manifest, root, secretBackend, hostCapabilities, identity } = {}) { return createRouteApi({ manifest, root, secretBackend, hostCapabilities, identity }); }
+export function createGozar({ manifest, root, secretBackend, hostCapabilities, identity, acknowledgeOrigin, originAckTimeoutMs, runtimeModules, detectionTtlMs, registryLineage } = {}) {
+  return createRouteApi({ manifest, root, secretBackend, hostCapabilities, identity, acknowledgeOrigin, originAckTimeoutMs, runtimeModules, detectionTtlMs, registryLineage });
+}
 export const { catalogRoutes, inspectLegacyRoute, ensureRoute, adoptRoute, routeStatus, closeRoute, suspendRoute, watchRoutes,
   getRoutePreferences, setRoutePreferences, runSetupAction, readSetupOperation, cancelSetupOperation, resolveClientAddress, listProviders, storeSecret, discardSecret,
   beginConfigurationDraft,commitConfigurationDraft,discardConfigurationDraft,readConfigurationDraft,clearConfigurationInput,reviewRouteConsent,approveRouteConsent,listRoutes } = routes;
@@ -17,44 +19,24 @@ export const detect = catalogRoutes;
 // Kept service and hand-back exports (also at @tnunamak/gozar/service).
 export { addService, statusServices, removeService, createServiceVerifier, releaseRoute, confirmHandBack, cancelHandBack } from './service.mjs';
 
-const cli = fileURLToPath(new URL('../../bin/gozar.mjs', import.meta.url));
-const fields = {
-  port: '--port', clientReach: '--client-reach', adapterId: '--adapter', origin: '--origin',
-  lifetimeMs: '--lifetime-ms', bindAddress: '--bind-address', firewallAck: '--firewall-ack',
-  transport: '--transport', clientProfileId: '--client-profile', probeWaitMs: '--probe-wait-ms',
-  probeDirectory: '--probe-directory', probeRequest: '--probe-request', probeReceipt: '--probe-receipt',
-  probeExecutorId: '--probe-executor-id', installLinkTemplate: '--install-link-template',
-};
-const flags = { yes: '--yes', sse: '--sse', streamableHttp: '--streamable-http', oauthDcr: '--oauth-dcr', operational: '--operational' };
-
-function invoke(command, options = {}) {
-  const args = [cli, command, '--json'];
-  for (const [key, value] of Object.entries(options)) {
-    if (key === 'home') continue;
-    if (fields[key] && value !== undefined) args.push(fields[key], String(value));
-    else if (flags[key] && typeof value === 'boolean') { if (value) args.push(flags[key]); }
-    else throw new Error(`Unknown or invalid Gozar option: ${key}`);
-  }
-  return new Promise((resolve, reject) => {
-    execFile(process.execPath, args, {
-      env: { ...process.env, ...(options.home === undefined ? {} : { GOZAR_HOME: options.home }) },
-      timeout: 750_000, maxBuffer: 4 * 1024 * 1024,
-    }, (error, stdout, stderr) => {
-      let reply;
-      try { reply = JSON.parse(stdout.trim()); }
-      catch { reject(new Error(`Invalid Gozar JSON response: ${stderr || error?.message || stdout}`)); return; }
-      if (error) {
-        reject(Object.assign(new Error(reply.error ?? `Gozar ${command} failed (${reply.snapshot?.phase ?? error.message})`), { reply, code: error.code }));
-      } else resolve(reply);
-    });
-  });
-}
-
-/** schemaVersion 1 is the route API (attached or session usage); a call without it is the legacy session call. */
+/**
+ * `expose` is the route request (schemaVersion 1). The earlier port-and-flags call started the earlier session controller, which no
+ * longer exists: every provider's session now runs through the route API, where approval is a consent token for the exact route.
+ */
 export function expose(options) {
   if (options?.schemaVersion === 1) return routes.expose(options);
-  if (options?.lifetimeMs !== undefined) validateLifetimeMs(options.lifetimeMs);
-  return invoke('expose', options);
+  return Promise.reject(gozarError('invalid_input', 'expose takes a route request with schemaVersion: 1 (catalogRoutes, then expose with the candidate approval). The earlier port-and-flags call was removed in 0.5.2.'));
 }
-export function status(options) { return invoke('status', options); }
-export function stop(options) { return invoke('stop', options); }
+/** Sessions recorded in one Gozar home, by port. A read only: a recorded earlier-version session is history, never a current route. */
+export async function status(options = {}) {
+  const { sessionInventory } = await import('./session-directory.mjs');
+  const home = await canonicalHome(options.home ?? defaultHome(), false);
+  const sessions = await sessionInventory(home);
+  return { schemaVersion: 1, sessions: options.port === undefined ? sessions : sessions.filter(item => item.port === options.port) };
+}
+/** Closes the one session recorded for `port`, through the runtime that owns its record. */
+export async function stop(options = {}) {
+  if (!Number.isInteger(options.port)) return Promise.reject(gozarError('invalid_input', 'stop needs the session port'));
+  const { stopSessionByPort } = await import('./session-directory.mjs');
+  return { schemaVersion: 1, session: await stopSessionByPort(options.home ?? defaultHome(), options.port) };
+}

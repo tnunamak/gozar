@@ -61,10 +61,56 @@ async function boundProof(record,checked){
   const identity=await runtime.embeddingServices.resolveIdentity({home:runtime.home});
   return {...checked,observedAt:checked.checkedAt??null,subject:{origin:record.origin??record.intent.origin,target:record.target,...identity,handleGeneration:record.generation}};
 }
-const verifyRecord=async record=>{
- const started=Date.now(),checked=await runVerifier({origin:record.origin??record.intent.origin,target:record.target,verifyCmd:null}),observed=Date.parse(checked.checkedAt);
- if(!Number.isFinite(observed)||observed<started||observed>Date.now()||Date.now()>started+5000)return {...checked,status:'unverified',observedAt:null,subject:null};
- return boundProof(record,{...checked,validUntil:new Date(observed+15000).toISOString()});
+const unprovenResult=()=>({status:'unverified',checkedAt:null,observedAt:null,subject:null,checks:[]});
+// Every durable proof (publish, reconcile, adopt, renewal) passes the awaited exact-origin host boundary
+// first: with a declared acknowledgment handler no challenge runs until the host bound THIS origin.
+// `fence` is the unlocked status path's way to prove only while the route is still live (current generation, not
+// releasing or stopped). It runs AFTER the acknowledgment and holds the reservation lock across the recheck and the
+// whole proof (see `whileEligible`): every cancelling mutation (release, stop, suspend, hand-back, allow) takes that same
+// exclusive lock, so none can commit between the recheck and the start of the challenge. The acknowledgment itself is
+// held outside the lock, so a slow host callback never blocks a cancellation. Callers that already hold the reservation
+// lock pass no fence.
+const verifyRecord=async(record,fence)=>{
+ const ticket=++proofTickets;
+ if(!await acknowledgePinnedOrigin(record))return rememberProof(record,unprovenResult(),ticket);
+ const prove=async()=>{
+  const started=Date.now(),checked=await runVerifier({origin:record.origin??record.intent.origin,target:record.target,verifyCmd:null}),observed=Date.parse(checked.checkedAt);
+  if(!Number.isFinite(observed)||observed<started||observed>Date.now()||Date.now()>started+5000)return rememberProof(record,{...checked,status:'unverified',observedAt:null,subject:null},ticket);
+  return rememberProof(record,await boundProof(record,{...checked,validUntil:new Date(observed+15000).toISOString()}),ticket);
+ };
+ if(!fence)return prove();
+ return await fence(prove)??rememberProof(record,unprovenResult(),ticket);
+};
+// A watch observes; it does not prove. Under a declared `acknowledgeOrigin` every proof needs the host to bind its exact
+// origin and attempt inside a call the host itself opened, so only an explicit start, check or adoption may prove. A poll
+// that proved on its own would ask outside every host call (refused, and reported as a failure) or take the attempt
+// of an explicit check that overlaps it. What the watch reports instead is the latest proof this process obtained for this
+// exact home, route and generation, while that proof's own validity window lasts; after it, the route reads unverified until an
+// explicit check renews it. Held only when a handler is declared, never read as authority.
+// Every proof attempt takes a ticket when it starts. An attempt that ends (verified or not, by refusal, failure or an
+// ended route) replaces what is held for its key unless a later-started attempt already has: the newest start wins.
+const lastProofs=new Map();
+let proofTickets=0;
+const proofKey=record=>{const runtime=scopedRuntime.getStore();return typeof runtime?.acknowledgeOrigin==='function'?JSON.stringify([runtime.home,record.routeId,record.generation]):null;};
+function rememberProof(record,proof,ticket){
+ const key=proofKey(record);if(!key)return proof;
+ const now=Date.now();
+ for(const[held,value]of lastProofs)if(!(value.until>now))lastProofs.delete(held);
+ if(lastProofs.get(key)?.ticket>ticket)return proof;
+ const verified=proof.status==='verified';
+ lastProofs.set(key,{ticket,proof:verified?proof:null,until:verified?Date.parse(proof.validUntil):now+60_000});
+ return proof;
+}
+function observedProof(record){
+ const proof=lastProofs.get(proofKey(record)??'')?.proof;
+ const origin=record.origin??record.intent.origin;
+ if(proof&&Date.parse(proof.validUntil)>Date.now()&&(!proof.subject||(proof.subject.origin===origin&&proof.subject.target===record.target&&proof.subject.handleGeneration===record.generation)))return proof;
+ return unprovenResult();
+}
+// Ending a route forgets that home's proof for it (one generation when the call names one), never another home's.
+const forgetProofs=(routeId,generation)=>{
+ const home=scopedRuntime.getStore()?.home;if(typeof home!=='string')return;
+ for(const key of [...lastProofs.keys()]){const[heldHome,heldRoute,heldGeneration]=JSON.parse(key);if(heldHome===home&&heldRoute===routeId&&(generation===undefined||heldGeneration===generation))lastProofs.delete(key);}
 };
 async function currentConsent(record){
   const runtime=scopedRuntime.getStore();if(!runtime?.embeddingServices||!record.reviewQuery)return null;
@@ -284,6 +330,20 @@ async function stopped(dir, routeId) {
   try { await readRecord(tombstonePath(dir, routeId)); return true; }
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
+const ineligibleStates = ['releasing', 'handing-back', 'suspending', 'suspended'];
+// A status call runs unlocked: the route is still this generation, not ending and not stopped by the user.
+async function statusEligible(dir, record) {
+  const fresh = await load(dir, record.routeId);
+  return !!fresh && fresh.generation === record.generation && !ineligibleStates.includes(fresh.state) && !await stopped(dir, record.routeId);
+}
+// Run `action` only if the route is still live, holding the reservation lock from the recheck through the action's first
+// effect (a challenge, a provider write). A cancel waits for the lock, so it commits before the recheck, which then
+// refuses (resolves null), or after the action. A busy lock also resolves null: nothing proves or writes without the fence.
+async function whileEligible(home, record, action) {
+  const run = async dir => await statusEligible(dir, record) ? action() : null;
+  try { const held = heldReservation.getStore(); return held ? await run(held) : await reserved(home, run); }
+  catch (error) { if (error.code === 'busy') return null; throw error; }
+}
 async function refuseUserStop(dir, routeId) {
   if (await stopped(dir, routeId)) throw refuse('stopped_by_user', 'The user stopped this route');
 }
@@ -371,6 +431,12 @@ export async function reserveSession({ home = defaultHome(), port, providerResou
     return { reserved: true };
   });
 }
+/** Once a session has settled on one provider port, its reservation names only that port (it reserved every candidate to start). */
+export async function narrowSessionReservation({ home, port, providerPorts }) {
+  const file = join(await canonicalHome(home, false), `port-${port}`, 'reservation.json');
+  const current = JSON.parse(await readFile(file, 'utf8'));
+  await atomicWrite(file, { ...current, providerPorts });
+}
 // Read-only, for service routes: the route ID of a durable record published at origin, if any.
 // home must already be canonical.
 export async function durableRouteAt(home, origin, deps) {
@@ -388,11 +454,12 @@ export async function durableListenerHeld({ home = defaultHome(), port }) {
 
 // Read-only: which Gozar route or live session in this home holds each of these provider ports. A port that no
 // Gozar route holds is absent from the answer: whatever holds it is not ours. Never creates state.
-export async function portHolders({ home = defaultHome(), providerResource, ports }, deps) {
+export async function portHolders({ home = defaultHome(), providerResource, ports, exceptSessionPort }, deps) {
   let dir, canonical;
   try { dir = await routesDirectory(home, false); canonical = await canonicalHome(home, false); }
   catch (error) { if (['ENOENT', 'unsafe_state_path'].includes(error.code)) return []; throw error; }
-  const table = await reservationTable(canonical, dir);
+  // The asking session's own reservation is not a holder of its own ports.
+  const table = (await reservationTable(canonical, dir)).filter(entry => exceptSessionPort === undefined || entry.owner.sessionPort !== exceptSessionPort);
   return ports.flatMap(port => { const entry = heldBy(table, { resource: providerResource, port }); return entry ? [{ port, ...entry.owner }] : []; });
 }
 
@@ -409,7 +476,7 @@ function matchesEmptyIntent(record, facet, observed, current) {
     isDeepStrictEqual(current, record.intent.rule);
 }
 
-async function reconcile(record, facet, observed, { verify = true } = {}) {
+async function reconcile(record, facet, observed, { verify = true, fence, observe = false } = {}) {
   if (['releasing', 'handing-back', 'address_changed'].includes(record.state)) return { state: record.state };
   const pin = record.receipt ?? record.intent;
   if (observed.identity !== pin.dnsName) return { state: 'address_changed' };
@@ -423,7 +490,7 @@ async function reconcile(record, facet, observed, { verify = true } = {}) {
   const binding={authority:'adapter',target:facet.slots(observed.snapshot,{target:record.target}).some(slot=>String(slot.slot)===String(pin.port)&&slot.forwards===true)?{known:true,value:record.target}:{known:false,reason:'effective-target-not-observed'},remedy:null};
   if (!verify || record.state === 'suspending') return { state: record.state };
   if(!await consentCurrent(record))return {state:'unverified',consentChange:record.consentChange};
-  const checked = await verifyRecord(record);
+  const checked = observe ? observedProof(record) : await verifyRecord(record, fence);
   return { state: checked.status === 'verified' ? 'usable' : 'unverified', verification: checked,binding };
 }
 
@@ -562,15 +629,47 @@ async function createListener(dir, record, entry, { table, firstAllocation, expe
   return publish(dir, record);
 }
 
+// The same awaited exact-origin host boundary for durable starts (0.5.2): when the host's factory declared
+// `acknowledgeOrigin`, the pinned origin is acknowledged in-process, scoped to this route and a fresh
+// attempt, before publication verification. A missing, refused, malformed, stale or timed-out
+// acknowledgment publishes nothing and leaves the record unverified with its retained cleanup debt.
+async function acknowledgePinnedOrigin(record) {
+  const runtime = scopedRuntime.getStore();
+  if (typeof runtime?.acknowledgeOrigin !== 'function') return true;
+  const origin = record.origin ?? record.intent?.origin;
+  if (typeof origin !== 'string' || !origin) return false;
+  const request = { owner: record.owner, providerId: record.adapterId,
+    handle: { kind: 'durable', id: record.routeId, generation: record.generation },
+    operationId: record.operationId ?? null, target: record.target, origin, attemptId: randomUUID() };
+  const bounded = new Promise(resolve => { const timer = setTimeout(resolve, runtime.originAckTimeoutMs ?? 10_000, null); timer.unref?.(); });
+  let reply;
+  try { reply = await Promise.race([runtime.acknowledgeOrigin({ ...request, home: await canonicalHome(runtime.home, false) }), bounded]); }
+  catch { return false; }
+  return reply?.acknowledged === true && reply.origin === origin && reply.handle?.id === record.routeId &&
+    reply.handle?.generation === record.generation && reply.attemptId === request.attemptId;
+}
+
 // Verify the pinned origin and durably publish it only after verification succeeds.
+// The generation fence runs before the host acknowledgment and the proof, after the proof, and before
+// every write (including the negative ones): a concurrent release or hand-back that moved the generation wins.
 async function publish(dir, record, checked) {
-  if(!await consentCurrent(record)){await save(dir,{...record,state:'unverified'});return {record,verification:{status:'unverified',checkedAt:record.verification?.checkedAt??null,observedAt:record.verification?.observedAt??null,subject:record.verification?.subject??null}};}
-  checked ??= await verifyRecord(record);
-  // Fence: a concurrent release or hand-back that moved the generation wins.
-  const fresh = await load(dir, record.routeId);
-  if (!fresh || fresh.generation !== record.generation || ['releasing', 'handing-back', 'suspending', 'suspended'].includes(fresh.state))
-    throw refuse('route_releasing', 'The route was released during this call; it was not published');
+  const fence = async () => {
+    const fresh = await load(dir, record.routeId);
+    if (!fresh || fresh.generation !== record.generation || ['releasing', 'handing-back', 'suspending', 'suspended'].includes(fresh.state))
+      throw refuse('route_releasing', 'The route was released during this call; it was not published');
+  };
+  const unverified = async () => {
+    await fence();
+    record = { ...record, state: 'unverified' };
+    await save(dir, record);
+    return { record, verification: { status: 'unverified', checkedAt: record.verification?.checkedAt ?? null, observedAt: record.verification?.observedAt ?? null, subject: record.verification?.subject ?? null } };
+  };
+  await fence();
+  if (!await consentCurrent(record)) return unverified();
+  checked ??= await verifyRecord(record); // the proof passes the host acknowledgment first
+  await fence();
   const state = checked.status === 'verified'&&await consentCurrent(record) ? 'usable' : 'unverified';
+  await fence();
   record = { ...record, state,verification:checked,origin: state === 'usable' ? record.origin ?? record.intent.origin : record.origin ?? null };
   await save(dir, record);
   return { record, verification: checked };
@@ -751,6 +850,7 @@ async function removeListener(dir, record, adapters, ctx, { suspend = false } = 
 // Withdraw the provider rule while retaining the origin, consent and slot reservation.
 export async function suspendRoute({ routeId, home = defaultHome(), expectedGeneration }, deps) {
   routeId = routeIdValue(routeId);
+  forgetProofs(routeId, expectedGeneration);
   const adapters = await adaptersOf(deps), ctx = durableContext(home);
   return reserved(home, async dir => {
     await refuseUserStop(dir, routeId);
@@ -777,6 +877,7 @@ export async function suspendRoute({ routeId, home = defaultHome(), expectedGene
 // No mode clears a user stop.
 export async function releaseRoute({ routeId, mode = 'remove', home = defaultHome(), expectedGeneration }, deps) {
   routeId = routeIdValue(routeId);
+  forgetProofs(routeId, expectedGeneration);
   if (!['remove', 'hand-back', 'dismiss'].includes(mode)) throw refuse('invalid_input', 'mode must be remove, hand-back or dismiss');
   return reserved(home, async dir => {
     if (mode !== 'remove') await refuseUserStop(dir, routeId);
@@ -802,6 +903,7 @@ export async function releaseRoute({ routeId, mode = 'remove', home = defaultHom
 // record deletion, then compare-and-set removal. Works during a hand-back: the user outranks both owners.
 export async function stopRoute({ routeId, home = defaultHome() }, deps) {
   routeId = routeIdValue(routeId);
+  forgetProofs(routeId);
   return reserved(home, async dir => {
     await atomicWrite(tombstonePath(dir, routeId), { schemaVersion: 1, routeId, stoppedAt: new Date().toISOString() });
     const record = await load(dir, routeId);
@@ -950,6 +1052,8 @@ export async function adoptRoute(request, deps) {
 // is published under the reservation lock; nothing else changes.
 export async function statusRoutes({ routeId, home = defaultHome(), canonical = false } = {}, deps) {
   if (routeId !== undefined) routeIdValue(routeId);
+  // `deps.observe` is the watch's read: under a declared host boundary it proves nothing (see lastProofs).
+  const observing = deps?.observe === true && typeof scopedRuntime.getStore()?.acknowledgeOrigin === 'function';
   let dir;
   try {
     if (canonical) { dir = routeDirectory(home); await trustedDirectory(dir); await privateDirectory(dir); }
@@ -974,8 +1078,9 @@ export async function statusRoutes({ routeId, home = defaultHome(), canonical = 
   };
   const routes = [];
   for (let record of records) {
-    const check = await targetCheck(record);
-    const extra = { targetCheck: check };
+    // An observation reads recorded state only and sends no challenge request to the target. Its one write is the defensive consent withdrawal (consentCurrent).
+    const check = observing ? null : await targetCheck(record);
+    const extra = observing ? {} : { targetCheck: check };
     if (check === 'another program is listening' && record.state !== 'suspended') Object.assign(extra, {
       warning: `Another program is listening on ${record.target}; the provider forwards traffic for this route to it.`,
       nextAction: `gozar stop --route ${record.routeId}` });
@@ -983,13 +1088,13 @@ export async function statusRoutes({ routeId, home = defaultHome(), canonical = 
     try { entry = durableEntry(adapters, record.adapterId); } catch (cause) { routes.push({ ...view(record, { state: 'unknown' }, extra), error: { code: cause.code ?? null, message: cause.message } }); continue; }
     const { observed, error } = await observeFor(entry,record);
     if (!observed) { routes.push({ ...view(record, { state: 'unknown' }, extra), error }); continue; }
-    const current = await reconcile(record, entry.facet, observed);
+    const current = await reconcile(record, entry.facet, observed, { fence: action => whileEligible(home, record, action), observe: observing });
     const fresh=await load(dir,record.routeId);
     if(!fresh||fresh.generation!==record.generation||['releasing','handing-back','suspending','suspended'].includes(fresh.state)){
       current.state=fresh?.state??'unknown';if(current.verification)current.verification={...current.verification,status:'unverified'};
       routes.push(view(record,current,extra));continue;
     }
-    if (current.state === 'usable' && record.origin === null) {
+    if (current.state === 'usable' && record.origin === null && !observing) {
       // First successful verification after a crash or a failed check: publish it durably.
       const published = await reserved(home, async locked => {
         const fresh = await load(locked, record.routeId);
@@ -999,22 +1104,28 @@ export async function statusRoutes({ routeId, home = defaultHome(), canonical = 
       if (published) record = published;
       else current.state = 'unverified';
     }
-    if (['usable', 'unverified'].includes(current.state)) await renewIfDue(record, entry.facet, observed, durableContext(home,record.owner), current);
+    // The lease write is guarded again: a release that committed since the checks above must not be renewed.
+    // Lease renewal is a provider write, so it belongs to an explicit check, never to an observation.
+    if (!observing && ['usable', 'unverified'].includes(current.state)) await renewIfDue(record, entry.facet, observed, durableContext(home,record.owner), current, action => whileEligible(home, record, action));
     routes.push(view(record, current, extra));
   }
   return { schemaVersion: 1, routes, stoppedRoutes };
 }
 
-// A leased rule that expires soon is renewed from status (and so from watch). A renewal that fails leaves the
+// A leased rule that expires soon is renewed from status (and from watch, unless the host declared `acknowledgeOrigin`:
+// then a watch observes only and the host's own explicit checks renew). A renewal that fails leaves the
 // rule in place and reports the route `unverified`: the lease may lapse, and that is never silent.
-async function renewIfDue(record, facet, observed, ctx, current) {
+async function renewIfDue(record, facet, observed, ctx, current, fence) {
   if (!facet.renew || !facet.expiresAt) return;
   const slot = (record.receipt ?? record.intent).port;
   const expiresAt = facet.expiresAt(observed.snapshot, slot);
   if (expiresAt === null || expiresAt === undefined || Date.parse(expiresAt) - Date.now() > renewLeadMs) return;
   try {
-    const renewed = await facet.renew(ctx, { slot, rule: record.receipt.rule });
-    if (!Number.isFinite(Date.parse(renewed?.expiresAt))) throw new Error('no expiry');
+    // The provider write runs under the same fence as a proof: a release that committed first is not renewed.
+    await fence(async () => {
+      const renewed = await facet.renew(ctx, { slot, rule: record.receipt.rule });
+      if (!Number.isFinite(Date.parse(renewed?.expiresAt))) throw new Error('no expiry');
+    });
   } catch {
     current.state = 'unverified';
     current.verification = { ...(current.verification ?? {}), status: 'failed', error: 'Lease renewal failed' };

@@ -37,8 +37,8 @@ export async function createTestingGozar({effects,...options}={}){
     try{const result=await handler(structuredClone(request.input),{signal:abort.signal,fixture:true});event.state='completed';return structuredClone(result);}
     catch{event.state='failed';throw gozarError('provider_unavailable','The testing effect failed');}
   };
-  const {manifest,root,secretBackend,hostCapabilities,identity}=options;
-  const api=createCoreRouteApi({manifest,root,secretBackend,hostCapabilities,identity,dispatchEffect,
+  const {manifest,root,secretBackend,hostCapabilities,identity,acknowledgeOrigin,originAckTimeoutMs,runtimeModules,detectionTtlMs,registryLineage}=options;
+  const api=createCoreRouteApi({manifest,root,secretBackend,hostCapabilities,identity,acknowledgeOrigin,originAckTimeoutMs,runtimeModules,detectionTtlMs,registryLineage,dispatchEffect,
     verify:request=>verification(request,{fetch:testingFetch(dispatchEffect)})});
   const gozar={...api};
   const mark=value=>{const copy=structuredClone(value);copy.facts??=[];copy.facts.push({id:'gozar-testing-effects',label:'Fixture evidence',value:'Synthetic provider effects and isolated local transport; real provider acceptance is unverified.',known:true,group:'proof',affectsConsent:false,source:'@tnunamak/gozar/testing',asOf:null});return copy;};
@@ -85,10 +85,6 @@ export function fakeReadContext({ home, probeOk = true, verified = true, now = D
   });
 }
 
-// An expose of kind session starts a controller process. A fake provider has none, so the testing API starts no process
-// and answers as a controller that has a candidate address ready. A test may replace it with `expose: { startSession }`.
-const fakeStartSession = options => ({ snapshot: { sessionId: `fake-${options.port}`, phase: 'candidate-ready', candidate: options.origin ?? 'https://fake.example.invalid', expiresAtMs: Date.now() + (options.lifetimeMs ?? 60_000) } });
-
 /** The route API with no process or network: sessions are answered in memory. Same options as the package's own factory. */
 export function createRouteApi(deps = {}) {
   // A durable route is checked by the challenge verifier. With a read context given, that verifier is the context's.
@@ -96,7 +92,7 @@ export function createRouteApi(deps = {}) {
     const checked = await deps.readContext.verifyChallenge(origin, target);
     return { method: 'challenge', error: checked.status === 'verified' ? null : 'fake', scope: 'controller-origin', ...checked };
   }));
-  return createCoreRouteApi({ platform: 'linux', ...deps, ...(verify ? { verify } : {}), expose: { startSession: fakeStartSession, ...deps.expose } });
+  return createCoreRouteApi({ platform: 'linux', ...deps, ...(verify ? { verify } : {}), ...(deps.expose ? { expose: deps.expose } : {}) });
 }
 
 const KINDS = ['session', 'attached', 'durable'];

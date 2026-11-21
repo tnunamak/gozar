@@ -8,17 +8,27 @@ subject is unverified and has no published address.
 
 | Public path | Proof and publication | Cleanup authority |
 | --- | --- | --- |
-| `expose` session usage; CLI port session | Admitted operational engine with current nonce authorization, endpoint/generation binding, outside receipt and optional stream checks. The embedding controller adds its current incarnation/target subject | Attributable local process identities and the exact owned operational resource. A failed initial proof shuts down the owned runtime; uncertainty remains cleanup debt |
+| `expose` session usage | Admitted operational plan run by the generic session controller: the host acknowledges the exact announced origin, then the controller proves only that origin with a current nonce, endpoint/generation binding and optional stream checks, from the provider's declared vantage (see below). The controller adds its current incarnation/target subject | Attributable local process identities and the exact owned operational resource. A failed initial proof shuts down the owned runtime; uncertainty remains cleanup debt |
 | `expose` attached HTTPS | HTTP nonce/stream gate, or adapter-declared `prepareProof`. Hook results must match the current attempt id and normalized endpoint, current deadline/cancellation and observation interval before publication | Exact returned receipt, retained on failed proof/start/close. SDK/process close is followed by independent presence observation. Acknowledgement alone cannot confirm absence |
 | `ensureRoute` / `adoptRoute` durable | Conditional native configuration ownership plus service challenge. Proof is bound to the current target/incarnation/generation; adoption rechecks the unchanged native rule before claiming it | Exact owned rule/target, conditional comparison and absence read-back; foreign rules are preserved. Known partial writes remain retained uncertain intents |
 | Owner-kept `ensureRoute` / structured status | Current service challenge and subject. Reviewing consent withdraws; successful redemption requires fresh proof | Removes Gozar's local tracking and publication only. The application and upstream ingress stay owner-owned |
 | Unknown extension fixture | Declares its own non-HTTP proof hook; no provider-id dispatch or HTTP-only core branch. Wrong attempt/endpoint or failed custom proof cannot publish | Fixture adapter receipt and independent ledger. This proves the seam, not an actual external provider |
 | Raw shipped TCP/TLS profiles | Detect-only in 0.4; no executable candidate token | Experimental module tests do not admit these profiles publicly |
 
+A recipe session (localhost.run, tunnl.gg, LAN, Tailscale Funnel and Serve) is proven by the generic session controller, never by the allocation.
+The bounded allocation turns the pure core's allocate and remove steps into driver effects and keeps the core's own probe effect, unrun. After the host
+acknowledged the exact announced origin, the session controller asks the allocation to run that probe, and the effect driver applies the checks it
+always applies: the probe's origin, vantage, generation and freshness, this attempt's nonce and verifier, TLS and the stream protocols the core asked
+for. A remote vantage (public, tailnet, LAN) needs a trusted executor for that vantage. The session runtime accepts one (`runtime.probeExecutor`), but
+0.5.2 has no public factory option that supplies it, so the only executor a host gets is the public relay verifier, a request pinned to a public DNS
+answer and a public IP, which serves the public vantage only. So a Funnel proof cannot be answered over the tailnet, and a tailnet or LAN proof stays
+unverified, and the route is withdrawn, as in 0.5.1. A loopback fetch from the session's own device is never substituted for an intended vantage. A proof that ran from the host's own network says
+so in `verification.vantage` (`this-device`). Stopping needs no proof: a stop while the proof is still pending removes what the ledger records as owned,
+and the core is never given a probe result that was not observed.
+
 The small historical Rust recipe verifier accepted weaker receipts. It is
-excluded from 0.4 public session publication: daemon startup rejects a selected
-non-operational publishing plan, and control rejects its health/publication
-commands. An old attributable journal remains stoppable. This exclusion preserves
+excluded from 0.4 public session publication: the session runtime admits only
+operational plans, and control rejects its health/publication commands. An old attributable journal remains stoppable. This exclusion preserves
 the richer operational verifier; it does not weaken its authorization checks.
 The internal Rust state-machine fixtures are not an alternate public create API.
 

@@ -3,6 +3,7 @@ import { bindConfiguration } from './adapter-configuration.mjs';
 import { catalogFactsFor } from './catalog-facts.mjs';
 import { canonicalConsentValue, consentSnapshot, safeSetupAction, setupConsentReview } from './consent-facts.mjs';
 import { embeddingError } from './embedding-services.mjs';
+import { inputIdOf } from './embedding-state.mjs';
 import { executeArtifact } from './embedding-prerequisites.mjs';
 import { inspectAdapter, readContextFor } from './route-catalog.mjs';
 import { checkValue } from './route-setup.mjs';
@@ -15,7 +16,6 @@ const equal = (a, b) => canonical(a) === canonical(b);
 const unknown = reason => ({ known: false, reason });
 const stateValues = ['authorization-required', 'pending', 'denied', 'expired', 'blocked', 'reconciling', 'complete'];
 const recovery = new Set(['reconcile', 'remove-resource', 'revoke-credential', 'stop-connector', 'disconnect']);
-const inputRequirement = (adapter, action) => (adapter.definition.inputRequirements ?? []).find(row => row.actionId === action.id)?.id ?? action.id;
 const kinds = ['connector', 'tunnel', 'dns', 'credential', 'other'];
 const slotPattern = /^[a-z][a-z0-9._-]{0,63}$/;
 const slot = value => {
@@ -118,7 +118,7 @@ async function refresh(request, deps, storage, adapter, context, record, { inclu
   }
 
   const candidate = raw ? safeSetupAction(raw) : null;
-  if (candidate && ['provide-secret', 'provide-value'].includes(candidate.kind)) candidate.inputId = inputRequirement(adapter, candidate);
+  if (candidate && ['provide-secret', 'provide-value'].includes(candidate.kind)) candidate.inputId = inputIdOf(adapter, candidate);
   if (candidate && (intent || resource)) candidate.digest = hash([
     candidate.digest, intent, resource ? { id: resource.id, subject: resource.subject, identity: resource.identity ?? null } : null,
   ]);
@@ -162,7 +162,7 @@ async function refresh(request, deps, storage, adapter, context, record, { inclu
 async function execute(request, deps, storage, adapter, context, record, command) {
   const { action, value, resource } = command;
   const { tx } = storage;
-  const inputId = inputRequirement(adapter, action);
+  const inputId = inputIdOf(adapter, action);
   if (action.kind === 'provide-secret') await tx.withSecret(inputId, request.secretHandle, async () => {});
   if (['provide-value', 'provide-secret'].includes(action.kind)) tx.assertMutable();
   if (resource && ['remove-resource', 'revoke-credential'].includes(action.step.purpose)) tx.assertUnused();

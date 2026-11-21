@@ -79,7 +79,7 @@ async function recoverOwner(owner) {
       .filter(entry => entry.resources.length !== 1);
     if (unresolvedBeforeRecovery.length)
       throw new Error('Previous key owner has a create intent without a durable resource identity');
-    const { recoverStop } = await import('./daemon.mjs');
+    const { recoverStop } = await import('./session-recipe.mjs');
     const result = await recoverStop(owner.sessionDirectory);
     if (result.snapshot?.phase !== 'stopped' || result.localCleanupFailures?.length)
       throw new Error('Previous key owner cleanup is unresolved');
