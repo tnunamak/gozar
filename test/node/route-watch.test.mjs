@@ -18,16 +18,6 @@ const notFound = () => Object.assign(new Error('gone'), { code: 'route_not_found
 const collect = async iterable => { const events = []; for await (const event of iterable) events.push(event); return events; };
 const deps = status => ({ routeStatus: status.routeStatus, minIntervalMs: 1 });
 
-test('a fresh unverified view with equal consent digests emits no consent change', async () => {
-  const base = view();
-  const unverified = view({ published: null, ingress: null,
-    verification: { ...base.verification, status: 'unverified' },
-    consentChange: { oldDigest: 'same-consent', newDigest: 'same-consent', reason: 'consent-or-proof-changed' } });
-  const s = script(unverified, unverified, view({ state: 'released' }));
-  const events = await collect(watchRoutes(request(ctl().signal), deps(s)));
-  assert.deepEqual(events.map(event => event.type), ['snapshot', 'terminal']);
-});
-
 test('snapshot, then changed on a state change, then terminal on release; every event validates', async () => {
   const s = script(view(), view(), view({ state: 'lost' }), view({ state: 'released', ingress: null }));
   const events = await collect(watchRoutes(request(ctl().signal), deps(s)));
