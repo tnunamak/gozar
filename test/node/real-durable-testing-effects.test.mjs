@@ -89,8 +89,37 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
   assert.equal(terminal.state,'released');assert.deepEqual(terminal.handle,resumed.handle);
   assert.equal(terminal.cleanup.state,'confirmed');
   assert.equal(writes,terminalWrites,'stopped replay must remain terminal without a write');
+  if(index===choices.length-1){
+   const terminalPath=join(home,'operations',terminalName);
+   const terminalBytes=await readFile(terminalPath);
+   assert.ok(harness.events.some(e=>e.kind==='local-api'&&e.operation==='request'));
+   await harness.close();
+   harness=await createTestingGozar({effects});
+   const reopened=harness.gozar;
+   const unchanged=async()=>{
+    assert.deepEqual(await readFile(terminalPath),terminalBytes,'the terminal journal bytes remain exact');
+    assert.equal(writes,terminalWrites,'neither replay writes through the fake provider');
+    assert.deepEqual(config,foreign,'foreign forwarding is preserved');
+   };
+   const stale=await reopened.closeRoute({home,handle:route.handle,mode:'remove'}).catch(error=>{
+    assert.ok(['route_conflict','route_not_found'].includes(error?.code),'an earlier generation may only be missing or refused');
+    return null;
+   });
+   if(stale!==null){
+    assert.notEqual(stale.cleanup.state,'confirmed','the earlier generation cannot get positive removal evidence');
+    assert.notEqual(stale.state,'released');
+    assert.equal(stale.published,null);
+    assert.deepEqual(stale.handle,route.handle,'any non-positive response still names the requested generation');
+   }
+   await unchanged();
+   const exact=await reopened.closeRoute({home,handle:resumed.handle,mode:'remove'});
+   assert.equal(exact.state,'released');
+   assert.equal(exact.cleanup.state,'confirmed');
+   assert.equal(exact.published,null);
+   assert.deepEqual(exact.handle,resumed.handle);
+   await unchanged();
+  }
  }
- assert.ok(harness.events.some(e=>e.kind==='local-api'&&e.operation==='request'));
 }
 test('shipped durable modules parse source observations, conditionally write, prove and remove only their rule',t=>exercise(t));
 test('known partial durable write stays owned and can be recovered after a failed provider response',t=>exercise(t,{partialWrite:true}));
