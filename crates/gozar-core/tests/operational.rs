@@ -10,6 +10,29 @@ fn run(input: Value) -> Value {
     );
     out
 }
+#[test]
+fn public_step_returns_the_same_typed_error_for_missing_or_invalid_json() {
+    let expected = json!({"error":{
+        "code":"invalid-input",
+        "message":"invalid input JSON or protocol shape"
+    }});
+    for input in ["", "{", "{}"] {
+        let output: Value = serde_json::from_str(&gozar_core::step(input)).unwrap();
+        assert_eq!(output, expected);
+    }
+}
+
+#[test]
+fn repeated_status_preserves_the_same_snapshot_without_effects() {
+    let first = run(json!({"command":{"type":"status","sessionId":"inert-status-fixture"}}));
+    assert_eq!(first["snapshot"]["sessionId"], "inert-status-fixture");
+    assert_eq!(first["effects"], json!([]));
+    assert_eq!(first["events"], json!([]));
+    assert!(first.get("action").is_none());
+    let second = run(json!({"state":first["state"],"command":{"type":"status"}}));
+    assert_eq!(second, first);
+}
+
 fn fixture() -> Value {
     serde_json::from_str(include_str!("../../../test/adapters/fixtures/plan-v1.json")).unwrap()
 }
