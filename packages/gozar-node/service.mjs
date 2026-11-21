@@ -90,15 +90,16 @@ async function present(route) {
  // Records without a generation predate the current handle contract: history only.
  if((route.generation??0)===0)return {...route,verification:{status:'unverified',checkedAt:null,observedAt:null,subject:null}};
  const runtime=serviceContext.getStore(),current=await currentExternal(route);
+ const consentChanged=Boolean(current&&current.review.consentFactsDigest!==route.embedding.consentReview.consentFactsDigest);
  let checked;
- if(current&&current.review.consentFactsDigest!==route.embedding.consentReview.consentFactsDigest){
+ if(consentChanged){
   route.embedding.reviewRequired=true;
   await mutate(route.embedding.request.home,route.origin,async dir=>{const fresh=await stored(join(dir,filename(route.origin)),filename(route.origin));if(fresh.embedding?.consentReview.consentFactsDigest===route.embedding.consentReview.consentFactsDigest)await atomicWrite(join(dir,filename(route.origin)),{...fresh,embedding:{...fresh.embedding,reviewRequired:true}});});
  }
  if(current&&route.embedding.reviewRequired)checked={status:'unverified',checkedAt:null,observedAt:null,subject:null};
  else checked=await (runtime?.verify??verification)(route);
  if(current){const identity=await runtime.embeddingServices.resolveIdentity({home:route.embedding.request.home});checked={...checked,observedAt:checked.checkedAt??null,subject:{origin:route.origin,target:route.target,...identity,handleGeneration:route.generation},validUntil:checked.checkedAt?new Date(Date.parse(checked.checkedAt)+15000).toISOString():null};}
- return {...route,verification:checked,...(current&&checked.status!=='verified'?{consentChange:{oldDigest:route.embedding.consentReview.consentFactsDigest,newDigest:current.review.consentFactsDigest,reason:'consent-or-proof-changed',nextAction:instructionAction('review-route-consent','Review changed route consent','Call reviewRouteConsent for this handle and show its current snapshot before approval.')}}:{})};
+ return {...route,verification:checked,...(consentChanged?{consentChange:{oldDigest:route.embedding.consentReview.consentFactsDigest,newDigest:current.review.consentFactsDigest,reason:'consent-or-proof-changed',nextAction:instructionAction('review-route-consent','Review changed route consent','Call reviewRouteConsent for this handle and show its current snapshot before approval.')}}:{})};
 }
 async function addServiceUnguarded({ origin, target, verifyCmd = null, home = defaultHome(),embedding }) {
   const route = config({ origin, target, verifyCmd,embedding,generation:1 });

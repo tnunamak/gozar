@@ -28,6 +28,29 @@ test('a fresh unverified view with equal consent digests emits no consent change
   assert.deepEqual(events.map(event => event.type), ['snapshot', 'terminal']);
 });
 
+test('first and later distinct consent digests each emit once', async () => {
+  const first = view({ consentChange: { oldDigest: 'a', newDigest: 'b', reason: 'consent-or-proof-changed' } });
+  const equal = view({ consentChange: { oldDigest: 'c', newDigest: 'c', reason: 'consent-or-proof-changed' } });
+  const later = view({ consentChange: { oldDigest: 'b', newDigest: 'c', reason: 'consent-or-proof-changed' } });
+  const s = script(first, first, equal, later, later, view({ state: 'released' }));
+  const events = await collect(watchRoutes(request(ctl().signal), deps(s)));
+  assert.deepEqual(events.map(event => event.type), ['snapshot', 'consent_changed', 'consent_changed', 'terminal']);
+  assert.deepEqual(events.map(event => event.sequence), [0, 1, 2, 3]);
+  assert.deepEqual(events.filter(event => event.type === 'consent_changed')
+    .map(event => [event.oldDigest, event.newDigest]), [['a', 'b'], ['b', 'c']]);
+});
+
+test('a proof-only unverified to verified transition is an ordinary change', async () => {
+  const base = view();
+  const unverified = view({ verification: { ...base.verification, status: 'unverified' },
+    consentChange: { oldDigest: 'same-consent', newDigest: 'same-consent', reason: 'consent-or-proof-changed' } });
+  const s = script(unverified, base, base, view({ state: 'released' }));
+  const events = await collect(watchRoutes(request(ctl().signal), deps(s)));
+  assert.deepEqual(events.map(event => event.type), ['snapshot', 'changed', 'terminal']);
+  assert.equal(events[0].route.verification.status, 'unverified');
+  assert.equal(events[1].route.verification.status, 'verified');
+});
+
 test('snapshot, then changed on a state change, then terminal on release; every event validates', async () => {
   const s = script(view(), view(), view({ state: 'lost' }), view({ state: 'released', ingress: null }));
   const events = await collect(watchRoutes(request(ctl().signal), deps(s)));
