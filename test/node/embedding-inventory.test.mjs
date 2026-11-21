@@ -11,3 +11,28 @@ test('inventory decorates actions and prerequisite remedies with the same config
  try{const s=createEmbeddingServices({registryId:'fixture'});const v=await listProviders({home},{adapters:[adapter],embeddingServices:s,readContext:{configuration:async()=>null},decorateSetupAction:({action,configuration,draftId})=>({...action,consentFactsDigest:`fixture:${configuration.revision}:${draftId}`})});const p=v.providers[0];assert.equal(p.configuration.actions[0].consentFactsDigest,`fixture:${p.configuration.revision}:null`);assert.equal(p.prerequisites[0].remedy.consentFactsDigest,p.configuration.actions[0].consentFactsDigest);
  }finally{await rm(home,{recursive:true,force:true});}
 });
+
+test('inventory observes effective provider metadata without consent tokens', async()=>{
+ const home=await mkdtemp(join(tmpdir(),'metadata-inventory-'));
+ const known=value=>({known:true,value});
+ const unknown=reason=>({known:false,reason});
+ const cases=[[null,4000,known(4000),false],[8000,null,known(null),true],[8000,0,known(0)],[8000,undefined,unknown('not-declared')],[0,undefined,known(0),undefined,true]];
+ const adapters=cases.map(([outer,idle,,account,native],n)=>{
+  const id='unfamiliar-provider-'+n;
+  const definition={id,label:'Outer name',supportedKinds:['attached','session'],idleTimeoutMs:outer,copy:{human:{name:'Outer copy'}},capabilities:{reach:'lan',transport:'https',needsAccount:account,address:{stability:'stable'}},disclosure:{revision:'v'},facts:[]};
+  return {id,definition,...(native?{}:{operationalDefinition:{displayName:'Wrapped name',copy:{human:{name:'Wrapped copy',summary:'Wrapped summary'}},...(idle===undefined?{}:{idleTimeoutMs:idle})}}),detect:async()=>({state:'ready',facts:{}}),properties:()=>definition.capabilities,setupActions:()=>[]};
+ });
+ try {
+  const {providers}=await listProviders({home},{adapters,embeddingServices:createEmbeddingServices({registryId:'metadata-fixture'}),readContext:{configuration:async()=>null}});
+  for (const [n,row] of providers.entries()){
+   const [,,idle,account,native]=cases[n];
+   assert.deepEqual(row.idleTimeoutMs,idle);
+   assert.deepEqual(row.displayName,known(native?'Outer name':'Wrapped name'));
+   assert.deepEqual(row.copy.human.name,known('Outer copy'));
+   assert.deepEqual(row.copy.human.summary,native?unknown('not-declared'):known('Wrapped summary'));
+   assert.deepEqual(row.addressStability,known('stable'));
+   assert.deepEqual(row.needsAccount,account===undefined?unknown('not-observed'):known(account));
+  }
+  assert.doesNotMatch(JSON.stringify(providers),/candidateToken/);
+ } finally { await rm(home,{recursive:true,force:true}); }
+});

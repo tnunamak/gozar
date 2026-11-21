@@ -28,6 +28,11 @@ export interface HostEmbeddingMethods {
 }
 export interface ProviderInventory {
  providerId:string;label:string;reach:Reach;transport:Properties['transport'];
+ displayName:Observation<string>;
+ copy:{human:{name:Observation<string>;address:Observation<string>;summary:Observation<string>;setup:Observation<string>}};
+ addressStability:Observation<'stable'|'ephemeral'>;
+ idleTimeoutMs:Observation<number|null>;
+ needsAccount:Observation<boolean>;
  availability:Availability;
  prerequisites:Prerequisite[];configuration:Configuration;facts:Fact[];
  /** Present when the host factory caches polling reads: the honest freshness of this row's detection. */

@@ -44,6 +44,9 @@ const registry = await testing.fakeRegistry({ id: 'fake-0a1b2c3d', kinds: ['sess
 const fake = testing.createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: testing.fakeReadContext({ home: ${JSON.stringify(stateHome)} }) });
 const fakeCatalog = await fake.catalogRoutes({ schemaVersion: 1, owner: 'example-app', target: '127.0.0.1:9', home: ${JSON.stringify(stateHome)}, usage: { kind: 'session', lifetimeMs: 60000 },
   requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] } });
+const embed = await root.createGozar();
+const present = (await embed.listProviders({ home: ${JSON.stringify(stateHome)} })).providers;
+if (!present.length || present.some(row => ['displayName','addressStability','idleTimeoutMs','needsAccount'].some(key => typeof row[key]?.known !== 'boolean') || typeof row.copy?.human?.name?.known !== 'boolean')) throw new Error('installed public provider observations missing');
 await registry.cleanup();
 console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
   types: pkg.types, exportsTypes: pkg.exports['.'].types, engines: pkg.engines.node, providers: manifest.providers.map(item => item.id),
