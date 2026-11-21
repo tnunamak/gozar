@@ -217,6 +217,8 @@ GUI environment or installed artifact passed a live journey. Offline fixtures,
 read-only detection, presence checks and secret-prompt checks each establish only
 their stated boundary. Keep installed host acceptance and real-provider checks
 separate. Shipped execution is HTTP(S); ngrok TLS/TCP profiles remain detect-only.
-Ngrok HTTPS needs its optional SDK and account/domain prerequisites; Cloudflare
-named uses an existing owner-managed tunnel/DNS route. Neither is implied ready
-by saved inputs. No future release or provider expansion is promised here.
+Ngrok HTTPS needs its optional SDK and account/domain prerequisites. Cloudflare
+named supports both managed setup and an existing owner-managed tunnel and DNS
+route. Its attached connector requires `cloudflared` and `bash` on `PATH`. Saved
+inputs alone do not establish readiness for either provider. No future release
+or provider expansion is promised here.
