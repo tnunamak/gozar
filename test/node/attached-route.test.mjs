@@ -4,7 +4,7 @@ import { readFile, readdir, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { attachedStatus, closeAttachedRoute, controlAttached, openAttachedRoute, openSessionRoute } from '../../packages/gozar-node/attached-route.mjs';
+import { attachedStatus, closeAttachedRoute, controlAttached, openAttachedRoute, openSessionRoute, redeemApproval } from '../../packages/gozar-node/attached-route.mjs';
 import { routeStatus, closeRoute } from '../../packages/gozar-node/route-view.mjs';
 import { processIdentity } from '../../packages/gozar-node/process-identity.mjs';
 import { assertShape, codeOf, query, scratch, attachedScratch, stubAdapter, tokenStubs } from './route-schema-check.mjs';
@@ -69,6 +69,23 @@ async function approvedRequest(tokens, home, adapterId = 'stub-a') {
 }
 const depsFor = (tokens, controllerModule, over = {}) => ({ adapters: [stubAdapter('stub-a')], redeem: tokens.redeem, consentBinding: tokens.consentBinding, platform: 'linux', readContext,
   controllerModule, leaseExpiryMs: EXPIRY, heartbeatMs: BEAT, startTimeoutMs: 30_000, ...over });
+
+test('valid fixture approval spends before planning and observing the approved route', async t => {
+  const home = await scratch(t), tokens = tokenStubs(), events = [];
+  const request = await approvedRequest(tokens, home);
+  const adapter = stubAdapter('stub-a');
+  const plan = adapter.plan, observe = adapter.observe;
+  adapter.plan = (...args) => { events.push('plan'); return plan.apply(adapter, args); };
+  adapter.observe = (...args) => { events.push('observe'); return observe.apply(adapter, args); };
+  const result = await redeemApproval(request, {
+    ...depsFor(tokens, undefined, {adapters:[adapter]}),
+    redeem(input) { events.push('spend'); return tokens.redeem(input); },
+  });
+  assert.deepEqual(events, ['spend','plan','observe']);
+  assert.equal(result.adapter, adapter);
+  assert.equal(result.plan.digest, result.grant.planDigest);
+  assert.equal(result.request.target, request.target);
+});
 
 // A separate owner process, so a test can kill the owner for real.
 async function ownerScript(t, home, controllerModule, { exitAfterOpen = false } = {}) {
