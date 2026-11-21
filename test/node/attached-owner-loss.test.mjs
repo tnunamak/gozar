@@ -34,7 +34,6 @@ async function listener(t) {
 async function scenario(t, { forwarding, removal, hangCreate = false, closeFailure = null, journalFailure = false, managedReference = true, lateProof = false }) {
   await mkdir(join(homedir(), '.tmp'), { recursive: true, mode: 0o700 });
   const root = await mkdtemp(join(homedir(), '.tmp', 'gz-ownerloss-'));
-  t.after(async () => { await chmod(directory, 0o700).catch(() => {}); await rm(root, { recursive: true, force: true }); });
   const home = join(root, 'h'), directory = join(home, 'attached', 'att_0123456789abcdef');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const appPort = await listener(t), foreignPort = await listener(t);
@@ -97,7 +96,13 @@ async function scenario(t, { forwarding, removal, hangCreate = false, closeFailu
     await controlAttached(directory, { type: 'finalize-removal', handleKind: 'attached', handleId: handle.id, generation: 1 }, 2_000).catch(() => {});
     await Promise.race([run.catch(() => {}), sleep(2_000)]);
   };
-  t.after(cleanup);
+  // Remove the home only after the fixture listeners and controller have retired.
+  // A failed removal must not skip their teardown and leave the test process alive.
+  t.after(async () => {
+    await cleanup();
+    await chmod(directory, 0o700).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  });
   if (lateProof) await until(async () => seen.prepares, count => count === 1);
   else if (hangCreate) await until(async () => seen.creates, count => count === 1);
   else await until(async () => (await json(join(directory, 'state.json')).catch(() => null))?.phase, phase => phase === 'usable');
@@ -181,7 +186,8 @@ test('owner loss while the provider create never returns: forwarding closes, not
   assert.match(state.lastView.cleanup.message, /Startup outcome remains unknown/);
   assert.equal(state.receipt, null);
   assert.deepEqual(state.handle, s.handle);
-  s.release();
+  // This fixture models a create that never returns. Resolving it after controller
+  // exit would start a late journal write concurrently with temporary-home removal.
 });
 
 for (const closeFailure of ['throw', 'reject', 'hang']) {
