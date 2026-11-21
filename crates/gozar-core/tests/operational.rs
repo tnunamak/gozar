@@ -1062,3 +1062,33 @@ fn public_relay_health_stays_publishable_for_eighty_minutes_past_nonce_budget() 
         );
     }
 }
+
+#[test]
+fn status_roundtrip_keeps_the_initial_session_label_and_snapshot() {
+    let initial = run(json!({"command":{"type":"status","sessionId":"test-status"}}));
+    let again = run(json!({"state":initial["state"],"command":{"type":"status"}}));
+
+    assert_eq!(initial["snapshot"]["sessionId"], "test-status");
+    assert_eq!(again["state"], initial["state"]);
+    assert_eq!(again["snapshot"], initial["snapshot"]);
+    assert_eq!(again["events"], json!([]));
+    assert_eq!(again["effects"], json!([]));
+}
+
+#[test]
+fn stopping_an_empty_session_is_idempotent() {
+    let initial = run(json!({"command":{"type":"status","sessionId":"test-stop"}}));
+    let stopped = run(json!({"state":initial["state"],"command":{"type":"stop"}}));
+    let repeated = run(json!({"state":stopped["state"],"command":{"type":"stop"}}));
+
+    assert_eq!(stopped["snapshot"]["phase"], "stopped");
+    assert_eq!(
+        stopped["snapshot"]["generation"].as_u64(),
+        initial["snapshot"]["generation"].as_u64().map(|value| value + 1)
+    );
+    assert_eq!(stopped["events"][0]["type"], "endpoint-withdrawn");
+    assert_eq!(stopped["effects"], json!([]));
+    assert_eq!(repeated["snapshot"], stopped["snapshot"]);
+    assert_eq!(repeated["events"], json!([]));
+    assert_eq!(repeated["effects"], json!([]));
+}
