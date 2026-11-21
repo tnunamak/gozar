@@ -16,6 +16,27 @@ import { providerWorld } from './session-provider-fixtures.mjs';
 import { attachedScratch } from './route-schema-check.mjs';
 import { gone, sessionWorld } from './session-controller-fixtures.mjs';
 
+test('a conflicting unbootstrapped session start carries confirmed cleanup for only its refused handle', async t => {
+  const w = await sessionWorld(t);
+  const retained = await w.run();
+  try {
+    await assert.rejects(w.run(), error => {
+      assert.equal(error.code, 'route_conflict');
+      assert.ok(error.route, 'a refusal before bootstrap owes no cleanup');
+      assert.equal(error.route.cleanup.state, 'confirmed');
+      assert.equal(error.route.state, 'released');
+      assert.notEqual(error.route.handle.id, retained.handle.id);
+      assert.equal(error.route.published, null);
+      return true;
+    });
+    assert.equal(await w.alive(), true, 'the retained controller is unaffected');
+  } finally {
+    const closed = await closeAttachedRoute({ home: w.home, handle: retained.handle });
+    assert.equal(closed.cleanup.state, 'confirmed');
+    assert.equal(await gone(w), true);
+  }
+});
+
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
 test('red: wait verified on a start whose create fails rejects with a code, and the controller that holds the cleanup debt stays authenticated', async t => {
