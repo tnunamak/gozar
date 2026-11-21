@@ -97,6 +97,11 @@ export function definitionErrors(definition) {
   return errors;
 }
 
+// A recipe's wrapped definition owns its operational limit. Native adapters
+// can declare a limit themselves; absence is not an observed null.
+const effectiveIdleTimeout = (declared, wrapped) =>
+  wrapped == null ? declared.idleTimeoutMs : wrapped.idleTimeoutMs;
+
 // Only declared provider copy and effective inspected properties belong on this surface.
 export function providerPresentation(adapter, properties) {
   const declared = adapter.definition;
@@ -109,7 +114,7 @@ export function providerPresentation(adapter, properties) {
   for (const key of ['name', 'address', 'summary', 'setup']) {
     human[key] = observeText(text(declared.copy?.human?.[key]) ?? text(wrapped?.copy?.human?.[key]));
   }
-  const idle = Object.hasOwn(declared, 'idleTimeoutMs') ? declared.idleTimeoutMs : wrapped?.idleTimeoutMs;
+  const idle = effectiveIdleTimeout(declared, wrapped);
   const stability = properties?.address?.stability;
   const account = properties?.needsAccount;
   return {
@@ -401,7 +406,7 @@ export function recipeAdapter({ definition: location, excludeActions = [], exter
     },
 
     async runtimeFacts() {
-      const idle = wrapped?.idleTimeoutMs ?? null;
+      const idle = effectiveIdleTimeout(definition, wrapped) ?? null;
       return { properties: structuredClone(definition.capabilities), ingress: null,
         limits: { recommendedPollIntervalMs: idle ? Math.max(1000, Math.floor(idle / 2)) : 60000, idleTimeoutMs: idle } };
     },
