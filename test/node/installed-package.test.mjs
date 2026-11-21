@@ -29,6 +29,13 @@ test('installed package: root and /service import, exports equal the contract, c
   await exec('npm', ['install', '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund', join(pack, packed.filename)], { cwd: project, timeout: 120_000 });
   const installed = join(project, 'node_modules', '@tnunamak', 'gozar');
 
+  // Compile the bare-import fixture against this same installed archive, not the checkout.
+  const consumer = join(project, 'release-public-api-consumer.ts');
+  await writeFile(consumer, await readFile(new URL('../fixtures/release-public-api-consumer.ts', import.meta.url)));
+  const compiler = process.env.GOZAR_TSC || 'tsc'; // Reuse the host compiler; never download one during the gate.
+  await exec(compiler, ['--strict', '--noEmit', '--target', 'ES2022', '--module', 'NodeNext',
+    '--moduleResolution', 'NodeNext', consumer], { cwd: project, timeout: 60_000 });
+
   const probe = join(project, 'probe.mjs');
   await writeFile(probe, `import * as root from '@tnunamak/gozar';
 import * as service from '@tnunamak/gozar/service';
@@ -42,10 +49,15 @@ const catalog = await root.catalogRoutes({ schemaVersion: 1, owner: 'example-app
   usage: { kind: 'attached' }, requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] } });
 const registry = await testing.fakeRegistry({ id: 'fake-0a1b2c3d', kinds: ['session'], reach: 'internet' });
 const fake = testing.createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: testing.fakeReadContext({ home: ${JSON.stringify(stateHome)} }) });
-const fakeCatalog = await fake.catalogRoutes({ schemaVersion: 1, owner: 'example-app', target: '127.0.0.1:9', home: ${JSON.stringify(stateHome)}, usage: { kind: 'session', lifetimeMs: 60000 },
-  requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] } });
-await registry.cleanup();
-console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
+let fakeCatalog, inventory;
+try {
+  fakeCatalog = await fake.catalogRoutes({ schemaVersion: 1, owner: 'example-app', target: '127.0.0.1:9', home: ${JSON.stringify(stateHome)}, usage: { kind: 'session', lifetimeMs: 60000 },
+    requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] } });
+  inventory = (await fake.listProviders({ home: ${JSON.stringify(stateHome)}, owner: 'installed-fixture' })).providers;
+} finally {
+  await registry.cleanup();
+}
+console.log(JSON.stringify({ inventory, testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
   types: pkg.types, exportsTypes: pkg.exports['.'].types, engines: pkg.engines.node, providers: manifest.providers.map(item => item.id),
   candidates: catalog.candidates.length, observedAt: typeof catalog.observedAt, tokens: catalog.candidates.filter(item => item.candidateToken).length }));
 `);
@@ -58,6 +70,26 @@ console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeId
   assert.deepEqual(seen.testingExports, ['createReadContext', 'createRouteApi', 'createTestingGozar', 'fakeReadContext', 'fakeRegistry', 'fakeRouteScenarios'], 'the testing export is in the archive and names its public helpers');
   assert.deepEqual(seen.fakeIds, ['fake-0a1b2c3d']);
   assert.deepEqual(seen.fakeEligible, [true], 'the fake provider is listed from the installed bytes');
+  assert.equal(seen.inventory.length, 1);
+  const inventory = seen.inventory[0];
+  assert.equal(inventory.providerId, 'fake-0a1b2c3d');
+  const observation = (value, accepts, label) => {
+    assert.ok(value && (value.known === true || value.known === false), label);
+    if (value.known) {
+      assert.ok(accepts(value.value), label + ' known value');
+      assert.deepEqual(Object.keys(value).sort(), ['known', 'value'], label);
+    } else {
+      assert.equal(typeof value.reason, 'string', label + ' unknown reason');
+      assert.ok(value.reason.length, label + ' non-empty reason');
+      assert.deepEqual(Object.keys(value).sort(), ['known', 'reason'], label);
+    }
+  };
+  const text = value => typeof value === 'string';
+  observation(inventory.displayName, text, 'displayName');
+  for (const field of ['name', 'address', 'summary', 'setup']) observation(inventory.copy.human[field], text, 'copy.human.' + field);
+  observation(inventory.addressStability, value => ['stable', 'ephemeral'].includes(value), 'addressStability');
+  observation(inventory.idleTimeoutMs, value => value === null || (Number.isFinite(value) && value >= 0), 'idleTimeoutMs');
+  observation(inventory.needsAccount, value => typeof value === 'boolean', 'needsAccount');
   assert.equal(seen.types, './packages/gozar-node/route-contract.d.ts');
   assert.equal(seen.exportsTypes, seen.types);
   assert.equal(seen.engines, '>=22.13');

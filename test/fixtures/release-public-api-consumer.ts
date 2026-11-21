@@ -2,7 +2,7 @@
 import {
  createGozar, type GozarOptions, type Query, type Requirements, type Fact, type Cost,
  type SetupConsentSnapshot, type RouteConsentSnapshot, type GozarThrownError,
- type RouteView, type SecretBackend, type HostIdentity,
+ type RouteView, type Observation, type SecretBackend, type HostIdentity,
  type RunSetupOperationRequest, type SetupOperation,
 } from '@tnunamak/gozar';
 import {
@@ -208,3 +208,22 @@ async function consumeSetupOperation(api: Api) {
  const cancelled: SetupOperation = await api.cancelSetupOperation(setupOperation);
  return [view, read, cancelled];
 }
+
+// Scalar observations remain a discriminated union through the installed root export.
+const noAccount: Observation<boolean> = { known: true, value: false };
+const zeroTimeout: Observation<number | null> = { known: true, value: 0 };
+const noTimeout: Observation<number | null> = { known: true, value: null };
+const emptyLabel: Observation<string> = { known: true, value: '' };
+const unknownLabel: Observation<string> = { known: false, reason: 'unobserved' };
+// @ts-expect-error Unknown is not a known null value.
+const missingReason: Observation<string> = { known: false };
+// @ts-expect-error An unknown observation may not carry an authoritative value.
+const unknownWithValue: Observation<boolean> = { known: false, reason: 'unobserved', value: false };
+// @ts-expect-error An observation of a number does not coerce a string.
+const stringTimeout: Observation<number> = { known: true, value: '0' };
+// @ts-expect-error An observation of a boolean does not coerce a number.
+const numberAccount: Observation<boolean> = { known: true, value: 0 };
+function scalar(value: Observation<number | null>): number | null | string {
+  return value.known ? value.value : value.reason;
+}
+void [noAccount, zeroTimeout, noTimeout, emptyLabel, unknownLabel, missingReason, unknownWithValue, stringTimeout, numberAccount, scalar];
