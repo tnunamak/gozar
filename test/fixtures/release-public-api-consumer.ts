@@ -2,7 +2,7 @@
 import {
  createGozar, type GozarOptions, type Query, type Requirements, type Fact, type Cost,
  type SetupConsentSnapshot, type RouteConsentSnapshot, type GozarThrownError,
- type RouteView, type SecretBackend, type HostIdentity,
+ type RouteView, type SecretBackend, type HostIdentity, type ProviderInventory,
  type RunSetupOperationRequest, type SetupOperation,
 } from '@tnunamak/gozar';
 import {
@@ -149,6 +149,7 @@ async function consume(){
  const route:RouteView=await api.expose(expose);
  consumeRouteMetadata(route);
  const inventory=await api.listProviders({home:query.home,owner:query.owner});
+ observePresentation(inventory.providers[0]);
  const availability:InventoryAvailability=inventory.providers[0].availability;
  const availabilityState:'available'|'detect-only'|'unsupported'=availability.attached.state;
  void availabilityState;
@@ -208,3 +209,28 @@ async function consumeSetupOperation(api: Api) {
  const cancelled: SetupOperation = await api.cancelSetupOperation(setupOperation);
  return [view, read, cancelled];
 }
+
+// The installed consumer must see the same discriminated scalar observations as the runtime.
+function observePresentation(row: ProviderInventory) {
+ if (row.displayName.known) { const name: string = row.displayName.value; void name; }
+ for (const field of [row.copy.human.name, row.copy.human.address, row.copy.human.summary, row.copy.human.setup]) {
+  if (field.known) { const copy: string = field.value; void copy; }
+ }
+ if (row.addressStability.known) { const range: 'stable' | 'ephemeral' = row.addressStability.value; void range; }
+ if (row.idleTimeoutMs.known) { const timeout: number | null = row.idleTimeoutMs.value; void timeout; }
+ if (row.needsAccount.known) { const account: boolean = row.needsAccount.value; void account; }
+}
+const emptyName: ProviderInventory['displayName'] = { known: true, value: '' };
+const zeroIdle: ProviderInventory['idleTimeoutMs'] = { known: true, value: 0 };
+const nullIdle: ProviderInventory['idleTimeoutMs'] = { known: true, value: null };
+const noAccount: ProviderInventory['needsAccount'] = { known: true, value: false };
+const unknownName: ProviderInventory['displayName'] = { known: false, reason: 'not-observed' };
+// @ts-expect-error Unknown observations cannot carry a value.
+const unknownWithValue: ProviderInventory['displayName'] = { known: false, reason: 'not-observed', value: '' };
+// @ts-expect-error Idle timeout cannot be text.
+const textIdle: ProviderInventory['idleTimeoutMs'] = { known: true, value: '0' };
+// @ts-expect-error Account presence cannot be numeric.
+const numericAccount: ProviderInventory['needsAccount'] = { known: true, value: 0 };
+// @ts-expect-error Address stability is a closed union.
+const wrongStability: ProviderInventory['addressStability'] = { known: true, value: 'temporary' };
+void [emptyName, zeroIdle, nullIdle, noAccount, unknownName, unknownWithValue, textIdle, numericAccount, wrongStability];

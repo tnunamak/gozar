@@ -29,6 +29,16 @@ test('installed package: root and /service import, exports equal the contract, c
   await exec('npm', ['install', '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund', join(pack, packed.filename)], { cwd: project, timeout: 120_000 });
   const installed = join(project, 'node_modules', '@tnunamak', 'gozar');
 
+  const consumer = join(project, 'release-public-api-consumer.ts');
+  await writeFile(consumer, await readFile(new URL('../fixtures/release-public-api-consumer.ts', import.meta.url)));
+  const tsconfig = join(project, 'tsconfig.json');
+  await writeFile(tsconfig, JSON.stringify({
+    compilerOptions: { target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext',
+      strict: true, noEmit: true, skipLibCheck: false, types: [] },
+    files: ['release-public-api-consumer.ts'],
+  }));
+  await exec(process.env.GOZAR_TSC || 'tsc', ['--project', tsconfig, '--pretty', 'false'], { cwd: project, timeout: 30_000 });
+
   const probe = join(project, 'probe.mjs');
   await writeFile(probe, `import * as root from '@tnunamak/gozar';
 import * as service from '@tnunamak/gozar/service';
@@ -44,8 +54,9 @@ const registry = await testing.fakeRegistry({ id: 'fake-0a1b2c3d', kinds: ['sess
 const fake = testing.createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: testing.fakeReadContext({ home: ${JSON.stringify(stateHome)} }) });
 const fakeCatalog = await fake.catalogRoutes({ schemaVersion: 1, owner: 'example-app', target: '127.0.0.1:9', home: ${JSON.stringify(stateHome)}, usage: { kind: 'session', lifetimeMs: 60000 },
   requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] } });
+const inventory = await fake.listProviders({ home: ${JSON.stringify(stateHome)}, owner: 'example-app' });
 await registry.cleanup();
-console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
+console.log(JSON.stringify({ inventory, testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
   types: pkg.types, exportsTypes: pkg.exports['.'].types, engines: pkg.engines.node, providers: manifest.providers.map(item => item.id),
   candidates: catalog.candidates.length, observedAt: typeof catalog.observedAt, tokens: catalog.candidates.filter(item => item.candidateToken).length }));
 `);
@@ -62,6 +73,27 @@ console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeId
   assert.equal(seen.exportsTypes, seen.types);
   assert.equal(seen.engines, '>=22.13');
   assert.deepEqual(seen.providers, JSON.parse(await readFile(new URL('../../adapters/manifest.json', import.meta.url), 'utf8')).providers.map(provider => provider.id), 'the installed registry is the source registry');
+  assert.deepEqual(seen.inventory.providers.map(row => row.providerId), ['fake-0a1b2c3d']);
+  const checkObservation = (observation, isValue, field) => {
+    assert.ok(observation && typeof observation === 'object', field);
+    if (observation.known === true) {
+      assert.deepEqual(Object.keys(observation).sort(), ['known', 'value'], field);
+      assert.ok(isValue(observation.value), field);
+    } else {
+      assert.equal(observation.known, false, field);
+      assert.deepEqual(Object.keys(observation).sort(), ['known', 'reason'], field);
+      assert.equal(typeof observation.reason, 'string', field);
+    }
+  };
+  for (const row of seen.inventory.providers) {
+    const isString = value => typeof value === 'string';
+    checkObservation(row.displayName, isString, 'displayName');
+    for (const field of ['name', 'address', 'summary', 'setup'])
+      checkObservation(row.copy?.human?.[field], isString, 'copy.human.' + field);
+    checkObservation(row.addressStability, value => value === 'stable' || value === 'ephemeral', 'addressStability');
+    checkObservation(row.idleTimeoutMs, value => value === null || typeof value === 'number', 'idleTimeoutMs');
+    checkObservation(row.needsAccount, value => typeof value === 'boolean', 'needsAccount');
+  }
   assert.equal(seen.candidates, seen.providers.length, 'one candidate per installed registry entry');
   assert.equal(seen.tokens, 0, 'nothing is ready on a host with no provider tooling, so no token is issued');
   const example = join(installed, 'examples/remote-access-screen.mjs');
