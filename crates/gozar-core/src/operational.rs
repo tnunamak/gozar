@@ -2115,7 +2115,7 @@ pub fn complete(out: &mut Output, p: &Pending, cmd: &Value) {
         }
         return;
     }
-    let Some(mut e) = out.state.execution.take() else {
+    let Some(e) = out.state.execution.take() else {
         out.state.pending.remove(&p.effect.id);
         event(out, "cancelled-plan-callback");
         if out.state.stop_requested {
@@ -2131,217 +2131,11 @@ pub fn complete(out: &mut Output, p: &Pending, cmd: &Value) {
     let result = &cmd["result"];
     let ok = cmd.get("ok") == Some(&Value::Bool(true));
     let current = e.generation == out.state.generation && !out.state.stop_requested;
-    let completed = (|| -> Result<(), String> {
-        if e.stage == "persist" {
-            out.state.pending.remove(&p.effect.id);
-            if !ok || result.get("durable") != Some(&Value::Bool(true)) {
-                return Err("Operational mutation intent was not durably acknowledged".into());
-            }
-            if e.operation == "create" && !current {
-                return Ok(());
-            }
-            if e.valid_until_ms <= out.state.host.now_ms {
-                return Err("Fresh preflight expired while intent was being persisted".into());
-            }
-            if !e
-                .requires
-                .iter()
-                .all(|r| assertion(r, &Value::Null, &e, &out.state, &Value::Null, 0))
-            {
-                return Err("Preflight authority changed before mutation".into());
-            }
-            let adapter = out
-                .state
-                .adapters
-                .iter()
-                .find(|adapter| adapter.id == e.adapter_id)
-                .ok_or("Adapter unavailable")?;
-            admissible(adapter, &out.state)?;
-            if e.operation == "create"
-                && (!materializations_valid(adapter, &e, &out.state)
-                    || !mapping_plan_valid(adapter, &e))
-            {
-                return Err("Private materialization scope changed before mutation".into());
-            }
-            for (name, saved) in &e.bindings {
-                if e.operation == "remove"
-                    && (e.recipe.kind == EffectKind::OwnedProcess
-                        || immutable_cleanup_binding(saved))
-                {
-                    continue;
-                }
-                if let Some(authority) = saved.get("hostAuthority") {
-                    let current = out
-                        .state
-                        .host
-                        .bindings
-                        .get(name)
-                        .ok_or("Host binding disappeared before mutation")?;
-                    if !fresh(current, &out.state)
-                        || current.get("value") != saved.get("value")
-                        || current.get("handleRef") != saved.get("handleRef")
-                        || current.get("authorityRef") != Some(authority)
-                        || (immutable_cleanup_binding(saved)
-                            && current.get("generation") != saved.get("generation"))
-                        || current.get("materialization") != saved.get("materialization")
-                        || current.get("mode") != saved.get("mode")
-                        || current.get("parentMode") != saved.get("parentMode")
-                    {
-                        return Err("Host binding identity changed before mutation".into());
-                    }
-                }
-            }
-            let recipe = prepare_recipe(&e)?;
-            e.stage = "execute".into();
-            emit_scoped(out, &e, recipe, "execute", "execute");
-            out.state.execution = Some(e);
-            return Ok(());
-        }
-        if e.stage == "execute" {
-            let exit_ok = result
-                .get("exitCode")
-                .and_then(Value::as_i64)
-                .is_none_or(|n| n == 0);
-            if e.operation == "create" {
-                if let Err(error) = record_allocation(out, &mut e, result) {
-                    if !ok && result.get("notApplied") == Some(&Value::Bool(true)) {
-                        out.state.pending.remove(&p.effect.id);
-                        return Err("Create confirmed not applied".into());
-                    }
-                    // No safe attribution yet: retain request and never issue another create.
-                    out.state.execution = Some(e);
-                    limit(out, &error);
-                    out.state.phase = if out.state.stop_requested {
-                        "stopping"
-                    } else {
-                        "failed"
-                    }
-                    .into();
-                    return Ok(());
-                }
-                out.state.pending.remove(&p.effect.id);
-                if e.recipe
-                    .fields
-                    .get("ledger")
-                    .map(|v| expand(v, &e.bindings))
-                    .transpose()?
-                    .as_ref()
-                    .is_some_and(|expected| {
-                        e.ledger.as_ref().is_none_or(|l| &l.details != expected)
-                    })
-                {
-                    return Err("Created allocation differs from consented ledger; owned cleanup debt retained".into());
-                }
-                if !current {
-                    if let Some(r) = out
-                        .state
-                        .resources
-                        .iter_mut()
-                        .find(|r| Some(&r.id) == e.resource_id.as_ref())
-                    {
-                        r.cleanup = "pending".into();
-                    }
-                    out.state.execution = None;
-                    cleanup(out);
-                    return Ok(());
-                }
-                if !ok || !exit_ok {
-                    return Err("Create returned an owned allocation but completion failed; cleanup debt retained".into());
-                }
-                e.candidate = parse(&p.parser, result).and_then(|s| origin(&s));
-            } else {
-                out.state.pending.remove(&p.effect.id);
-                if !ok || !exit_ok || result.get("removed") != Some(&Value::Bool(true)) {
-                    return Err("Owned removal is unconfirmed; do not blindly reissue".into());
-                }
-            }
-            e.stage = "after".into();
-            e.index = 0;
-            return drive(out, e);
-        }
-        if e.operation == "create" && !current {
-            out.state.pending.remove(&p.effect.id);
-            cleanup(out);
-            return Ok(());
-        }
-        let steps = if e.stage == "before" {
-            &e.before
-        } else {
-            &e.after
-        };
-        let step = steps
-            .get(e.index)
-            .cloned()
-            .ok_or("Plan step cursor out of bounds")?;
-        out.state.pending.remove(&p.effect.id);
-        if step.id != ticket.step_id || !ok {
-            return Err("Ordered observation failed".into());
-        }
-        let observation = &result["observation"];
-        if !fresh(observation, &out.state)
-            || !opaque(str_field(observation, "authorityRef"))
-            || observation
-                .get("observedAtMs")
-                .and_then(Value::as_u64)
-                .is_none_or(|t| t < e.started_at_ms)
-        {
-            return Err("Observation missing scoped fresh authority/time receipt".into());
-        }
-        e.valid_until_ms = e
-            .valid_until_ms
-            .min(observation["expiresAtMs"].as_u64().unwrap_or(0));
-        let raw = str_field(result, "stdout");
-        if raw.len() > 1_048_576 {
-            return Err("Observation exceeds core byte limit".into());
-        }
-        let doc = if raw.is_empty() {
-            result.clone()
-        } else {
-            serde_json::from_str(raw).map_err(|_| "Observation is not a JSON document")?
-        };
-        if step.id == "ownership" && step.recipe.fields.get("action") == Some(&json!("inspect")) {
-            let ledger = e.ledger.as_ref().ok_or("Missing ownership ledger")?;
-            let receipt = &result["ownershipReceipt"];
-            if !continuity(receipt, ledger, &out.state)
-                || doc.get("details") != Some(&ledger.details)
-            {
-                return Err("Local immutable handle continuity or exact details changed".into());
-            }
-            e.facts
-                .insert(step.id.clone(), json!({"route":ledger.details}));
-        } else {
-            if step
-                .assert
-                .as_ref()
-                .is_some_and(|rule| !assertion(rule, &doc, &e, &out.state, result, 0))
-            {
-                return Err(
-                    "Raw current record assertion failed; preserve administrator changes".into(),
-                );
-            }
-            if parse(&p.parser, result).is_none() {
-                return Err("Observation parser failed".into());
-            }
-            let mut facts = serde_json::Map::new();
-            for (name, spec) in &step.captures {
-                facts.insert(name.clone(), capture(&doc, spec, &e.bindings, 0)?);
-            }
-            e.facts.insert(step.id.clone(), Value::Object(facts));
-        }
-        if let (Some(receipt), Some(ledger)) = (result.get("ownershipReceipt"), e.ledger.as_ref()) {
-            if !continuity(receipt, ledger, &out.state) {
-                return Err("Ownership continuity unknown or changed".into());
-            }
-            e.ownership_receipt = Some(
-                json!({"handleRef":receipt["handleRef"],"continuityRef":receipt["continuityRef"],"sessionId":receipt["sessionId"],"observedAtMs":receipt["observedAtMs"],"expiresAtMs":receipt["expiresAtMs"],"continuous":true}),
-            );
-            e.valid_until_ms = e
-                .valid_until_ms
-                .min(receipt["expiresAtMs"].as_u64().unwrap_or(0));
-        }
-        e.index += 1;
-        drive(out, e)
-    })();
+    let completed = match e.stage.as_str() {
+        "persist" => complete_persist(out, p, e, result, ok, current),
+        "execute" => complete_execute(out, p, e, result, ok, current),
+        _ => complete_observation(out, p, ticket, e, result, ok, current),
+    };
     if let Err(error) = completed {
         for r in &mut out.state.resources {
             if r.ledger.is_some() && r.cleanup != "removed" {
@@ -2350,6 +2144,239 @@ pub fn complete(out: &mut Output, p: &Pending, cmd: &Value) {
         }
         fail(out, &error);
     }
+}
+fn complete_persist(
+    out: &mut Output,
+    p: &Pending,
+    mut e: Execution,
+    result: &Value,
+    ok: bool,
+    current: bool,
+) -> Result<(), String> {
+    out.state.pending.remove(&p.effect.id);
+    if !ok || result.get("durable") != Some(&Value::Bool(true)) {
+        return Err("Operational mutation intent was not durably acknowledged".into());
+    }
+    if e.operation == "create" && !current {
+        return Ok(());
+    }
+    if e.valid_until_ms <= out.state.host.now_ms {
+        return Err("Fresh preflight expired while intent was being persisted".into());
+    }
+    if !e
+        .requires
+        .iter()
+        .all(|r| assertion(r, &Value::Null, &e, &out.state, &Value::Null, 0))
+    {
+        return Err("Preflight authority changed before mutation".into());
+    }
+    let adapter = out
+        .state
+        .adapters
+        .iter()
+        .find(|adapter| adapter.id == e.adapter_id)
+        .ok_or("Adapter unavailable")?;
+    admissible(adapter, &out.state)?;
+    if e.operation == "create"
+        && (!materializations_valid(adapter, &e, &out.state)
+            || !mapping_plan_valid(adapter, &e))
+    {
+        return Err("Private materialization scope changed before mutation".into());
+    }
+    for (name, saved) in &e.bindings {
+        if e.operation == "remove"
+            && (e.recipe.kind == EffectKind::OwnedProcess
+                || immutable_cleanup_binding(saved))
+        {
+            continue;
+        }
+        if let Some(authority) = saved.get("hostAuthority") {
+            let current = out
+                .state
+                .host
+                .bindings
+                .get(name)
+                .ok_or("Host binding disappeared before mutation")?;
+            if !fresh(current, &out.state)
+                || current.get("value") != saved.get("value")
+                || current.get("handleRef") != saved.get("handleRef")
+                || current.get("authorityRef") != Some(authority)
+                || (immutable_cleanup_binding(saved)
+                    && current.get("generation") != saved.get("generation"))
+                || current.get("materialization") != saved.get("materialization")
+                || current.get("mode") != saved.get("mode")
+                || current.get("parentMode") != saved.get("parentMode")
+            {
+                return Err("Host binding identity changed before mutation".into());
+            }
+        }
+    }
+    let recipe = prepare_recipe(&e)?;
+    e.stage = "execute".into();
+    emit_scoped(out, &e, recipe, "execute", "execute");
+    out.state.execution = Some(e);
+    Ok(())
+}
+fn complete_execute(
+    out: &mut Output,
+    p: &Pending,
+    mut e: Execution,
+    result: &Value,
+    ok: bool,
+    current: bool,
+) -> Result<(), String> {
+    let exit_ok = result
+        .get("exitCode")
+        .and_then(Value::as_i64)
+        .is_none_or(|n| n == 0);
+    if e.operation == "create" {
+        if let Err(error) = record_allocation(out, &mut e, result) {
+            if !ok && result.get("notApplied") == Some(&Value::Bool(true)) {
+                out.state.pending.remove(&p.effect.id);
+                return Err("Create confirmed not applied".into());
+            }
+            // No safe attribution yet: retain request and never issue another create.
+            out.state.execution = Some(e);
+            limit(out, &error);
+            out.state.phase = if out.state.stop_requested {
+                "stopping"
+            } else {
+                "failed"
+            }
+            .into();
+            return Ok(());
+        }
+        out.state.pending.remove(&p.effect.id);
+        if e.recipe
+            .fields
+            .get("ledger")
+            .map(|v| expand(v, &e.bindings))
+            .transpose()?
+            .as_ref()
+            .is_some_and(|expected| {
+                e.ledger.as_ref().is_none_or(|l| &l.details != expected)
+            })
+        {
+            return Err("Created allocation differs from consented ledger; owned cleanup debt retained".into());
+        }
+        if !current {
+            if let Some(r) = out
+                .state
+                .resources
+                .iter_mut()
+                .find(|r| Some(&r.id) == e.resource_id.as_ref())
+            {
+                r.cleanup = "pending".into();
+            }
+            out.state.execution = None;
+            cleanup(out);
+            return Ok(());
+        }
+        if !ok || !exit_ok {
+            return Err("Create returned an owned allocation but completion failed; cleanup debt retained".into());
+        }
+        e.candidate = parse(&p.parser, result).and_then(|s| origin(&s));
+    } else {
+        out.state.pending.remove(&p.effect.id);
+        if !ok || !exit_ok || result.get("removed") != Some(&Value::Bool(true)) {
+            return Err("Owned removal is unconfirmed; do not blindly reissue".into());
+        }
+    }
+    e.stage = "after".into();
+    e.index = 0;
+    drive(out, e)
+}
+fn complete_observation(
+    out: &mut Output,
+    p: &Pending,
+    ticket: &Ticket,
+    mut e: Execution,
+    result: &Value,
+    ok: bool,
+    current: bool,
+) -> Result<(), String> {
+    if e.operation == "create" && !current {
+        out.state.pending.remove(&p.effect.id);
+        cleanup(out);
+        return Ok(());
+    }
+    let steps = if e.stage == "before" {
+        &e.before
+    } else {
+        &e.after
+    };
+    let step = steps
+        .get(e.index)
+        .cloned()
+        .ok_or("Plan step cursor out of bounds")?;
+    out.state.pending.remove(&p.effect.id);
+    if step.id != ticket.step_id || !ok {
+        return Err("Ordered observation failed".into());
+    }
+    let observation = &result["observation"];
+    if !fresh(observation, &out.state)
+        || !opaque(str_field(observation, "authorityRef"))
+        || observation
+            .get("observedAtMs")
+            .and_then(Value::as_u64)
+            .is_none_or(|t| t < e.started_at_ms)
+    {
+        return Err("Observation missing scoped fresh authority/time receipt".into());
+    }
+    e.valid_until_ms = e
+        .valid_until_ms
+        .min(observation["expiresAtMs"].as_u64().unwrap_or(0));
+    let raw = str_field(result, "stdout");
+    if raw.len() > 1_048_576 {
+        return Err("Observation exceeds core byte limit".into());
+    }
+    let doc = if raw.is_empty() {
+        result.clone()
+    } else {
+        serde_json::from_str(raw).map_err(|_| "Observation is not a JSON document")?
+    };
+    if step.id == "ownership" && step.recipe.fields.get("action") == Some(&json!("inspect")) {
+        let ledger = e.ledger.as_ref().ok_or("Missing ownership ledger")?;
+        let receipt = &result["ownershipReceipt"];
+        if !continuity(receipt, ledger, &out.state)
+            || doc.get("details") != Some(&ledger.details)
+        {
+            return Err("Local immutable handle continuity or exact details changed".into());
+        }
+        e.facts
+            .insert(step.id.clone(), json!({"route":ledger.details}));
+    } else {
+        if step
+            .assert
+            .as_ref()
+            .is_some_and(|rule| !assertion(rule, &doc, &e, &out.state, result, 0))
+        {
+            return Err(
+                "Raw current record assertion failed; preserve administrator changes".into(),
+            );
+        }
+        if parse(&p.parser, result).is_none() {
+            return Err("Observation parser failed".into());
+        }
+        let mut facts = serde_json::Map::new();
+        for (name, spec) in &step.captures {
+            facts.insert(name.clone(), capture(&doc, spec, &e.bindings, 0)?);
+        }
+        e.facts.insert(step.id.clone(), Value::Object(facts));
+    }
+    if let (Some(receipt), Some(ledger)) = (result.get("ownershipReceipt"), e.ledger.as_ref()) {
+        if !continuity(receipt, ledger, &out.state) {
+            return Err("Ownership continuity unknown or changed".into());
+        }
+        e.ownership_receipt = Some(
+            json!({"handleRef":receipt["handleRef"],"continuityRef":receipt["continuityRef"],"sessionId":receipt["sessionId"],"observedAtMs":receipt["observedAtMs"],"expiresAtMs":receipt["expiresAtMs"],"continuous":true}),
+        );
+        e.valid_until_ms = e
+            .valid_until_ms
+            .min(receipt["expiresAtMs"].as_u64().unwrap_or(0));
+    }
+    e.index += 1;
+    drive(out, e)
 }
 pub fn health(out: &mut Output, rotate: bool) {
     let result = (|| -> Result<(), String> {

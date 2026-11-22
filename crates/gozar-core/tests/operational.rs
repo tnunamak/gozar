@@ -242,6 +242,27 @@ fn failed_and_expired_preflight_emit_no_mutation() {
     assert_eq!(ack(&out, r, &f["host"])["effects"], json!([]));
 }
 #[test]
+fn nondurable_ack_clears_the_pending_intent_without_emitting_execution() {
+    let f = fixture();
+    let a = definition("private");
+    let out = until(
+        begin(&a, &f["host"]),
+        &a,
+        &f["host"],
+        &f["baselineConfig"],
+        "persist",
+    );
+    assert_eq!(out["effects"][0]["kind"], "persist");
+    let id = out["effects"][0]["id"].as_str().unwrap();
+    assert!(out["state"]["pending"].get(id).is_some());
+    for result in [json!({}), json!({"durable":false})] {
+        let denied = ack(&out, result, &f["host"]);
+        assert_eq!(denied["effects"], json!([]));
+        assert!(denied["state"]["pending"].get(id).is_none());
+        assert_eq!(denied["state"]["resources"], out["state"]["resources"]);
+    }
+}
+#[test]
 fn durable_ack_cannot_execute_after_preflight_authority_expiry() {
     let f = fixture();
     let a = definition("private");
