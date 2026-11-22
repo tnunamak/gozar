@@ -46,7 +46,27 @@ const fakeCatalog = await fake.catalogRoutes({ schemaVersion: 1, owner: 'example
   requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] } });
 const embed = await root.createGozar();
 const present = (await embed.listProviders({ home: ${JSON.stringify(stateHome)} })).providers;
-if (!present.length || present.some(row => ['displayName','addressStability','idleTimeoutMs','needsAccount'].some(key => typeof row[key]?.known !== 'boolean') || typeof row.copy?.human?.name?.known !== 'boolean')) throw new Error('installed public provider observations missing');
+const nonblank = value => typeof value === 'string' && value.trim().length > 0;
+const observes = (entry, profile) => {
+  if (entry?.known === true) return Object.hasOwn(entry, 'value') &&
+    !Object.hasOwn(entry, 'reason') && profile(entry.value);
+  if (entry?.known === false) return !Object.hasOwn(entry, 'value') &&
+    Object.hasOwn(entry, 'reason') && nonblank(entry.reason);
+  return false;
+};
+if (!present.length) throw new Error('installed public provider inventory is empty');
+for (const row of present) {
+  const fields = [
+    ['displayName', row.displayName, nonblank],
+    ['addressStability', row.addressStability, value => ['stable', 'ephemeral'].includes(value)],
+    ['idleTimeoutMs', row.idleTimeoutMs, value => value === null || (Number.isSafeInteger(value) && value >= 0)],
+    ['needsAccount', row.needsAccount, value => typeof value === 'boolean'],
+    ...['name', 'address', 'summary', 'setup'].map(key => ['copy.human.' + key, row.copy?.human?.[key], nonblank]),
+  ];
+  for (const [key, entry, profile] of fields) {
+    if (!observes(entry, profile)) throw new Error('malformed installed public provider observation: ' + key + ' (' + row.providerId + ')');
+  }
+}
 await registry.cleanup();
 console.log(JSON.stringify({ testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
   types: pkg.types, exportsTypes: pkg.exports['.'].types, engines: pkg.engines.node, providers: manifest.providers.map(item => item.id),
