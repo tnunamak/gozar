@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {createServiceVerifier} from '@tnunamak/gozar';
 import {createTestingGozar} from '@tnunamak/gozar/testing';
 import {scratch,query} from './route-schema-check.mjs';
-export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJournal=false}={}){
+export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJournal=false,terminalInventory=false}={}){
  let harness,app;t.after(async()=>{try{await harness?.close();}finally{if(app)await new Promise(resolve=>app.close(resolve));}});
  const home=await scratch(t),owner='durable-effects';
  const verifier=createServiceVerifier();app=http.createServer((req,res)=>{if(!verifier(req,res))res.end('app');});await new Promise(resolve=>app.listen(0,'127.0.0.1',resolve));
@@ -85,6 +85,25 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
   assert.deepEqual(terminalJournal.view.handle,resumed.handle,'terminal journal follows exact committed restoration');
   assert.equal(terminalJournal.view.cleanup.state,'confirmed');
   assert.deepEqual(config,foreign);assert.equal(writes,afterResume+1,'Stop removes exactly the resumed rule');
+  if(terminalInventory){
+   const journalPath=join(home,'operations',terminalName);
+   const beforeInventory=await readFile(journalPath),inventoryWrites=writes;
+   const fresh=await createTestingGozar({effects});
+   try{
+    const {routes}=await fresh.gozar.listRoutes({home,owner});
+    const owned=routes.filter(row=>row.handle.kind==='durable'&&row.handle.id===resumed.handle.id);
+    assert.equal(owned.length,1,'inventory contains one row for the exact durable identity');
+    assert.deepEqual(owned[0].handle,resumed.handle,'terminal inventory uses the restored generation');
+    assert.notEqual(owned[0].handle.generation,route.handle.generation);
+    assert.equal(owned[0].state,'released');
+    assert.equal(owned[0].cleanup.state,'confirmed');
+    assert.equal(owned[0].published,null);
+    assert.equal(writes,inventoryWrites,'listing must not change provider rules');
+    assert.deepEqual(config,foreign);
+    assert.deepEqual(await readFile(journalPath),beforeInventory,'listing must not rewrite terminal evidence');
+   }finally{await fresh.close();}
+   return;
+  }
   const terminalWrites=writes,terminal=await api.ensureRoute(request);
   assert.equal(terminal.state,'released');assert.deepEqual(terminal.handle,resumed.handle);
   assert.equal(terminal.cleanup.state,'confirmed');
@@ -95,3 +114,4 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
 test('shipped durable modules parse source observations, conditionally write, prove and remove only their rule',t=>exercise(t));
 test('known partial durable write stays owned and can be recovered after a failed provider response',t=>exercise(t,{partialWrite:true}));
 test('public adoption binds current configuration and proof before claiming an existing rule',t=>exercise(t,{adoptExisting:true}));
+test('fresh owned inventory keeps only confirmed restored terminal durable evidence',t=>exercise(t,{terminalInventory:true}));
