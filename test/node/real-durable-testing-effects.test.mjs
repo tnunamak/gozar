@@ -7,7 +7,8 @@ import {join} from 'node:path';
 import {createServiceVerifier} from '@tnunamak/gozar';
 import {createTestingGozar} from '@tnunamak/gozar/testing';
 import {scratch,query} from './route-schema-check.mjs';
-export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJournal=false}={}){
+const DURABLE_REPLAY_PROVIDERS = ['tailscale-funnel', 'tailscale-private'];
+export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJournal=false,replayProviderId=''}={}){
  let harness,app;t.after(async()=>{try{await harness?.close();}finally{if(app)await new Promise(resolve=>app.close(resolve));}});
  const home=await scratch(t),owner='durable-effects';
  const verifier=createServiceVerifier();app=http.createServer((req,res)=>{if(!verifier(req,res))res.end('app');});await new Promise(resolve=>app.listen(0,'127.0.0.1',resolve));
@@ -30,7 +31,9 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
   }},
  ];
  harness=await createTestingGozar({effects});const api=harness.gozar;
- const choices=(await api.listProviders({home,owner,refresh:true})).providers.filter(p=>p.availability.durable.state==='available');assert.equal(choices.length,2);
+ const available=(await api.listProviders({home,owner,refresh:true})).providers.filter(p=>p.availability.durable.state==='available');assert.equal(available.length,2);
+ const choices=replayProviderId===''?available:available.filter(provider=>provider.providerId===replayProviderId);
+ if(replayProviderId!=='')assert.equal(choices.length,1,`expected durable provider ${replayProviderId}`);
  for(const [index,provider]of choices.entries()){
   const q=query({home,owner,providerId:provider.providerId,operationId:`durable-${index}`,target:`127.0.0.1:${app.address().port}`,usage:{kind:'durable',routeId:`fixture-${index}`},requirements:{reach:provider.reach,transport:'https',payloadAccess:'allow-provider',address:'stable',setup:'allow',protocols:[]}});
   if(adoptExisting){config={...config,TCP:{...config.TCP,'443':{HTTPS:true}},Web:{'fixture.node.invalid:443':{Handlers:{'/':{Proxy:`http://${q.target}`}}}},AllowFunnel:{'fixture.node.invalid:443':true}};q.origin='https://fixture.node.invalid';q.intent='adopt';}
@@ -108,5 +111,8 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
  }
 }
 test('shipped durable modules parse source observations, conditionally write, prove and remove only their rule',t=>exercise(t));
+for(const replayProviderId of DURABLE_REPLAY_PROVIDERS){
+ test(`fresh durable facade replay preserves terminal evidence for ${replayProviderId}`,t=>exercise(t,{replayProviderId}));
+}
 test('known partial durable write stays owned and can be recovered after a failed provider response',t=>exercise(t,{partialWrite:true}));
 test('public adoption binds current configuration and proof before claiming an existing rule',t=>exercise(t,{adoptExisting:true}));
