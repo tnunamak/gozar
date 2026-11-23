@@ -45,6 +45,22 @@ fn repeated_status_preserves_the_same_snapshot_without_effects() {
     assert_eq!(second, first);
 }
 
+#[test]
+fn unsupported_show_help_reports_correlated_event_without_an_effect() {
+    let session = "fixture-show-help";
+    let out = run(json!({"command":{"type":"show-help","sessionId":session}}));
+    let generation = out["snapshot"]["generation"].clone();
+
+    assert_eq!(out["snapshot"]["sessionId"], session);
+    assert!(generation.is_u64());
+    assert_eq!(
+        out["events"],
+        json!([{"type":"unsupported-command","sessionId":session,"generation":generation}])
+    );
+    assert_eq!(out["effects"], json!([]));
+    assert!(out.get("action").is_none());
+}
+
 fn fixture() -> Value {
     serde_json::from_str(include_str!("../../../test/adapters/fixtures/plan-v1.json")).unwrap()
 }
