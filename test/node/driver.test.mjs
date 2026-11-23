@@ -285,6 +285,43 @@ test('owned process output frames complete lines across chunks without diagnosti
   assert.equal(JSON.stringify(driver.journal.value).includes('lhr.life'), false);
 });
 
+test('an observer callback failure does not discard diagnostic output', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  const seen = [];
+  driver.onProcessOutput = row => {
+    if (row.completeLine === 'first') throw new Error('synthetic observer failure');
+    if (row.completeLine !== undefined) seen.push(row.completeLine);
+  };
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('first\n'));
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('second\n'));
+  assert.deepEqual(seen, ['second']);
+  assert.deepEqual(driver.readProcessOutput().map(row => row.output), ['first\n', 'second\n']);
+});
+
+test('diagnostic reads return independent rows and a noninclusive sequence cursor', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('one'));
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('two'));
+  const next = driver.readProcessOutput(1);
+  assert.equal(next.length, 1);
+  assert.equal(next[0].sequence, 2);
+  next[0].output = 'client-local change';
+  assert.deepEqual(driver.readProcessOutput().map(row => row.output), ['one', 'two']);
+});
+
+function makeOutputOnlyDriver() {
+  return Object.assign(Object.create(EffectDriver.prototype), {
+    sessionId: 'synthetic-session', observeProcessOutput: true, onProcessOutput: null,
+    outputEvents: [], outputBytes: 0, outputSequence: 0, nowMs: () => 100,
+  });
+}
+
 test('initial create URL is handled by the core result and never re-emitted as a route change', async t => {
   const recipe = { kind: 'spawn', program, args: ['-e', 'process.stdout.write("https://a.lhr.life\\n");setTimeout(()=>process.stdout.write("https://b.lhr.life\\n"),120);setInterval(()=>{},1000)'],
     timeoutMs: 1000, maxOutputBytes: 4096, longRunning: true, collectMs: 30 };
