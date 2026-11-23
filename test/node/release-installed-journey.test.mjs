@@ -253,3 +253,22 @@ test('uncertain cleanup cannot become a successful installed step',async t=>{
  t.after(()=>rm(report.scratch,{recursive:true,force:true}));
  assert.equal(report.status,'failed');assert.deepEqual(report.failure.result,result);
 });
+
+test('pack receipt rejects an array with more than one package receipt',async()=>{
+ const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
+ const first={filename:'tnunamak-gozar-1.2.3.tgz',name:'@tnunamak/gozar',version:'1.2.3'};
+ assert.deepEqual(parsePackOutput(JSON.stringify([first])),first);
+ assert.throws(
+  ()=>parsePackOutput(JSON.stringify([first,{...first,filename:'tnunamak-gozar-1.2.4.tgz',version:'1.2.4'}])),
+  {message:'Unknown or ambiguous npm pack output'}
+ );
+});
+
+test('pack receipt rejects a single package with the wrong package identity',async()=>{
+ const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
+ const entry={filename:'sample-widget-1.2.3.tgz',name:'@sample/widget',version:'1.2.3'};
+ assert.throws(
+  ()=>parsePackOutput(JSON.stringify([entry])),
+  {message:'Unknown or ambiguous npm pack output'}
+ );
+});
