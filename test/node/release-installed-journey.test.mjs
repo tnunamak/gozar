@@ -123,6 +123,30 @@ for(const nested of [false,true])test('refuses optional ngrok peer at '+(nested?
  t.after(()=>rm(report.scratch,{recursive:true,force:true}));
  assert.equal(report.status,'failed');
 });
+test('a synchronous launch failure reports not-started cleanup and the original error',async()=>{
+ const error=Object.assign(new Error('synthetic executable missing'),{code:'ENOENT'});
+ const result=await runProcess('fixture-only',[],{timeoutMs:1000},{spawnProcess:()=>{throw error;}});
+ assert.deepEqual(result.error,{name:'Error',message:'synthetic executable missing',code:'ENOENT'});
+ assert.deepEqual(result.cleanup,{scope:'not-started',state:'confirmed'});
+ assert.equal(result.status,null);
+ assert.equal(result.stdout,'');
+});
+
+test('a direct child closed by signal retains the signal and captured diagnostics',async()=>{
+ const child=new EventEmitter();
+ child.stdout=new EventEmitter();
+ child.stderr=new EventEmitter();
+ const pending=runProcess('fixture-only',[],{timeoutMs:1000},{spawnProcess:()=>child});
+ child.stderr.emit('data',Buffer.from('synthetic diagnostic'));
+ child.emit('close',null,'SIGTERM');
+ const result=await pending;
+ assert.equal(result.status,null);
+ assert.equal(result.signal,'SIGTERM');
+ assert.equal(result.stderr,'synthetic diagnostic');
+ assert.equal(result.timedOut,false);
+ assert.equal(result.cleanup.state,'confirmed');
+});
+
 test('process error waits for close and retains both pre-error and trailing output',async()=>{
  const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.kill=()=>{};
  let settled=false;
