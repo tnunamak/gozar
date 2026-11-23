@@ -1092,3 +1092,15 @@ fn stopping_an_empty_session_is_idempotent() {
     assert_eq!(repeated["events"], json!([]));
     assert_eq!(repeated["effects"], json!([]));
 }
+
+
+#[test]
+fn recommendation_without_adapters_has_no_choices_or_effects() {
+    let out = run(json!({"command": {"type": "recommend"}, "adapters": []}));
+    assert_eq!(out["snapshot"]["phase"], "planned");
+    assert_eq!(out["snapshot"]["recommendations"], json!([]));
+    assert_eq!(out["snapshot"]["plans"], json!([]));
+    assert_eq!(out["action"], json!({"kind": "choose", "choices": []}));
+    assert_eq!(out["effects"], json!([]));
+    assert_eq!(out["events"], json!([]));
+}
