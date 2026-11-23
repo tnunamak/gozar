@@ -31,6 +31,7 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
  ];
  harness=await createTestingGozar({effects});const api=harness.gozar;
  const choices=(await api.listProviders({home,owner,refresh:true})).providers.filter(p=>p.availability.durable.state==='available');assert.equal(choices.length,2);
+ const terminalInventoryProviders=new Set();
  for(const [index,provider]of choices.entries()){
   const q=query({home,owner,providerId:provider.providerId,operationId:`durable-${index}`,target:`127.0.0.1:${app.address().port}`,usage:{kind:'durable',routeId:`fixture-${index}`},requirements:{reach:provider.reach,transport:'https',payloadAccess:'allow-provider',address:'stable',setup:'allow',protocols:[]}});
   if(adoptExisting){config={...config,TCP:{...config.TCP,'443':{HTTPS:true}},Web:{'fixture.node.invalid:443':{Handlers:{'/':{Proxy:`http://${q.target}`}}}},AllowFunnel:{'fixture.node.invalid:443':true}};q.origin='https://fixture.node.invalid';q.intent='adopt';}
@@ -102,16 +103,21 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
     assert.deepEqual(config,foreign);
     assert.deepEqual(await readFile(journalPath),beforeInventory,'listing must not rewrite terminal evidence');
    }finally{await fresh.close();}
-   return;
+   terminalInventoryProviders.add(provider.providerId);
+   continue;
   }
   const terminalWrites=writes,terminal=await api.ensureRoute(request);
   assert.equal(terminal.state,'released');assert.deepEqual(terminal.handle,resumed.handle);
   assert.equal(terminal.cleanup.state,'confirmed');
   assert.equal(writes,terminalWrites,'stopped replay must remain terminal without a write');
  }
+ if(terminalInventory){
+  assert.equal(terminalInventoryProviders.size,2,'terminal inventory must complete for two distinct providers');
+  assert.deepEqual(terminalInventoryProviders,new Set(choices.map(provider=>provider.providerId)));
+ }
  assert.ok(harness.events.some(e=>e.kind==='local-api'&&e.operation==='request'));
 }
 test('shipped durable modules parse source observations, conditionally write, prove and remove only their rule',t=>exercise(t));
 test('known partial durable write stays owned and can be recovered after a failed provider response',t=>exercise(t,{partialWrite:true}));
 test('public adoption binds current configuration and proof before claiming an existing rule',t=>exercise(t,{adoptExisting:true}));
-test('fresh owned inventory keeps only confirmed restored terminal durable evidence',t=>exercise(t,{terminalInventory:true}));
+test('fresh owned inventory keeps confirmed restored terminal evidence for both durable providers',t=>exercise(t,{terminalInventory:true}));
