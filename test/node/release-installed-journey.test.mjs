@@ -163,6 +163,27 @@ test('a synchronous launch failure reports not-started cleanup and the original 
  assert.equal(result.stdout,'');
 });
 
+test('a synchronous launch refusal without an error code records null',async()=>{
+ const error=new TypeError('synthetic launch refusal');
+ const result=await runProcess('fixture-only',[],{timeoutMs:1000},{spawnProcess:()=>{throw error;}});
+ assert.deepEqual(result.error,{name:'TypeError',message:'synthetic launch refusal',code:null});
+ assert.deepEqual(result.cleanup,{scope:'not-started',state:'confirmed'});
+ assert.deepEqual([result.status,result.signal,result.stdout,result.stderr],[null,null,'','']);
+});
+
+test('an ordinary nonzero close keeps its exit code and separate output streams',async()=>{
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ child.kill=()=>assert.fail('ordinary close must not signal the fixture');
+ const pending=runProcess('fixture-only',[],{timeoutMs:1000},{spawnProcess:()=>child});
+ child.stdout.emit('data','one');child.stderr.emit('data','two');
+ child.emit('close',7,null);
+ const result=await pending;
+ assert.deepEqual([result.status,result.signal,result.stdout,result.stderr],[7,null,'one','two']);
+ assert.deepEqual([result.timedOut,result.overflow,result.drainTimedOut],[false,false,false]);
+ assert.deepEqual([result.cleanup.scope,result.cleanup.state],['child-only','confirmed']);
+ assert.equal(result.error,undefined);
+});
+
 test('a direct child closed by signal retains the signal and captured diagnostics',async()=>{
  const child=new EventEmitter();
  child.stdout=new EventEmitter();
