@@ -282,6 +282,33 @@ test('real subprocess preserves UTF-8 split across separate stdout and stderr wr
   }
  }
 });
+test('fake process output at the exact shared byte cap is not overflow',async()=>{
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ const signals=[];child.kill=signal=>signals.push(signal);
+ const pending=runProcess('fixture',[],{timeoutMs:2000},{spawnProcess:()=>child});
+ const cap=16*1024*1024;
+ child.stdout.emit('data',Buffer.alloc(cap-2,120));
+ child.stderr.emit('data','é');
+ child.emit('close',0,null);
+ const result=await pending;
+ assert.equal(result.overflow,false);assert.equal(result.outputBytes,cap);
+ assert.equal(result.observedBytes,cap);assert.equal(result.stderr,'é');
+ assert.deepEqual(signals,[]);
+});
+test('fake process output beyond the shared cap counts but does not retain the extra bytes',async()=>{
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ const signals=[];child.kill=signal=>signals.push(signal);
+ const pending=runProcess('fixture',[],{timeoutMs:2000},{spawnProcess:()=>child});
+ const cap=16*1024*1024;
+ child.stdout.emit('data',Buffer.alloc(cap-1,120));
+ child.stderr.emit('data','AB');
+ child.stderr.emit('data','C');
+ child.emit('close',null,'SIGTERM');
+ const result=await pending;
+ assert.equal(result.overflow,true);assert.equal(result.outputBytes,cap);
+ assert.equal(result.observedBytes,cap+2);assert.equal(result.stderr,'A');
+ assert.equal(result.signal,'SIGTERM');assert.deepEqual(signals,['SIGTERM']);
+});
 test('missing close is bounded and explicitly retains uncertain cleanup',async()=>{
  const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.kill=()=>true;
  const result=await bounded(runProcess('fixture',[],{timeoutMs:10},{spawnProcess:()=>child}),3000);
