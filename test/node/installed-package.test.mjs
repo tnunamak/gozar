@@ -13,6 +13,23 @@ import { fileURLToPath } from 'node:url';
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
+const assertFixturePresentation = rows => {
+  assert.deepEqual(rows.map(row => ({
+    id: row.providerId,
+    name: row.displayName,
+    idle: row.idleTimeoutMs,
+    account: row.needsAccount,
+    undeclaredCopy: row.copy?.human?.summary,
+  })), [
+    { id: 'fake-meta-zero', name: { known: true, value: 'Fixture Zero' },
+      idle: { known: true, value: 0 }, account: { known: true, value: false },
+      undeclaredCopy: { known: false, reason: 'not-declared' } },
+    { id: 'fake-meta-null', name: { known: true, value: 'Fixture Null' },
+      idle: { known: true, value: null }, account: { known: true, value: false },
+      undeclaredCopy: { known: false, reason: 'not-declared' } },
+  ]);
+};
+
 test('installed package: root and /service import, exports equal the contract, catalogRoutes runs on the installed bytes', async t => {
   await mkdir(join(homedir(), '.tmp'), { recursive: true });
   const base = await mkdtemp(join(homedir(), '.tmp', 'gozar-installed-'));
@@ -43,7 +60,8 @@ test('installed package: root and /service import, exports equal the contract, c
   await writeFile(probe, `import * as root from '@tnunamak/gozar';
 import * as service from '@tnunamak/gozar/service';
 import * as testing from '@tnunamak/gozar/testing';
-import { readFile } from 'node:fs/promises';
+import { readFile, rename, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 const dts = await readFile(new URL('./node_modules/@tnunamak/gozar/packages/gozar-node/route-contract.d.ts', import.meta.url), 'utf8');
 const pkg = JSON.parse(await readFile(new URL('./node_modules/@tnunamak/gozar/package.json', import.meta.url), 'utf8'));
 const manifest = JSON.parse(await readFile(new URL('./node_modules/@tnunamak/gozar/adapters/manifest.json', import.meta.url), 'utf8'));
@@ -56,7 +74,33 @@ const fakeCatalog = await fake.catalogRoutes({ schemaVersion: 1, owner: 'example
   requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] } });
 const inventory = await fake.listProviders({ home: ${JSON.stringify(stateHome)}, owner: 'example-app' });
 await registry.cleanup();
-console.log(JSON.stringify({ inventory, testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
+const fixtureInventory = [];
+for (const [id, label, idleTimeoutMs] of [['fake-meta-zero', 'Fixture Zero', 0], ['fake-meta-null', 'Fixture Null', null]]) {
+  const registry = await testing.fakeRegistry({ id, label, kinds: ['durable'], reach: 'internet' });
+  try {
+    const folder = join(registry.root, 'providers', id);
+    const wrappedPath = join(folder, 'wrapped.definition.json');
+    const wrapped = JSON.parse(await readFile(wrappedPath, 'utf8'));
+    wrapped.definition.idleTimeoutMs = idleTimeoutMs;
+    await writeFile(wrappedPath, JSON.stringify(wrapped));
+    // The durable fake keeps its normal methods; expose the actual installed
+    // recipe adapter's operational definition to the inventory reader.
+    await rename(join(folder, 'index.mjs'), join(folder, 'fixture-original.mjs'));
+    const runtimeUrl = new URL('./node_modules/@tnunamak/gozar/packages/gozar-node/adapter-runtime.mjs', import.meta.url).href;
+    await writeFile(join(folder, 'index.mjs'), [
+      'import original from "./fixture-original.mjs";',
+      'import { recipeAdapter } from ' + JSON.stringify(runtimeUrl) + ';',
+      'const recipe = recipeAdapter({ definition: new URL("./definition.json", import.meta.url) });',
+      'export default { ...original, operationalDefinition: recipe.operationalDefinition };',
+    ].join('\\n'));
+    const api = testing.createRouteApi({ manifest: registry.manifest, root: registry.root, readContext: testing.fakeReadContext({ home: ${JSON.stringify(stateHome)} }) });
+    const snapshot = await api.listProviders({ home: ${JSON.stringify(stateHome)}, owner: 'example-app', refresh: true });
+    fixtureInventory.push(...snapshot.providers);
+  } finally {
+    await registry.cleanup();
+  }
+}
+console.log(JSON.stringify({ inventory, fixtureInventory, testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
   types: pkg.types, exportsTypes: pkg.exports['.'].types, engines: pkg.engines.node, providers: manifest.providers.map(item => item.id),
   candidates: catalog.candidates.length, observedAt: typeof catalog.observedAt, tokens: catalog.candidates.filter(item => item.candidateToken).length }));
 `);
@@ -94,6 +138,7 @@ console.log(JSON.stringify({ inventory, testingExports: Object.keys(testing).sor
     checkObservation(row.idleTimeoutMs, value => value === null || typeof value === 'number', 'idleTimeoutMs');
     checkObservation(row.needsAccount, value => typeof value === 'boolean', 'needsAccount');
   }
+  assertFixturePresentation(seen.fixtureInventory);
   assert.equal(seen.candidates, seen.providers.length, 'one candidate per installed registry entry');
   assert.equal(seen.tokens, 0, 'nothing is ready on a host with no provider tooling, so no token is issued');
   const example = join(installed, 'examples/remote-access-screen.mjs');
