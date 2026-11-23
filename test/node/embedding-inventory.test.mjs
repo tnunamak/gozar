@@ -16,6 +16,7 @@ test('inventory observes effective provider metadata without consent tokens', as
  const home=await mkdtemp(join(tmpdir(),'metadata-inventory-'));
  const known=value=>({known:true,value});
  const unknown=reason=>({known:false,reason});
+ const inertMarker='INERT_TEST_SENTINEL_NOT_A_CREDENTIAL';
  const cases=new Map([
   ['wrapped-ephemeral',{outer:null,wrappedIdle:4000,idle:known(4000),account:false,stability:'ephemeral',address:known('ephemeral')}],
   ['wrapped-unlimited',{outer:8000,wrappedIdle:null,idle:known(null),account:true,stability:'stable',address:known('stable')}],
@@ -26,11 +27,14 @@ test('inventory observes effective provider metadata without consent tokens', as
  ]);
  const adapters=[...cases].map(([id,entry])=>{
   const {outer,wrappedIdle,account,stability,native}=entry;
-  const definition={id,label:'Outer name',supportedKinds:['attached','session'],idleTimeoutMs:outer,copy:{human:{name:'Outer copy'}},capabilities:{reach:'lan',transport:'https',needsAccount:account,address:{stability:'stable'}},disclosure:{revision:'v'},facts:[]};
+  const definition={id,label:'Outer name',supportedKinds:['attached','session'],idleTimeoutMs:outer,copy:{human:{name:'Outer copy'}},capabilities:{reach:'lan',transport:'https',needsAccount:account,candidateToken:inertMarker,address:{stability:'stable'}},disclosure:{revision:'v'},facts:[]};
   return {id,definition,...(native?{}:{operationalDefinition:{displayName:'Wrapped name',copy:{human:{name:'Wrapped copy',summary:'Wrapped summary'}},...(wrappedIdle===undefined?{}:{idleTimeoutMs:wrappedIdle})}}),detect:async()=>({state:'ready',facts:{}}),properties:()=>({...definition.capabilities,...(stability===undefined?{address:undefined}:{address:{stability}})}),setupActions:()=>[]};
  });
  try {
-  const {providers}=await listProviders({home},{adapters,embeddingServices:createEmbeddingServices({registryId:'metadata-fixture'}),readContext:{configuration:async()=>null}});
+  assert.equal(adapters[0].definition.capabilities.candidateToken,inertMarker);
+  assert.equal(adapters[0].properties().candidateToken,inertMarker);
+  const inventory=await listProviders({home},{adapters,embeddingServices:createEmbeddingServices({registryId:'metadata-fixture'}),readContext:{configuration:async()=>null}});
+  const {providers}=inventory;
   assert.deepEqual(providers.map(row=>row.providerId).sort(),[...cases.keys()].sort());
   for (const row of providers){
    const expected=cases.get(row.providerId);
@@ -43,6 +47,8 @@ test('inventory observes effective provider metadata without consent tokens', as
    assert.deepEqual(row.addressStability,address);
    assert.deepEqual(row.needsAccount,account===undefined?unknown('not-observed'):known(account));
   }
-  assert.doesNotMatch(JSON.stringify(providers),/candidateToken/);
+  const serialized=JSON.stringify(inventory);
+  assert.doesNotMatch(serialized,/candidateToken/);
+  assert.equal(serialized.includes(inertMarker),false);
  } finally { await rm(home,{recursive:true,force:true}); }
 });
