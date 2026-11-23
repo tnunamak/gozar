@@ -22,13 +22,17 @@ test('inventory observes effective provider metadata without consent tokens', as
   ['wrapped-unlimited',{outer:8000,wrappedIdle:null,idle:known(null),account:true,stability:'stable',address:known('stable')}],
   ['wrapped-zero',{outer:8000,wrappedIdle:0,idle:known(0),stability:'stable',address:known('stable')}],
   ['wrapped-unobserved',{outer:8000,idle:unknown('not-declared'),address:unknown('not-observed')}],
+  ['wrapped-negative-idle',{outer:8000,wrappedIdle:-1,idle:unknown('not-declared'),address:unknown('not-observed')}],
+  ['wrapped-fractional-idle',{outer:8000,wrappedIdle:1.5,idle:unknown('not-declared'),address:unknown('not-observed')}],
+  ['wrapped-string-idle',{outer:8000,wrappedIdle:'10',idle:unknown('not-declared'),address:unknown('not-observed')}],
+  ['wrapped-blank-name',{outer:8000,blankName:true,idle:unknown('not-declared'),address:unknown('not-observed')}],
   ['wrapped-invalid',{outer:8000,idle:unknown('not-declared'),stability:'invalid',address:unknown('not-observed')}],
   ['native-zero',{outer:0,idle:known(0),stability:'stable',address:known('stable'),native:true}],
  ]);
  const adapters=[...cases].map(([id,entry])=>{
-  const {outer,wrappedIdle,account,stability,native}=entry;
-  const definition={id,label:'Outer name',supportedKinds:['attached','session'],idleTimeoutMs:outer,copy:{human:{name:'Outer copy'}},capabilities:{reach:'lan',transport:'https',needsAccount:account,candidateToken:inertMarker,address:{stability:'stable'}},disclosure:{revision:'v'},facts:[]};
-  return {id,definition,...(native?{}:{operationalDefinition:{displayName:'Wrapped name',copy:{human:{name:'Wrapped copy',summary:'Wrapped summary'}},...(wrappedIdle===undefined?{}:{idleTimeoutMs:wrappedIdle})}}),detect:async()=>({state:'ready',facts:{}}),properties:()=>({...definition.capabilities,...(stability===undefined?{address:undefined}:{address:{stability}})}),setupActions:()=>[]};
+  const {outer,wrappedIdle,account,stability,native,blankName}=entry;
+  const definition={id,label:blankName?' \t ':'Outer name',supportedKinds:['attached','session'],idleTimeoutMs:outer,copy:{human:{name:'Outer copy',address:'Declared address'}},capabilities:{reach:'lan',transport:'https',needsAccount:account,candidateToken:inertMarker,address:{stability:'stable'}},disclosure:{revision:'v'},facts:[]};
+  return {id,definition,...(native?{}:{operationalDefinition:{...(blankName?{}:{displayName:'Wrapped name'}),copy:{human:{name:'Wrapped copy',summary:'Wrapped summary',address:'Wrapped address',setup:'Wrapped setup'}},...(wrappedIdle===undefined?{}:{idleTimeoutMs:wrappedIdle})}}),detect:async()=>({state:'ready',facts:{}}),properties:()=>({...definition.capabilities,...(stability===undefined?{address:undefined}:{address:{stability}})}),setupActions:()=>[]};
  });
  try {
   assert.equal(adapters[0].definition.capabilities.candidateToken,inertMarker);
@@ -39,11 +43,13 @@ test('inventory observes effective provider metadata without consent tokens', as
   for (const row of providers){
    const expected=cases.get(row.providerId);
    assert.ok(expected);
-   const {idle,account,native,address}=expected;
+   const {idle,account,native,address,blankName}=expected;
    assert.deepEqual(row.idleTimeoutMs,idle);
-   assert.deepEqual(row.displayName,known(native?'Outer name':'Wrapped name'));
+   assert.deepEqual(row.displayName,blankName?unknown('not-declared'):known(native?'Outer name':'Wrapped name'));
    assert.deepEqual(row.copy.human.name,known('Outer copy'));
    assert.deepEqual(row.copy.human.summary,native?unknown('not-declared'):known('Wrapped summary'));
+   assert.deepEqual(row.copy.human.address,known('Declared address'));
+   assert.deepEqual(row.copy.human.setup,native?unknown('not-declared'):known('Wrapped setup'));
    assert.deepEqual(row.addressStability,address);
    assert.deepEqual(row.needsAccount,account===undefined?unknown('not-observed'):known(account));
   }

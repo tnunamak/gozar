@@ -62,6 +62,8 @@ import * as service from '@tnunamak/gozar/service';
 import * as testing from '@tnunamak/gozar/testing';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const installedAdaptersRoot = fileURLToPath(new URL('./node_modules/@tnunamak/gozar/adapters/', import.meta.url));
 const dts = await readFile(new URL('./node_modules/@tnunamak/gozar/packages/gozar-node/route-contract.d.ts', import.meta.url), 'utf8');
 const pkg = JSON.parse(await readFile(new URL('./node_modules/@tnunamak/gozar/package.json', import.meta.url), 'utf8'));
 const manifest = JSON.parse(await readFile(new URL('./node_modules/@tnunamak/gozar/adapters/manifest.json', import.meta.url), 'utf8'));
@@ -74,6 +76,8 @@ const fakeCatalog = await fake.catalogRoutes({ schemaVersion: 1, owner: 'example
   requirements: { reach: 'internet', transport: 'https', payloadAccess: 'allow-provider', address: 'any', setup: 'none', protocols: [] } });
 const inventory = await fake.listProviders({ home: ${JSON.stringify(stateHome)}, owner: 'example-app' });
 await registry.cleanup();
+const installedApi = testing.createRouteApi({ manifest, root: installedAdaptersRoot, readContext: testing.fakeReadContext({ home: ${JSON.stringify(stateHome)} }) });
+const installedInventory = await installedApi.listProviders({ home: ${JSON.stringify(stateHome)}, owner: 'example-app', refresh: true });
 const fixtureInventory = [];
 for (const [id, label, idleTimeoutMs] of [['fake-meta-zero', 'Fixture Zero', 0], ['fake-meta-null', 'Fixture Null', null]]) {
   const registry = await testing.fakeRegistry({ id, label, kinds: ['durable'], reach: 'internet' });
@@ -100,7 +104,7 @@ for (const [id, label, idleTimeoutMs] of [['fake-meta-zero', 'Fixture Zero', 0],
     await registry.cleanup();
   }
 }
-console.log(JSON.stringify({ inventory, fixtureInventory, testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
+console.log(JSON.stringify({ inventory, fixtureInventory, installedIds: installedInventory.providers.map(item => item.providerId), testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
   types: pkg.types, exportsTypes: pkg.exports['.'].types, engines: pkg.engines.node, providers: manifest.providers.map(item => item.id),
   candidates: catalog.candidates.length, observedAt: typeof catalog.observedAt, tokens: catalog.candidates.filter(item => item.candidateToken).length }));
 `);
@@ -116,6 +120,7 @@ console.log(JSON.stringify({ inventory, fixtureInventory, testingExports: Object
   assert.equal(seen.types, './packages/gozar-node/route-contract.d.ts');
   assert.equal(seen.exportsTypes, seen.types);
   assert.equal(seen.engines, '>=22.13');
+  assert.deepEqual(seen.installedIds.sort(), [...seen.providers].sort(), 'read-only inventory lists every shipped manifest ID exactly once');
   assert.deepEqual(seen.providers, JSON.parse(await readFile(new URL('../../adapters/manifest.json', import.meta.url), 'utf8')).providers.map(provider => provider.id), 'the installed registry is the source registry');
   assert.deepEqual(seen.inventory.providers.map(row => row.providerId), ['fake-0a1b2c3d']);
   const checkObservation = (observation, isValue, field) => {
