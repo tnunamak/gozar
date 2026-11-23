@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {createServiceVerifier} from '@tnunamak/gozar';
 import {createTestingGozar} from '@tnunamak/gozar/testing';
 import {scratch,query} from './route-schema-check.mjs';
-export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJournal=false}={}){
+export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJournal=false,terminalInventory=false}={}){
  let harness,app;t.after(async()=>{try{await harness?.close();}finally{if(app)await new Promise(resolve=>app.close(resolve));}});
  const home=await scratch(t),owner='durable-effects';
  const verifier=createServiceVerifier();app=http.createServer((req,res)=>{if(!verifier(req,res))res.end('app');});await new Promise(resolve=>app.listen(0,'127.0.0.1',resolve));
@@ -31,6 +31,7 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
  ];
  harness=await createTestingGozar({effects});const api=harness.gozar;
  const choices=(await api.listProviders({home,owner,refresh:true})).providers.filter(p=>p.availability.durable.state==='available');assert.equal(choices.length,2);
+ const terminalInventoryProviders=new Set();
  for(const [index,provider]of choices.entries()){
   const q=query({home,owner,providerId:provider.providerId,operationId:`durable-${index}`,target:`127.0.0.1:${app.address().port}`,usage:{kind:'durable',routeId:`fixture-${index}`},requirements:{reach:provider.reach,transport:'https',payloadAccess:'allow-provider',address:'stable',setup:'allow',protocols:[]}});
   if(adoptExisting){config={...config,TCP:{...config.TCP,'443':{HTTPS:true}},Web:{'fixture.node.invalid:443':{Handlers:{'/':{Proxy:`http://${q.target}`}}}},AllowFunnel:{'fixture.node.invalid:443':true}};q.origin='https://fixture.node.invalid';q.intent='adopt';}
@@ -73,13 +74,38 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
   assert.deepEqual(terminalJournal.view.handle,resumed.handle,'terminal journal follows exact committed restoration');
   assert.equal(terminalJournal.view.cleanup.state,'confirmed');
   assert.deepEqual(config,foreign);assert.equal(writes,afterResume+1,'Stop removes exactly the resumed rule');
+  if(terminalInventory){
+   const journalPath=join(home,'operations',terminalName);
+   const beforeInventory=await readFile(journalPath),inventoryWrites=writes;
+   const fresh=await createTestingGozar({effects});
+   try{
+    const {routes}=await fresh.gozar.listRoutes({home,owner});
+    const owned=routes.filter(row=>row.handle.kind==='durable'&&row.handle.id===resumed.handle.id);
+    assert.equal(owned.length,1,'inventory contains one row for the exact durable identity');
+    assert.deepEqual(owned[0].handle,resumed.handle,'terminal inventory uses the restored generation');
+    assert.notEqual(owned[0].handle.generation,route.handle.generation);
+    assert.equal(owned[0].state,'released');
+    assert.equal(owned[0].cleanup.state,'confirmed');
+    assert.equal(owned[0].published,null);
+    assert.equal(writes,inventoryWrites,'listing must not change provider rules');
+    assert.deepEqual(config,foreign);
+    assert.deepEqual(await readFile(journalPath),beforeInventory,'listing must not rewrite terminal evidence');
+   }finally{await fresh.close();}
+   terminalInventoryProviders.add(provider.providerId);
+   continue;
+  }
   const terminalWrites=writes,terminal=await api.ensureRoute(request);
   assert.equal(terminal.state,'released');assert.deepEqual(terminal.handle,resumed.handle);
   assert.equal(terminal.cleanup.state,'confirmed');
   assert.equal(writes,terminalWrites,'stopped replay must remain terminal without a write');
+ }
+ if(terminalInventory){
+  assert.equal(terminalInventoryProviders.size,2,'terminal inventory must complete for two distinct providers');
+  assert.deepEqual(terminalInventoryProviders,new Set(choices.map(provider=>provider.providerId)));
  }
  assert.ok(harness.events.some(e=>e.kind==='local-api'&&e.operation==='request'));
 }
 test('shipped durable modules parse source observations, conditionally write, prove and remove only their rule',t=>exercise(t));
 test('known partial durable write stays owned and can be recovered after a failed provider response',t=>exercise(t,{partialWrite:true}));
 test('public adoption binds current configuration and proof before claiming an existing rule',t=>exercise(t,{adoptExisting:true}));
+test('fresh owned inventory keeps confirmed restored terminal evidence for both durable providers',t=>exercise(t,{terminalInventory:true}));
