@@ -302,6 +302,32 @@ test('diagnostic reads return independent rows and a noninclusive sequence curso
   assert.deepEqual(driver.readProcessOutput().map(row => row.output), ['one', 'two']);
 });
 
+test('diagnostic retention evicts the oldest rows at the event count cap', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  for (let index = 0; index < 130; index++) {
+    driver.processOutput(effect, resource, 'stdout', Buffer.from('x'));
+  }
+  const rows = driver.readProcessOutput();
+  assert.equal(rows.length, 128);
+  assert.equal(rows[0].sequence, 3);
+  assert.equal(rows.at(-1).sequence, 130);
+});
+
+test('diagnostic retention counts multibyte characters by UTF-8 bytes', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  const chunk = Buffer.from('é'.repeat(4096));
+  for (let index = 0; index < 5; index++) {
+    driver.processOutput(effect, resource, 'stdout', chunk);
+  }
+  const rows = driver.readProcessOutput();
+  assert.deepEqual(rows.map(row => row.sequence), [2, 3, 4, 5]);
+  assert.equal(rows.reduce((bytes, row) => bytes + Buffer.byteLength(row.output), 0), 32768);
+});
+
 function makeOutputOnlyDriver() {
   return Object.assign(Object.create(EffectDriver.prototype), {
     sessionId: 'synthetic-session', observeProcessOutput: true, onProcessOutput: null,
