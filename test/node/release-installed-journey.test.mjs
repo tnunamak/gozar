@@ -53,6 +53,25 @@ test('digest refusal starts zero subprocesses',async t=>{
  await assert.rejects(runInstalledJourney({...f.input,sha256:'0'.repeat(64)},{run:stub.run}),/digest/i);
  assert.equal(stub.calls.length,0);
 });
+test('a runtime dependency refuses before output or subprocess creation',async t=>{
+ const f=await fixture(t,{dependencies:{'synthetic-runtime':'1'}});
+ const stub=processStub(f);
+ await assert.rejects(runInstalledJourney(f.input,{run:stub.run}),/must be standalone/);
+ assert.equal(stub.calls.length,0);
+ await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
+
+test('an archive missing a required example refuses before any subprocess',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ delete f.files['examples/provider-lifecycle-fixture.mjs'];
+ const bytes=tar(f.files);
+ await writeFile(f.input.tarball,bytes);
+ const sha256=createHash('sha256').update(bytes).digest('hex');
+ await assert.rejects(runInstalledJourney({...f.input,sha256},{run:stub.run}),/Missing installed example examples\/provider-lifecycle-fixture\.mjs/);
+ assert.equal(stub.calls.length,0);
+ await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
+
 test('offline archive journey verifies installed bytes and strict lifecycle evidence',async t=>{
  const f=await fixture(t),stub=processStub(f);
  const result=await runInstalledJourney(f.input,{run:stub.run});
