@@ -321,3 +321,19 @@ test('the admitted and attached effect contexts carry the adapter\'s own configu
   const named = createAdmittedContext({ read: { ...read, configuration: async ref => ({ ref }) }, adapterId: 'edge-a', generation: 1 });
   assert.deepEqual(await named.configuration('route-1'), { ref: 'route-1' }, 'a named ref keeps the base lookup');
 });
+
+test('LAN setup handles absent or empty interface observations', async () => {
+  const { observedInterfaces } = await import('../../adapters/providers/lan/index.mjs');
+  assert.deepEqual(observedInterfaces(undefined), []);
+  assert.deepEqual(observedInterfaces({ interfaces: {
+    missing: null,
+    dormant: [],
+    internal: [{ internal: true, address: '127.0.0.1' }],
+  } }), []);
+});
+
+test('Tailscale setup presents the HTTPS default port implicitly and other ports explicitly', async () => {
+  const { originOf } = await import('../../adapters/providers/_shared/tailscale-serve.mjs');
+  assert.equal(originOf('demo.invalid', 443), 'https://demo.invalid');
+  assert.equal(originOf('demo.invalid', 8443), 'https://demo.invalid:8443');
+});
