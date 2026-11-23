@@ -592,6 +592,24 @@ fn pointer_binding_escapes_root_mount_in_raw_assertion() {
     assert_eq!(out["effects"][0]["kind"], "persist");
 }
 #[test]
+fn malformed_json_returns_only_the_protocol_error() {
+    let response: Value = serde_json::from_str(&gozar_core::step("{")).unwrap();
+    assert_eq!(
+        response,
+        json!({"error": {"code": "invalid-input", "message": "invalid input JSON or protocol shape"}})
+    );
+}
+
+#[test]
+fn missing_command_returns_only_the_protocol_error() {
+    let response: Value = serde_json::from_str(&gozar_core::step("{}")).unwrap();
+    assert_eq!(
+        response,
+        json!({"error": {"code": "invalid-input", "message": "invalid input JSON or protocol shape"}})
+    );
+}
+
+#[test]
 fn public_route_remains_candidate_for_private_clients_and_observations_rank_it_honestly() {
     let f = fixture();
     let public = definition("external");
