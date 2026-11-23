@@ -198,6 +198,31 @@ for(const events of [
  t.after(()=>rm(report.scratch,{recursive:true,force:true}));
  assert.equal(report.status,'failed');
 });
+test('a synthetic signalled close stays distinct from a numeric exit', async()=>{
+ const child=new EventEmitter();
+ child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ const result=runProcess('synthetic',[],{timeoutMs:1000},{spawnProcess:()=>child});
+ child.emit('close',null,'SIGINT');
+ const receipt=await result;
+ assert.equal(receipt.status,null);
+ assert.equal(receipt.signal,'SIGINT');
+ assert.equal(receipt.timedOut,false);
+ assert.equal(receipt.cleanup.state,'confirmed');
+});
+test('output after a synthetic close cannot change bytes retained in the receipt', async()=>{
+ const child=new EventEmitter();
+ child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ const result=runProcess('synthetic',[],{timeoutMs:1000},{spawnProcess:()=>child});
+ child.stdout.emit('data',Buffer.from('done'));
+ child.emit('close',0,null);
+ child.stderr.emit('data',Buffer.from('late'));
+ const receipt=await result;
+ assert.equal(receipt.stdout,'done');
+ assert.equal(receipt.stderr,'');
+ assert.equal(receipt.observedBytes,4);
+ assert.equal(receipt.outputBytes,4);
+});
+
 test('permits repeated genuine proof phase before stop',async t=>{
  const f=await fixture(t),outcome={...evidence,events:['setup','start','proof','proof','stop','cleanup']};
  const result=await runInstalledJourney(f.input,{run:processStub(f,{outcome}).run});
