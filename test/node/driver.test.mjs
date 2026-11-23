@@ -125,6 +125,12 @@ test('owned child survives driver restart, exact stop preserves unrelated proces
   assert.equal(created.ok, true);
   const resourceId = created.result.resourceId;
   const owned = journal.value.owned[resourceId];
+  const originalChild = driver.children.get(resourceId);
+  assert.ok(originalChild, 'the original driver still owns the ChildProcess handle');
+  assert.equal(process.listenerCount('exit'), exitListeners + 1, 'the live child installed the hook');
+  const originalExit = once(originalChild, 'exit', { signal: AbortSignal.timeout(5000) });
+  // Handle timeout even if an earlier removal assertion fails; the awaited result still rejects.
+  void originalExit.catch(() => {});
   assert.ok(await processIdentity(owned.pid));
   const restartedJournal = new Journal(directory); await restartedJournal.load();
   const restarted = new EffectDriver({ adapters: [adapter], journal: restartedJournal, sessionId: 'test' });
@@ -137,6 +143,8 @@ test('owned child survives driver restart, exact stop preserves unrelated proces
   assert.equal(Object.keys(restartedJournal.value.owned).length, 0);
   assert.deepEqual(await restarted.closeLocal(), []);
   assert.deepEqual(await restarted.closeLocal(), []);
+  // Recovered PID removal proves OS state, not that the original JS exit handlers ran.
+  await originalExit;
   assert.equal(process.listenerCount('exit'), exitListeners, 'cleanup detaches the exit hook');
 });
 
