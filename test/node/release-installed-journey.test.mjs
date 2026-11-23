@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,mkdir,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join,dirname} from 'node:path';
+import {join,dirname,sep} from 'node:path';
 import {gzipSync} from 'node:zlib';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
 import {spawn} from 'node:child_process';
 import {runInstalledJourney,runProcess} from '../../scripts/release-installed-journey.mjs';
+import {parseArgs as parsePublicTypesArgs} from '../../scripts/check-public-types.mjs';
 
 function tar(files){
  const chunks=[];
@@ -422,4 +423,19 @@ test('pack receipt rejects a single package with the wrong package identity',asy
   ()=>parsePackOutput(JSON.stringify([entry])),
   {message:'Unknown or ambiguous npm pack output'}
  );
+});
+
+test('public-types argv preserves both invented absolute values in either flag order',()=>{
+ const installedRoot=join(sep,'synthetic-install'),tsc=join(sep,'synthetic-compiler');
+ const expected={installedRoot,tsc};
+ assert.deepEqual(parsePublicTypesArgs(['--installed-root',installedRoot,'--tsc',tsc]),expected);
+ assert.deepEqual(parsePublicTypesArgs(['--tsc',tsc,'--installed-root',installedRoot]),expected);
+});
+
+test('public-types argv distinguishes missing values, duplicate options and relative values',()=>{
+ const installedRoot=join(sep,'synthetic-install'),tsc=join(sep,'synthetic-compiler');
+ assert.throws(()=>parsePublicTypesArgs(['--installed-root','--tsc',tsc]),{message:'Missing value for --installed-root'});
+ assert.throws(()=>parsePublicTypesArgs(['--tsc',tsc]),{message:'Required: --installed-root ABS_INSTALL_PREFIX --tsc ABS_COMPILER'});
+ assert.throws(()=>parsePublicTypesArgs(['--installed-root',installedRoot,'--tsc',tsc,'--tsc',tsc]),{message:'Unknown or duplicate argument: --tsc'});
+ assert.throws(()=>parsePublicTypesArgs(['--installed-root',installedRoot,'--tsc','synthetic-compiler']),{message:'Both paths must be absolute'});
 });
