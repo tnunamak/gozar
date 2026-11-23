@@ -243,6 +243,28 @@ test('opt-in process observer captures later bounded transient output without jo
   assert.equal(driver.readProcessOutput(events.at(-1).sequence).length,0);
 });
 
+test('process observer discards an overlong line and resumes at the next newline',()=>{
+ const lines=[];
+ const driver=new EffectDriver({adapters:[],journal:{},sessionId:'synthetic',resolveProgram:()=>null,
+  onProcessOutput:event=>{if(event.completeLine!==undefined)lines.push(event.completeLine);}});
+ const resource={id:'fake-child',generation:1,adapterId:'fake',continuityRef:'fake'};
+ driver.routeOutputReady.add(resource.id);
+ driver.processOutput({id:'output'},resource,'stdout',Buffer.from('x'.repeat(4097)));
+ driver.processOutput({id:'output'},resource,'stdout',Buffer.from('\nrecovered\r\n'));
+ assert.deepEqual(lines,['recovered']);
+});
+
+test('a failing output observer does not discard retained diagnostics',()=>{
+ const driver=new EffectDriver({adapters:[],journal:{},sessionId:'synthetic',resolveProgram:()=>null,
+  observeProcessOutput:true,onProcessOutput:()=>{throw new Error('synthetic observer stopped');}});
+ const resource={id:'fake-child',generation:1,adapterId:'fake',continuityRef:'fake'};
+ driver.processOutput({id:'first'},resource,'stderr',Buffer.from('first'));
+ driver.processOutput({id:'second'},resource,'stderr',Buffer.from('second'));
+ const events=driver.readProcessOutput();
+ assert.deepEqual(events.map(event=>event.output),['first','second']);
+ assert.deepEqual(driver.readProcessOutput(events[0].sequence).map(event=>event.output),['second']);
+});
+
 test('owned process output frames complete lines across chunks without diagnostic observation', async t => {
   const { driver } = await fixture(t, {});
   const lines = [];
