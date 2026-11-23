@@ -177,6 +177,29 @@ test('process error waits for close and retains both pre-error and trailing outp
  assert.equal(result.stdout,'before after');assert.equal(result.stderr,'diagnostic');
  assert.deepEqual(result.error,{name:'Error',message:'spawn failed',code:'ENOENT'});
 });
+test('a synchronous spawn refusal records that no child started',async()=>{
+ const failure=Object.assign(new Error('synthetic spawn refusal'),{code:'ENOENT'});
+ const result=await runProcess('fixture',[],{timeoutMs:1000},{spawnProcess:()=>{throw failure;}});
+ assert.equal(result.status,null);
+ assert.deepEqual(result.error,{name:'Error',message:'synthetic spawn refusal',code:'ENOENT'});
+ assert.deepEqual(result.cleanup,{scope:'not-started',state:'confirmed'});
+ assert.equal(result.timedOut,false);
+});
+
+test('a signal exit keeps the failure and output received while draining',async()=>{
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ child.kill=()=>assert.fail('the fixture never enables process signaling');
+ const pending=runProcess('fixture',[],{timeoutMs:1000},{spawnProcess:()=>child});
+ child.emit('exit',null,'SIGTERM');
+ child.stderr.emit('data','synthetic final diagnostic');
+ child.emit('close',null,'SIGTERM');
+ const result=await pending;
+ assert.equal(result.status,null);
+ assert.equal(result.signal,'SIGTERM');
+ assert.equal(result.stderr,'synthetic final diagnostic');
+ assert.equal(result.drainTimedOut,false);
+});
+
 test('process error with even zero exit retains a failed step receipt and output files',async t=>{
  const f=await fixture(t);const result={status:0,signal:null,stdout:'partial stdout',stderr:'partial stderr',error:{name:'Error',message:'spawn failed',code:'ENOENT'}};
  await assert.rejects(runInstalledJourney(f.input,{run:async()=>result}),/subprocess failed/);
