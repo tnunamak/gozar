@@ -23,6 +23,18 @@ fn public_step_returns_the_same_typed_error_for_missing_or_invalid_json() {
 }
 
 #[test]
+fn valid_json_primitives_are_not_protocol_envelopes() {
+    let expected = json!({"error":{
+        "code":"invalid-input",
+        "message":"invalid input JSON or protocol shape"
+    }});
+    for input in ["null", "false", "42", r#""synthetic""#] {
+        let output: Value = serde_json::from_str(&gozar_core::step(input)).unwrap();
+        assert_eq!(output, expected, "input: {input}");
+    }
+}
+
+#[test]
 fn repeated_status_preserves_the_same_snapshot_without_effects() {
     let first = run(json!({"command":{"type":"status","sessionId":"inert-status-fixture"}}));
     assert_eq!(first["snapshot"]["sessionId"], "inert-status-fixture");
