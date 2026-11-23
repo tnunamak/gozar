@@ -14,6 +14,7 @@ import { routeMain } from '../../packages/gozar-node/route-cli.mjs';
 import { storeSecret, withSecret } from '../../packages/gozar-node/secret-store.mjs';
 import { runSetupAction } from '../../packages/gozar-node/route-setup.mjs';
 import { createNgrokAdapter } from '../../adapters/providers/ngrok-https-edge/index.mjs';
+import { domainPattern } from '../../adapters/providers/ngrok-https-edge/setup.mjs';
 import { action, codeOf, query, scratch, stubAdapter } from './route-schema-check.mjs';
 
 const TOKEN = 'ngrok-stub-token-b7e41d90c3a2';
@@ -79,6 +80,17 @@ async function ngrokWorld(t) {
   };
   return { home, side, api, forwards, candidateOf, provide, provideValue };
 }
+
+test('ngrok manual hostname accepts the exact DNS label limit', () => {
+  assert.equal(domainPattern.test(`${'a'.repeat(63)}.example`), true);
+  assert.equal(domainPattern.test(`${'a'.repeat(64)}.example`), false);
+});
+
+test('ngrok manual hostname distinguishes an internal dash from a label-edge dash', () => {
+  assert.equal(domainPattern.test('synthetic-demo.example'), true);
+  assert.equal(domainPattern.test('-synthetic.example'), false);
+  assert.equal(domainPattern.test('synthetic-.example'), false);
+});
 
 test('ngrok setup journey: auth, then reserved domain, then ready; expose opens the listener with the stored values', async t => {
   const { home, api, forwards, candidateOf, provide, provideValue } = await ngrokWorld(t);
