@@ -90,11 +90,12 @@ export function planChecks({ changedPaths, files, readSource, full = false }) {
     catch { opaque = true; opaqueModules.add(file); continue; }
     if (typeof source !== 'string') { opaque = true; opaqueModules.add(file); continue; }
 
-    // Match direct imports, re-exports and literal loader calls. Anything
+    // Match imports, re-exports, loader calls and module-relative file URLs. Anything
     // nonliteral goes through conservative fallback, not a guessed edge.
     const refs = [
       ...source.matchAll(/\b(?:from|import)\s*['"]([^'"\r\n]+)['"]/gu),
       ...source.matchAll(/\b(?:import|require)\s*\(\s*['"]([^'"\r\n]+)['"]\s*\)/gu),
+      ...source.matchAll(/\bnew\s+URL\s*\(\s*['"]([^'"\r\n]+)['"]\s*,\s*import\.meta\.url\s*\)/gu),
     ];
     const calls = [...source.matchAll(/\b(?:import|require)\s*\(/gu)].length;
     if (calls > [...source.matchAll(/\b(?:import|require)\s*\(\s*['"][^'"\r\n]+['"]\s*\)/gu)].length)

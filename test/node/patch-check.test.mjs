@@ -24,6 +24,19 @@ test('a deleted helper selects its remaining transitive consumers',()=>{
  assert.equal(plan.buildWasm,false);
 });
 
+test('a deleted JSON fixture selects both import and file-read consumers',()=>{
+ const files=['test/node/error-normalizer.test.mjs','test/node/import-palette.test.mjs',
+  'test/node/read-palette.test.mjs','test/node/unrelated.test.mjs'];
+ const sources={
+  'test/node/import-palette.test.mjs':"import palette from '../../packages/palette.json' with { type: 'json' };",
+  'test/node/read-palette.test.mjs':"import {readFileSync} from 'node:fs'; const palette=JSON.parse(readFileSync(new URL('../../packages/palette.json',import.meta.url),'utf8'));",
+ };
+ const plan=planChecks({changedPaths:['packages/palette.json'],files,readSource:file=>sources[file]??''});
+ assert.deepEqual(plan.nodeTests,['test/node/error-normalizer.test.mjs','test/node/import-palette.test.mjs','test/node/read-palette.test.mjs']);
+ assert.deepEqual(plan.rustPackages,[]);
+ assert.equal(plan.buildWasm,false);
+});
+
 test('opaque imports widen source changes and missing smoke fails closed',()=>{
  const files=['test/node/error-normalizer.test.mjs','test/node/one.test.mjs',
   'test/node/two.test.mjs','packages/feature.mjs'];
