@@ -47,7 +47,10 @@ export function planChecks({ changedPaths, files, readSource, full = false }) {
   const changed = new Set(changedPaths.map(clean));
   if ((!full && !changed.size) || !present.has(smoke))
     throw new Error('no changed paths or missing required smoke test');
-  const allTests = [...present].filter(file => nodeTest.test(file)).sort();
+  // Full integration preserves the registered gate's recursive Node families.
+  // Patch mode can also select a changed acceptance or e2e test explicitly.
+  const allTests = [...present].filter(file => nodeTest.test(file) &&
+    (!full || /^test\/(?:node|adapters)\//u.test(file))).sort();
   const known = new Set([...present, ...changed]);
   const reverse = new Map();
   const forward = new Map();
@@ -263,8 +266,9 @@ export function runPatchCheck(args, {
       commands.push(['bash', ['scripts/build-wasm.sh']]);
     }
     commands.push([process.execPath, ['--test', '--test-concurrency=1', ...plan.nodeTests]]);
-    if (plan.full) commands.push(['cargo', ['test', '--workspace']]);
-    else for (const name of plan.rustPackages) commands.push(['cargo', ['test', '-p', name]]);
+    const rustArgs = ['--locked', '--offline', '--', '--test-threads=1'];
+    if (plan.full) commands.push(['cargo', ['test', '--workspace', ...rustArgs]]);
+    else for (const name of plan.rustPackages) commands.push(['cargo', ['test', '-p', name, ...rustArgs]]);
     log('Node checks: ' + JSON.stringify(plan.nodeTests));
     log('Rust checks: ' + (plan.full ? 'workspace' : JSON.stringify(plan.rustPackages)));
     for (const [command, commandArgs] of commands) {

@@ -112,6 +112,15 @@ test('patch CLI can run its full integration check on a clean checkout',()=>{
  assert.deepEqual(f.calls.map(call=>call.command),['git','bash',process.execPath,'cargo']);
 });
 
+test('full mode preserves the registered Node gate families',()=>{
+ const files=[cliSmoke,cliNested,'test/adapters/example.test.mjs',
+  'test/acceptance/manual.test.mjs','test/e2e/manual.test.mjs'];
+ const plan=planChecks({changedPaths:[],files,readSource:()=>'',full:true});
+ assert.deepEqual(plan.nodeTests,[cliSmoke,cliNested,'test/adapters/example.test.mjs'].sort());
+ const patch=planChecks({changedPaths:['test/acceptance/manual.test.mjs'],files,readSource:()=>''});
+ assert.ok(patch.nodeTests.includes('test/acceptance/manual.test.mjs'));
+});
+
 test('a shared installed runner checks the caller worktree rather than its own directory',()=>{
  const before=process.cwd(),root=mkdtempSync(join(tmpdir(),'gozar-runner-cwd-'));
  const calls=[];
@@ -203,7 +212,7 @@ test('patch CLI builds before selected core tests and does not run unrelated Nod
   ['git',['ls-files','--others','--exclude-standard','-z']],
   ['bash',[cliWasm]],
   [process.execPath,['--test','--test-concurrency=1',coreTest,cliSmoke]],
-  ['cargo',['test','-p','gozar-core']],
+  ['cargo',['test','-p','gozar-core','--locked','--offline','--','--test-threads=1']],
  ]);
 });
 
@@ -214,7 +223,7 @@ test('patch CLI full mode builds and runs recursive Node and Rust workspace chec
   ['git',['diff','--name-only','-z','--no-renames','HEAD','--']],
   ['bash',[cliWasm]],
   [process.execPath,['--test','--test-concurrency=1',cliSmoke,cliNested]],
-  ['cargo',['test','--workspace']],
+  ['cargo',['test','--workspace','--locked','--offline','--','--test-threads=1']],
  ]);
 });
 
