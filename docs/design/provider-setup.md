@@ -23,7 +23,7 @@ Gozar returns `pending` while the adapter awaits an observation. `denied` and `e
 | `state` | Progress of the setup workflow. `complete` is not route readiness. |
 | `nextAction` | The current offer, if any. Show it even after setup completes. |
 | `evidence` | The observed outcome and its source, or that the outcome is unknown. |
-| Route proof | Whether the independently consented route has passed proof. Advertise only `published` from the route view. |
+| Route publication | Whether the separately approved route passed proof and can be advertised. An allocated `origin` is not enough; use only `published` from the route view. |
 
 **Historical design rationale:** The [cloudflared source study](https://github.com/cloudflare/cloudflared/tree/095f3caf1dd9084cfe063ca40a4e5b0709e53e5b), captured on 2026-11-11, distinguished login or process success from independent certificate and DNS readback. The [Tailscale Serve docs](https://tailscale.com/kb/1312/serve), captured on 2026-11-12, required tailnet HTTPS to be enabled. These examples informed the separation above; they are not current provider-policy claims.
 
@@ -73,4 +73,4 @@ Existing raw ngrok TCP/TLS are detect-only. Own-address is adopt-only. These pro
 
 Use `gozar setup-operation reserve|read|run|cancel --request-file FILE --json` with the public request or reference in a mode 0600 file. For secret intake use `run --secret-file FILE`. An explicit interactive `read --browser-handoff` returns an unexpired handoff when the adapter offers one.
 
-Run `node --test test/acceptance/provider-setup.red.test.mjs test/acceptance/cloudflare-managed-setup.test.mjs` explicitly. The first suite uses a randomized provider and exercises the same operations through the package root and CLI. The second intercepts the real Cloudflare adapter's REST and connector calls and drives actual loopback gate and app traffic. Cloudflare account permissions, browser enrollment, external reachability and provider-side cleanup still require live acceptance.
+From a [prepared source checkout](../../README.md#develop), not from the installed npm package, run `node --test test/acceptance/provider-setup.red.test.mjs test/acceptance/cloudflare-managed-setup.test.mjs` explicitly. The first suite uses a randomized provider and exercises the same operations through the package root and CLI. The second intercepts the real Cloudflare adapter's REST and connector calls and drives actual loopback gate and app traffic. Cloudflare account permissions, browser enrollment, external reachability and provider-side cleanup still require live acceptance.
