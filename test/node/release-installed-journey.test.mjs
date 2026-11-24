@@ -132,6 +132,35 @@ for(const outcome of [{...evidence,cleanup:{state:'unconfirmed'}},{...evidence,p
  });
 }
 
+test('install success with no installed package keeps a failed receipt and starts no examples',async t=>{
+ const f=await fixture(t),calls=[];
+ await assert.rejects(runInstalledJourney(f.input,{run:async(command)=>{
+  calls.push(command);return {status:0,stdout:'fixture install completed',stderr:''};
+ }}),{code:'ENOENT'});
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+ assert.deepEqual(calls,['npm']);
+ assert.equal(report.status,'failed');
+ assert.equal(report.failure.code,'ENOENT');
+ assert.deepEqual(report.steps.map(({name})=>name),['install']);
+});
+
+test('truncated lifecycle JSON keeps the output and failed receipt',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const stdout='{"fixtureOnly":true';
+ await assert.rejects(runInstalledJourney(f.input,{run:async(...args)=>{
+  const result=await stub.run(...args);
+  return stub.calls.length===3?{...result,stdout}:result;
+ }}),SyntaxError);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+ assert.equal(report.status,'failed');
+ assert.equal(report.failure.name,'SyntaxError');
+ assert.equal(Object.hasOwn(report,'lifecycle'),false);
+ assert.deepEqual(report.steps.map(({name})=>name),['install','screen','lifecycle']);
+ assert.equal(await readFile(join(f.input.outputDirectory,'lifecycle.stdout'),'utf8'),stdout);
+});
+
 test('optional SDK presence refuses before examples',async t=>{
  const f=await fixture(t),stub=processStub(f);
  await assert.rejects(runInstalledJourney(f.input,{run:async(command,args,options)=>{
