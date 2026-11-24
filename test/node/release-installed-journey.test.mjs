@@ -94,6 +94,34 @@ test('an archive missing a required example refuses before any subprocess',async
  await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
 });
 
+test('an existing output directory is preserved and no process starts',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ await mkdir(f.input.outputDirectory);
+ const marker=join(f.input.outputDirectory,'result.json');
+ await writeFile(marker,'previous synthetic receipt\n');
+ await assert.rejects(runInstalledJourney(f.input,{run:stub.run}),{code:'EEXIST'});
+ assert.equal(stub.calls.length,0);
+ assert.equal(await readFile(marker,'utf8'),'previous synthetic receipt\n');
+});
+
+test('unknown fake screen output is recorded and stops before lifecycle',async t=>{
+ const f=await fixture(t),stub=processStub(f),calls=[];
+ const run=(command,args,options)=>{
+  calls.push(command);
+  return args.includes('--fakes')
+   ? Promise.resolve({status:0,stdout:'Unrecognized fixture screen\n',stderr:''})
+   : stub.run(command,args,options);
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),/Unknown screen outcome/);
+ const receipt=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(receipt.scratch,{recursive:true,force:true}));
+ assert.equal(receipt.status,'failed');
+ assert.deepEqual(receipt.steps.map(step=>step.name),['install','screen']);
+ assert.equal(receipt.failure.message,'Unknown screen outcome');
+ assert.equal(calls.length,2);
+ assert.equal(await readFile(join(f.input.outputDirectory,'screen.stdout'),'utf8'),'Unrecognized fixture screen\n');
+});
+
 test('offline archive journey verifies installed bytes and strict lifecycle evidence',async t=>{
  const f=await fixture(t),stub=processStub(f);
  const result=await runInstalledJourney(f.input,{run:stub.run});
