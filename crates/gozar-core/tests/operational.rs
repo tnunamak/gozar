@@ -666,6 +666,27 @@ fn missing_command_returns_only_the_protocol_error() {
 }
 
 #[test]
+fn repeat_recommendation_reports_the_unknown_reach_notice_only_once() {
+    let first = run(json!({"command": {"type": "recommend"}, "adapters": []}));
+    let second = run(json!({"state": first["state"], "command": {"type": "recommend"}}));
+    let notice = json!(["Client reach unknown; public HTTPS first, client validation still required"]);
+    assert_eq!(first["snapshot"]["limitations"], notice);
+    assert_eq!(second["snapshot"]["limitations"], notice);
+    assert_eq!(second["effects"], json!([]));
+}
+
+#[test]
+fn a_declared_reach_does_not_show_the_unknown_reach_notice() {
+    let out = run(json!({
+        "command": {"type": "recommend"},
+        "adapters": [],
+        "requirements": {"clientReach": "this-device"}
+    }));
+    assert_eq!(out["snapshot"]["limitations"], json!([]));
+    assert_eq!(out["effects"], json!([]));
+}
+
+#[test]
 fn public_route_remains_candidate_for_private_clients_and_observations_rank_it_honestly() {
     let f = fixture();
     let public = definition("external");
