@@ -353,3 +353,21 @@ test('Tailscale setup presents the HTTPS default port implicitly and other ports
   assert.equal(originOf('demo.invalid', 443), 'https://demo.invalid');
   assert.equal(originOf('demo.invalid', 8443), 'https://demo.invalid:8443');
 });
+
+test('an allowance diagnostic has a fixed message and an account-help action', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const error = safeListenerError({ code: 'ERR_NGROK_108', message: 'fixture debug detail' });
+  assert.match(error.message, /agent\/session allowance was reached/);
+  assert.equal(error.nextAction.kind, 'open-url');
+  assert.equal(error.nextAction.label, 'Check account setup');
+  assert.doesNotMatch(error.message, /fixture debug detail/);
+});
+
+test('an unknown listener diagnostic gives stable review instructions', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const error = safeListenerError({ message: 'fictional provider detail' });
+  assert.match(error.message, /review setup and retry/);
+  assert.equal(error.nextAction.kind, 'instructions');
+  assert.equal(error.nextAction.label, 'Review connection and setup');
+  assert.doesNotMatch(error.message, /fictional provider detail/);
+});
