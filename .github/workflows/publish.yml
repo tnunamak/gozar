@@ -31,8 +31,9 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
       # Trusted publishing needs npm 11.5.1 or later.
-      - run: npm install -g npm@11
+      - run: npm install -g npm@11 typescript@7.0.2
       - run: npm --version
+      - run: tsc --version
       - name: Tag must equal v + package.json version
         if: github.ref_type == 'tag'
         run: |
