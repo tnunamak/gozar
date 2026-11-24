@@ -13,7 +13,7 @@ Use Node >=22.13. Install locally in your walk directory; run the local binary
 below, not a potentially different global installation:
 
 ```sh
-npm install @tnunamak/gozar@0.5.4
+npm install @tnunamak/gozar@0.5.5
 ```
 
 Only for an SDK adapter, also install its optional dependency:
@@ -24,7 +24,7 @@ npm install @ngrok/ngrok@1.7.0
 
 For a named connector, install the official `cloudflared` executable instead of
 the optional SDK.
-Public raw TCP/TLS profiles are detect-only in 0.5.4; this walk exercises HTTP(S).
+Public raw TCP/TLS profiles are detect-only in 0.5.5; this walk exercises HTTP(S).
 Gozar reports missing local
 prerequisites as data and never runs an installer.
 
@@ -231,7 +231,7 @@ dashboard does not establish them. Local file deletion is not remote revocation.
 ## Operator evidence and signoff
 
 Record provider, actual account plan, platform/architecture, Node version and
-installed package version (0.5.4 for this walk), plus optional SDK version if used.
+installed package version (0.5.5 for this walk), plus optional SDK version if used.
 Use a sanitized record for **each** step: install/prerequisites, local control,
 configure or managed setup operation, catalog/approval, expose/proof, intended-client positive request,
 owned close/status, dashboard changes, paired post-dashboard probes, and final
