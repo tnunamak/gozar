@@ -92,6 +92,22 @@ test('ngrok manual hostname distinguishes an internal dash from a label-edge das
   assert.equal(domainPattern.test('synthetic-.example'), false);
 });
 
+test('ngrok hostname validation distinguishes the total name limit from each label limit', () => {
+  const base = ['a'.repeat(63), 'b'.repeat(63), 'c'.repeat(63)].join('.');
+  const valid = base + '.' + 'd'.repeat(61);
+  const oversized = base + '.' + 'd'.repeat(62);
+  assert.equal(valid.length, 253);
+  assert.equal(oversized.length, 254);
+  assert.equal(domainPattern.test(valid), true);
+  assert.equal(domainPattern.test(oversized), false);
+});
+
+test('ngrok hostname validation does not treat missing labels as a complete hostname', () => {
+  assert.equal(domainPattern.test('fixture.example'), true);
+  assert.equal(domainPattern.test('fixture'), false);
+  assert.equal(domainPattern.test('fixture..example'), false);
+});
+
 test('ngrok setup journey: auth, then reserved domain, then ready; expose opens the listener with the stored values', async t => {
   const { home, api, forwards, candidateOf, provide, provideValue } = await ngrokWorld(t);
   let candidate = await candidateOf();
