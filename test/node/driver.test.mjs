@@ -254,6 +254,20 @@ test('process observer discards an overlong line and resumes at the next newline
  assert.deepEqual(lines,['recovered']);
 });
 
+test('process observer discards a line that exceeds the cap across two chunks', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  const lines = [];
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  driver.onProcessOutput = row => { if (row.completeLine !== undefined) lines.push(row.completeLine); };
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('x'.repeat(4096)));
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('y'));
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('\nkept\n'));
+  assert.deepEqual(lines, ['kept']);
+});
+
 test('a failing output observer does not discard retained diagnostics',()=>{
  const driver=new EffectDriver({adapters:[],journal:{},sessionId:'synthetic',resolveProgram:()=>null,
   observeProcessOutput:true,onProcessOutput:()=>{throw new Error('synthetic observer stopped');}});
@@ -296,10 +310,10 @@ test('an observer callback failure does not discard diagnostic output', () => {
     if (row.completeLine === 'first') throw new Error('synthetic observer failure');
     if (row.completeLine !== undefined) seen.push(row.completeLine);
   };
-  driver.processOutput(effect, resource, 'stdout', Buffer.from('first\n'));
-  driver.processOutput(effect, resource, 'stdout', Buffer.from('second\n'));
-  assert.deepEqual(seen, ['second']);
-  assert.deepEqual(driver.readProcessOutput().map(row => row.output), ['first\n', 'second\n']);
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('first\nsecond\n'));
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('third\n'));
+  assert.deepEqual(seen, ['second', 'third']);
+  assert.deepEqual(driver.readProcessOutput().map(row => row.output), ['first\nsecond\n', 'third\n']);
 });
 
 test('diagnostic reads return independent rows and a noninclusive sequence cursor', () => {

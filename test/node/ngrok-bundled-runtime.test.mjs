@@ -12,6 +12,7 @@ import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createNgrokAdapter } from '../../adapters/providers/ngrok-https-edge/index.mjs';
+import { listenerSdk } from '../../adapters/providers/_shared/listener-effects.mjs';
 import { createRouteApi } from '../../packages/gozar-node/route-api.mjs';
 import { loadAdapters } from '../../packages/gozar-node/adapter-runtime.mjs';
 import { registryIdentity } from '../../packages/gozar-node/registry-identity.mjs';
@@ -52,6 +53,37 @@ const setupContext = (runtimeModules, extras = {}) => ({
 });
 const operation = { id: 'operation-1', cancelled: false, resources: [], connectorInputs: [], lastActionId: 'check-prerequisites' };
 const observeSetup = (adapter, ctx) => adapter.observeSetup(ctx, operation);
+
+test('synthetic listener detection without availability stops before allocation', async () => {
+  const calls = [];
+  let loads = 0;
+  const dispatchEffect = async effect => { calls.push(effect); return { available: false }; };
+  const loadSdk = async () => { loads++; throw new Error('unexpected SDK load'); };
+  await assert.rejects(listenerSdk({ dispatchEffect }, loadSdk), { code: 'setup_required' });
+  assert.deepEqual(calls, [{ kind: 'sdk-listener', operation: 'detect', input: {} }]);
+  assert.equal(loads, 0);
+});
+
+test('synthetic listener reads distinguish explicit absence from unknown presence', async () => {
+  const calls = [];
+  let loads = 0;
+  const dispatchEffect = async effect => {
+    calls.push(effect);
+    if (effect.operation === 'detect') return { available: true };
+    if (effect.operation === 'read') return effect.input.handle === 'absent' ? { present: false } : {};
+    assert.fail('unexpected listener effect: ' + effect.operation);
+  };
+  const loadSdk = async () => { loads++; throw new Error('unexpected SDK load'); };
+  const sdk = await listenerSdk({ dispatchEffect }, loadSdk);
+  assert.equal(await sdk.getListener('absent'), null);
+  await assert.rejects(sdk.getListener('unknown'), { code: 'provider_unavailable' });
+  assert.deepEqual(calls, [
+    { kind: 'sdk-listener', operation: 'detect', input: {} },
+    { kind: 'sdk-listener', operation: 'read', input: { handle: 'absent' } },
+    { kind: 'sdk-listener', operation: 'read', input: { handle: 'unknown' } },
+  ]);
+  assert.equal(loads, 0);
+});
 
 test('cold and incomplete observations offer SDK installation only with explicit writable authority', () => {
   const adapter = createNgrokAdapter({ loadSdk: async () => { throw new Error('module missing'); } });

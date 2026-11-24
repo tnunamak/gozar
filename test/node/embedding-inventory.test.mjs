@@ -1,5 +1,7 @@
-import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm} from 'node:fs/promises';import {join} from 'node:path';import {tmpdir} from 'node:os';
+import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';import {dirname,join} from 'node:path';import {tmpdir} from 'node:os';
 import {listProviders} from '../../packages/gozar-node/embedding-inventory.mjs';import {createEmbeddingServices} from '../../packages/gozar-node/embedding-services.mjs';
+import {recipeAdapter} from '../../packages/gozar-node/adapter-runtime.mjs';
+import {fakeRegistry} from '../../packages/gozar-node/testing.mjs';
 test('inventory includes unfamiliar providers, audiences, and unsupported usages without tokens',async()=>{
  const home=await mkdtemp(join(tmpdir(),'embed-inventory-'));const adapters=['unfamiliar-a','unfamiliar-b'].map((id,n)=>({id,definition:{id,label:id,supportedKinds:n?['durable']:['attached','session'],requiredCapabilities:['runtime.attached'],capabilities:{reach:n?'tailnet':'lan',transport:'https'},disclosure:{revision:'v'},facts:[]},detect:async()=>({state:'ready',facts:{}}),properties(){return this.definition.capabilities;},setupActions:()=>[]}));
  try{const deps={adapters,embeddingServices:createEmbeddingServices({registryId:'fixture'}),readContext:{configuration:async()=>null}};const v=await listProviders({home},deps);assert.equal(v.providers.length,2);assert.equal(v.providers[0].availability.durable.state,'unsupported');assert.equal(v.providers[0].availability.attached.state,'unsupported');assert.equal(v.providers[1].reach,'tailnet');assert.equal(v.providers[0].prerequisites.find(p=>p.id==='runtime.attached').observation.reason,'host-capability-undeclared');assert.equal(JSON.stringify(v).includes('candidateToken'),false);
@@ -58,4 +60,54 @@ test('inventory observes effective provider metadata without consent tokens', as
   assert.doesNotMatch(serialized,/candidateToken/);
   assert.equal(serialized.includes(inertMarker),false);
  } finally { await rm(home,{recursive:true,force:true}); }
+});
+
+test('admitted recipe idle limits agree with inventory while omission remains unknown', async t=>{
+ const home=await mkdtemp(join(tmpdir(),'recipe-idle-parity-'));
+ t.after(()=>rm(home,{recursive:true,force:true}));
+ const cases=[
+  ['finite',{idleTimeoutMs:4000},4000,{known:true,value:4000}],
+  ['zero',{idleTimeoutMs:0},0,{known:true,value:0}],
+  ['unlimited',{idleTimeoutMs:null},null,{known:true,value:null}],
+  ['omitted',{},null,{known:false,reason:'not-declared'}],
+ ];
+ const adapters=[];
+ for(const [name,fields] of cases){
+  const id='idle-'+name;
+  const fixture=await fakeRegistry({id,kinds:['durable'],reach:'lan',dir:home});
+  const definition=join(fixture.root,fixture.manifest.providers[0].definition);
+  const wrappedFile=join(dirname(definition),'wrapped.definition.json');
+  const wrapped=JSON.parse(await readFile(wrappedFile,'utf8'));
+  delete wrapped.definition.idleTimeoutMs;
+  Object.assign(wrapped.definition,fields);
+  await writeFile(wrappedFile,JSON.stringify(wrapped));
+  adapters.push(recipeAdapter({definition}));
+ }
+ const result=await listProviders({home},{adapters,platform:'linux',
+  embeddingServices:createEmbeddingServices({registryId:'recipe-idle-parity'}),readContext:{configuration:async()=>null}});
+ for(const [[name,,runtimeIdle,observedIdle],adapter] of cases.map((entry,i)=>[entry,adapters[i]])){
+  const runtime=await adapter.runtimeFacts();
+  const row=result.providers.find(item=>item.providerId==='idle-'+name);
+  assert.ok(row,name);
+  assert.equal(runtime.limits.idleTimeoutMs,runtimeIdle,name);
+  assert.deepEqual(row.idleTimeoutMs,observedIdle,name);
+  if(row.idleTimeoutMs.known) assert.equal(row.idleTimeoutMs.value,runtime.limits.idleTimeoutMs,name);
+ }
+});
+
+test('each uncached inventory read projects the current host prerequisite observation', async t=>{
+ const home=await mkdtemp(join(tmpdir(),'prerequisite-observation-'));
+ t.after(()=>rm(home,{recursive:true,force:true}));
+ const definition={id:'prerequisite-fixture',supportedKinds:['attached'],capabilities:{reach:'lan',transport:'https'},
+  disclosure:{revision:'v'},prerequisites:[{id:'local-setup',label:'Local setup',observation:'detected'}]};
+ let observed;
+ const adapter={id:definition.id,definition,properties:()=>definition.capabilities,setupActions:()=>[],
+  detect:async()=>({state:observed===true?'ready':'action-required',facts:{detected:observed}})};
+ const deps={adapters:[adapter],embeddingServices:createEmbeddingServices({registryId:'prerequisite-fixture'}),
+  readContext:{configuration:async()=>null}};
+ for(const [fact,state] of [[true,'present'],[false,'missing'],['denied','denied'],[undefined,'unknown']]){
+  observed=fact;
+  const {providers:[row]}=await listProviders({home},deps);
+  assert.equal(row.prerequisites.find(item=>item.id==='local-setup')?.state,state);
+ }
 });
