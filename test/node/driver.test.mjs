@@ -243,6 +243,28 @@ test('opt-in process observer captures later bounded transient output without jo
   assert.equal(driver.readProcessOutput(events.at(-1).sequence).length,0);
 });
 
+test('process observer discards an overlong line and resumes at the next newline',()=>{
+ const lines=[];
+ const driver=new EffectDriver({adapters:[],journal:{},sessionId:'synthetic',resolveProgram:()=>null,
+  onProcessOutput:event=>{if(event.completeLine!==undefined)lines.push(event.completeLine);}});
+ const resource={id:'fake-child',generation:1,adapterId:'fake',continuityRef:'fake'};
+ driver.routeOutputReady.add(resource.id);
+ driver.processOutput({id:'output'},resource,'stdout',Buffer.from('x'.repeat(4097)));
+ driver.processOutput({id:'output'},resource,'stdout',Buffer.from('\nrecovered\r\n'));
+ assert.deepEqual(lines,['recovered']);
+});
+
+test('a failing output observer does not discard retained diagnostics',()=>{
+ const driver=new EffectDriver({adapters:[],journal:{},sessionId:'synthetic',resolveProgram:()=>null,
+  observeProcessOutput:true,onProcessOutput:()=>{throw new Error('synthetic observer stopped');}});
+ const resource={id:'fake-child',generation:1,adapterId:'fake',continuityRef:'fake'};
+ driver.processOutput({id:'first'},resource,'stderr',Buffer.from('first'));
+ driver.processOutput({id:'second'},resource,'stderr',Buffer.from('second'));
+ const events=driver.readProcessOutput();
+ assert.deepEqual(events.map(event=>event.output),['first','second']);
+ assert.deepEqual(driver.readProcessOutput(events[0].sequence).map(event=>event.output),['second']);
+});
+
 test('owned process output frames complete lines across chunks without diagnostic observation', async t => {
   const { driver } = await fixture(t, {});
   const lines = [];
@@ -262,6 +284,69 @@ test('owned process output frames complete lines across chunks without diagnosti
     Array.from({ length: 3 }, () => [2, 'adapter', 'ledger-ref']));
   assert.equal(JSON.stringify(driver.journal.value).includes('lhr.life'), false);
 });
+
+test('an observer callback failure does not discard diagnostic output', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  const seen = [];
+  driver.onProcessOutput = row => {
+    if (row.completeLine === 'first') throw new Error('synthetic observer failure');
+    if (row.completeLine !== undefined) seen.push(row.completeLine);
+  };
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('first\n'));
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('second\n'));
+  assert.deepEqual(seen, ['second']);
+  assert.deepEqual(driver.readProcessOutput().map(row => row.output), ['first\n', 'second\n']);
+});
+
+test('diagnostic reads return independent rows and a noninclusive sequence cursor', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('one'));
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('two'));
+  const next = driver.readProcessOutput(1);
+  assert.equal(next.length, 1);
+  assert.equal(next[0].sequence, 2);
+  next[0].output = 'client-local change';
+  assert.deepEqual(driver.readProcessOutput().map(row => row.output), ['one', 'two']);
+});
+
+test('diagnostic retention evicts the oldest rows at the event count cap', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  for (let index = 0; index < 130; index++) {
+    driver.processOutput(effect, resource, 'stdout', Buffer.from('x'));
+  }
+  const rows = driver.readProcessOutput();
+  assert.equal(rows.length, 128);
+  assert.equal(rows[0].sequence, 3);
+  assert.equal(rows.at(-1).sequence, 130);
+});
+
+test('diagnostic retention counts multibyte characters by UTF-8 bytes', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  const chunk = Buffer.from('é'.repeat(4096));
+  for (let index = 0; index < 5; index++) {
+    driver.processOutput(effect, resource, 'stdout', chunk);
+  }
+  const rows = driver.readProcessOutput();
+  assert.deepEqual(rows.map(row => row.sequence), [2, 3, 4, 5]);
+  assert.equal(rows.reduce((bytes, row) => bytes + Buffer.byteLength(row.output), 0), 32768);
+});
+
+function makeOutputOnlyDriver() {
+  return Object.assign(Object.create(EffectDriver.prototype), {
+    sessionId: 'synthetic-session', observeProcessOutput: true, onProcessOutput: null,
+    outputEvents: [], outputBytes: 0, outputSequence: 0, nowMs: () => 100,
+  });
+}
 
 test('initial create URL is handled by the core result and never re-emitted as a route change', async t => {
   const recipe = { kind: 'spawn', program, args: ['-e', 'process.stdout.write("https://a.lhr.life\\n");setTimeout(()=>process.stdout.write("https://b.lhr.life\\n"),120);setInterval(()=>{},1000)'],

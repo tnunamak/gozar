@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,mkdir,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join,dirname} from 'node:path';
+import {join,dirname,sep} from 'node:path';
 import {gzipSync} from 'node:zlib';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
 import {spawn} from 'node:child_process';
 import {runInstalledJourney,runProcess} from '../../scripts/release-installed-journey.mjs';
+import {parseArgs as parsePublicTypesArgs} from '../../scripts/check-public-types.mjs';
 
 function tar(files){
  const chunks=[];
@@ -48,11 +49,42 @@ function processStub(f,{fault,mutate=false,outcome=evidence}={}){
  };
  return {run,calls};
 }
+test('release pack metadata reports ambiguity instead of selecting a result',async()=>{
+ const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
+ const pack={name:'@tnunamak/gozar',version:'0.0.0-fixture',filename:'gozar-fixture.tgz'};
+ assert.deepEqual(parsePackOutput(JSON.stringify([pack])),pack);
+ assert.throws(()=>parsePackOutput(JSON.stringify([pack,{...pack,version:'0.0.1-fixture'}])),/Unknown or ambiguous npm pack output/);
+});
+
+test('release pack metadata does not accept an unrelated package result',async()=>{
+ const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
+ assert.throws(()=>parsePackOutput(JSON.stringify([{name:'fixture-other',version:'0.0.0-fixture',filename:'fixture-other.tgz'}])),/Unknown or ambiguous npm pack output/);
+});
+
 test('digest refusal starts zero subprocesses',async t=>{
  const f=await fixture(t),stub=processStub(f);
  await assert.rejects(runInstalledJourney({...f.input,sha256:'0'.repeat(64)},{run:stub.run}),/digest/i);
  assert.equal(stub.calls.length,0);
 });
+test('a runtime dependency refuses before output or subprocess creation',async t=>{
+ const f=await fixture(t,{dependencies:{'synthetic-runtime':'1'}});
+ const stub=processStub(f);
+ await assert.rejects(runInstalledJourney(f.input,{run:stub.run}),/must be standalone/);
+ assert.equal(stub.calls.length,0);
+ await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
+
+test('an archive missing a required example refuses before any subprocess',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ delete f.files['examples/provider-lifecycle-fixture.mjs'];
+ const bytes=tar(f.files);
+ await writeFile(f.input.tarball,bytes);
+ const sha256=createHash('sha256').update(bytes).digest('hex');
+ await assert.rejects(runInstalledJourney({...f.input,sha256},{run:stub.run}),/Missing installed example examples\/provider-lifecycle-fixture\.mjs/);
+ assert.equal(stub.calls.length,0);
+ await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
+
 test('offline archive journey verifies installed bytes and strict lifecycle evidence',async t=>{
  const f=await fixture(t),stub=processStub(f);
  const result=await runInstalledJourney(f.input,{run:stub.run});
@@ -123,6 +155,51 @@ for(const nested of [false,true])test('refuses optional ngrok peer at '+(nested?
  t.after(()=>rm(report.scratch,{recursive:true,force:true}));
  assert.equal(report.status,'failed');
 });
+test('a synchronous launch failure reports not-started cleanup and the original error',async()=>{
+ const error=Object.assign(new Error('synthetic executable missing'),{code:'ENOENT'});
+ const result=await runProcess('fixture-only',[],{timeoutMs:1000},{spawnProcess:()=>{throw error;}});
+ assert.deepEqual(result.error,{name:'Error',message:'synthetic executable missing',code:'ENOENT'});
+ assert.deepEqual(result.cleanup,{scope:'not-started',state:'confirmed'});
+ assert.equal(result.status,null);
+ assert.equal(result.stdout,'');
+});
+
+test('a synchronous launch refusal without an error code records null',async()=>{
+ const error=new TypeError('synthetic launch refusal');
+ const result=await runProcess('fixture-only',[],{timeoutMs:1000},{spawnProcess:()=>{throw error;}});
+ assert.deepEqual(result.error,{name:'TypeError',message:'synthetic launch refusal',code:null});
+ assert.deepEqual(result.cleanup,{scope:'not-started',state:'confirmed'});
+ assert.deepEqual([result.status,result.signal,result.stdout,result.stderr],[null,null,'','']);
+});
+
+test('an ordinary nonzero close keeps its exit code and separate output streams',async()=>{
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ child.kill=()=>assert.fail('ordinary close must not signal the fixture');
+ const pending=runProcess('fixture-only',[],{timeoutMs:1000},{spawnProcess:()=>child});
+ child.stdout.emit('data','one');child.stderr.emit('data','two');
+ child.emit('close',7,null);
+ const result=await pending;
+ assert.deepEqual([result.status,result.signal,result.stdout,result.stderr],[7,null,'one','two']);
+ assert.deepEqual([result.timedOut,result.overflow,result.drainTimedOut],[false,false,false]);
+ assert.deepEqual([result.cleanup.scope,result.cleanup.state],['child-only','confirmed']);
+ assert.equal(result.error,undefined);
+});
+
+test('a direct child closed by signal retains the signal and captured diagnostics',async()=>{
+ const child=new EventEmitter();
+ child.stdout=new EventEmitter();
+ child.stderr=new EventEmitter();
+ const pending=runProcess('fixture-only',[],{timeoutMs:1000},{spawnProcess:()=>child});
+ child.stderr.emit('data',Buffer.from('synthetic diagnostic'));
+ child.emit('close',null,'SIGTERM');
+ const result=await pending;
+ assert.equal(result.status,null);
+ assert.equal(result.signal,'SIGTERM');
+ assert.equal(result.stderr,'synthetic diagnostic');
+ assert.equal(result.timedOut,false);
+ assert.equal(result.cleanup.state,'confirmed');
+});
+
 test('process error waits for close and retains both pre-error and trailing output',async()=>{
  const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.kill=()=>{};
  let settled=false;
@@ -134,6 +211,29 @@ test('process error waits for close and retains both pre-error and trailing outp
  assert.equal(result.stdout,'before after');assert.equal(result.stderr,'diagnostic');
  assert.deepEqual(result.error,{name:'Error',message:'spawn failed',code:'ENOENT'});
 });
+test('a synchronous spawn refusal records that no child started',async()=>{
+ const failure=Object.assign(new Error('synthetic spawn refusal'),{code:'ENOENT'});
+ const result=await runProcess('fixture',[],{timeoutMs:1000},{spawnProcess:()=>{throw failure;}});
+ assert.equal(result.status,null);
+ assert.deepEqual(result.error,{name:'Error',message:'synthetic spawn refusal',code:'ENOENT'});
+ assert.deepEqual(result.cleanup,{scope:'not-started',state:'confirmed'});
+ assert.equal(result.timedOut,false);
+});
+
+test('a signal exit keeps the failure and output received while draining',async()=>{
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ child.kill=()=>assert.fail('the fixture never enables process signaling');
+ const pending=runProcess('fixture',[],{timeoutMs:1000},{spawnProcess:()=>child});
+ child.emit('exit',null,'SIGTERM');
+ child.stderr.emit('data','synthetic final diagnostic');
+ child.emit('close',null,'SIGTERM');
+ const result=await pending;
+ assert.equal(result.status,null);
+ assert.equal(result.signal,'SIGTERM');
+ assert.equal(result.stderr,'synthetic final diagnostic');
+ assert.equal(result.drainTimedOut,false);
+});
+
 test('process error with even zero exit retains a failed step receipt and output files',async t=>{
  const f=await fixture(t);const result={status:0,signal:null,stdout:'partial stdout',stderr:'partial stderr',error:{name:'Error',message:'spawn failed',code:'ENOENT'}};
  await assert.rejects(runInstalledJourney(f.input,{run:async()=>result}),/subprocess failed/);
@@ -155,6 +255,31 @@ for(const events of [
  t.after(()=>rm(report.scratch,{recursive:true,force:true}));
  assert.equal(report.status,'failed');
 });
+test('a synthetic signalled close stays distinct from a numeric exit', async()=>{
+ const child=new EventEmitter();
+ child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ const result=runProcess('synthetic',[],{timeoutMs:1000},{spawnProcess:()=>child});
+ child.emit('close',null,'SIGINT');
+ const receipt=await result;
+ assert.equal(receipt.status,null);
+ assert.equal(receipt.signal,'SIGINT');
+ assert.equal(receipt.timedOut,false);
+ assert.equal(receipt.cleanup.state,'confirmed');
+});
+test('output after a synthetic close cannot change bytes retained in the receipt', async()=>{
+ const child=new EventEmitter();
+ child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ const result=runProcess('synthetic',[],{timeoutMs:1000},{spawnProcess:()=>child});
+ child.stdout.emit('data',Buffer.from('done'));
+ child.emit('close',0,null);
+ child.stderr.emit('data',Buffer.from('late'));
+ const receipt=await result;
+ assert.equal(receipt.stdout,'done');
+ assert.equal(receipt.stderr,'');
+ assert.equal(receipt.observedBytes,4);
+ assert.equal(receipt.outputBytes,4);
+});
+
 test('permits repeated genuine proof phase before stop',async t=>{
  const f=await fixture(t),outcome={...evidence,events:['setup','start','proof','proof','stop','cleanup']};
  const result=await runInstalledJourney(f.input,{run:processStub(f,{outcome}).run});
@@ -239,6 +364,33 @@ test('real subprocess preserves UTF-8 split across separate stdout and stderr wr
   }
  }
 });
+test('fake process output at the exact shared byte cap is not overflow',async()=>{
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ const signals=[];child.kill=signal=>signals.push(signal);
+ const pending=runProcess('fixture',[],{timeoutMs:2000},{spawnProcess:()=>child});
+ const cap=16*1024*1024;
+ child.stdout.emit('data',Buffer.alloc(cap-2,120));
+ child.stderr.emit('data','é');
+ child.emit('close',0,null);
+ const result=await pending;
+ assert.equal(result.overflow,false);assert.equal(result.outputBytes,cap);
+ assert.equal(result.observedBytes,cap);assert.equal(result.stderr,'é');
+ assert.deepEqual(signals,[]);
+});
+test('fake process output beyond the shared cap counts but does not retain the extra bytes',async()=>{
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ const signals=[];child.kill=signal=>signals.push(signal);
+ const pending=runProcess('fixture',[],{timeoutMs:2000},{spawnProcess:()=>child});
+ const cap=16*1024*1024;
+ child.stdout.emit('data',Buffer.alloc(cap-1,120));
+ child.stderr.emit('data','AB');
+ child.stderr.emit('data','C');
+ child.emit('close',null,'SIGTERM');
+ const result=await pending;
+ assert.equal(result.overflow,true);assert.equal(result.outputBytes,cap);
+ assert.equal(result.observedBytes,cap+2);assert.equal(result.stderr,'A');
+ assert.equal(result.signal,'SIGTERM');assert.deepEqual(signals,['SIGTERM']);
+});
 test('missing close is bounded and explicitly retains uncertain cleanup',async()=>{
  const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.kill=()=>true;
  const result=await bounded(runProcess('fixture',[],{timeoutMs:10},{spawnProcess:()=>child}),3000);
@@ -252,4 +404,38 @@ test('uncertain cleanup cannot become a successful installed step',async t=>{
  const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
  t.after(()=>rm(report.scratch,{recursive:true,force:true}));
  assert.equal(report.status,'failed');assert.deepEqual(report.failure.result,result);
+});
+
+test('pack receipt rejects an array with more than one package receipt',async()=>{
+ const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
+ const first={filename:'tnunamak-gozar-1.2.3.tgz',name:'@tnunamak/gozar',version:'1.2.3'};
+ assert.deepEqual(parsePackOutput(JSON.stringify([first])),first);
+ assert.throws(
+  ()=>parsePackOutput(JSON.stringify([first,{...first,filename:'tnunamak-gozar-1.2.4.tgz',version:'1.2.4'}])),
+  {message:'Unknown or ambiguous npm pack output'}
+ );
+});
+
+test('pack receipt rejects a single package with the wrong package identity',async()=>{
+ const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
+ const entry={filename:'sample-widget-1.2.3.tgz',name:'@sample/widget',version:'1.2.3'};
+ assert.throws(
+  ()=>parsePackOutput(JSON.stringify([entry])),
+  {message:'Unknown or ambiguous npm pack output'}
+ );
+});
+
+test('public-types argv preserves both invented absolute values in either flag order',()=>{
+ const installedRoot=join(sep,'synthetic-install'),tsc=join(sep,'synthetic-compiler');
+ const expected={installedRoot,tsc};
+ assert.deepEqual(parsePublicTypesArgs(['--installed-root',installedRoot,'--tsc',tsc]),expected);
+ assert.deepEqual(parsePublicTypesArgs(['--tsc',tsc,'--installed-root',installedRoot]),expected);
+});
+
+test('public-types argv distinguishes missing values, duplicate options and relative values',()=>{
+ const installedRoot=join(sep,'synthetic-install'),tsc=join(sep,'synthetic-compiler');
+ assert.throws(()=>parsePublicTypesArgs(['--installed-root','--tsc',tsc]),{message:'Missing value for --installed-root'});
+ assert.throws(()=>parsePublicTypesArgs(['--tsc',tsc]),{message:'Required: --installed-root ABS_INSTALL_PREFIX --tsc ABS_COMPILER'});
+ assert.throws(()=>parsePublicTypesArgs(['--installed-root',installedRoot,'--tsc',tsc,'--tsc',tsc]),{message:'Unknown or duplicate argument: --tsc'});
+ assert.throws(()=>parsePublicTypesArgs(['--installed-root',installedRoot,'--tsc','synthetic-compiler']),{message:'Both paths must be absolute'});
 });

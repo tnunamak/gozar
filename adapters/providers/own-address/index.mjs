@@ -114,10 +114,14 @@ export default recipeAdapter({
         if (operation.cancelled) return { state: 'cancelled', evidence: unknown('external-resources-retained'),
           nextAction: action('retain-infrastructure', 'instructions', 'Keep your existing infrastructure',
             'owner', 'host', 'reconcile', { instructions: retained }) };
+        const fixedOrigin = ctx.origin != null;
+        if (fixedOrigin && parseOrigin(ctx.origin) === null) return {
+          state: 'blocked', nextAction: null, evidence: unknown('app-fixed-https-origin-invalid'),
+        };
         if (operation.lastActionId === null) return { state: 'authorization-required', nextAction: entry };
         const origin = await given(ctx);
         if (!origin) return {
-          state: ctx.origin == null ? 'authorization-required' : 'blocked',
+          state: 'authorization-required',
           nextAction: structuredClone(originAction), evidence: unknown('owner-https-origin-required'),
         };
         if (!route) return {

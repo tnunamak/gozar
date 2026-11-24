@@ -10,6 +10,85 @@ fn run(input: Value) -> Value {
     );
     out
 }
+#[test]
+fn public_step_returns_the_same_typed_error_for_missing_or_invalid_json() {
+    let expected = json!({"error":{
+        "code":"invalid-input",
+        "message":"invalid input JSON or protocol shape"
+    }});
+    for input in ["", "{", "{}"] {
+        let output: Value = serde_json::from_str(&gozar_core::step(input)).unwrap();
+        assert_eq!(output, expected);
+    }
+}
+
+#[test]
+fn valid_json_primitives_are_not_protocol_envelopes() {
+    let expected = json!({"error":{
+        "code":"invalid-input",
+        "message":"invalid input JSON or protocol shape"
+    }});
+    for input in ["null", "false", "42", r#""synthetic""#] {
+        let output: Value = serde_json::from_str(&gozar_core::step(input)).unwrap();
+        assert_eq!(output, expected, "input: {input}");
+    }
+}
+
+#[test]
+fn repeated_status_preserves_the_same_snapshot_without_effects() {
+    let first = run(json!({"command":{"type":"status","sessionId":"inert-status-fixture"}}));
+    assert_eq!(first["snapshot"]["sessionId"], "inert-status-fixture");
+    assert_eq!(first["effects"], json!([]));
+    assert_eq!(first["events"], json!([]));
+    assert!(first.get("action").is_none());
+    let second = run(json!({"state":first["state"],"command":{"type":"status"}}));
+    assert_eq!(second, first);
+}
+
+#[test]
+fn unsupported_show_help_reports_correlated_event_without_an_effect() {
+    let session = "fixture-show-help";
+    let out = run(json!({"command":{"type":"show-help","sessionId":session}}));
+    let generation = out["snapshot"]["generation"].clone();
+
+    assert_eq!(out["snapshot"]["sessionId"], session);
+    assert!(generation.is_u64());
+    assert_eq!(
+        out["events"],
+        json!([{"type":"unsupported-command","sessionId":session,"generation":generation}])
+    );
+    assert_eq!(out["effects"], json!([]));
+    assert!(out.get("action").is_none());
+}
+
+#[test]
+fn status_rejects_a_clock_behind_the_preceding_snapshot() {
+    let first = run(json!({"command":{"type":"status"},"host":{"nowMs":25}}));
+    let next = json!({
+        "state": first["state"],
+        "command": {"type":"status"},
+        "host": {"nowMs":24}
+    });
+    let failure: Value = serde_json::from_str(&gozar_core::step(&next.to_string())).unwrap();
+    assert_eq!(
+        failure,
+        json!({"error":{"code":"invalid-input","message":"host clock moved backwards"}})
+    );
+}
+
+#[test]
+fn status_at_the_same_explicit_clock_tick_has_no_effects() {
+    let first = run(json!({"command":{"type":"status"},"host":{"nowMs":25}}));
+    let next = run(json!({
+        "state": first["state"],
+        "command": {"type":"status"},
+        "host": {"nowMs":25}
+    }));
+    assert_eq!(next["snapshot"], first["snapshot"]);
+    assert_eq!(next["effects"], json!([]));
+    assert_eq!(next["events"], json!([]));
+}
+
 fn fixture() -> Value {
     serde_json::from_str(include_str!("../../../test/adapters/fixtures/plan-v1.json")).unwrap()
 }
@@ -548,6 +627,24 @@ fn pointer_binding_escapes_root_mount_in_raw_assertion() {
     assert_eq!(out["effects"][0]["kind"], "persist");
 }
 #[test]
+fn malformed_json_returns_only_the_protocol_error() {
+    let response: Value = serde_json::from_str(&gozar_core::step("{")).unwrap();
+    assert_eq!(
+        response,
+        json!({"error": {"code": "invalid-input", "message": "invalid input JSON or protocol shape"}})
+    );
+}
+
+#[test]
+fn missing_command_returns_only_the_protocol_error() {
+    let response: Value = serde_json::from_str(&gozar_core::step("{}")).unwrap();
+    assert_eq!(
+        response,
+        json!({"error": {"code": "invalid-input", "message": "invalid input JSON or protocol shape"}})
+    );
+}
+
+#[test]
 fn public_route_remains_candidate_for_private_clients_and_observations_rank_it_honestly() {
     let f = fixture();
     let public = definition("external");
@@ -1038,4 +1135,46 @@ fn public_relay_health_stays_publishable_for_eighty_minutes_past_nonce_budget() 
             "refresh {refresh}: {out}"
         );
     }
+}
+
+#[test]
+fn status_roundtrip_keeps_the_initial_session_label_and_snapshot() {
+    let initial = run(json!({"command":{"type":"status","sessionId":"test-status"}}));
+    let again = run(json!({"state":initial["state"],"command":{"type":"status"}}));
+
+    assert_eq!(initial["snapshot"]["sessionId"], "test-status");
+    assert_eq!(again["state"], initial["state"]);
+    assert_eq!(again["snapshot"], initial["snapshot"]);
+    assert_eq!(again["events"], json!([]));
+    assert_eq!(again["effects"], json!([]));
+}
+
+#[test]
+fn stopping_an_empty_session_is_idempotent() {
+    let initial = run(json!({"command":{"type":"status","sessionId":"test-stop"}}));
+    let stopped = run(json!({"state":initial["state"],"command":{"type":"stop"}}));
+    let repeated = run(json!({"state":stopped["state"],"command":{"type":"stop"}}));
+
+    assert_eq!(stopped["snapshot"]["phase"], "stopped");
+    assert_eq!(
+        stopped["snapshot"]["generation"].as_u64(),
+        initial["snapshot"]["generation"].as_u64().map(|value| value + 1)
+    );
+    assert_eq!(stopped["events"][0]["type"], "endpoint-withdrawn");
+    assert_eq!(stopped["effects"], json!([]));
+    assert_eq!(repeated["snapshot"], stopped["snapshot"]);
+    assert_eq!(repeated["events"], json!([]));
+    assert_eq!(repeated["effects"], json!([]));
+}
+
+
+#[test]
+fn recommendation_without_adapters_has_no_choices_or_effects() {
+    let out = run(json!({"command": {"type": "recommend"}, "adapters": []}));
+    assert_eq!(out["snapshot"]["phase"], "planned");
+    assert_eq!(out["snapshot"]["recommendations"], json!([]));
+    assert_eq!(out["snapshot"]["plans"], json!([]));
+    assert_eq!(out["action"], json!({"kind": "choose", "choices": []}));
+    assert_eq!(out["effects"], json!([]));
+    assert_eq!(out["events"], json!([]));
 }
