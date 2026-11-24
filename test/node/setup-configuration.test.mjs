@@ -81,6 +81,26 @@ async function ngrokWorld(t) {
   return { home, side, api, forwards, candidateOf, provide, provideValue };
 }
 
+const readProviderDisplay = provider => JSON.parse(readFileSync(
+  new URL(`../../adapters/providers/${provider}/definition.json`, import.meta.url), 'utf8',
+)).adapter;
+
+test('packaged provider setup shows distinct service names', () => {
+  assert.equal(readProviderDisplay('tailscale-funnel').label, 'Tailscale Funnel');
+  assert.equal(readProviderDisplay('cloudflare-named').label, 'Cloudflare named tunnel');
+});
+
+test('packaged provider setup names terms and privacy links separately', () => {
+  for (const provider of ['tailscale-funnel', 'cloudflare-named']) {
+    const links = readProviderDisplay(provider).disclosure.links;
+    assert.deepEqual(links.map(({ rel, label }) => ({ rel, label })), [
+      { rel: 'terms', label: 'Terms' },
+      { rel: 'privacy', label: 'Privacy' },
+    ]);
+  }
+});
+
+
 test('ngrok manual hostname accepts the exact DNS label limit', () => {
   assert.equal(domainPattern.test(`${'a'.repeat(63)}.example`), true);
   assert.equal(domainPattern.test(`${'a'.repeat(64)}.example`), false);
