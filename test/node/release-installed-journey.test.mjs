@@ -61,6 +61,15 @@ test('release pack metadata does not accept an unrelated package result',async()
  assert.throws(()=>parsePackOutput(JSON.stringify([{name:'fixture-other',version:'0.0.0-fixture',filename:'fixture-other.tgz'}])),/Unknown or ambiguous npm pack output/);
 });
 
+test('release pack metadata rejects an empty or whitespace-only package version',async()=>{
+ const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
+ const pack={name:'@tnunamak/gozar',filename:'gozar-fixture.tgz'};
+ for(const version of ['', '  \t'])assert.throws(
+  ()=>parsePackOutput(JSON.stringify([{...pack,version}])),
+  {message:'Unknown or ambiguous npm pack output'}
+ );
+});
+
 test('digest refusal starts zero subprocesses',async t=>{
  const f=await fixture(t),stub=processStub(f);
  await assert.rejects(runInstalledJourney({...f.input,sha256:'0'.repeat(64)},{run:stub.run}),/digest/i);
@@ -83,6 +92,34 @@ test('an archive missing a required example refuses before any subprocess',async
  await assert.rejects(runInstalledJourney({...f.input,sha256},{run:stub.run}),/Missing installed example examples\/provider-lifecycle-fixture\.mjs/);
  assert.equal(stub.calls.length,0);
  await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
+
+test('an existing output directory is preserved and no process starts',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ await mkdir(f.input.outputDirectory);
+ const marker=join(f.input.outputDirectory,'result.json');
+ await writeFile(marker,'previous synthetic receipt\n');
+ await assert.rejects(runInstalledJourney(f.input,{run:stub.run}),{code:'EEXIST'});
+ assert.equal(stub.calls.length,0);
+ assert.equal(await readFile(marker,'utf8'),'previous synthetic receipt\n');
+});
+
+test('unknown fake screen output is recorded and stops before lifecycle',async t=>{
+ const f=await fixture(t),stub=processStub(f),calls=[];
+ const run=(command,args,options)=>{
+  calls.push(command);
+  return args.includes('--fakes')
+   ? Promise.resolve({status:0,stdout:'Unrecognized fixture screen\n',stderr:''})
+   : stub.run(command,args,options);
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),/Unknown screen outcome/);
+ const receipt=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(receipt.scratch,{recursive:true,force:true}));
+ assert.equal(receipt.status,'failed');
+ assert.deepEqual(receipt.steps.map(step=>step.name),['install','screen']);
+ assert.equal(receipt.failure.message,'Unknown screen outcome');
+ assert.equal(calls.length,2);
+ assert.equal(await readFile(join(f.input.outputDirectory,'screen.stdout'),'utf8'),'Unrecognized fixture screen\n');
 });
 
 test('offline archive journey verifies installed bytes and strict lifecycle evidence',async t=>{
@@ -122,6 +159,35 @@ for(const outcome of [{...evidence,cleanup:{state:'unconfirmed'}},{...evidence,p
   assert.deepEqual(report.lifecycle,outcome);assert.equal(report.status,'failed');
  });
 }
+
+test('install success with no installed package keeps a failed receipt and starts no examples',async t=>{
+ const f=await fixture(t),calls=[];
+ await assert.rejects(runInstalledJourney(f.input,{run:async(command)=>{
+  calls.push(command);return {status:0,stdout:'fixture install completed',stderr:''};
+ }}),{code:'ENOENT'});
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+ assert.deepEqual(calls,['npm']);
+ assert.equal(report.status,'failed');
+ assert.equal(report.failure.code,'ENOENT');
+ assert.deepEqual(report.steps.map(({name})=>name),['install']);
+});
+
+test('truncated lifecycle JSON keeps the output and failed receipt',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const stdout='{"fixtureOnly":true';
+ await assert.rejects(runInstalledJourney(f.input,{run:async(...args)=>{
+  const result=await stub.run(...args);
+  return stub.calls.length===3?{...result,stdout}:result;
+ }}),SyntaxError);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+ assert.equal(report.status,'failed');
+ assert.equal(report.failure.name,'SyntaxError');
+ assert.equal(Object.hasOwn(report,'lifecycle'),false);
+ assert.deepEqual(report.steps.map(({name})=>name),['install','screen','lifecycle']);
+ assert.equal(await readFile(join(f.input.outputDirectory,'lifecycle.stdout'),'utf8'),stdout);
+});
 
 test('optional SDK presence refuses before examples',async t=>{
  const f=await fixture(t),stub=processStub(f);

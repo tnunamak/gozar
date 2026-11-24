@@ -13,7 +13,7 @@ export function parsePackOutput(text){
  const value=JSON.parse(text);
  const entries=Array.isArray(value)?value:value?.filename?[value]:Object.values(value??{});
  if(entries.length!==1||typeof entries[0]?.filename!=='string'||entries[0].name!=='@tnunamak/gozar'||
-    typeof entries[0].version!=='string')throw new Error('Unknown or ambiguous npm pack output');
+    typeof entries[0].version!=='string'||!entries[0].version.trim())throw new Error('Unknown or ambiguous npm pack output');
  const entry=entries[0];
  if(basename(entry.filename)!==entry.filename||!entry.filename.endsWith('.tgz'))throw new Error('Unsafe npm archive filename');
  return entry;

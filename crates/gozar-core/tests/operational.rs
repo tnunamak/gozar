@@ -62,6 +62,40 @@ fn unsupported_show_help_reports_correlated_event_without_an_effect() {
 }
 
 #[test]
+fn unsupported_help_diagnostic_does_not_repeat_on_later_status() {
+    let initial = run(json!({"command":{"type":"status","sessionId":"fixture-help-once"}}));
+    let help = run(json!({
+        "state": initial["state"],
+        "command": {"type":"show-help"}
+    }));
+    assert_eq!(help["events"].as_array().unwrap().len(), 1);
+    assert_eq!(help["events"][0]["type"], "unsupported-command");
+    assert_eq!(help["events"][0]["sessionId"], initial["snapshot"]["sessionId"]);
+    assert_eq!(help["effects"], json!([]));
+
+    let status = run(json!({"state":help["state"],"command":{"type":"status"}}));
+    assert_eq!(status["snapshot"], help["snapshot"]);
+    assert_eq!(status["events"], json!([]));
+    assert_eq!(status["effects"], json!([]));
+}
+
+#[test]
+fn invalid_saved_state_reports_only_typed_input_error() {
+    let expected = json!({
+        "error": {
+            "code": "invalid-input",
+            "message": "invalid input JSON or protocol shape"
+        }
+    });
+    for state in [json!(false), json!("not-a-snapshot")] {
+        let input = json!({"state":state,"command":{"type":"status"}});
+        let result: Value =
+            serde_json::from_str(&gozar_core::step(&input.to_string())).unwrap();
+        assert_eq!(result, expected, "state: {state}");
+    }
+}
+
+#[test]
 fn status_rejects_a_clock_behind_the_preceding_snapshot() {
     let first = run(json!({"command":{"type":"status"},"host":{"nowMs":25}}));
     let next = json!({
@@ -663,6 +697,27 @@ fn missing_command_returns_only_the_protocol_error() {
         response,
         json!({"error": {"code": "invalid-input", "message": "invalid input JSON or protocol shape"}})
     );
+}
+
+#[test]
+fn repeat_recommendation_reports_the_unknown_reach_notice_only_once() {
+    let first = run(json!({"command": {"type": "recommend"}, "adapters": []}));
+    let second = run(json!({"state": first["state"], "command": {"type": "recommend"}}));
+    let notice = json!(["Client reach unknown; public HTTPS first, client validation still required"]);
+    assert_eq!(first["snapshot"]["limitations"], notice);
+    assert_eq!(second["snapshot"]["limitations"], notice);
+    assert_eq!(second["effects"], json!([]));
+}
+
+#[test]
+fn a_declared_reach_does_not_show_the_unknown_reach_notice() {
+    let out = run(json!({
+        "command": {"type": "recommend"},
+        "adapters": [],
+        "requirements": {"clientReach": "this-device"}
+    }));
+    assert_eq!(out["snapshot"]["limitations"], json!([]));
+    assert_eq!(out["effects"], json!([]));
 }
 
 #[test]

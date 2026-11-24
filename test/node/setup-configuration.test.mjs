@@ -92,6 +92,22 @@ test('ngrok manual hostname distinguishes an internal dash from a label-edge das
   assert.equal(domainPattern.test('synthetic-.example'), false);
 });
 
+test('ngrok hostname validation distinguishes the total name limit from each label limit', () => {
+  const base = ['a'.repeat(63), 'b'.repeat(63), 'c'.repeat(63)].join('.');
+  const valid = base + '.' + 'd'.repeat(61);
+  const oversized = base + '.' + 'd'.repeat(62);
+  assert.equal(valid.length, 253);
+  assert.equal(oversized.length, 254);
+  assert.equal(domainPattern.test(valid), true);
+  assert.equal(domainPattern.test(oversized), false);
+});
+
+test('ngrok hostname validation does not treat missing labels as a complete hostname', () => {
+  assert.equal(domainPattern.test('fixture.example'), true);
+  assert.equal(domainPattern.test('fixture'), false);
+  assert.equal(domainPattern.test('fixture..example'), false);
+});
+
 test('ngrok setup journey: auth, then reserved domain, then ready; expose opens the listener with the stored values', async t => {
   const { home, api, forwards, candidateOf, provide, provideValue } = await ngrokWorld(t);
   let candidate = await candidateOf();
@@ -332,8 +348,34 @@ test('LAN setup handles absent or empty interface observations', async () => {
   } }), []);
 });
 
+test('LAN setup ignores malformed address entries and entries missing an internal flag', async () => {
+  const { observedInterfaces } = await import('../../adapters/providers/lan/index.mjs');
+  assert.deepEqual(observedInterfaces({ interfaces: {
+    unusable: [null, { internal: false, address: 'not-an-address' }],
+    unknown: [{ address: '192.0.2.10' }],
+  } }), []);
+});
+
 test('Tailscale setup presents the HTTPS default port implicitly and other ports explicitly', async () => {
   const { originOf } = await import('../../adapters/providers/_shared/tailscale-serve.mjs');
   assert.equal(originOf('demo.invalid', 443), 'https://demo.invalid');
   assert.equal(originOf('demo.invalid', 8443), 'https://demo.invalid:8443');
+});
+
+test('an allowance diagnostic has a fixed message and an account-help action', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const error = safeListenerError({ code: 'ERR_NGROK_108', message: 'fixture debug detail' });
+  assert.match(error.message, /agent\/session allowance was reached/);
+  assert.equal(error.nextAction.kind, 'open-url');
+  assert.equal(error.nextAction.label, 'Check account setup');
+  assert.doesNotMatch(error.message, /fixture debug detail/);
+});
+
+test('an unknown listener diagnostic gives stable review instructions', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const error = safeListenerError({ message: 'fictional provider detail' });
+  assert.match(error.message, /review setup and retry/);
+  assert.equal(error.nextAction.kind, 'instructions');
+  assert.equal(error.nextAction.label, 'Review connection and setup');
+  assert.doesNotMatch(error.message, /fictional provider detail/);
 });

@@ -355,6 +355,29 @@ test('diagnostic retention counts multibyte characters by UTF-8 bytes', () => {
   assert.equal(rows.reduce((bytes, row) => bytes + Buffer.byteLength(row.output), 0), 32768);
 });
 
+test('a callback-only observer does not retain diagnostic rows', () => {
+  const driver = makeOutputOnlyDriver();
+  driver.observeProcessOutput = false;
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set();
+  const output = [];
+  driver.onProcessOutput = row => output.push(row.output);
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  driver.processOutput({ id: 'sample' }, resource, 'stdout', Buffer.from('example status'));
+  assert.deepEqual(output, ['example status']);
+  assert.deepEqual(driver.readProcessOutput(), []);
+});
+
+test('a chunk received with no observers does not consume a diagnostic sequence', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  driver.observeProcessOutput = false;
+  driver.processOutput({ id: 'skipped' }, resource, 'stdout', Buffer.from('unobserved'));
+  driver.observeProcessOutput = true;
+  driver.processOutput({ id: 'observed' }, resource, 'stdout', Buffer.from('example status'));
+  assert.deepEqual(driver.readProcessOutput().map(row => [row.sequence, row.output]), [[1, 'example status']]);
+});
+
 function makeOutputOnlyDriver() {
   return Object.assign(Object.create(EffectDriver.prototype), {
     sessionId: 'synthetic-session', observeProcessOutput: true, onProcessOutput: null,
