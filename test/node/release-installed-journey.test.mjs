@@ -505,3 +505,22 @@ test('public-types argv distinguishes missing values, duplicate options and rela
  assert.throws(()=>parsePublicTypesArgs(['--installed-root',installedRoot,'--tsc',tsc,'--tsc',tsc]),{message:'Unknown or duplicate argument: --tsc'});
  assert.throws(()=>parsePublicTypesArgs(['--installed-root',installedRoot,'--tsc','synthetic-compiler']),{message:'Both paths must be absolute'});
 });
+
+for(const [label,screen] of [
+ ['wrong heading','Unexpected screen\nHost inputs: {}\nChoice: Fixture\n'],
+ ['missing choice','Remote access\nHost inputs: {}\n'],
+])test('installed screen '+label+' fails before lifecycle starts',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const run=async(command,args,options)=>{
+  if(stub.calls.length===0)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  const result=await stub.run(command,args,options);
+  return args.includes('--fakes')?{...result,stdout:screen}:result;
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),{message:'Unknown screen outcome'});
+ assert.equal(stub.calls.length,2);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ assert.equal(report.status,'failed');
+ assert.deepEqual(report.steps.map(step=>step.name),['install','screen']);
+ assert.equal(report.failure.message,'Unknown screen outcome');
+ assert.equal(await readFile(join(f.input.outputDirectory,'screen.stdout'),'utf8'),screen);
+});
