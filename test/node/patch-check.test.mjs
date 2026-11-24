@@ -60,7 +60,7 @@ const cliExample = 'test/node/example.test.mjs';
 const cliNested = 'test/node/nested/other.test.mjs';
 
 function cliFixture({changed = [cliExample], files = [cliSmoke, cliExample],
-                     source = {}, status = {}, stdout} = {}) {
+                     source = {}, status = {}, stdout, untracked = {status:0,stdout:''}} = {}) {
  const calls = [], messages = [], failures = [];
  let tick = 0;
  return {calls, messages, failures, invoke: (args = []) => runPatchCheck(args, {
@@ -72,6 +72,7 @@ function cliFixture({changed = [cliExample], files = [cliSmoke, cliExample],
   now: () => ++tick,
   run: (command, argv, {cwd,capture}) => {
    calls.push({command, argv, cwd, capture});
+   if (command === 'git' && argv[0] === 'ls-files') return untracked;
    const result = {status: status[command] ?? 0};
    if (command === 'git') result.stdout = stdout ?? changed.map(file => file + '\0').join('');
    return result;
@@ -84,11 +85,13 @@ test('patch CLI defaults to HEAD and checks the planned file plus mandatory smok
  assert.equal(f.invoke(),0);
  assert.deepEqual(f.calls.map(({command,argv}) => [command,argv]),[
   ['git',['diff','--name-only','-z','--no-renames','HEAD','--']],
+  ['git',['ls-files','--others','--exclude-standard','-z']],
   [process.execPath,['--test','--test-concurrency=1',cliSmoke,cliExample]],
  ]);
  assert.ok(f.calls.every(call=>call.cwd==='/fixture/repo'));
  assert.equal(f.calls[0].capture,true);
- assert.equal(f.calls[1].capture,false);
+ assert.equal(f.calls[1].capture,true);
+ assert.equal(f.calls[2].capture,false);
  assert.ok(f.messages.some(line=>line.endsWith(': 1 ms')));
 });
 
@@ -104,9 +107,9 @@ test('a shared installed runner checks the caller worktree rather than its own d
  try{
   process.chdir(root);
   const code=runPatchCheck([],{discover:()=>[cliSmoke,cliExample],readSource:()=>'',log:()=>{},fail:()=>{},
-   run:(command,args,options)=>{calls.push(options.cwd);return {status:0,stdout:command==='git'?cliExample+'\0':''};}});
+   run:(command,args,options)=>{calls.push(options.cwd);return {status:0,stdout:command==='git'&&args[0]==='diff'?cliExample+'\0':''};}});
   assert.equal(code,0);
-  assert.deepEqual(calls,[root,root]);
+  assert.deepEqual(calls,[root,root,root]);
  }finally{process.chdir(before);rmSync(root,{recursive:true,force:true});}
 });
 
@@ -123,14 +126,14 @@ test('patch CLI uses an explicit base SHA and accounts for renamed or deleted so
  assert.equal(f.invoke(['--base',sha]),0);
  assert.ok(f.calls[0].argv.includes('--no-renames'));
  assert.ok(f.calls[0].argv.includes(sha));
- assert.deepEqual(f.calls[1].argv.slice(2),[cliSmoke,cliExample]);
+ assert.deepEqual(f.calls[2].argv.slice(2),[cliSmoke,cliExample]);
 });
 
 test('patch CLI fails before running checks when diff or selections are unavailable',()=>{
  for(const config of [{changed:[]},{stdout:'broken'},{files:[cliExample]},{status:{git:13}}]){
   const f=cliFixture(config);
   assert.equal(f.invoke(),config.status?.git ?? 1);
-  assert.deepEqual(f.calls.map(x=>x.command),['git']);
+  assert.deepEqual(f.calls.map(x=>x.command),config.stdout||config.status ? ['git'] : ['git','git']);
   assert.equal(f.failures.length,1);
  }
  for(const args of [['--unknown'],['--base'],['--base','HEAD'],['--full','--full']]){
@@ -140,14 +143,31 @@ test('patch CLI fails before running checks when diff or selections are unavaila
  }
 });
 
+test('patch CLI refuses tracked and untracked inputs before running checks',()=>{
+ const f=cliFixture({files:[cliSmoke,cliExample,cliNested],untracked:{status:0,stdout:cliNested+'\0'}});
+ assert.equal(f.invoke(),1);
+ assert.deepEqual(f.calls.map(x=>x.argv[0]),['diff','ls-files']);
+ assert.match(f.failures[0],/stage all patch inputs or use a clean checkout/i);
+});
+
+test('patch CLI refuses failed or malformed untracked enumeration before running checks',()=>{
+ for(const untracked of [{status:13,stdout:''},{status:0,stdout:'unterminated'},
+  {status:0,stdout:'\0'},{status:0,stdout:'one\0\0'},{status:null,signal:'SIGTERM'},{status:0}]){
+  const f=cliFixture({untracked});
+  assert.notEqual(f.invoke(),0);
+  assert.deepEqual(f.calls.map(x=>x.argv[0]),['diff','ls-files']);
+  assert.match(f.failures[0],/cannot establish untracked paths/i);
+ }
+});
+
 test('patch CLI forwards test and build failures, stopping dependent checks',()=>{
  const node=cliFixture({status:{[process.execPath]:17}});
  assert.equal(node.invoke(),17);
- assert.deepEqual(node.calls.map(x=>x.command),['git',process.execPath]);
+ assert.deepEqual(node.calls.map(x=>x.command),['git','git',process.execPath]);
  const build=cliFixture({changed:['crates/gozar-core/src/lib.rs'],
   files:[cliWasm,cliSmoke],status:{bash:23}});
  assert.equal(build.invoke(),23);
- assert.deepEqual(build.calls.map(x=>x.command),['git','bash']);
+ assert.deepEqual(build.calls.map(x=>x.command),['git','git','bash']);
 });
 
 test('patch CLI selects only the exact documentation checks and smoke for docs',()=>{
@@ -155,11 +175,11 @@ test('patch CLI selects only the exact documentation checks and smoke for docs',
  const f=cliFixture({changed:['README.md'],
   files:[cliWasm,cliSmoke,packageTest,walkTest,'test/node/package-sibling.test.mjs',cliNested]});
  assert.equal(f.invoke(),0);
- assert.deepEqual(f.calls[1].argv,[cliWasm]);
- assert.deepEqual(f.calls[2].argv.slice(2),[cliSmoke,walkTest,packageTest]);
+ assert.deepEqual(f.calls[2].argv,[cliWasm]);
+ assert.deepEqual(f.calls[3].argv.slice(2),[cliSmoke,walkTest,packageTest]);
  const missing=cliFixture({changed:['README.md'],files:[cliSmoke,packageTest]});
  assert.equal(missing.invoke(),1);
- assert.deepEqual(missing.calls.map(x=>x.command),['git']);
+ assert.deepEqual(missing.calls.map(x=>x.command),['git','git']);
 });
 
 test('patch CLI builds before selected core tests and does not run unrelated Node tests',()=>{
@@ -169,6 +189,7 @@ test('patch CLI builds before selected core tests and does not run unrelated Nod
  assert.equal(f.invoke(),0);
  assert.deepEqual(f.calls.map(({command,argv}) => [command,argv]),[
   ['git',['diff','--name-only','-z','--no-renames','HEAD','--']],
+  ['git',['ls-files','--others','--exclude-standard','-z']],
   ['bash',[cliWasm]],
   [process.execPath,['--test','--test-concurrency=1',coreTest,cliSmoke]],
   ['cargo',['test','-p','gozar-core']],

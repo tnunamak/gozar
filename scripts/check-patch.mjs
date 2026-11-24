@@ -221,7 +221,7 @@ function runCommand(command, args, options) {
   });
 }
 
-/** Injectable command boundary. The executable uses real child exit statuses. */
+/** Injectable command boundary; patch mode requires indexed or committed inputs. */
 export function runPatchCheck(args, {
   root = process.cwd(),
   run = runCommand,
@@ -241,6 +241,18 @@ export function runPatchCheck(args, {
       return Number.isInteger(diff?.status) && diff.status > 0 ? diff.status : 1;
     }
     const changedPaths = diff.stdout ? diff.stdout.slice(0, -1).split('\0') : [];
+    if (!full) {
+      const extra = run('git', ['ls-files', '--others', '--exclude-standard', '-z'],
+        { cwd: root, capture: true });
+      if (!extra || extra.error || extra.signal || extra.status !== 0 ||
+          typeof extra.stdout !== 'string' ||
+          (extra.stdout && (!extra.stdout.endsWith('\0') ||
+            extra.stdout.startsWith('\0') || extra.stdout.includes('\0\0')))) {
+        fail('Cannot establish untracked paths');
+        return Number.isInteger(extra?.status) && extra.status > 0 ? extra.status : 1;
+      }
+      if (extra.stdout) throw new Error('Untracked paths: stage all patch inputs or use a clean checkout');
+    }
     if (!changedPaths.length && !full) throw new Error('no changed paths');
     const files = discover(root);
     const plan = planChecks({ changedPaths, files, readSource, full });
