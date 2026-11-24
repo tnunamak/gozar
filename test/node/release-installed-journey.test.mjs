@@ -505,3 +505,34 @@ test('public-types argv distinguishes missing values, duplicate options and rela
  assert.throws(()=>parsePublicTypesArgs(['--installed-root',installedRoot,'--tsc',tsc,'--tsc',tsc]),{message:'Unknown or duplicate argument: --tsc'});
  assert.throws(()=>parsePublicTypesArgs(['--installed-root',installedRoot,'--tsc','synthetic-compiler']),{message:'Both paths must be absolute'});
 });
+
+for(const mode of ['split-euro','invalid-inflation','second-stream-inflation'])test('returned and written UTF-8 respects combined cap: '+mode,async t=>{
+ const cap=16*1024*1024;
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.kill=()=>true;
+ const pending=runProcess('fixture',[],{timeoutMs:1000},{spawnProcess:()=>child});
+ // stderr also consumes the shared budget; raw capture must never exceed it.
+ if(mode==='second-stream-inflation'){
+  child.stdout.emit('data',Buffer.alloc(cap/2,97));
+  child.stderr.emit('data',Buffer.alloc(cap/2,0xff));
+ }else{
+ child.stderr.emit('data',Buffer.from('E'));
+ child.stdout.emit('data',Buffer.alloc(cap-2,97));
+ child.stdout.emit('data',Buffer.from([mode==='split-euro'?0xe2:0xff]));
+ if(mode==='split-euro')child.stdout.emit('data',Buffer.from([0x82,0xac]));
+ }
+ child.emit('close',0,null);
+ const result=await pending;
+ assert.equal(result.outputBytes,cap);assert.equal(result.overflow,true);
+ assert.ok(Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr)<=cap);
+ assert.ok(result.stdout.startsWith('a'.repeat(100)));
+ const f=await fixture(t);
+ await assert.rejects(runInstalledJourney(f.input,{run:async()=>result}),/subprocess failed/);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+ assert.equal(report.status,'failed');
+ assert.equal(report.failure.result.overflow,true);
+ const out=await readFile(join(f.input.outputDirectory,'install.stdout'));
+ const err=await readFile(join(f.input.outputDirectory,'install.stderr'));
+ assert.ok(out.length+err.length<=cap);
+ assert.equal(out.toString('utf8'),result.stdout);assert.equal(err.toString('utf8'),result.stderr);
+});
