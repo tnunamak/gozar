@@ -41,7 +41,7 @@ test('named provider setup actions identify the invalid field independently', as
   const good = { token: 'synthetic-placeholder', origin: 'https://fixture.example', 'gate-port': '45443' };
   for (const [input, expected, authSet, originSet, portSet] of [
     [{ ...good, origin: 'not-an-origin' }, ['origin'], true, false, true],
-    [{ ...good, token: '' }, ['token'], false, true, true],
+    [{ ...good, token: '' }, ['managed-api-token', 'token'], false, true, true],
     [{ ...good, 'gate-port': '1023' }, ['gate-port'], true, true, false],
     [good, [], true, true, true],
   ]) {
@@ -58,8 +58,9 @@ test('named provider setup actions identify the invalid field independently', as
     assert.deepEqual(probes, ['cloudflared', 'bash']);
     assert.equal(state, expected.length ? 'action-required' : 'ready');
     assert.deepEqual([facts.authSet, facts.originSet, facts.portSet], [authSet, originSet, portSet]);
-    assert.deepEqual(cloudflareNamed.setupActions(facts).map(action => action.id)
-      .filter(id => ['token', 'origin', 'gate-port'].includes(id)), expected);
+    // Every offered action, in order: with both binaries present, only a missing field adds an action, and
+    // the initial managed-token choice appears only when the saved token is absent.
+    assert.deepEqual(cloudflareNamed.setupActions(facts).map(action => action.id), expected);
   }
 });
 for (const adapter of [localhost, tunnl]) {
