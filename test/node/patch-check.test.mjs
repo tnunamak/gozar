@@ -70,12 +70,13 @@ const cliWasm = 'scripts/build-wasm.sh';
 const cliExample = 'test/node/example.test.mjs';
 const cliNested = 'test/node/nested/other.test.mjs';
 
-function cliFixture({changed = [cliExample], files = [cliSmoke, cliExample],
+function cliFixture({changed = [cliExample], files = [cliSmoke, cliExample], batchBase = null,
                      source = {}, status = {}, stdout, untracked = {status:0,stdout:''}} = {}) {
  const calls = [], messages = [], failures = [];
  let tick = 0;
  return {calls, messages, failures, invoke: (args = []) => runPatchCheck(args, {
   root: '/fixture/repo',
+  batchBase,
   discover: () => files,
   readSource: file => source[file] ?? '',
   log: line => messages.push(line),
@@ -110,6 +111,28 @@ test('patch CLI can run its full integration check on a clean checkout',()=>{
  const f=cliFixture({changed:[],files:[cliSmoke,cliExample,cliWasm]});
  assert.equal(f.invoke(['--full']),0);
  assert.deepEqual(f.calls.map(call=>call.command),['git','bash',process.execPath,'cargo']);
+});
+
+test('a clean patch check reports no-op without pretending to run tests',()=>{
+ const f=cliFixture({changed:[],files:[]});
+ assert.equal(f.invoke(),0);
+ assert.deepEqual(f.calls.map(call=>call.command),['git','git']);
+ assert.ok(f.messages.includes('GOZAR_PATCH_RESULT=noop reason=no-changed-paths'));
+ assert.deepEqual(f.failures,[]);
+});
+
+test('committed batch checks compare against the supplied starting commit',()=>{
+ const batchBase='b'.repeat(40), explicit='c'.repeat(40);
+ const f=cliFixture({batchBase});
+ assert.equal(f.invoke(),0);
+ assert.equal(f.calls[0].argv[4],batchBase);
+ assert.deepEqual(f.calls[2].argv.slice(2),[cliSmoke,cliExample]);
+ const override=cliFixture({batchBase});
+ assert.equal(override.invoke(['--base',explicit]),0);
+ assert.equal(override.calls[0].argv[4],explicit);
+ const invalid=cliFixture({batchBase:'not-a-sha'});
+ assert.equal(invalid.invoke(),1);
+ assert.deepEqual(invalid.calls,[]);
 });
 
 test('full mode preserves the registered Node gate families',()=>{
@@ -150,7 +173,7 @@ test('patch CLI uses an explicit base SHA and accounts for renamed or deleted so
 });
 
 test('patch CLI fails before running checks when diff or selections are unavailable',()=>{
- for(const config of [{changed:[]},{stdout:'broken'},{files:[cliExample]},{status:{git:13}}]){
+ for(const config of [{stdout:'broken'},{files:[cliExample]},{status:{git:13}}]){
   const f=cliFixture(config);
   assert.equal(f.invoke(),config.status?.git ?? 1);
   assert.deepEqual(f.calls.map(x=>x.command),config.stdout||config.status ? ['git'] : ['git','git']);

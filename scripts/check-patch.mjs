@@ -199,7 +199,7 @@ export function discoverFiles(root) {
   return files.sort();
 }
 
-function parseOptions(args) {
+function parseOptions(args, batchBase) {
   let base = 'HEAD', explicit = false, full = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--full' && !full) full = true;
@@ -211,6 +211,11 @@ function parseOptions(args) {
     } else {
       throw new Error('invalid option: ' + args[i]);
     }
+  }
+  if (!explicit && !full && batchBase) {
+    if (typeof batchBase !== 'string' || !/^[a-f0-9]{7,64}$/iu.test(batchBase))
+      throw new Error('DOT_LAND_BATCH_BASE requires a commit SHA');
+    base = batchBase;
   }
   return { base, full };
 }
@@ -228,6 +233,7 @@ function runCommand(command, args, options) {
 /** Injectable command boundary; patch mode requires indexed or committed inputs. */
 export function runPatchCheck(args, {
   root = process.cwd(),
+  batchBase = process.env.DOT_LAND_BATCH_BASE,
   run = runCommand,
   discover = discoverFiles,
   readSource = file => readFileSync(join(root, file), 'utf8'),
@@ -236,7 +242,7 @@ export function runPatchCheck(args, {
   now = Date.now,
 } = {}) {
   try {
-    const { base, full } = parseOptions(args);
+    const { base, full } = parseOptions(args, batchBase);
     const diff = run('git', ['diff', '--name-only', '-z', '--no-renames', base, '--'],
       { cwd: root, capture: true });
     if (!diff || diff.error || diff.signal || diff.status !== 0 ||
@@ -257,7 +263,10 @@ export function runPatchCheck(args, {
       }
       if (extra.stdout) throw new Error('Untracked paths: stage all patch inputs or use a clean checkout');
     }
-    if (!changedPaths.length && !full) throw new Error('no changed paths');
+    if (!changedPaths.length && !full) {
+      log('GOZAR_PATCH_RESULT=noop reason=no-changed-paths');
+      return 0;
+    }
     const files = discover(root);
     const plan = planChecks({ changedPaths, files, readSource, full });
     const commands = [];
