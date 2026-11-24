@@ -71,7 +71,7 @@ const cliExample = 'test/node/example.test.mjs';
 const cliNested = 'test/node/nested/other.test.mjs';
 
 function cliFixture({changed = [cliExample], files = [cliSmoke, cliExample], batchBase = null,
-                     source = {}, status = {}, stdout, untracked = {status:0,stdout:''}} = {}) {
+                     source = {}, status = {}, stdout, untracked = {status:0,stdout:''}, commitResult} = {}) {
  const calls = [], messages = [], failures = [];
  let tick = 0;
  return {calls, messages, failures, invoke: (args = []) => runPatchCheck(args, {
@@ -85,6 +85,9 @@ function cliFixture({changed = [cliExample], files = [cliSmoke, cliExample], bat
   run: (command, argv, {cwd,capture}) => {
    calls.push({command, argv, cwd, capture});
    if (command === 'git' && argv[0] === 'ls-files') return untracked;
+   if (command === 'git' && argv[0] === 'rev-parse') return commitResult ?? {
+    status:0,stdout:(argv[2]==='HEAD^{commit}' ? 'a'.repeat(40) : argv[2].replace(/\^\{commit\}$/u,''))+'\n',
+   };
    const result = {status: status[command] ?? 0};
    if (command === 'git') result.stdout = stdout ?? changed.map(file => file + '\0').join('');
    return result;
@@ -116,9 +119,39 @@ test('patch CLI can run its full integration check on a clean checkout',()=>{
 test('a clean patch check reports no-op without pretending to run tests',()=>{
  const f=cliFixture({changed:[],files:[]});
  assert.equal(f.invoke(),0);
- assert.deepEqual(f.calls.map(call=>call.command),['git','git']);
- assert.ok(f.messages.includes('GOZAR_PATCH_RESULT=noop reason=no-changed-paths'));
+ assert.deepEqual(f.calls.map(call=>call.command),['git','git','git','git']);
+ assert.ok(f.messages.includes('GOZAR_PATCH_RESULT=noop reason=no-changed-paths base='+
+  'a'.repeat(40)+' head='+'a'.repeat(40)));
  assert.deepEqual(f.failures,[]);
+});
+
+test('a defined empty batch base fails before Git or test execution',()=>{
+ const f=cliFixture({batchBase:'',changed:[]});
+ assert.equal(f.invoke(),1);
+ assert.deepEqual(f.calls,[]);
+ assert.match(f.failures[0],/DOT_LAND_BATCH_BASE requires a commit SHA/u);
+ assert.deepEqual(f.messages,[]);
+});
+
+test('requested comparisons with no changes fail with resolved base and HEAD',()=>{
+ for(const batchBase of ['a'.repeat(40),'b'.repeat(40)]){
+  const f=cliFixture({batchBase,changed:[]});
+  assert.equal(f.invoke(),1);
+  assert.match(f.failures[0],new RegExp('base='+batchBase+' head='+'a'.repeat(40),'u'));
+  assert.deepEqual(f.messages,[]);
+ }
+ const f=cliFixture({changed:[]});
+ assert.equal(f.invoke(['--base','a'.repeat(40)]),1);
+ assert.match(f.failures[0],/Expected changed paths/u);
+});
+
+test('a no-op cannot hide failed or malformed commit resolution',()=>{
+ for(const commitResult of [{status:128,stdout:''},{status:0,stdout:'not-a-commit\n'},
+  {status:0,signal:'SIGTERM',stdout:'a'.repeat(40)},{}]){
+  const f=cliFixture({changed:[],commitResult});
+  assert.equal(f.invoke(),1);
+  assert.deepEqual(f.messages,[]);
+ }
 });
 
 test('committed batch checks compare against the supplied starting commit',()=>{

@@ -212,12 +212,13 @@ function parseOptions(args, batchBase) {
       throw new Error('invalid option: ' + args[i]);
     }
   }
-  if (!explicit && !full && batchBase) {
+  const batchDeclared = batchBase !== undefined && batchBase !== null;
+  if (!explicit && !full && batchDeclared) {
     if (typeof batchBase !== 'string' || !/^[a-f0-9]{7,64}$/iu.test(batchBase))
       throw new Error('DOT_LAND_BATCH_BASE requires a commit SHA');
     base = batchBase;
   }
-  return { base, full };
+  return { base, full, expectsChanges: !full && (explicit || batchDeclared) };
 }
 
 function runCommand(command, args, options) {
@@ -242,7 +243,7 @@ export function runPatchCheck(args, {
   now = Date.now,
 } = {}) {
   try {
-    const { base, full } = parseOptions(args, batchBase);
+    const { base, full, expectsChanges } = parseOptions(args, batchBase);
     const diff = run('git', ['diff', '--name-only', '-z', '--no-renames', base, '--'],
       { cwd: root, capture: true });
     if (!diff || diff.error || diff.signal || diff.status !== 0 ||
@@ -264,7 +265,19 @@ export function runPatchCheck(args, {
       if (extra.stdout) throw new Error('Untracked paths: stage all patch inputs or use a clean checkout');
     }
     if (!changedPaths.length && !full) {
-      log('GOZAR_PATCH_RESULT=noop reason=no-changed-paths');
+      const commits = [];
+      for (const ref of [base, 'HEAD']) {
+        const commit = run('git', ['rev-parse', '--verify', ref + '^{commit}'],
+          { cwd: root, capture: true });
+        const value = typeof commit?.stdout === 'string' ? commit.stdout.trim() : '';
+        if (!commit || commit.error || commit.signal || commit.status !== 0 ||
+            !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/iu.test(value))
+          throw new Error('Cannot resolve comparison commit: ' + ref);
+        commits.push(value);
+      }
+      const comparison = 'base=' + commits[0] + ' head=' + commits[1];
+      if (expectsChanges) throw new Error('Expected changed paths: ' + comparison);
+      log('GOZAR_PATCH_RESULT=noop reason=no-changed-paths ' + comparison);
       return 0;
     }
     const files = discover(root);
