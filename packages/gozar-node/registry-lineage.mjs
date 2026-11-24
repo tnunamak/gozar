@@ -20,3 +20,7 @@ export const PUBLISHED_REGISTRY_IDS = Object.freeze([
 const bundled = Object.freeze({ id: BUNDLED_LINEAGE_ID, replaces: PUBLISHED_REGISTRY_IDS });
 export const bundledLineage = () => bundled;
 export const isBundledLineage = lineage => lineage === bundled;
+
+// Cleanup admission only. This never authorizes allocation, consent or publication.
+export const cleanupRegistryMatches = (recorded, runtime) => recorded === runtime.registryId ||
+  isBundledLineage(runtime.lineage) && PUBLISHED_REGISTRY_IDS.includes(recorded);

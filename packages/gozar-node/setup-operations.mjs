@@ -152,6 +152,8 @@ async function refresh(request, deps, storage, adapter, context, record, { inclu
     if (url?.protocol === 'https:' && !url.username && !url.password) handoffUrl = raw.href;
   }
   const nextAction = candidate ? { ...candidate, ...(handoffUrl && { href: handoffUrl }), consent: consentSnapshot(review(candidate)) } : null;
+  if (['complete', 'cancelled'].includes(state) && nextAction === null) record.terminal = { state, nextAction: null, revision: record.revision };
+  else delete record.terminal;
   const view = { schemaVersion: 1, operationId: request.operationId, revision: record.revision,
     scope: { registryId: deps.registryId, scopeId: configuration.scopeId, providerId: request.providerId,
       configurationRevision: configuration.revision, draftId: record.draftId },
