@@ -196,7 +196,7 @@ Keep `GOZAR_HOME` separate from `.gozar-route-example`; the latter belongs only 
 
 - `candidateToken` is private bearer data. It is single-use, expires after 10 minutes, and is bound to the query, the disclosure revision and what Gozar observed at the provider. If the provider changed, the call fails with `candidate_stale` and changes nothing: ask the catalog again. Do not log it.
 - Each candidate shows what an app needs to list, choose and explain a route without knowing any provider. `providerId` is the provider's own stable id; add it to the query (`providerId: 'ID'`) and the catalog holds only that candidate. An unknown id fails with `route_not_found` and a message that lists the ids on offer. It cannot be combined with `route`. Show the id, store it and send it back; do not compare it with a literal. `display.needs` is one static sentence on what the route needs on this computer. `properties.address.ports` lists the public ports Gozar tries, in order (`null` when the provider assigns the port). `properties.proof` says what Gozar checks before it publishes: `vantage` is where the check runs from and `checks` is a subset of `tls`, `nonce` and `sse`. `RouteView.verification` carries the same two fields for the last check, so it says where that check actually ran from. [docs/providers.md](docs/providers.md) lists them for every provider.
-- `ensureRoute` (durable), `adoptRoute` (takes over an existing rule and removes it when released or stopped) and `expose` (session or attached) all return a `RouteView`. Its `origin` is the route's address as soon as the provider has allocated it, also while the route is `unverified`: configure your server for it, so it can answer the challenge. `published` is the address you may advertise; it is `null` until the route is `usable`. With attached usage the calling process holds the route: the library sends a heartbeat every 5 seconds, the route ends within 20 seconds of the process exiting, and `closeRoute` ends it early.
+- `ensureRoute` (durable), `adoptRoute` (takes over an existing rule and removes it when released or stopped) and `expose` (session or attached) all return a `RouteView`. Its `origin` is the route's address as soon as the provider has allocated it, also while the route is `unverified`: configure your server for it, so it can answer the challenge. `published` is the address you may advertise; it is `null` until the route is `usable`. An attached route is held by its calling process. By default, the library sends heartbeats every 5 seconds and the controller checks periodically for owner loss using a 20-second threshold from the last heartbeat, not from process exit. Local forwarding closure and remote owned-resource removal are separate bounded cleanup attempts; an unconfirmed result remains as cleanup debt. Use `closeRoute` to request early closure and check its cleanup result.
 - A candidate's unmet `requirement` and `reasonCode` use closed lists. Its `actual` value can name input that prevented the route: an invalid owner-run origin appears as `{ origin, reason: 'invalid_origin' }` on the `setup` entry; a durable create origin outside the provider's creatable addresses appears as `{ origin }` on an `address` entry. Neither candidate receives a token.
 - Every failure has a code from a closed list, `GozarErrorCode` in `packages/gozar-node/route-contract.d.ts`, and an optional `nextAction`. Provider diagnostics never reach the app.
 - Requirements `transport` is `'https'`, `'tcp'`, `'tls'` or `'any'`. Shipped 0.5 execution is HTTP(S); raw TCP/TLS profiles remain detect-only. `'any'` allows plain HTTP, and only with reach `lan` or `this-device`; any other reach is `invalid_input`. A `provide-value` setup action asks the user for one plain value (`valueFormat` is `https-origin`, `domain` or `text`). Send it as `runSetupAction({ ..., value })`; a value that does not match the format is `invalid_input`. It is stored as configuration, not as a secret. A route its owner keeps (an address the user already runs) has `ownership: 'external-owned'`; `ensureRoute` records it without creating anything, and the origin is the one the user gave.
@@ -232,6 +232,8 @@ The same requests run from the command line. Each command reads its request from
 | `gozar review-consent --handle-file FILE --json` | Returns the current runtime consent snapshot. |
 | `gozar approve-consent --handle-file FILE --approval-file FILE --json` | Redeems that review and safely reproves the same generation. |
 
+Use `gozar setup` for one current action. Offers with a `step` use the [setup-operation commands](docs/design/provider-setup.md#cli-and-acceptance) instead.
+
 Exit codes: `0` success; `2` requirements, setup or `unsupported`; `3` missing, stale or unknown approval, or no such route; `1` any other failure. There is no `--yes` for these commands: the approval is the private file that holds the token the catalog issued.
 
 ## Embed Gozar in your app
@@ -263,7 +265,7 @@ input requirements through their `actionId`; read saved values and credential
 presence from `configuration`. Scoped `storeSecret` accepts bytes and returns a
 handle only to the trusted host. Setup requires the provider, current revision
 and the offered action's setup approval. Use persisted configuration drafts for
-editing or rotation while an older runtime is retained.
+editing or rotation while an older runtime is retained. Passive `listProviders` reads can return unknown (cold) or stale observations without probing. Use `listProviders({ home, owner, refresh: true })` for an explicit [fresh provider observation](docs/embedding-contract.md#cached-polling-reads-052).
 
 Recatalog the exact query before starting. Show the selected candidate's complete
 `consent` snapshot: `{scope,consentFactsDigest,facts,disclosures}`. Show every
@@ -278,7 +280,7 @@ recovers partial and uncertain allocations after a host crash. Its snapshots are
 historical; use `routeStatus` for current subject-bound proof. Advertise only
 `published`. Runtime consent drift withdraws publication; review and approve the
 new snapshot for safe proof on the same generation, or stop when refresh is
-unsupported. `closeRoute` retains uncertainty until exact owned cleanup succeeds.
+unsupported. `closeRoute` retains uncertainty until exact owned cleanup succeeds. Set `acknowledgeOrigin` on the factory when your host needs to accept the exact allocated origin before proof. With that callback, `watchRoutes` observes retained state for allocated origins; `routeStatus` requests fresh route proof. See [exact-origin host acknowledgment](docs/embedding-contract.md#exact-origin-host-acknowledgment-052).
 
 Shipped execution in 0.5 is HTTP(S) only. Raw TCP/TLS profiles remain detect-only
 so the full embedding contract can ship together. Trusted extensions can declare
@@ -286,7 +288,9 @@ their own protocol proof through `prepareProof`; the installed lifecycle fixture
 uses non-HTTP proof without core changes. New display properties are open facts,
 not additional typed fields. See [the embedding contract](docs/embedding-contract.md),
 [migration changes](docs/migration-0.4.md), [testing effects](docs/testing-effects.md)
-and the runnable [screen example](examples/remote-access-screen.mjs).
+and the runnable [screen example](examples/remote-access-screen.mjs). The screen illustrates rendering, not installed-host acceptance.
+
+**Packaged hosts (including DataConnect):** [Declare optional runtime modules](docs/embedding-contract.md#packaged-runtime-modules-052) on the trusted factory. A read-only bundle includes the tested native dependencies for its platform and architecture; runtime installation is a separate mode that requires an explicit declaration and authorization.
 
 The root exports `createGozar` and the same default factory methods: catalog/detect,
 provider inventory, setup/secret intake, configuration drafts, route start/adopt,

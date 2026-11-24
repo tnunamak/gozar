@@ -18,6 +18,13 @@ Find setup actions in `Candidate.setup.actions`, provider prerequisite remedies,
 
 Gozar returns `pending` while the adapter awaits an observation. `denied` and `expired` require evidence tied to the current operation. `complete` is the trusted adapter's setup workflow status. Read `evidence` separately for the observed outcome and its source, or for its unknown status. Uncertain resource debt requires reconciliation. Browser return, process exit and acknowledgement of instructions supply no independent proof. Route publication requires its own route consent and proof. A completed workflow can still offer route guidance or an optional configuration change. Use `state` for setup readiness and render `nextAction` independently. An instruction can also appear while setup is blocked or reconciling.
 
+| Display axis | What to show |
+| --- | --- |
+| Setup `state` | Workflow progress only. `complete` does not mean the route is published. |
+| Offered `nextAction` | Show separately when present, including optional or descriptive guidance after completion. |
+| `evidence` | Show the observation’s source and whether it is known. A completed LAN setup can still lack client evidence. |
+| Route publication | Use the independent route result and advertise only `RouteView.published`. Own-address mapping instructions can remain after setup completes without publishing a route. |
+
 ## Open, read and advance
 
 1. Save a caller-chosen `operationId` before the first call. Call `runSetupAction` with that ID, `expectedSetupRevision: 0`, the initial `actionId`, and the configuration or draft revision. Start reserves the operation and returns its first scoped offer. It accepts no approval or input at revision zero and performs no external mutation. The legacy call returns `setup_required` for an operation-only action.
@@ -57,6 +64,8 @@ The observation context exposes configuration values and credential presence thr
 - Tailscale's isolated CLI reported `NeedsLogin` and a browser handoff. Exact node and tailnet identity, admin completion, Serve/Funnel mapping readback and independent client proof remain unverified.
 
 These results select the adapter's offered steps and evidence source. Management and connector credentials remain distinct in all three cases.
+
+**Historical design evidence (2026-11-24 note, from captured material):** [cloudflared source at `095f3caf`](https://github.com/cloudflare/cloudflared/tree/095f3caf1dd9084cfe063ca40a4e5b0709e53e5b) distinguished login or process success from independent certificate/DNS readback; the captured [Tailscale Serve guidance](https://tailscale.com/kb/1312/serve) required HTTPS to be enabled for the tailnet. These are historical rationale for separating setup and proof, not current provider-policy claims.
 
 Existing raw ngrok TCP/TLS are detect-only. Own-address is adopt-only. These profiles do not get a managed create offer.
 
