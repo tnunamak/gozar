@@ -72,6 +72,7 @@ async function scenario(t, { forwarding, removal, hangCreate = false, closeFailu
     seen.removes.push(receipt);
     seen.forwardingOpenAtRemove = seen.gatePort === null ? null : await accepts(seen.gatePort);
     if (adapter.mode === 'hang') await hang;
+    seen.removalCompletions = (seen.removalCompletions ?? 0) + 1;
     if (adapter.mode === 'throw') throw new Error('provider refused');
     if (adapter.mode === 'debt') return { removed: false, debt: { message: 'provider still holds the resource' } };
     if (journalFailure) await chmod(directory, 0o500);
@@ -172,7 +173,10 @@ test('owner loss: a removal that never returns is bounded; a racing close does n
   assert.notEqual(state.phase, 'released');
   assert.ok(state.receipt);
   assert.deepEqual(state.handle, s.handle);
-  s.release();
+  // As with the never-returning create fixture below, do not turn this hung
+  // operation into a late journal writer after the controller has exited.
+  await Promise.resolve();
+  assert.equal(s.seen.removalCompletions ?? 0, 0, 'the never-returning fixture must remain unresolved through teardown');
 });
 
 test('owner loss while the provider create never returns: forwarding closes, nothing is removed by guess, the handle stays journaled', async t => {
