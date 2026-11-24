@@ -127,23 +127,28 @@ export async function redeemApproval(request, deps) {
 
 // --- The control channel (owner <-> controller): one JSON line each way, authenticated by a private nonce ---
 
-export function controlAttached(directory, command, timeoutMs = 15_000) {
+export function controlAttached(directory, command, timeoutMs = 15_000, {
+  readControl = readFile, identify = processIdentity, connect = path => net.createConnection(path),
+  setDeadline = setTimeout, clearDeadline = clearTimeout,
+} = {}) {
   return new Promise((resolve, reject) => {
     let output = '', settled = false, socket;
-    const finish = (error, value) => { if (settled) return; settled = true; clearTimeout(deadline); socket?.destroy(); error ? reject(error) : resolve(value); };
-    const deadline = setTimeout(() => finish(gozarError('provider_unavailable', 'The route controller did not answer in time')), timeoutMs);
-    readFile(join(directory, 'control.json'), 'utf8').then(async text => {
+    const finish = (error, value) => { if (settled) return; settled = true; clearDeadline(deadline); socket?.destroy(); error ? reject(error) : resolve(value); };
+    const deadline = setDeadline(() => finish(gozarError('provider_unavailable', 'The route controller did not answer in time')), timeoutMs);
+    readControl(join(directory, 'control.json'), 'utf8').then(async text => {
       const identity = JSON.parse(text);
       if(command.type==='observe'){
         if(!Number.isInteger(identity.pid)||!identity.startIdentity)
           throw gozarError('route_conflict','Incomplete controller process identity');
-        const actual=await processIdentity(identity.pid);
+        const actual=await identify(identity.pid);
         if(!actual)throw Object.assign(new Error('The route controller is not running'),{gone:true});
         if(actual!==identity.startIdentity)throw gozarError('route_conflict','Controller process identity changed');
-      } else if (!identity.startIdentity || await processIdentity(identity.pid) !== identity.startIdentity) {
+      } else if (!identity.startIdentity || await identify(identity.pid) !== identity.startIdentity) {
         throw Object.assign(new Error('The route controller is not running'), { gone: true });
       }
-      socket = net.createConnection(join(directory, 'control.sock'));
+      // Identity preparation can outlive the deadline. Never open a late socket.
+      if (settled) return;
+      socket = connect(join(directory, 'control.sock'));
       socket.once('connect', () => socket.write(`${JSON.stringify({ nonce: identity.nonce, command, ...(command.type==='observe'?{controllerIdentity:{pid:identity.pid,startIdentity:identity.startIdentity}}:{}) })}\n`));
       socket.on('data', chunk => {
         output += chunk;
