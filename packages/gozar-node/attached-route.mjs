@@ -95,11 +95,6 @@ export async function redeemApproval(request, deps) {
   const tokens = deps.redeem && deps.consentBinding ? null : await import('./consent-token.mjs');
   const { approval, wait, ...query } = request;
 
-  function spendApproval() {
-    const binding = (deps.consentBinding ?? tokens.consentBinding)(query, home, approval.disclosureRevision,approval.consentFactsDigest);
-    return (deps.redeem ?? tokens.redeemConsentToken)({ home, token: approval.candidateToken, binding, providerId: query.providerId });
-  }
-
   function requireAdmissibleAdapter(adapter) {
     if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available; ask the catalog again');
     if (approval.disclosureRevision !== consentDisclosureRevision(adapter.definition, query.intent)) throw gozarError('candidate_stale', 'Consent-relevant facts changed after approval; ask the catalog again');
@@ -127,7 +122,8 @@ export async function redeemApproval(request, deps) {
       throw gozarError('candidate_stale', 'The provider changed after the user approved; nothing was changed, ask the catalog again');
   }
 
-  const grant = await spendApproval();
+  const binding = (deps.consentBinding ?? tokens.consentBinding)(query, home, approval.disclosureRevision,approval.consentFactsDigest);
+  const grant = await (deps.redeem ?? tokens.redeemConsentToken)({ home, token: approval.candidateToken, binding, providerId: query.providerId });
   const adapter = (await adaptersOf(deps)).find(item => item.id === grant.adapterId);
   const ownership = requireAdmissibleAdapter(adapter);
   const context = bindConfiguration({...await readContextFor(deps, home, deps.platform ?? process.platform,query.owner),origin:query.origin??null}, adapter.id);
