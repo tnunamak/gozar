@@ -61,6 +61,15 @@ test('release pack metadata does not accept an unrelated package result',async()
  assert.throws(()=>parsePackOutput(JSON.stringify([{name:'fixture-other',version:'0.0.0-fixture',filename:'fixture-other.tgz'}])),/Unknown or ambiguous npm pack output/);
 });
 
+test('release pack metadata rejects an empty or whitespace-only package version',async()=>{
+ const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
+ const pack={name:'@tnunamak/gozar',filename:'gozar-fixture.tgz'};
+ for(const version of ['', '  \t'])assert.throws(
+  ()=>parsePackOutput(JSON.stringify([{...pack,version}])),
+  {message:'Unknown or ambiguous npm pack output'}
+ );
+});
+
 test('digest refusal starts zero subprocesses',async t=>{
  const f=await fixture(t),stub=processStub(f);
  await assert.rejects(runInstalledJourney({...f.input,sha256:'0'.repeat(64)},{run:stub.run}),/digest/i);
