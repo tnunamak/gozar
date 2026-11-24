@@ -175,10 +175,6 @@ for(const kind of ['attached','session']) test(kind+' without operationId retain
     }});
     const api=createRouteApi({...deps,embeddingServices:injected});
       const first=await own.open(api,q);await echo(first.origin);
-      const secondQ=query(f.home,q.owner,f.providerId,apps[1].target),second=await own.open(normal,secondQ);
-      const foreignQ=query(f.home,'foreign-owner',f.providerId,apps[2].target),foreign=await own.open(normal,foreignQ);
-      await echo(second.origin);await echo(foreign.origin);
-      const before=await counts(f);assert.deepEqual(before,{start:3,proof:3});
       // Owning-helper preparation precedes any removal. This is not a simulated close timeout.
       const statusRequest={home:f.home,owner:q.owner,handle:first.handle};
       const scope=await attachedCleanupReference(statusRequest,{registryId});
@@ -199,6 +195,8 @@ for(const kind of ['attached','session']) test(kind+' without operationId retain
       const listed=(await preparedReader.listRoutes({home:f.home,owner:q.owner})).routes.find(row=>row.handle.id===first.handle.id);
       assert.deepEqual(listed.handle,first.handle);
       assert.equal(listed.verification.status,'verified');
+      // Freshness must be witnessed before any sibling startup or reproof.
+      assert.deepEqual(await counts(f),{start:1,proof:1});
       assert.deepEqual(await readFile(recordPath),recordBytes);
       assert.deepEqual(await readFile(tempPath),tempBytes);
       const malformedPath=join(cleanupDir,randomBytes(32).toString('hex')+'.json');
@@ -210,6 +208,10 @@ for(const kind of ['attached','session']) test(kind+' without operationId retain
       assert.deepEqual(await readFile(recordPath),recordBytes);
       assert.deepEqual(await readFile(tempPath),tempBytes);
       await rm(malformedPath);await rm(tempPath);
+      const secondQ=query(f.home,q.owner,f.providerId,apps[1].target),second=await own.open(normal,secondQ);
+      const foreignQ=query(f.home,'foreign-owner',f.providerId,apps[2].target),foreign=await own.open(normal,foreignQ);
+      await echo(second.origin);await echo(foreign.origin);
+      const before=await counts(f);assert.deepEqual(before,{start:3,proof:3});
       await echo(first.origin);await echo(foreign.origin);
       failedHandle=structuredClone(first.handle);fail=true;
       let pending;
