@@ -4,11 +4,33 @@ import { readFile, readdir, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { attachedStatus, closeAttachedRoute, openAttachedRoute, openSessionRoute } from '../../packages/gozar-node/attached-route.mjs';
+import { attachedStatus, closeAttachedRoute, controlAttached, openAttachedRoute, openSessionRoute } from '../../packages/gozar-node/attached-route.mjs';
 import { routeStatus, closeRoute } from '../../packages/gozar-node/route-view.mjs';
 import { processIdentity } from '../../packages/gozar-node/process-identity.mjs';
 import { assertShape, codeOf, query, scratch, attachedScratch, stubAdapter, tokenStubs } from './route-schema-check.mjs';
 
+test('controlAttached does not open a socket when identity settles after the deadline', async () => {
+  let prepared, entered, deadline;
+  const identityReady = new Promise(resolve => { prepared = resolve; });
+  const identifying = new Promise(resolve => { entered = resolve; });
+  let opens = 0, cleared = 0;
+  const timer = Symbol('fake deadline');
+  const pending = controlAttached('fictional-control', { type: 'observe' }, 123, {
+    readControl: async () => JSON.stringify({ pid: 123, startIdentity: 'fixture-start', nonce: 'fixture-nonce' }),
+    identify: () => { entered(); return identityReady; },
+    connect: () => { opens++; throw new Error('unexpected socket attempt'); },
+    setDeadline: (callback, ms) => { assert.equal(ms, 123); deadline = callback; return timer; },
+    clearDeadline: id => { assert.equal(id, timer); cleared++; },
+  });
+  const rejected = assert.rejects(pending, { code: 'provider_unavailable' });
+  await identifying;
+  deadline();
+  await rejected;
+  prepared('fixture-start');
+  await identityReady;
+  assert.equal(opens, 0);
+  assert.equal(cleared, 1);
+});
 const helperUrl = pathToFileURL(new URL('./route-schema-check.mjs', import.meta.url).pathname).href;
 const attachedUrl = pathToFileURL(new URL('../../packages/gozar-node/attached-route.mjs', import.meta.url).pathname).href;
 const readContext = { now: () => Date.now(), configuration: async () => null, probe: async () => ({ ok: true }), verifyChallenge: async () => ({ status: 'verified' }) };
