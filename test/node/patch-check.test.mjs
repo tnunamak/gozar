@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {planChecks} from '../../scripts/check-patch.mjs';
+import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {dirname, join} from 'node:path';
+import {discoverFiles, planChecks, runPatchCheck} from '../../scripts/check-patch.mjs';
 
 test('a test-only patch selects that test and the smoke without Rust work',()=>{
  const plan=planChecks({changedPaths:['test/node/example.test.mjs'],
@@ -36,4 +39,131 @@ test('a Rust-core file selects its crate and invalidates generated WASM',()=>{
  const plan=planChecks({changedPaths:['crates/gozar-core/src/lib.rs'],files,readSource:()=>''});
  assert.deepEqual(plan.rustPackages,['gozar-core']);
  assert.equal(plan.buildWasm,true);
+});
+
+const cliSmoke = 'test/node/error-normalizer.test.mjs';
+const cliWasm = 'scripts/build-wasm.sh';
+const cliExample = 'test/node/example.test.mjs';
+const cliNested = 'test/node/nested/other.test.mjs';
+
+function cliFixture({changed = [cliExample], files = [cliSmoke, cliExample],
+                     source = {}, status = {}, stdout} = {}) {
+ const calls = [], messages = [], failures = [];
+ let tick = 0;
+ return {calls, messages, failures, invoke: (args = []) => runPatchCheck(args, {
+  root: '/fixture/repo',
+  discover: () => files,
+  readSource: file => source[file] ?? '',
+  log: line => messages.push(line),
+  fail: line => failures.push(line),
+  now: () => ++tick,
+  run: (command, argv, {cwd,capture}) => {
+   calls.push({command, argv, cwd, capture});
+   const result = {status: status[command] ?? 0};
+   if (command === 'git') result.stdout = stdout ?? changed.map(file => file + '\0').join('');
+   return result;
+  },
+ })};
+}
+
+test('patch CLI defaults to HEAD and checks the planned file plus mandatory smoke',()=>{
+ const f = cliFixture();
+ assert.equal(f.invoke(),0);
+ assert.deepEqual(f.calls.map(({command,argv}) => [command,argv]),[
+  ['git',['diff','--name-only','-z','--no-renames','HEAD','--']],
+  [process.execPath,['--test','--test-concurrency=1',cliSmoke,cliExample]],
+ ]);
+ assert.ok(f.calls.every(call=>call.cwd==='/fixture/repo'));
+ assert.equal(f.calls[0].capture,true);
+ assert.equal(f.calls[1].capture,false);
+ assert.ok(f.messages.some(line=>line.endsWith(': 1 ms')));
+});
+
+test('patch CLI uses an explicit base SHA and accounts for renamed or deleted sources',()=>{
+ const sha='a'.repeat(40);
+ const f=cliFixture({
+  changed:['packages/old.mjs','packages/new.mjs'],
+  files:[cliSmoke,cliExample,cliNested,'packages/bridge.mjs','packages/new.mjs'],
+  source:{
+   [cliExample]:"import '../../packages/bridge.mjs';",
+   'packages/bridge.mjs':"export {x} from './old.mjs'; export {y} from './new.mjs';",
+  },
+ });
+ assert.equal(f.invoke(['--base',sha]),0);
+ assert.ok(f.calls[0].argv.includes('--no-renames'));
+ assert.ok(f.calls[0].argv.includes(sha));
+ assert.deepEqual(f.calls[1].argv.slice(2),[cliSmoke,cliExample]);
+});
+
+test('patch CLI fails before running checks when diff or selections are unavailable',()=>{
+ for(const config of [{changed:[]},{stdout:'broken'},{files:[cliExample]},{status:{git:13}}]){
+  const f=cliFixture(config);
+  assert.equal(f.invoke(),config.status?.git ?? 1);
+  assert.deepEqual(f.calls.map(x=>x.command),['git']);
+  assert.equal(f.failures.length,1);
+ }
+ for(const args of [['--unknown'],['--base'],['--base','HEAD'],['--full','--full']]){
+  const f=cliFixture();
+  assert.equal(f.invoke(args),1);
+  assert.deepEqual(f.calls,[]);
+ }
+});
+
+test('patch CLI forwards test and build failures, stopping dependent checks',()=>{
+ const node=cliFixture({status:{[process.execPath]:17}});
+ assert.equal(node.invoke(),17);
+ assert.deepEqual(node.calls.map(x=>x.command),['git',process.execPath]);
+ const build=cliFixture({changed:['crates/gozar-core/src/lib.rs'],
+  files:[cliWasm,cliSmoke],status:{bash:23}});
+ assert.equal(build.invoke(),23);
+ assert.deepEqual(build.calls.map(x=>x.command),['git','bash']);
+});
+
+test('patch CLI selects only the exact documentation checks and smoke for docs',()=>{
+ const packageTest='test/node/package.test.mjs', walkTest='test/node/live-provider-walk-doc.test.mjs';
+ const f=cliFixture({changed:['README.md'],
+  files:[cliWasm,cliSmoke,packageTest,walkTest,'test/node/package-sibling.test.mjs',cliNested]});
+ assert.equal(f.invoke(),0);
+ assert.deepEqual(f.calls[1].argv,[cliWasm]);
+ assert.deepEqual(f.calls[2].argv.slice(2),[cliSmoke,walkTest,packageTest]);
+ const missing=cliFixture({changed:['README.md'],files:[cliSmoke,packageTest]});
+ assert.equal(missing.invoke(),1);
+ assert.deepEqual(missing.calls.map(x=>x.command),['git']);
+});
+
+test('patch CLI builds before selected core tests and does not run unrelated Node tests',()=>{
+ const coreTest='test/node/core.test.mjs';
+ const f=cliFixture({changed:['crates/gozar-core/src/lib.rs'],
+  files:[cliWasm,cliSmoke,coreTest,cliNested]});
+ assert.equal(f.invoke(),0);
+ assert.deepEqual(f.calls.map(({command,argv}) => [command,argv]),[
+  ['git',['diff','--name-only','-z','--no-renames','HEAD','--']],
+  ['bash',[cliWasm]],
+  [process.execPath,['--test','--test-concurrency=1',coreTest,cliSmoke]],
+  ['cargo',['test','-p','gozar-core']],
+ ]);
+});
+
+test('patch CLI full mode builds and runs recursive Node and Rust workspace checks serially',()=>{
+ const f=cliFixture({changed:[cliNested],files:[cliWasm,cliSmoke,cliNested]});
+ assert.equal(f.invoke(['--full']),0);
+ assert.deepEqual(f.calls.map(({command,argv}) => [command,argv]),[
+  ['git',['diff','--name-only','-z','--no-renames','HEAD','--']],
+  ['bash',[cliWasm]],
+  [process.execPath,['--test','--test-concurrency=1',cliSmoke,cliNested]],
+  ['cargo',['test','--workspace']],
+ ]);
+});
+
+test('patch CLI discovers nested tests and only the named generated outputs',t=>{
+ const root=mkdtempSync(join(tmpdir(),'patch-check-files-'));
+ t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const wasm='packages/gozar-core/generated/gozar_core_bg.wasm';
+ for(const file of [cliNested,wasm,'.git/ignore.mjs','target/fake.test.mjs',
+  'nested/node_modules/fake.test.mjs','packages/gozar-core/generated/untracked.test.mjs']){
+  const target=join(root,file);
+  mkdirSync(dirname(target),{recursive:true});
+  writeFileSync(target,'fixture');
+ }
+ assert.deepEqual(discoverFiles(root),[wasm,cliNested]);
 });

@@ -1,4 +1,7 @@
-import { posix as path } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, posix as path, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const smoke = 'test/node/error-normalizer.test.mjs';
 const moduleFile = /\.(?:[cm]?js|[cm]?ts|json)$/u;
@@ -6,7 +9,7 @@ const nodeTest = /(?:^|\/)test\/.*\.test\.[cm]?js$/u;
 const docs = /(?:^|\/)(?:README|CHANGELOG|INSTALL)(?:\.[^/]+)?$|^docs\//iu;
 const core = /^crates\/gozar-core\/|^packages\/gozar-core\/generated\//u;
 const buildInput = /^(?:Cargo\.(?:toml|lock)|rust-toolchain(?:\.toml)?|\.cargo\/.*|scripts\/build-wasm\.sh)$/u;
-const installedDoc = /(?:^|\/)[^/]*(?:package|operator-walk)[^/]*\.test\.[cm]?js$/iu;
+const installedDoc = ['test/node/package.test.mjs', 'test/node/live-provider-walk-doc.test.mjs'];
 const generated = [
   'packages/gozar-core/generated/gozar_core.js',
   'packages/gozar-core/generated/gozar_core_bg.wasm',
@@ -48,6 +51,7 @@ export function planChecks({ changedPaths, files, readSource, full = false }) {
   const known = new Set([...present, ...changed]);
   const reverse = new Map();
   const forward = new Map();
+  const opaqueModules = new Set();
   let opaque = false;
   let fallback = full;
   let rust = full;
@@ -60,7 +64,8 @@ export function planChecks({ changedPaths, files, readSource, full = false }) {
     if (buildInput.test(file) || core.test(file)) {
       rust = true;
       coreChanged = true;
-      fallback = true;
+      // Workspace/build-system edits are global; ordinary core changes are not.
+      if (buildInput.test(file)) fallback = true;
     } else if (file === 'package.json' || docs.test(file)) {
       docsChanged = true;
       // A pure planner has no before/after package document: it cannot prove
@@ -82,8 +87,8 @@ export function planChecks({ changedPaths, files, readSource, full = false }) {
         file.startsWith('packages/gozar-core/generated/')) continue;
     let source;
     try { source = readSource(file); }
-    catch { opaque = true; continue; }
-    if (typeof source !== 'string') { opaque = true; continue; }
+    catch { opaque = true; opaqueModules.add(file); continue; }
+    if (typeof source !== 'string') { opaque = true; opaqueModules.add(file); continue; }
 
     // Match direct imports, re-exports and literal loader calls. Anything
     // nonliteral goes through conservative fallback, not a guessed edge.
@@ -93,11 +98,13 @@ export function planChecks({ changedPaths, files, readSource, full = false }) {
     ];
     const calls = [...source.matchAll(/\b(?:import|require)\s*\(/gu)].length;
     if (calls > [...source.matchAll(/\b(?:import|require)\s*\(\s*['"][^'"\r\n]+['"]\s*\)/gu)].length)
-      opaque = true;
+      { opaque = true; opaqueModules.add(file); }
     for (const [, spec] of refs) {
       if (!spec.startsWith('./') && !spec.startsWith('../')) {
-        if (spec === '@tnunamak/gozar' || spec.startsWith('@tnunamak/gozar/'))
+        if (spec === '@tnunamak/gozar' || spec.startsWith('@tnunamak/gozar/')) {
           opaque = true;
+          opaqueModules.add(file);
+        }
         continue;
       }
       for (const target of localTargets(file, spec, known)) {
@@ -124,26 +131,145 @@ export function planChecks({ changedPaths, files, readSource, full = false }) {
   if ([...changed].some(file => moduleFile.test(file) && !nodeTest.test(file) &&
       !reverse.has(file))) fallback = true;
   if (docsChanged) {
-    const docTests = allTests.filter(file => installedDoc.test(file));
-    if (!docTests.length) fallback = true;
-    for (const file of docTests) selected.add(file);
+    for (const file of installedDoc) {
+      if (!present.has(file)) throw new Error('missing documentation check: ' + file);
+      selected.add(file);
+    }
   }
   if (fallback) for (const file of allTests) selected.add(file);
 
-  const closure = [...selected];
-  const walked = new Set();
-  let needsCore = fallback || coreChanged;
-  while (closure.length) {
-    const file = closure.pop();
-    if (walked.has(file)) continue;
-    walked.add(file);
-    if (core.test(file)) needsCore = true;
-    for (const dependency of forward.get(file) ?? []) closure.push(dependency);
+  function mayUseCore(root) {
+    const stack = [root];
+    const walked = new Set();
+    while (stack.length) {
+      const file = stack.pop();
+      if (walked.has(file)) continue;
+      walked.add(file);
+      // Packaging verifies generated artifacts through a child command, not an import.
+      if (file === installedDoc[0] || core.test(file) || opaqueModules.has(file)) return true;
+      for (const dependency of forward.get(file) ?? []) stack.push(dependency);
+    }
+    return false;
   }
+  if (coreChanged && !fallback) {
+    for (const file of allTests) {
+      if (mayUseCore(file) || /(?:^|[/.\-])(?:core|wasm)(?:[.\-]|$)/u.test(file))
+        selected.add(file);
+    }
+  }
+  const needsCore = fallback || coreChanged || [...selected].some(mayUseCore);
   return {
     nodeTests: [...selected].sort(),
     rustPackages: rust ? ['gozar-core'] : [],
-    buildWasm: needsCore && (coreChanged || !generated.every(file => present.has(file))),
+    needsCore,
+    // A generated file existing is not evidence that it matches the source.
+    buildWasm: needsCore,
     full: Boolean(full),
   };
 }
+
+const ignoredDirectories = new Set([
+  '.git', 'node_modules', '.worktrees', 'build', 'target', 'dist', 'coverage',
+]);
+const generatedDirectory = 'packages/gozar-core/generated';
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+
+export function discoverFiles(root) {
+  const files = [];
+  function walk(relative) {
+    for (const entry of readdirSync(join(root, relative), { withFileTypes: true })) {
+      const file = relative ? relative + '/' + entry.name : entry.name;
+      if (entry.isDirectory()) {
+        if (!ignoredDirectories.has(entry.name) && file !== generatedDirectory) walk(file);
+        else if (file === generatedDirectory) {
+          const names = readdirSync(join(root, file), { withFileTypes: true });
+          for (const name of names) {
+            const candidate = file + '/' + name.name;
+            if (name.isFile() && generated.includes(candidate)) files.push(candidate);
+          }
+        }
+      } else if (entry.isFile()) files.push(file);
+    }
+  }
+  walk('');
+  return files.sort();
+}
+
+function parseOptions(args) {
+  let base = 'HEAD', explicit = false, full = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--full' && !full) full = true;
+    else if (args[i] === '--base' && !explicit) {
+      const value = args[++i];
+      if (!/^[a-f0-9]{7,64}$/iu.test(value ?? '')) throw new Error('--base requires a commit SHA');
+      base = value;
+      explicit = true;
+    } else {
+      throw new Error('invalid option: ' + args[i]);
+    }
+  }
+  return { base, full };
+}
+
+function runCommand(command, args, options) {
+  return spawnSync(command, args, {
+    cwd: options.cwd,
+    shell: false,
+    encoding: 'utf8',
+    stdio: options.capture ? ['ignore', 'pipe', 'inherit'] : 'inherit',
+    maxBuffer: 32 * 1024 * 1024,
+  });
+}
+
+/** Injectable command boundary. The executable uses real child exit statuses. */
+export function runPatchCheck(args, {
+  root = repoRoot,
+  run = runCommand,
+  discover = discoverFiles,
+  readSource = file => readFileSync(join(root, file), 'utf8'),
+  log = line => console.log(line),
+  fail = line => console.error(line),
+  now = Date.now,
+} = {}) {
+  try {
+    const { base, full } = parseOptions(args);
+    const diff = run('git', ['diff', '--name-only', '-z', '--no-renames', base, '--'],
+      { cwd: root, capture: true });
+    if (!diff || diff.error || diff.signal || diff.status !== 0 ||
+        typeof diff.stdout !== 'string' || (diff.stdout && !diff.stdout.endsWith('\0'))) {
+      fail('Cannot establish changed paths for ' + base);
+      return Number.isInteger(diff?.status) && diff.status > 0 ? diff.status : 1;
+    }
+    const changedPaths = diff.stdout ? diff.stdout.slice(0, -1).split('\0') : [];
+    if (!changedPaths.length) throw new Error('no changed paths');
+    const files = discover(root);
+    const plan = planChecks({ changedPaths, files, readSource, full });
+    const commands = [];
+    if (plan.buildWasm) {
+      if (!files.includes('scripts/build-wasm.sh')) throw new Error('missing scripts/build-wasm.sh');
+      commands.push(['bash', ['scripts/build-wasm.sh']]);
+    }
+    commands.push([process.execPath, ['--test', '--test-concurrency=1', ...plan.nodeTests]]);
+    if (plan.full) commands.push(['cargo', ['test', '--workspace']]);
+    else for (const name of plan.rustPackages) commands.push(['cargo', ['test', '-p', name]]);
+    log('Node checks: ' + JSON.stringify(plan.nodeTests));
+    log('Rust checks: ' + (plan.full ? 'workspace' : JSON.stringify(plan.rustPackages)));
+    for (const [command, commandArgs] of commands) {
+      const started = now();
+      const result = run(command, commandArgs, { cwd: root, capture: false });
+      const elapsed = Math.max(0, now() - started);
+      log(command + ' ' + JSON.stringify(commandArgs) + ': ' + elapsed + ' ms');
+      if (!result || result.error || result.signal || result.status !== 0) {
+        fail('Check failed: ' + command);
+        return Number.isInteger(result?.status) && result.status > 0 ? result.status : 1;
+      }
+    }
+    return 0;
+  } catch (error) {
+    fail('Patch check: ' + (error instanceof Error ? error.message : String(error)));
+    return 1;
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href)
+  process.exitCode = runPatchCheck(process.argv.slice(2));
