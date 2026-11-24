@@ -32,11 +32,12 @@ test('inventory observes effective provider metadata without consent tokens', as
  const adapters=[...cases].map(([id,entry])=>{
   const {outer,wrappedIdle,account,stability,native,blankName}=entry;
   const definition={id,label:blankName?' \t ':'Outer name',supportedKinds:['attached','session'],idleTimeoutMs:outer,copy:{human:{name:'Outer copy',address:'Declared address'}},capabilities:{reach:'lan',transport:'https',needsAccount:account,candidateToken:inertMarker,address:{stability:'stable'}},disclosure:{revision:'v'},facts:[]};
-  return {id,definition,...(native?{}:{operationalDefinition:{...(blankName?{}:{displayName:'Wrapped name'}),copy:{human:{name:'Wrapped copy',summary:'Wrapped summary',address:'Wrapped address',setup:'Wrapped setup'}},...(wrappedIdle===undefined?{}:{idleTimeoutMs:wrappedIdle})}}),detect:async()=>({state:'ready',facts:{}}),properties:()=>({...definition.capabilities,...(stability===undefined?{address:undefined}:{address:{stability}})}),setupActions:()=>[]};
+  return {id,definition,...(native?{}:{operationalDefinition:{candidateToken:inertMarker,...(blankName?{}:{displayName:'Wrapped name'}),copy:{human:{name:'Wrapped copy',summary:'Wrapped summary',address:'Wrapped address',setup:'Wrapped setup'}},...(wrappedIdle===undefined?{}:{idleTimeoutMs:wrappedIdle})}}),detect:async()=>({state:'ready',facts:{}}),properties:()=>({...definition.capabilities,...(stability===undefined?{address:undefined}:{address:{stability}})}),setupActions:()=>[]};
  });
  try {
   assert.equal(adapters[0].definition.capabilities.candidateToken,inertMarker);
   assert.equal(adapters[0].properties().candidateToken,inertMarker);
+  assert.equal(adapters[0].operationalDefinition.candidateToken,inertMarker);
   const inventory=await listProviders({home},{adapters,embeddingServices:createEmbeddingServices({registryId:'metadata-fixture'}),readContext:{configuration:async()=>null}});
   const {providers}=inventory;
   assert.deepEqual(providers.map(row=>row.providerId).sort(),[...cases.keys()].sort());
