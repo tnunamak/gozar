@@ -42,7 +42,7 @@ Providers have their own prerequisites: localhost.run needs OpenSSH; Tailscale n
 
 ## Share a local service
 
-Start your own service on port 3000 and request a session route for it with the [route example](#route-by-requirement), or with `gozar ensure --query-file FILE` and `gozar expose --query-file FILE --approval-file FILE` (see the command table there). Review the displayed provider and exact local target. Approve only the route you want. localhost.run, tunnl.gg and the ngrok HTTPS edge terminate TLS and can read your traffic; for sensitive data, use Tailscale Funnel, which ends TLS on this computer, or your own proxy. Gozar allocates the route when its provider is ready, announces the exact address to the host, waits for the host's exact acknowledgment where the host declared one, and checks only that address before publishing it; outside-client verification can require additional setup.
+Start your own service on port 3000 and request a session route for it with the [route example](#route-by-requirement), or with `npx --package=@tnunamak/gozar@0.5.4 gozar ensure --query-file FILE` and `npx --package=@tnunamak/gozar@0.5.4 gozar expose --query-file FILE --approval-file FILE` (see the command table there). Review the displayed provider and exact local target. Approve only the route you want. localhost.run, tunnl.gg and the ngrok HTTPS edge terminate TLS and can read your traffic; for sensitive data, use Tailscale Funnel, which ends TLS on this computer, or your own proxy. Gozar allocates the route when its provider is ready, announces the exact address to the host, waits for the host's exact acknowledgment where the host declared one, and checks only that address before publishing it; outside-client verification can require additional setup.
 
 ```sh
 npx --package=@tnunamak/gozar@0.5.4 gozar status --port 3000
@@ -232,7 +232,7 @@ The same requests run from the command line. Each command reads its request from
 | `gozar review-consent --handle-file FILE --json` | Returns the current runtime consent snapshot. |
 | `gozar approve-consent --handle-file FILE --approval-file FILE --json` | Redeems that review and safely reproves the same generation. |
 
-`setup` applies a single current action. For a provider that offers a multi-step operation, see [the setup operation CLI](docs/design/provider-setup.md#cli-and-acceptance).
+`setup` applies a single current action. If the offered action carries a `step`, follow [the setup operation CLI](docs/design/provider-setup.md#cli-and-acceptance) instead.
 
 Exit codes: `0` success; `2` requirements, setup or `unsupported`; `3` missing, stale or unknown approval, or no such route; `1` any other failure. There is no `--yes` for these commands: the approval is the private file that holds the token the catalog issued.
 
@@ -242,7 +242,7 @@ Use the JavaScript API below, or execute the route-contract commands with `--jso
 
 Detection never authorizes an exposure. If a user must choose a provider, confirm a firewall change or accept the exact service target, show that choice in your interface and pass the approval the catalog issued only after the user approves the selected route and exact target.
 
-For active sessions, repeatedly read `routeStatus`: `published` is the current verified address, or `null` when no address may be advertised. A change of address withdraws the old one until the new one is verified. Clear stale links promptly and tell clients to reconnect to the newly verified address. Anonymous localhost.run URLs can change within minutes. The requested lifetime does not lock the address.
+For active sessions, repeatedly read `routeStatus`: `published` is the current verified address, or `null` when no address may be advertised. An allocated `origin` is not publication; do not share it while `published` is `null`. Separately, show unknown or stale provider inventory as such; a passive read is not an explicit refresh. A change of address withdraws the old one until the new one is verified. Clear stale links promptly and tell clients to reconnect to the newly verified address. Anonymous localhost.run URLs can change within minutes. The requested lifetime does not lock the address.
 
 Use `routeStatus` to recheck a route and `closeRoute` (or `gozar stop --port N`) for cleanup. A passing route check is not proof of authentication or of a successful application-level MCP call. For owner-operated persistent HTTPS, see [service routes](docs/service-routes.md).
 
@@ -280,7 +280,7 @@ recovers partial and uncertain allocations after a host crash. Its snapshots are
 historical; use `routeStatus` for current subject-bound proof. Advertise only
 `published`. Runtime consent drift withdraws publication; review and approve the
 new snapshot for safe proof on the same generation, or stop when refresh is
-unsupported. `closeRoute` retains uncertainty until exact owned cleanup succeeds. Configure the factory's `acknowledgeOrigin` callback if your host needs to accept the exact allocated origin before proof. With that callback, `watchRoutes` observes retained state for allocated origins; `routeStatus` requests fresh proof. See [host acknowledgment](docs/embedding-contract.md#exact-origin-host-acknowledgment-052).
+unsupported. `closeRoute` retains uncertainty until exact owned cleanup succeeds. Configure the factory's `acknowledgeOrigin` callback if your host needs to accept the exact allocated origin before proof. `watchRoutes` observes retained state; seeing an allocated origin there is not acknowledgment or publication. Use `routeStatus` to request fresh proof. See [host acknowledgment](docs/embedding-contract.md#exact-origin-host-acknowledgment-052).
 
 Shipped execution in 0.5 is HTTP(S) only. Raw TCP/TLS profiles remain detect-only
 so the full embedding contract can ship together. Trusted extensions can declare
@@ -290,7 +290,7 @@ not additional typed fields. See [the embedding contract](docs/embedding-contrac
 [migration changes](docs/migration-0.4.md), [testing effects](docs/testing-effects.md)
 and the runnable [screen example](examples/remote-access-screen.mjs).
 
-**Packaged hosts (including DataConnect):** declare how optional native modules are supplied. A read-only bundle includes the tested platform-specific dependencies; runtime installation needs an explicit declaration and authorization. See [packaged runtime modules](docs/embedding-contract.md#packaged-runtime-modules-052). The screen is a renderer example, not evidence that an installed host has passed acceptance.
+**Packaged hosts (including DataConnect):** declare how optional native modules are supplied. A read-only bundle includes the tested platform-specific dependencies; runtime installation needs an explicit declaration and authorization. See [packaged runtime modules](docs/embedding-contract.md#packaged-runtime-modules-052). The screen is a renderer example, not evidence that an installed host has passed acceptance. For a provider that still needs configuration, see [how to display setup progress, evidence and publication separately](docs/design/provider-setup.md#render-the-current-action).
 
 The root exports `createGozar` and the same default factory methods: catalog/detect,
 provider inventory, setup/secret intake, configuration drafts, route start/adopt,
