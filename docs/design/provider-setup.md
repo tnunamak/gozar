@@ -18,6 +18,15 @@ Find setup actions in `Candidate.setup.actions`, provider prerequisite remedies,
 
 Gozar returns `pending` while the adapter awaits an observation. `denied` and `expired` require evidence tied to the current operation. `complete` is the trusted adapter's setup workflow status. Read `evidence` separately for the observed outcome and its source, or for its unknown status. Uncertain resource debt requires reconciliation. Browser return, process exit and acknowledgement of instructions supply no independent proof. Route publication requires its own route consent and proof. A completed workflow can still offer route guidance or an optional configuration change. Use `state` for setup readiness and render `nextAction` independently. An instruction can also appear while setup is blocked or reconciling.
 
+| Display separately | What it tells the user |
+| --- | --- |
+| `state` | Progress of the setup workflow. `complete` is not route readiness. |
+| `nextAction` | The current offer, if any. Show it even after setup completes. |
+| `evidence` | The observed outcome and its source, or that the outcome is unknown. |
+| Route proof | Whether the independently consented route has passed proof. Advertise only `published` from the route view. |
+
+**Historical design rationale:** The [cloudflared source study](https://github.com/cloudflare/cloudflared/tree/095f3caf1dd9084cfe063ca40a4e5b0709e53e5b), captured on 2026-11-11, distinguished login or process success from independent certificate and DNS readback. The [Tailscale Serve docs](https://tailscale.com/kb/1312/serve), captured on 2026-11-12, required tailnet HTTPS to be enabled. These examples informed the separation above; they are not current provider-policy claims.
+
 ## Open, read and advance
 
 1. Save a caller-chosen `operationId` before the first call. Call `runSetupAction` with that ID, `expectedSetupRevision: 0`, the initial `actionId`, and the configuration or draft revision. Start reserves the operation and returns its first scoped offer. It accepts no approval or input at revision zero and performs no external mutation. The legacy call returns `setup_required` for an operation-only action.
