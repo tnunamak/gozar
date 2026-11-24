@@ -94,34 +94,49 @@ export async function redeemApproval(request, deps) {
   const home = await canonicalHome(request.home, true);
   const tokens = deps.redeem && deps.consentBinding ? null : await import('./consent-token.mjs');
   const { approval, wait, ...query } = request;
+
+  function requireAdmissibleAdapter(adapter) {
+    if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available; ask the catalog again');
+    if (approval.disclosureRevision !== consentDisclosureRevision(adapter.definition, query.intent)) throw gozarError('candidate_stale', 'Consent-relevant facts changed after approval; ask the catalog again');
+    if (!adapter.definition.supportedKinds.includes(request.usage.kind)) throw gozarError('unsupported', 'This route does not support that usage');
+    if(adapter.definition.availability?.[request.usage.kind]?.state==='detect-only'||adapter.definition.availability?.[request.usage.kind]?.state==='unsupported')throw gozarError('unsupported','This usage is not admitted for execution in this release');
+    const denied=capabilityPrerequisites(adapter.definition,deps.hostCapabilities??{}).find(p=>p.state!=='present');
+    if(denied)throw gozarError(denied.state==='denied'?'host_policy_denied':'unsupported','The host has not authorized a required capability');
+    const ownership = ownershipFor(adapter.definition);
+    if (ownership === 'external-owned' && query.usage.kind === 'attached') throw gozarError('candidate_stale', 'An attached controller needs a Gozar-owned plan');
+    return ownership;
+  }
+
+  function requireCurrentConsent(configuration, detected) {
+    const declared=completeProperties(adapter.properties(detected.facts),adapter.definition,query.usage.kind);
+    const properties={...declared,proof:{...declared.proof,checks:checksFor(declared.proof.checks,{sse:query.requirements.protocols.includes('sse')})}};
+    const consentReview=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration,target:query.target,origin:query.origin,ownership,properties,
+      disclosure:{...adapter.definition.disclosure,revision:approval.disclosureRevision},facts:catalogFactsFor({adapter,facts:detected.facts})});
+    if(approval.kind!=='route'||approval.consentFactsDigest!==consentReview.consentFactsDigest||grant.consentFactsDigest!==consentReview.consentFactsDigest)throw gozarError('consent_mismatch','Route consent changed; review the current candidate again');
+    return consentReview;
+  }
+
+  function requireFreshPlan(plan, observed) {
+    if (!planMatchesOwnership(plan, ownership) || (ownership === 'external-owned' && plan.origin !== grant.origin) ||
+        plan.digest !== grant.planDigest || observed.resourceKey !== grant.observedResource)
+      throw gozarError('candidate_stale', 'The provider changed after the user approved; nothing was changed, ask the catalog again');
+  }
+
   const binding = (deps.consentBinding ?? tokens.consentBinding)(query, home, approval.disclosureRevision,approval.consentFactsDigest);
   const grant = await (deps.redeem ?? tokens.redeemConsentToken)({ home, token: approval.candidateToken, binding, providerId: query.providerId });
   const adapter = (await adaptersOf(deps)).find(item => item.id === grant.adapterId);
-  if (!adapter) throw gozarError('candidate_stale', 'The approved route is no longer available; ask the catalog again');
-  if (approval.disclosureRevision !== consentDisclosureRevision(adapter.definition, query.intent)) throw gozarError('candidate_stale', 'Consent-relevant facts changed after approval; ask the catalog again');
-  if (!adapter.definition.supportedKinds.includes(request.usage.kind)) throw gozarError('unsupported', 'This route does not support that usage');
-  if(adapter.definition.availability?.[request.usage.kind]?.state==='detect-only'||adapter.definition.availability?.[request.usage.kind]?.state==='unsupported')throw gozarError('unsupported','This usage is not admitted for execution in this release');
-  const denied=capabilityPrerequisites(adapter.definition,deps.hostCapabilities??{}).find(p=>p.state!=='present');
-  if(denied)throw gozarError(denied.state==='denied'?'host_policy_denied':'unsupported','The host has not authorized a required capability');
-  const ownership = ownershipFor(adapter.definition);
-  if (ownership === 'external-owned' && query.usage.kind === 'attached') throw gozarError('candidate_stale', 'An attached controller needs a Gozar-owned plan');
+  const ownership = requireAdmissibleAdapter(adapter);
   const context = bindConfiguration({...await readContextFor(deps, home, deps.platform ?? process.platform,query.owner),origin:query.origin??null}, adapter.id);
   let consentReview;
   if(deps.embeddingServices){
     const configuration=await deps.embeddingServices.readConfiguration({home,owner:query.owner,providerId:adapter.id});
     const detected=await adapter.detect(context);
-    const declared=completeProperties(adapter.properties(detected.facts),adapter.definition,query.usage.kind);
-    const properties={...declared,proof:{...declared.proof,checks:checksFor(declared.proof.checks,{sse:query.requirements.protocols.includes('sse')})}};
-    consentReview=routeConsentReview({registryId:deps.registryId,providerId:adapter.id,usage:query.usage,configuration,target:query.target,origin:query.origin,ownership,properties,
-      disclosure:{...adapter.definition.disclosure,revision:approval.disclosureRevision},facts:catalogFactsFor({adapter,facts:detected.facts})});
-    if(approval.kind!=='route'||approval.consentFactsDigest!==consentReview.consentFactsDigest||grant.consentFactsDigest!==consentReview.consentFactsDigest)throw gozarError('consent_mismatch','Route consent changed; review the current candidate again');
+    consentReview = requireCurrentConsent(configuration, detected);
   }
   const adapterAsk = adapterRequest(query);
   const plan = await adapter.plan(context, adapterAsk);
   const observed = await adapter.observe(context, adapterAsk);
-  if (!planMatchesOwnership(plan, ownership) || (ownership === 'external-owned' && plan.origin !== grant.origin) ||
-      plan.digest !== grant.planDigest || observed.resourceKey !== grant.observedResource)
-    throw gozarError('candidate_stale', 'The provider changed after the user approved; nothing was changed, ask the catalog again');
+  requireFreshPlan(plan, observed);
   return { home, adapter, grant, plan, request: adapterAsk, context, consentReview };
 }
 
