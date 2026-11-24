@@ -13,7 +13,7 @@ Use Node >=22.13. Install locally in your walk directory; run the local binary
 below, not a potentially different global installation:
 
 ```sh
-npm install @tnunamak/gozar@0.5.4
+npm install @tnunamak/gozar@0.5.5
 ```
 
 Only for an SDK adapter, also install its optional dependency:

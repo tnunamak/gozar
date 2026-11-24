@@ -71,6 +71,6 @@ Existing raw ngrok TCP/TLS are detect-only. Own-address is adopt-only. These pro
 
 ## CLI and acceptance
 
-For a project-local install, use `npx --package=@tnunamak/gozar@0.5.4 gozar setup-operation SUBCOMMAND --request-file FILE --json`, replacing `SUBCOMMAND` with one of `reserve`, `read`, `run` or `cancel`. Put the public request or reference in a mode 0600 file. For secret intake, select `run` and add `--secret-file FILE`. An explicit interactive `read --browser-handoff` returns an unexpired handoff when the adapter offers one.
+For a project-local install, use `npx --package=@tnunamak/gozar@0.5.5 gozar setup-operation SUBCOMMAND --request-file FILE --json`, replacing `SUBCOMMAND` with one of `reserve`, `read`, `run` or `cancel`. Put the public request or reference in a mode 0600 file. For secret intake, select `run` and add `--secret-file FILE`. An explicit interactive `read --browser-handoff` returns an unexpired handoff when the adapter offers one.
 
 From a [prepared source checkout](../../README.md#develop), not from the installed npm package, run `node --test test/acceptance/provider-setup.red.test.mjs test/acceptance/cloudflare-managed-setup.test.mjs` explicitly. The first suite uses a randomized provider and exercises the same operations through the package root and CLI. The second intercepts the real Cloudflare adapter's REST and connector calls and drives actual loopback gate and app traffic. Cloudflare account permissions, browser enrollment, external reachability and provider-side cleanup still require live acceptance.
