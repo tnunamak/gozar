@@ -355,15 +355,15 @@ Registered service routes do not have Gozar session expiry, but their uptime dep
 
 **Nothing eligible:** Ask the catalog (`gozar catalog --query-file FILE --json`). Fix missing tools, login, permission, interface or outside-network verification; a candidate in the catalog is not readiness.
 
-**No published address, route changed or stopped responding:** Read `gozar status --port 3000 --json` or `routeStatus`. Use only the current verified `published`. If it is `null`, remove the old link from your app. Anonymous relay URLs can change within minutes even within the requested session lifetime.
+**No published address, route changed, or cleanup is pending:** Choose the status and cleanup commands for the kind of route you opened:
+
+- **Temporary session:** Use its local port with `gozar status --port 3000 --json` and `gozar stop --port 3000 --json` (replace `3000` with the recorded port). See [Share a local service](#share-a-local-service).
+- **Attached or durable route:** Keep its exact retained handle. Check it with `routeStatus({ home, handle })` or `gozar route-status --handle-file FILE --json`; use `gozar close --handle-file FILE --json` to withdraw it and retry cleanup. For a durable route you can also use its route ID with the [durable status and stop commands](docs/service-routes.md#durable-routes-gozar-owned).
+- **Registered existing HTTPS service:** Use its exact HTTPS origin with `gozar service status --origin "$ORIGIN" --json` or `gozar service remove --origin "$ORIGIN" --json`. See the [service-route guide](docs/service-routes.md). Removing the record does not stop your service or remove your proxy, DNS, or other infrastructure.
+
+Share only the current verified `published` address for Gozar-managed routes. If it is `null`, stop sharing it and remove the old link from your app. Keep the exact cleanup reference (port, retained handle or durable route ID, or service origin) until the relevant cleanup or record removal is confirmed; retry when the result calls for it. Start a fresh `expose` only after owned cleanup is confirmed.
 
 **Approval required:** Collect the user's approval of the chosen provider and exact local target, then pass the approval the catalog issued. A JSON response is not consent.
-
-**Expired session or cleanup debt:**
-```sh
-npx --package=@tnunamak/gozar@0.5.4 gozar stop --port 3000 --json
-```
-Inspect cleanup failures and retry when indicated. Start a fresh `expose` only after cleanup is resolved.
 
 **Existing HTTPS service fails verification:** Ensure the service challenge helper is installed before normal routes, the proxy preserves the public Host, and the declared target port equals the backend's actual listener. See [service routes](docs/service-routes.md). A saved route record is not a verified route.
 
