@@ -79,6 +79,24 @@ test('patch CLI defaults to HEAD and checks the planned file plus mandatory smok
  assert.ok(f.messages.some(line=>line.endsWith(': 1 ms')));
 });
 
+test('patch CLI can run its full integration check on a clean checkout',()=>{
+ const f=cliFixture({changed:[],files:[cliSmoke,cliExample,cliWasm]});
+ assert.equal(f.invoke(['--full']),0);
+ assert.deepEqual(f.calls.map(call=>call.command),['git','bash',process.execPath,'cargo']);
+});
+
+test('a shared installed runner checks the caller worktree rather than its own directory',()=>{
+ const before=process.cwd(),root=mkdtempSync(join(tmpdir(),'gozar-runner-cwd-'));
+ const calls=[];
+ try{
+  process.chdir(root);
+  const code=runPatchCheck([],{discover:()=>[cliSmoke,cliExample],readSource:()=>'',log:()=>{},fail:()=>{},
+   run:(command,args,options)=>{calls.push(options.cwd);return {status:0,stdout:command==='git'?cliExample+'\0':''};}});
+  assert.equal(code,0);
+  assert.deepEqual(calls,[root,root]);
+ }finally{process.chdir(before);rmSync(root,{recursive:true,force:true});}
+});
+
 test('patch CLI uses an explicit base SHA and accounts for renamed or deleted sources',()=>{
  const sha='a'.repeat(40);
  const f=cliFixture({

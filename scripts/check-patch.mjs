@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, posix as path, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join, posix as path, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const smoke = 'test/node/error-normalizer.test.mjs';
 const moduleFile = /\.(?:[cm]?js|[cm]?ts|json)$/u;
@@ -172,7 +172,6 @@ const ignoredDirectories = new Set([
   '.git', 'node_modules', '.worktrees', 'build', 'target', 'dist', 'coverage',
 ]);
 const generatedDirectory = 'packages/gozar-core/generated';
-const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 export function discoverFiles(root) {
   const files = [];
@@ -223,7 +222,7 @@ function runCommand(command, args, options) {
 
 /** Injectable command boundary. The executable uses real child exit statuses. */
 export function runPatchCheck(args, {
-  root = repoRoot,
+  root = process.cwd(),
   run = runCommand,
   discover = discoverFiles,
   readSource = file => readFileSync(join(root, file), 'utf8'),
@@ -241,7 +240,7 @@ export function runPatchCheck(args, {
       return Number.isInteger(diff?.status) && diff.status > 0 ? diff.status : 1;
     }
     const changedPaths = diff.stdout ? diff.stdout.slice(0, -1).split('\0') : [];
-    if (!changedPaths.length) throw new Error('no changed paths');
+    if (!changedPaths.length && !full) throw new Error('no changed paths');
     const files = discover(root);
     const plan = planChecks({ changedPaths, files, readSource, full });
     const commands = [];
