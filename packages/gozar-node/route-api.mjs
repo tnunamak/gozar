@@ -60,9 +60,18 @@ export function createRouteApi(deps = {}) {
     // The bundled registry keeps one stable storage name across releases. An injected or custom registry has no lineage
     // unless its host declares one: matching definitions are not proof of the same executable.
     const lineage=deps.registryLineage??(deps.adapters||deps.manifest||deps.root?undefined:bundledLineage());
-    return {registryId,embeddingServices:deps.embeddingServices??createEmbeddingServices({registryId,lineage,secretBackend:deps.secretBackend,hostCapabilities:deps.hostCapabilities,identity:deps.identity,
+    return {registryId,lineage,embeddingServices:deps.embeddingServices??createEmbeddingServices({registryId,lineage,secretBackend:deps.secretBackend,hostCapabilities:deps.hostCapabilities,identity:deps.identity,
       // What an earlier saved input may become is decided by the provider's own current declaration, never by its id alone.
-      currentInputKinds:async providerId=>inputKindsOf((await adapters()).find(adapter=>adapter.id===providerId))})};
+      currentInputKinds:async providerId=>inputKindsOf((await adapters()).find(adapter=>adapter.id===providerId)),
+      observeEarlierSetupOperation:async({home,owner,providerId,operation})=>{
+        const adapter=(await adapters()).find(candidate=>candidate.id===providerId);
+        if(typeof adapter?.observeSetup!=='function')return null;
+        const read=await readContextFor(deps,home,platform(),owner);
+        // No configuration resolver, mutation or credential access crosses this migration boundary.
+        return adapter.observeSetup({now:read.now,probe:read.probe,home,platform:platform(),configuration:async()=>null,providerConfiguration:async()=>null,
+          configurationPresence:async()=>null,hasManagementSecret:()=>false,withManagementSecret:async()=>null},
+          {id:'migration-retirement',cancelled:operation.cancelled,resources:[],connectorInputs:[],lastActionId:operation.lastActionId??null});
+      }})};
   })();
   const shared = async (request={}) => { const resolved=await services(); return ({ adapters: await adapters(), platform: platform(), ...resolved, owner:request.owner,home:request.home,
     ...(deps.manifest ? { registry: { manifest: deps.manifest, root: deps.root } } : {}),

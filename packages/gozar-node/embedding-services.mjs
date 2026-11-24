@@ -62,7 +62,7 @@ function checkedLineage(lineage){
 const persisters=new WeakMap();
 // `currentInputKinds(providerId)` is the host-trusted, side-effect-free answer to "which input ids may this provider's
 // current release hold, and in which role ('secret' | 'text')?". Unknown means no carry-forward: it fails closed.
-export function createEmbeddingServices({registryId,secretBackend,hostCapabilities={},identity,lineage:declaredLineage,currentInputKinds}={}){
+export function createEmbeddingServices({registryId,secretBackend,hostCapabilities={},identity,lineage:declaredLineage,currentInputKinds,observeEarlierSetupOperation}={}){
  const lineage=checkedLineage(declaredLineage);
  // The custodian names the storage owner. Without a lineage it is the content registry id (storage stays per content).
  const custodian=lineage?.id??registryId;
@@ -126,12 +126,29 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
  // the stored item stays addressable by exactly one authorized record. A rival lineage sees the tombstone and is refused.
  // The promise is about ordinary supported resolution after the commit; it does not recall bytes a trusted earlier host
  // already read into memory.
- async function adopt(state,providerId,scopeId,{R,key,rec}){
+ async function adopt(state,providerId,scopeId,{R,key,rec},home,owner){
   const sound=plain(rec)&&rec.scopeId===key&&plain(rec.bindings)&&plain(rec.values)&&plain(rec.drafts)&&typeof rec.revision==='string'&&Array.isArray(rec.uses)&&rec.uses.every(x=>typeof x==='string');
   if(!sound)refuseMigration('incompatible');
   // Open drafts, setup operations and operation-held credentials are not ordinary bindings: refuse until they are closed.
-  if(Object.keys(rec.drafts).length||Object.values(state.secrets).some(ref=>ref.scopeId===key&&(ref.draftId||ref.operationId))
-   ||Object.values(state.setupOperations??{}).some(op=>op?.scopeId===key))refuseMigration('inflight');
+  if(Object.keys(rec.drafts).length||Object.values(state.secrets).some(ref=>ref.scopeId===key&&(ref.draftId||ref.operationId)))refuseMigration('inflight');
+  const retiring=[];
+  for(const [id,op]of Object.entries(state.setupOperations??{})){
+   if(op?.scopeId!==key)continue;
+   if(!plain(op)||op.draftId!==null||!Array.isArray(op.resources)||op.resources.length||!plain(op.management)||Object.keys(op.management).length||
+      op.connectorSecrets!==undefined&&(!plain(op.connectorSecrets)||Object.keys(op.connectorSecrets).length)||
+      typeof op.cancelled!=='boolean'||!Number.isSafeInteger(op.revision)||op.revision<0||typeof op.configurationRevision!=='string')refuseMigration('inflight');
+   // Empty custody alone is not terminal evidence. Older writers did not persist
+   // completion, so ask the current adapter through its read-only setup interface.
+   const terminal=op.terminal?.revision===op.revision?op.terminal:null;
+   let observation=terminal;
+   if(!observation){
+    try{observation=await observeEarlierSetupOperation?.({home,owner,providerId,operationKey:id,registryId:R,operation:clone(op)});}
+    catch{refuseMigration('inflight');}
+   }
+   if(!observation||!['complete','cancelled'].includes(observation.state)||observation.nextAction!==null||
+      observation.state==='cancelled'&&!op.cancelled)refuseMigration('inflight');
+   retiring.push(id);
+  }
   for(const [inputId,handle]of Object.entries(rec.bindings)){
    const ref=typeof handle==='string'?state.secrets[handle]:undefined;
    if(!ref||ref.registryId!==R||ref.scopeId!==key||ref.inputId!==inputId||ref.draftId||ref.operationId||ref.backendScopeId!==undefined)refuseMigration('incompatible');
@@ -146,6 +163,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   const adopted={scopeId,revision:rec.revision,bindings:clone(rec.bindings),values:clone(rec.values),drafts:{},uses:[],migratedFrom:[key]};
   for(const handle of Object.values(adopted.bindings))Object.assign(state.secrets[handle],{registryId:custodian,scopeId,backendScopeId:key});
   state.configs[scopeId]=adopted;
+  for(const id of retiring)delete state.setupOperations[id];
   state.configs[key]={scopeId:key,revision:fresh(),bindings:{},values:{},drafts:{},uses:[],migratedTo:scopeId};
   await persisters.get(state)();
   return adopted;
@@ -157,7 +175,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   if(state.configs[scopeId])return state.configs[scopeId];
   const found=candidates(state,home,providerId,owner,scopeId,lineage?.replaces??[]);
   if(found.length>1)refuseMigration('ambiguous');
-  if(found.length===1)return adopt(state,providerId,scopeId,found[0]);
+  if(found.length===1)return adopt(state,providerId,scopeId,found[0],home,owner);
   const c={scopeId,revision:fresh(),bindings:{},values:{},drafts:{},uses:[]};
   // Legacy records have home/provider scope only. Never claim them for a named owner.
   if(!secretBackend&&/^[a-z0-9][a-z0-9._-]{0,127}$/.test(providerId)){

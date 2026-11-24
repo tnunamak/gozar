@@ -559,7 +559,8 @@ export async function cleanupReferenceRecord({home,owner,handle}={},runtime={}){
  if(!rows.length)return null;
  const row=rows.find(row=>sameHandle(row.scope.handle,handle));
  if(!row||owner!==undefined&&row.scope.owner!==owner)throw gozarError('route_conflict','Cleanup reference belongs to another handle or owner');
- if(runtime.registryId!==undefined&&runtime.registryId!==row.scope.registryId)throw gozarError('cleanup_debt','Cleanup registry no longer matches');
+ const {cleanupRegistryMatches}=await import('./registry-lineage.mjs');
+ if(runtime.registryId!==undefined&&!cleanupRegistryMatches(row.scope.registryId,runtime))throw gozarError('cleanup_debt','Cleanup registry no longer matches');
  return row;
 }
 export async function prepareCleanupReference(scope){

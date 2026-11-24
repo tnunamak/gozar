@@ -670,7 +670,9 @@ export async function attachedCleanupReference(request,runtime,operationReferenc
     throw gozarError('route_conflict','Cleanup handle does not match its bootstrap');
   const registryId=bootstrap.registryId??bootstrap.embedding?.registryId;
   const owner=bootstrap.owner,providerId=bootstrap.adapterId;
-  if(typeof owner!=='string'||!owner||typeof providerId!=='string'||!providerId||registryId!==runtime.registryId||
+  const {cleanupRegistryMatches}=await import('./registry-lineage.mjs');
+  if(registryId!==runtime.registryId&&request.mode!=='remove')throw gozarError('cleanup_debt','Earlier registry recovery requires remove mode');
+  if(typeof owner!=='string'||!owner||typeof providerId!=='string'||!providerId||!cleanupRegistryMatches(registryId,runtime)||
       (bootstrap.home??bootstrap.embedding?.request?.home)!==home)
     throw gozarError('cleanup_debt','Cleanup scope cannot be verified');
   if(request.owner!==undefined&&request.owner!==owner)throw gozarError('route_conflict','Cleanup owner does not match');
