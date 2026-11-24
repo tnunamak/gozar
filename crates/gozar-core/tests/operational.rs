@@ -61,6 +61,34 @@ fn unsupported_show_help_reports_correlated_event_without_an_effect() {
     assert!(out.get("action").is_none());
 }
 
+#[test]
+fn status_rejects_a_clock_behind_the_preceding_snapshot() {
+    let first = run(json!({"command":{"type":"status"},"host":{"nowMs":25}}));
+    let next = json!({
+        "state": first["state"],
+        "command": {"type":"status"},
+        "host": {"nowMs":24}
+    });
+    let failure: Value = serde_json::from_str(&gozar_core::step(&next.to_string())).unwrap();
+    assert_eq!(
+        failure,
+        json!({"error":{"code":"invalid-input","message":"host clock moved backwards"}})
+    );
+}
+
+#[test]
+fn status_at_the_same_explicit_clock_tick_has_no_effects() {
+    let first = run(json!({"command":{"type":"status"},"host":{"nowMs":25}}));
+    let next = run(json!({
+        "state": first["state"],
+        "command": {"type":"status"},
+        "host": {"nowMs":25}
+    }));
+    assert_eq!(next["snapshot"], first["snapshot"]);
+    assert_eq!(next["effects"], json!([]));
+    assert_eq!(next["events"], json!([]));
+}
+
 fn fixture() -> Value {
     serde_json::from_str(include_str!("../../../test/adapters/fixtures/plan-v1.json")).unwrap()
 }
