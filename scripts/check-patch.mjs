@@ -109,6 +109,7 @@ export function planChecks({ changedPaths, files, readSource, full = false }) {
         continue;
       }
       for (const target of localTargets(file, spec, known)) {
+        if (!known.has(target)) { opaque = true; opaqueModules.add(file); }
         if (!forward.has(file)) forward.set(file, new Set());
         forward.get(file).add(target);
         if (!reverse.has(target)) reverse.set(target, new Set());

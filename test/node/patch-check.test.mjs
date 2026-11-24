@@ -37,6 +37,17 @@ test('a deleted JSON fixture selects both import and file-read consumers',()=>{
  assert.equal(plan.buildWasm,false);
 });
 
+test('an unresolved literal module URL cannot hide a consumer behind a known edge',()=>{
+ const files=['test/node/error-normalizer.test.mjs','test/node/plain.test.mjs',
+  'test/node/query.test.mjs','packages/feature.mjs'];
+ const sources={
+  'test/node/plain.test.mjs':"import '../../packages/feature.mjs';",
+  'test/node/query.test.mjs':"import '../../packages/feature.mjs?fresh=1';",
+ };
+ const plan=planChecks({changedPaths:['packages/feature.mjs'],files,readSource:file=>sources[file]??''});
+ assert.ok(plan.nodeTests.includes('test/node/query.test.mjs'));
+});
+
 test('opaque imports widen source changes and missing smoke fails closed',()=>{
  const files=['test/node/error-normalizer.test.mjs','test/node/one.test.mjs',
   'test/node/two.test.mjs','packages/feature.mjs'];
