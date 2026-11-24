@@ -348,6 +348,14 @@ test('LAN setup handles absent or empty interface observations', async () => {
   } }), []);
 });
 
+test('LAN setup ignores malformed address entries and entries missing an internal flag', async () => {
+  const { observedInterfaces } = await import('../../adapters/providers/lan/index.mjs');
+  assert.deepEqual(observedInterfaces({ interfaces: {
+    unusable: [null, { internal: false, address: 'not-an-address' }],
+    unknown: [{ address: '192.0.2.10' }],
+  } }), []);
+});
+
 test('Tailscale setup presents the HTTPS default port implicitly and other ports explicitly', async () => {
   const { originOf } = await import('../../adapters/providers/_shared/tailscale-serve.mjs');
   assert.equal(originOf('demo.invalid', 443), 'https://demo.invalid');
