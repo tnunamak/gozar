@@ -157,9 +157,11 @@ for (const scenario of ['cancellation', 'discarded draft and factory restart', '
   const { api, ref, harness, advance, secret, view, command, draftId, startFactory } =
     await setup(t, 'ngrok-https-edge', effects, home, { secretBackend, draft, initialAgent: draft ? agent : undefined });
   const dependency = await advance(view);
-  assert.equal(dependency.nextAction.kind, 'install-artifact');
-  assert.match(dependency.nextAction.artifact.sha256, /^[a-f0-9]{64}$/);
-  assert.equal((await advance(dependency)).state, 'blocked', 'without a host installer the SDK is still missing');
+  assert.equal(dependency.state, 'blocked');
+  assert.equal(dependency.nextAction, null, 'this fixture grants no runtime installation authority');
+  assert.equal(dependency.evidence.known, true);
+  assert.equal(dependency.evidence.value.stepId, 'ngrok-sdk');
+  assert.match(dependency.evidence.value.summary, /SDK/i);
   sdk = true;
   const afterSDK = await api.readSetupOperation(ref);
   if (!draft) assert.equal(afterSDK.nextAction.inputId, 'auth');
