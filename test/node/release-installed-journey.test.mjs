@@ -134,6 +134,39 @@ test('offline archive journey verifies installed bytes and strict lifecycle evid
  assert.ok(stub.calls[2].args[0].includes('/node_modules/@tnunamak/gozar/examples/'));
  assert.deepEqual(result.lifecycle,evidence);
 });
+
+test('installed journey installs the verified private archive copy',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const bytes=await readFile(f.input.tarball);
+ const result=await runInstalledJourney(f.input,{run:async(command,args,options)=>{
+  if(command==='npm'){
+   const archive=args.at(-1);
+   assert.equal(archive,join(options.cwd,'artifact.tgz'));
+   assert.notEqual(archive,f.input.tarball);
+   assert.deepEqual(await readFile(archive),bytes);
+  }
+  return stub.run(command,args,options);
+ }});
+ t.after(()=>rm(result.scratch,{recursive:true,force:true}));
+ assert.equal(result.status,'passed');
+});
+
+test('installed journey receipt records byte lengths and hashes for installed members',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ f.files['examples/remote-access-screen.mjs']='// café';
+ const bytes=tar(f.files);
+ await writeFile(f.input.tarball,bytes);
+ const sha256=createHash('sha256').update(bytes).digest('hex');
+ const result=await runInstalledJourney({...f.input,sha256},{run:stub.run});
+ t.after(()=>rm(result.scratch,{recursive:true,force:true}));
+ const receipt=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ const expected=Object.entries(f.files).map(([path,body])=>({
+  path,bytes:Buffer.byteLength(body),sha256:createHash('sha256').update(body).digest('hex')
+ }));
+ const byPath=(a,b)=>a.path.localeCompare(b.path);
+ assert.deepEqual([...receipt.members].sort(byPath),expected.sort(byPath));
+});
+
 for(const fault of [1,2,3])test('preserves exact subprocess failure '+fault,async t=>{
  const f=await fixture(t),stub=processStub(f,{fault});
  await assert.rejects(runInstalledJourney(f.input,{run:stub.run}),error=>{
