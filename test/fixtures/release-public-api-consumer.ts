@@ -3,7 +3,7 @@ import {
  createGozar, type GozarOptions, type Query, type Requirements, type Fact, type Cost,
  type SetupConsentSnapshot, type RouteConsentSnapshot, type GozarThrownError,
  type RouteView, type SecretBackend, type HostIdentity, type ProviderInventory,
- type RunSetupOperationRequest, type SetupOperation,
+ type RunSetupOperationRequest, type SetupOperation, type InteractiveSetupOperation,
 } from '@tnunamak/gozar';
 import {
  createTestingGozar, fakeRegistry, type TestingEffect, type NetworkEffectRequest,
@@ -219,7 +219,7 @@ async function consumeSetupOperation(api: Api) {
 
 type PublicSetupLeaf = SetupConsentSnapshot['disclosures']['action'];
 type OrdinaryAction = DraftRead['configuration']['actions'][number];
-type InteractiveOffer = NonNullable<Awaited<ReturnType<Api['readSetupOperation']>>['nextAction']>;
+type InteractiveOffer = NonNullable<InteractiveSetupOperation['nextAction']>;
 declare const safeLeaf: PublicSetupLeaf;
 declare const interactiveOffer: InteractiveOffer;
 declare const ordinaryOffer: OrdinaryAction;
