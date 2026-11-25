@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
+import { connect, createServer } from 'node:net';
 import { join } from 'node:path';
 import { fakeRegistry } from '@tnunamak/gozar/testing';
 import { createRouteApi } from '../../packages/gozar-node/route-api.mjs';
@@ -13,11 +14,12 @@ const fact = id => ({
   id, label: id, value: null, known: false, reason: 'not-observed',
   group: 'fixture', affectsConsent: true, source: `local-observation:/${id}`, asOf: null,
 });
-async function fixture(t, id) {
+async function fixture(t, id, { target, echo = false } = {}) {
   const home = await scratch(t), owner = 'transition-owner';
   const registry = await fakeRegistry({
     dir: join(home, 'registry'), id, kinds: ['attached'], reach: 'this-device',
     protocols: [], facts: [fact('base')],
+    ...(echo && { transport: 'tcp', proofProtocol: 'echo' }),
   });
   const registryOptions = { manifest: registry.manifest, root: registry.root };
   const services = createEmbeddingServices({ registryId: await registryIdentity(registryOptions) });
@@ -39,8 +41,8 @@ async function fixture(t, id) {
     };
   };
   const q = query({
-    home, owner, usage: { kind: 'attached' },
-    requirements: { reach: 'this-device', transport: 'any', payloadAccess: 'allow-provider',
+    home, owner, usage: { kind: 'attached' }, ...(target && { target }),
+    requirements: { reach: 'this-device', transport: echo ? 'tcp' : 'any', payloadAccess: 'allow-provider',
       address: 'any', setup: 'allow', protocols: [] },
   });
   const factory = expose => createRouteApi({
@@ -207,5 +209,70 @@ test('registered configuration hold survives denied release until exact public c
       assert.equal((await f.close(api, route.handle)).cleanup.state, 'confirmed');
     }
     f.services.releaseConfigurationUse = release;
+  }
+});
+
+
+function echoBytes(port, sent) {
+  return new Promise((resolve, reject) => {
+    const client = connect(port, '127.0.0.1');
+    const chunks = [];
+    let size = 0;
+    client.setTimeout(2000, () => client.destroy(new Error('echo timed out')));
+    client.once('error', reject);
+    client.once('connect', () => client.write(sent));
+    client.on('data', chunk => {
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size >= sent.length) client.end();
+    });
+    client.once('end', () => resolve(Buffer.concat(chunks)));
+  });
+}
+
+test('independent refusal observer sees one successful owned TCP echo lifecycle', async t => {
+  const sockets = new Set();
+  const app = createServer(socket => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+    socket.on('error', () => socket.destroy());
+    socket.on('data', chunk => socket.write(chunk));
+  });
+  const ready = new Promise((resolve, reject) => {
+    app.once('error', reject);
+    app.listen(0, '127.0.0.1', resolve);
+  });
+  await ready;
+  let release;
+  try {
+    const port = app.address().port;
+    const f = await fixture(t, 'refusal-observer-echo', { target: '127.0.0.1:' + port, echo: true });
+    const api = f.factory();
+    assert.deepEqual(await f.counts(), { starts: 0, removals: 0 });
+    const request = await f.request(api);
+    assert.deepEqual(await f.counts(), { starts: 0, removals: 0 });
+    const route = await api.expose(request);
+    release = () => f.close(api, route.handle);
+    const endpoint = new URL(route.origin);
+    assert.equal(endpoint.protocol, 'tcp:');
+    assert.equal(endpoint.hostname, '127.0.0.1');
+    assert.deepEqual(await f.counts(), { starts: 1, removals: 0 });
+    const routed = Buffer.from('provider forwarded these bytes');
+    assert.deepEqual(await echoBytes(Number(endpoint.port), routed), routed);
+    const closed = await release();
+    release = null;
+    assert.deepEqual(closed.handle, route.handle);
+    assert.equal(closed.state, 'released');
+    assert.equal(closed.cleanup.state, 'confirmed');
+    assert.deepEqual(await f.counts(), { starts: 1, removals: 1 });
+    const direct = Buffer.from('local app survives');
+    assert.deepEqual(await echoBytes(port, direct), direct);
+    assert.deepEqual(await f.counts(), { starts: 1, removals: 1 });
+  } finally {
+    try { await release?.(); }
+    finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise(resolve => app.close(resolve));
+    }
   }
 });
