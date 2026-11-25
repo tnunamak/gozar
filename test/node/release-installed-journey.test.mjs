@@ -572,3 +572,36 @@ for(const [label,screen] of [
  assert.equal(report.failure.message,'Unknown screen outcome');
  assert.equal(await readFile(join(f.input.outputDirectory,'screen.stdout'),'utf8'),screen);
 });
+
+test('a zero-exit install marked timed out remains failed with its output intact',async t=>{
+ const f=await fixture(t);
+ let calls=0;
+ await assert.rejects(runInstalledJourney(f.input,{run:async()=>{
+  calls++;
+  return {status:0,signal:null,timedOut:true,stdout:'output received before deadline',stderr:'late shutdown'};
+ }}),/Installed journey subprocess failed: install/);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+ assert.equal(calls,1);
+ assert.equal(report.status,'failed');
+ assert.equal(report.steps[0].result.timedOut,true);
+ assert.equal(await readFile(join(f.input.outputDirectory,'install.stdout'),'utf8'),'output received before deadline');
+ assert.equal(await readFile(join(f.input.outputDirectory,'install.stderr'),'utf8'),'late shutdown');
+});
+
+test('the release journey CLI rejects duplicate or missing flag values before staging',async t=>{
+ const f=await fixture(t);
+ const {spawnSync}=await import('node:child_process');
+ const {fileURLToPath}=await import('node:url');
+ const cli=fileURLToPath(new URL('../../scripts/release-installed-journey.mjs',import.meta.url));
+ for(const args of [
+  ['--output-directory',f.input.outputDirectory,'--output-directory',f.input.outputDirectory],
+  ['--output-directory',f.input.outputDirectory,'--source-sha'],
+ ]){
+  const out=spawnSync(process.execPath,[cli,...args],{encoding:'utf8'});
+  assert.equal(out.status,1);
+  assert.equal(out.stdout,'');
+  assert.match(out.stderr,/Unknown, repeated or missing argument/);
+  await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+ }
+});
