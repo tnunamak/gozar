@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { createConnection } from 'node:net';
 import { deriveProof } from '../../scripts/sync-adapter-registry.mjs';
 import { createNamedAdapter } from '../../adapters/providers/cloudflare-named/index.mjs';
 
@@ -56,8 +57,23 @@ test('named advertised transport matches the attached proof boundary and generat
   assert.match(row, /\| yes \/ yes \/ no \|/);
 });
 
-for (const buffered of [false, true]) {
-  test('named attached proof uses real timed SSE and '+(buffered?'rejects buffered delivery':'accepts incremental delivery'), async t => {
+function dialFixtureGate(port, signal) {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({host:'127.0.0.1',port,signal});
+    socket.once('error', reject);
+    socket.once('connect', () => { socket.destroy(); resolve(); });
+    socket.setTimeout(2_000, () => socket.destroy(new Error('fixture gate dial timed out')));
+  });
+}
+
+for (const {protocols, buffered} of [
+  {protocols:['sse','streamable-http'],buffered:false},
+  {protocols:['sse','streamable-http'],buffered:true},
+  {protocols:['sse'],buffered:false},
+  {protocols:['streamable-http'],buffered:false},
+]) {
+  test('named attached proof for '+protocols.join('+')+' '+(buffered?'rejects buffered SSE':'verifies'), async t => {
+    const requiresSse = protocols.includes('sse');
     // Redirect transport only; use the real gate nonce and timed-stream verifier.
     const app = createServer((_request, response) => response.end('fixture app'));
     await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
@@ -69,9 +85,11 @@ for (const buffered of [false, true]) {
     const adapter = createNamedAdapter({detectBinary:async()=>true,startConnector:async()=>{throw new Error('proof must not start a connector');}});
     const origin = 'https://named.example.invalid';
     const context = {platform:'linux',now:Date.now,configuration:async()=>({token:'fixture-only',origin,'gate-port':String(gatePort)})};
-    const request = {target:'127.0.0.1:'+app.address().port,usage:{kind:'attached'},requirements:{protocols:['sse','streamable-http']}};
+    const request = {target:'127.0.0.1:'+app.address().port,usage:{kind:'attached'},requirements:{protocols}};
     const proof = await adapter.prepareProof(context, request);
-    t.after(() => proof.close());
+    let closing;
+    const closeGate = () => (closing ??= Promise.resolve().then(() => proof.close()));
+    t.after(closeGate);
     const realFetch = globalThis.fetch;
     let streamResponses = 0;
     globalThis.fetch = async (input, init) => {
@@ -91,12 +109,23 @@ for (const buffered of [false, true]) {
     t.after(() => { clearTimeout(timeout); stop.abort(); });
     const attempt = {id:'named-stream-proof',signal:stop.signal,deadlineMs:Date.now()+10_000};
     const result = await proof.verify({origin,attempt});
-    assert.ok(streamResponses > 0, 'SSE requirement must reach the real timed stream request');
+    if (requiresSse) assert.ok(streamResponses > 0, 'SSE must reach the real timed stream request');
+    else assert.equal(streamResponses, 0, 'Streamable HTTP alone does not need a timed SSE observation');
     assert.equal(result.attemptId, attempt.id);
     assert.equal(result.endpoint, origin);
     assert.equal(result.vantage, 'this-device');
     assert.equal(result.status, buffered ? 'unverified' : 'verified');
-    assert.deepEqual(result.checks, buffered ? [] : ['tls','nonce','sse']);
+    assert.deepEqual(result.checks, buffered ? [] : requiresSse ? ['tls','nonce','sse'] : ['tls','nonce']);
     if (buffered) assert.notEqual(result.status, 'verified', 'no successful proof may authorize publication');
+    await dialFixtureGate(gatePort);
+    const canceledObservation = new AbortController();
+    canceledObservation.abort();
+    await assert.rejects(dialFixtureGate(gatePort, canceledObservation.signal), {code:'ABORT_ERR'});
+    await dialFixtureGate(gatePort);
+    await closeGate();
+    await assert.rejects(dialFixtureGate(gatePort), {code:'ECONNREFUSED'});
+    const stillRunning = await realFetch('http://127.0.0.1:'+app.address().port, {signal:AbortSignal.timeout(2_000)});
+    assert.equal(stillRunning.status, 200);
+    assert.equal(await stillRunning.text(), 'fixture app');
   });
 }
