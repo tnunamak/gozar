@@ -193,7 +193,8 @@ async function assertOptionalAbsent(root,names){
 export async function runInstalledJourney(input,{run=runProcess}={}){
  const {tarball,sha256,sourceSha,outputDirectory}=input;
  if(typeof tarball!=='string'||!tarball||typeof outputDirectory!=='string'||!outputDirectory||
-    !/^[a-f0-9]{64}$/.test(sha256??'')||!/^[a-f0-9]{40}$/.test(sourceSha??''))throw new Error('Explicit tarball, sha256, source SHA and output directory required');
+    typeof sha256!=='string'||!/^[a-f0-9]{64}$/.test(sha256)||
+    typeof sourceSha!=='string'||!/^[a-f0-9]{40}$/.test(sourceSha))throw new Error('Explicit tarball, sha256, source SHA and output directory required');
  const source=resolve(tarball),info=await lstat(source);
  if(!info.isFile()||info.isSymbolicLink())throw new Error('Archive must be a regular file');
  const bytes=await readFile(source);

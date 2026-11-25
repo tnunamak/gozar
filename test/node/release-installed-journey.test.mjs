@@ -100,6 +100,17 @@ test('invalid source revision is rejected before creating output',async t=>{
  await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
 });
 
+test('a non-string source revision is rejected before staging an otherwise valid archive',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const run=async(command,args,options)=>{
+  if(stub.calls.length===0)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  return stub.run(command,args,options);
+ };
+ await assert.rejects(runInstalledJourney({...f.input,sourceSha:[f.input.sourceSha]},{run}),/source SHA/);
+ assert.deepEqual(stub.calls,[]);
+ await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
+
 test('a verified archive for a different package never reaches npm',async t=>{
  const f=await fixture(t,{name:'@example/other-package'}),stub=processStub(f);
  await assert.rejects(runInstalledJourney(f.input,{run:stub.run}),/must be standalone @tnunamak\/gozar/);
