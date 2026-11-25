@@ -50,10 +50,20 @@ async function fixture(t, mode, initial = {}) {
   const draft = mode === 'loss' ? await api.beginConfigurationDraft({
     home, owner: q.owner, providerId, expectedConfigurationRevision: candidate.configuration.revision,
   }) : null;
-  const configuration = draft?.configuration ?? candidate.configuration;
+  const refreshed = draft ? await api.readConfigurationDraft({
+    home, owner: q.owner, providerId, draftId: draft.draftId, refresh: true,
+  }) : null;
+  const configuration = refreshed?.configuration ?? candidate.configuration;
   const [first] = draft ? configuration.actions : candidate.setup.actions;
   assertShape('Action', first);
   assert.equal(first.id, mode === 'browser' ? 'grant' : 'create-tunnel');
+  if (draft) {
+    assert.equal(refreshed.draftId, draft.draftId);
+    assert.equal(first.consent.scope.scopeId, configuration.scopeId);
+    const untouched = await world();
+    assert.equal(untouched.creates, 0);
+    assert.deepEqual(untouched.calls, []);
+  }
   const ref = { home, providerId: candidate.providerId, owner: q.owner, operationId: randomUUID() };
   const start = { ...ref, expectedConfigurationRevision: configuration.revision,
     ...(draft && { draftId: draft.draftId }), expectedSetupRevision: 0, actionId: first.id };
