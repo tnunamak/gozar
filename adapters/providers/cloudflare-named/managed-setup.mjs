@@ -115,6 +115,13 @@ export function managedCloudflareSetup(action, dependencies) {
     instructions: 'Create a Custom API token in My Profile → API Tokens. Grant Cloudflare Tunnel Edit for one account, Zone Read and DNS Edit for one existing Cloudflare zone, and set an expiry long enough for cleanup. Enter that API token in the private input. Gozar uses it to manage the tunnel, create the DNS record and verify DNS removal. Keep its dashboard entry until cleanup. Browser-only management authorization is unavailable here.',
   });
   const initial = () => access();
+  const accountInput = options => source('managed-account', 'Cloudflare account', 'text', options);
+  const zoneInput = options => source('managed-zone', 'Cloudflare DNS zone', 'text', options);
+  const hostnameInput = (label = 'Unused hostname') => source('managed-hostname', label, 'domain');
+  const portInput = () => step('managed-port', 'provide-value',
+    'Local connector gate port', 'configure', { valueFormat: 'text', required: true,
+      help: 'Choose an unused local port between 1024 and 65535, distinct from the port your app listens on.' });
+  const configurationInputActions = () => [accountInput(), zoneInput(), hostnameInput(), portInput()];
   const next = (state, nextAction = null, extra = {}) => ({ state, nextAction, ...extra });
 
   async function observeSetup(ctx, operation) {
@@ -205,21 +212,17 @@ export function managedCloudflareSetup(action, dependencies) {
           'Activate a zone on Cloudflare DNS and scope the API token to that account and zone. Refresh after activation.', { href: 'https://dash.cloudflare.com/' }));
         const account = values['managed-account'];
         if (!accounts.some(choice => choice.value === account)) return reply('pending',
-          source('managed-account', 'Cloudflare account', 'text', accounts));
+          accountInput(accounts));
         const accountZones = zones.filter(zone => zone.account.id === account);
         const zone = accountZones.find(zone => zone.id === values['managed-zone']);
-        if (!zone) return reply('pending', source('managed-zone', 'Cloudflare DNS zone', 'text',
-          accountZones.map(zone => ({ label: zone.name, value: zone.id }))));
+        if (!zone) return reply('pending', zoneInput(accountZones.map(zone => ({ label: zone.name, value: zone.id }))));
         const hostname = values['managed-hostname'];
-        if (!hostname?.endsWith('.' + zone.name)) return reply('pending', source('managed-hostname',
-          'Unused hostname under ' + zone.name, 'domain'));
+        if (!hostname?.endsWith('.' + zone.name)) return reply('pending', hostnameInput('Unused hostname under ' + zone.name));
         const port = Number(values['managed-port']);
-        if (!Number.isInteger(port) || port < 1024 || port > 65535) return reply('pending', step('managed-port', 'provide-value',
-          'Local connector gate port', 'configure', { valueFormat: 'text', required: true,
-            help: 'Choose an unused local port between 1024 and 65535, distinct from the port your app listens on.' }));
+        if (!Number.isInteger(port) || port < 1024 || port > 65535) return reply('pending', portInput());
         const records = result(await call('GET', dnsByName({ kind: 'dns', zone: zone.id, name: hostname })));
         if (!Array.isArray(records)) refuse();
-        if (records.length) return reply('blocked', source('managed-hostname', 'Choose a hostname with no existing DNS record under ' + zone.name, 'domain'));
+        if (records.length) return reply('blocked', hostnameInput('Choose a hostname with no existing DNS record under ' + zone.name));
         const subject = { kind: 'tunnel', account, zone: zone.id, hostname, port, name: 'gozar-' + digest(operation.id).slice(0, 24) };
         return reply('pending', step('managed-create-tunnel', 'gozar-runs', 'Create a Cloudflare tunnel for ' + hostname, 'provision',
           { help: 'The owned tunnel will use a loopback gate on port ' + port + '. Cloudflare terminates HTTPS.' }),
@@ -326,5 +329,5 @@ export function managedCloudflareSetup(action, dependencies) {
     return { state: executed ? 'complete' : 'blocked' };
   }
 
-  return { initial, observeSetup, executeSetup };
+  return { initial, configurationInputActions, observeSetup, executeSetup };
 }

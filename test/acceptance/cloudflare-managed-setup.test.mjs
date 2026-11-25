@@ -8,6 +8,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createTestingGozar } from '@tnunamak/gozar/testing';
 import { assertShape, query, scratch } from '../node/route-schema-check.mjs';
+import { inputKindsOf } from '../../packages/gozar-node/embedding-state.mjs';
+import { createNamedAdapter } from '../../adapters/providers/cloudflare-named/index.mjs';
 
 const account = 'a'.repeat(32), zone = 'b'.repeat(32), dnsId = 'c'.repeat(32);
 const retainedDNS = 'd'.repeat(32);
@@ -143,10 +145,18 @@ async function fixture(t) {
   const ref = { home, owner: q.owner, providerId: q.providerId, operationId: randomUUID() };
   const catalog = async () => (await api.catalogRoutes(q)).candidates[0];
   const configure = async view => {
+    const adapter = createNamedAdapter(), roles = inputKindsOf(adapter), offered = new Map();
+    const inputRole = action => action.kind === 'provide-secret' ? 'secret' : action.kind === 'provide-value' ? 'text' : null;
     for (const [id, value] of [['managed-account', account], ['managed-zone', zone], ['managed-hostname', host], ['managed-port', String(port)]]) {
       assert.equal(view.nextAction?.id, id);
+      const role = inputRole(view.nextAction);
+      assert.ok(role, 'the workflow offers an input action');
+      assert.equal(roles[id], role, 'every offered staged input has its declared write role');
+      offered.set(id, role);
       view = await drive(view, { value });
     }
+    const declared = adapter.configurationInputActions().map(action => [action.id, inputRole(action)]);
+    assert.deepEqual([...offered].sort(), declared.sort(), 'every declared staged input is actually offered');
     return view;
   };
   const drive = async (view, input = {}) => {

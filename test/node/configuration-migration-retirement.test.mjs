@@ -6,6 +6,30 @@ import {homedir} from 'node:os';
 import {createEmbeddingServices} from '../../packages/gozar-node/embedding-services.mjs';
 import {bundledLineage,PUBLISHED_REGISTRY_IDS} from '../../packages/gozar-node/registry-lineage.mjs';
 import {createRouteApi} from '../../packages/gozar-node/route-api.mjs';
+import {inputKindsOf} from '../../packages/gozar-node/embedding-state.mjs';
+import {createNamedAdapter} from '../../adapters/providers/cloudflare-named/index.mjs';
+
+test('current managed setup inputs have the roles of their declared write actions',()=>{
+  const adapter=createNamedAdapter();
+  const kinds=inputKindsOf(adapter);
+  assert.deepEqual({...kinds},{
+    'managed-api-token':'secret', token:'secret', origin:'text', 'gate-port':'text',
+    'managed-account':'text', 'managed-zone':'text', 'managed-hostname':'text', 'managed-port':'text',
+  });
+  assert.equal(Object.hasOwn(kinds,'unknown-input'),false);
+  assert.deepEqual(adapter.configurationActions().map(action=>action.id),['managed-api-token','token','origin','gate-port']);
+});
+
+test('invalid supplemental input declarations fail closed',()=>{
+  const base={definition:{},configurationActions:()=>[{id:'token',kind:'provide-secret'}]};
+  for(const actions of [
+    [{id:'token',kind:'provide-value'}],
+    [{id:'bogus',kind:'instructions'}],
+    [{id:'',kind:'provide-value'}],
+    null,
+  ]) assert.equal(inputKindsOf({...base,configurationInputActions:()=>actions}),undefined);
+  assert.equal(inputKindsOf({...base,configurationInputActions(){throw new Error('bad declaration');}}),undefined);
+});
 
 for(const cancelled of [false,true])test(`configuration-migration-retirement: resource-free ${cancelled?'cancelled':'completed'} earlier setup permits adoption`,async t=>{
  const home=await mkdtemp(join(homedir(),'.tmp','g-upgrade-'));
