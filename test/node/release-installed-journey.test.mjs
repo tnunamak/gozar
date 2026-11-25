@@ -75,6 +75,21 @@ test('digest refusal starts zero subprocesses',async t=>{
  await assert.rejects(runInstalledJourney({...f.input,sha256:'0'.repeat(64)},{run:stub.run}),/digest/i);
  assert.equal(stub.calls.length,0);
 });
+
+test('invalid source revision is rejected before creating output',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ await assert.rejects(runInstalledJourney({...f.input,sourceSha:'short'},{run:stub.run}),/source SHA/);
+ assert.deepEqual(stub.calls,[]);
+ await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
+
+test('a verified archive for a different package never reaches npm',async t=>{
+ const f=await fixture(t,{name:'@example/other-package'}),stub=processStub(f);
+ await assert.rejects(runInstalledJourney(f.input,{run:stub.run}),/must be standalone @tnunamak\/gozar/);
+ assert.deepEqual(stub.calls,[]);
+ await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
+
 test('a runtime dependency refuses before output or subprocess creation',async t=>{
  const f=await fixture(t,{dependencies:{'synthetic-runtime':'1'}});
  const stub=processStub(f);
