@@ -30,24 +30,27 @@ export const inputIdOf = (adapter, action) => (adapter.definition.inputRequireme
 
 /**
  * The current input contract of an executable provider: the ids and roles its own declared actions can write
- * (`provide-secret` writes a secret binding, `provide-value` writes plain text). This reads the same static
- * declaration the catalog shows before any probe, so it needs no live observation, no configuration and no
- * migration. An unknown provider, a declaration that throws, or one id in two roles has no contract (undefined).
+ * (`provide-secret` writes a secret binding, `provide-value` writes plain text). An adapter can supplement
+ * its catalog actions with the descriptors for staged writes that are not currently offered. All declarations
+ * are static: no observation or saved configuration is consulted. Invalid declarations have no contract.
  */
 export function inputKindsOf(adapter) {
   if (!adapter?.definition) return undefined;
-  let actions;
-  try { actions = adapter.configurationActions ? adapter.configurationActions() : adapter.setupActions({ setupNeeded: true }); } catch { return undefined; }
-  if (!Array.isArray(actions)) return undefined;
-  const kinds = Object.create(null);
-  for (const action of actions) {
-    const role = { 'provide-secret': 'secret', 'provide-value': 'text' }[action?.kind];
-    if (!role) continue;
-    const id = inputIdOf(adapter, action);
-    if (Object.hasOwn(kinds, id) && kinds[id] !== role) return undefined;
-    kinds[id] = role;
-  }
-  return kinds;
+  try {
+    const actions = adapter.configurationActions ? adapter.configurationActions() : adapter.setupActions({ setupNeeded: true });
+    const staged = adapter.configurationInputActions === undefined ? [] : adapter.configurationInputActions();
+    if (!Array.isArray(actions) || !Array.isArray(staged)) return undefined;
+    const kinds = Object.create(null);
+    const add = (action, supplemental) => {
+      const role = action?.kind === 'provide-secret' ? 'secret' : action?.kind === 'provide-value' ? 'text' : null;
+      if (!role) return !supplemental;
+      const id = inputIdOf(adapter, action);
+      if (typeof id !== 'string' || !id || (Object.hasOwn(kinds, id) && kinds[id] !== role)) return false;
+      kinds[id] = role;
+      return true;
+    };
+    return actions.every(action => add(action, false)) && staged.every(action => add(action, true)) ? kinds : undefined;
+  } catch { return undefined; }
 }
 
 export function configurationFor(actions, saved, declared) {
