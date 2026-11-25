@@ -57,6 +57,34 @@ function archiveFiles(bytes){
 }
 // These bounds apply after termination begins, even when inherited pipes never close.
 const PROCESS_DRAIN_MS=1000,PROCESS_KILL_GRACE_MS=200,PROCESS_OUTPUT_BYTES=16*1024*1024;
+// The raw capture is shared, but malformed UTF-8 can expand when decoded.
+function decodeDiagnosticStreams(chunks){
+ let room=PROCESS_OUTPUT_BYTES;
+ const decode=parts=>{
+  if(!room)return '';
+  const decoder=new TextDecoder('utf-8',{ignoreBOM:true});
+  const kept=[];
+  const retain=text=>{
+   const bytes=Buffer.byteLength(text);
+   if(bytes<=room){if(text)kept.push(text);room-=bytes;return room>0;}
+   let end=0;
+   for(const character of text){
+    const length=Buffer.byteLength(character);
+    if(length>room)break;
+    room-=length;end+=character.length;
+   }
+   if(end)kept.push(text.slice(0,end));
+   return false;
+  };
+  // Bound transient decoded segments without splitting valid UTF-8 across chunks.
+  for(const part of parts)for(let offset=0;offset<part.length;offset+=16384){
+   if(!retain(decoder.decode(part.subarray(offset,offset+16384),{stream:true})))return kept.join('');
+  }
+  retain(decoder.decode());
+  return kept.join('');
+ };
+ return {stdout:decode(chunks.stdout),stderr:decode(chunks.stderr)};
+}
 export function runProcess(command,args,options,{spawnProcess=spawn}={}){
  return new Promise(resolveResult=>{
   let child;
@@ -98,8 +126,7 @@ export function runProcess(command,args,options,{spawnProcess=spawn}={}){
    settled=true;
    clearTimeout(timer);clearTimeout(drainTimer);clearTimeout(killTimer);clearInterval(pollTimer);
    if(!closed){child.stdout?.destroy?.();child.stderr?.destroy?.();child.unref?.();}
-   resolveResult({status,signal,stdout:Buffer.concat(chunks.stdout).toString('utf8'),
-    stderr:Buffer.concat(chunks.stderr).toString('utf8'),timedOut,overflow,drainTimedOut:!closed,
+   resolveResult({status,signal,...decodeDiagnosticStreams(chunks),timedOut,overflow,drainTimedOut:!closed,
     outputBytes:retainedBytes,observedBytes,
     cleanup:{scope:group!==null?'process-group':'child-only',pid:child.pid??null,groupId:group,
      state:closed&&gone&&!(stopping&&group===null&&child.pid)?'confirmed':'unconfirmed',

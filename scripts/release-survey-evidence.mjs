@@ -8,6 +8,8 @@ import {fileURLToPath} from 'node:url';
 export const SURVEY_REVISION='ae83f3d71954d4220da77b80e62ddb0f859ef323';
 export const CLARITY_REVISION='e27b326a7e29e08bba65bff9bcba02c7124f8845';
 export const REQUIRED_REVIEWS=['r040-survey-primary-counts-1117','r040-survey-primary-profiles-1117','r040-survey-data-parity-1117'];
+const PARITY_REVIEW='r040-survey-data-parity-1117';
+const INVENTORY_DIGEST_BASIS='SHA-256 of UTF-8 JSON array of {path,bytes,sha256}, sorted by path; each file hash is over its original bytes.';
 const CLARITY_BRANCH='dot/r040-manifest-coverage-clarity-1117';
 const exec=promisify(execFile);
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -55,18 +57,21 @@ export function assembleEvidence({surveyRevision,survey,candidate,clarity,receip
  });
  const coverageText=text(candidate,'docs/release-0.4-interface-coverage.md');
  const supplied=receipts.map(receipt=>({receipt,sha256:hash(JSON.stringify(receipt)),trust:'caller-supplied-review-receipt'}));
- const completed=REQUIRED_REVIEWS.filter(id=>receipts.some(r=>r?.id===id&&r.status==='completed'&&r.surveyRevision===SURVEY_REVISION));
+ const candidateFiles=inventory(candidate.files);
+ const inventorySha256=hash(JSON.stringify(candidateFiles));
+ const completed=REQUIRED_REVIEWS.filter(id=>receipts.some(r=>r?.id===id&&r.status==='completed'&&r.surveyRevision===SURVEY_REVISION&&
+  (id!==PARITY_REVIEW||(r.candidateRevision===candidate.revision&&r.candidateInventorySha256===inventorySha256))));
  const missing=REQUIRED_REVIEWS.filter(id=>!completed.includes(id));
  return {
   schemaVersion:1,purpose:'one-shot-source-reconciliation',survey:{revision:survey.revision,files:inventory(survey.files)},
-  candidate:{revision:candidate.revision,files:inventory(candidate.files)},providers,normalizedDefinitions:normalized,
+  candidate:{revision:candidate.revision,files:candidateFiles,inventorySha256,inventoryDigestBasis:INVENTORY_DIGEST_BASIS},providers,normalizedDefinitions:normalized,
   coverage:{path:'docs/release-0.4-interface-coverage.md',sha256:hash(bytes(candidate,'docs/release-0.4-interface-coverage.md')),text:coverageText,
    gapRows:coverageText.split('\n').filter(line=>/^\|/.test(line)&&!/^[| :\-]+$/.test(line)),
    missingBounds:['329','306','441','319','six','descriptor','posture'].filter(term=>!coverageText.toLowerCase().includes(term)),
    limitations:'Full document retained verbatim; table rows are evidence to review, not inferred semantic verdicts.'},
   clarity:{branch:CLARITY_BRANCH,...clarity},
   reviewPrerequisites:{required:REQUIRED_REVIEWS,completed,missing,receipts:supplied,
-   note:'Caller receipts are retained provenance, not independently authenticated approvals. Queued work never counts as completed.'},
+   note:'Caller receipts are retained provenance, not independently authenticated approvals. Queued work never counts as completed. Parity also requires the exact candidate revision and inventory hash.'},
   semanticCoverageClosed:false,saturationEstablished:false,hostAcceptance:'not-established',consumerAcceptance:'not-established',
   unresolved:[
    ...missing.map(id=>'Required completed survey review: '+id),
