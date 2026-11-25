@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
+import {spawn} from 'node:child_process';
 import {randomUUID,randomBytes} from 'node:crypto';
-import {mkdir,mkdtemp,lstat,readFile,rm,readdir,writeFile} from 'node:fs/promises';
+import {access,mkdir,mkdtemp,lstat,readFile,rename,rm,readdir,writeFile} from 'node:fs/promises';
 import {join,dirname,basename} from 'node:path';
 import {homedir} from 'node:os';
+import {createGozar} from '../../packages/gozar-node/api.mjs';
 import {createRouteApi} from '../../packages/gozar-node/route-api.mjs';
 import {observeAttachedRoute,controlAttached,attachedCleanupReference} from '../../packages/gozar-node/attached-route.mjs';
 import {projectControllerObservation} from '../../packages/gozar-node/route-view.mjs';
@@ -203,4 +205,119 @@ for(const kind of ['attached','session'])test(kind+' private observation preserv
     } while(Date.now()<deadline);
     unpublished(dead);
     assert.equal(dead.cleanup.state,'unconfirmed');
+  }));
+
+async function waitForFixture(check, label, timeout=10000){
+  const until=Date.now()+timeout;
+  do {
+    const value=await check();
+    if(value)return value;
+    await new Promise(resolve=>setTimeout(resolve,25));
+  } while(Date.now()<until);
+  throw new Error('Timed out waiting for '+label);
+}
+const fileExists=path=>access(path).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;});
+
+test('lost generic session caller leaves one public handle and Stop fences a held proof',
+  {timeout:45000},()=>owned(async own=>{
+    const f=await fixture(own),server=await app();own.add(()=>server.close());
+    const provider=join(f.registry.root,'providers',f.providerId);
+    await rename(join(provider,'index.mjs'),join(provider,'fixture-original.mjs'));
+    const ready=join(f.root,'proof-held'),release=join(f.root,'release-proof');
+    const returned=join(f.root,'proof-returned'),aborted=join(f.root,'proof-aborted');
+    const stopGate=()=>writeFile(release,'release');
+    await writeFile(join(provider,'index.mjs'),`
+import original from './fixture-original.mjs';
+import {access,writeFile} from 'node:fs/promises';
+export default {...original, async prepareProof(ctx, request, attempt){
+  const proof=await original.prepareProof(ctx,request,attempt);
+  return {...proof, async verify(input){
+    const verified=await proof.verify(input);
+    if(verified.status!=='verified')throw new Error('owned echo did not verify');
+    const recordAbort=()=>writeFile(${JSON.stringify(aborted)},'aborted');
+    const onAbort=()=>{void recordAbort().catch(()=>{});};
+    if(attempt.signal.aborted)await recordAbort();
+    else attempt.signal.addEventListener('abort',onAbort,{once:true});
+    try{
+      await writeFile(${JSON.stringify(ready)},'held');
+      const until=Date.now()+15000;
+      do {
+        if(await access(${JSON.stringify(release)}).then(()=>true,()=>false)){
+          await writeFile(${JSON.stringify(returned)},'returned');
+          return verified;
+        }
+        await new Promise(resolve=>setTimeout(resolve,25));
+      } while(Date.now()<until);
+      throw new Error('fixture proof was not released');
+    } finally {attempt.signal.removeEventListener('abort',onAbort);}
+  }};
+}};
+`);
+    const q={...query(f.home,'owner',f.providerId,server.target,'session'),operationId:randomUUID()};
+    const deps={manifest:f.registry.manifest,root:f.registry.root};
+    const api=createGozar(deps);
+    const retained=async()=>(await api.listRoutes({home:q.home,owner:q.owner})).routes
+      .filter(route=>route.operationId===q.operationId);
+    let closePromise;
+    // Always unblock the fixture, then recover and close only its own exact handle.
+    own.beforeRoutes(async()=>{
+      await stopGate();
+      if(closePromise)await closePromise.catch(()=>{});
+      const rows=await retained();
+      assert.ok(rows.length<=1,'never clean up unrelated or ambiguous routes');
+      if(rows[0]&&rows[0].cleanup.state!=='confirmed'){
+        const closed=await api.closeRoute({home:q.home,handle:rows[0].handle,mode:'remove'});
+        assert.equal(closed.cleanup.state,'confirmed');
+      }
+    });
+
+    const childFile=join(f.root,'caller.mjs');
+    const moduleUrl=new URL('../../packages/gozar-node/api.mjs',import.meta.url).href;
+    await writeFile(childFile,`
+import {createGozar} from ${JSON.stringify(moduleUrl)};
+const deps=${JSON.stringify(deps)},query=${JSON.stringify(q)};
+const api=createGozar({...deps,async acknowledgeOrigin({origin,handle,attemptId}){
+  if(new URL(origin).hostname!=='127.0.0.1')throw new Error('nonfixture origin');
+  return {acknowledged:true,origin,handle:{id:handle.id,generation:handle.generation},attemptId};
+}});
+const selected=(await api.catalogRoutes(query)).candidates.find(c=>c.providerId===query.providerId);
+if(!selected?.candidateToken)throw new Error('fixture candidate unavailable');
+await api.expose({...query,wait:'verified',approval:{kind:'route',candidateToken:selected.candidateToken,
+  consentFactsDigest:selected.consentFactsDigest,disclosureRevision:selected.disclosure.revision}});
+`);
+    const child=spawn(process.execPath,[childFile],{stdio:'ignore'});
+    const exited=new Promise((resolve,reject)=>{
+      child.once('error',reject);child.once('exit',(code,signal)=>resolve({code,signal}));
+    });
+    void exited.catch(()=>{});
+    const callerPid=child.pid;
+    const killOwnedCaller=()=>{
+      if(child.exitCode===null&&child.signalCode===null&&Number.isSafeInteger(callerPid)&&callerPid>1){
+        assert.equal(child.pid,callerPid,'only the saved child PID may be signalled');
+        child.kill('SIGKILL');
+      }
+    };
+    own.beforeRoutes(async()=>{killOwnedCaller();await exited;});
+    await waitForFixture(()=>fileExists(ready),'held genuine echo proof');
+    assert.equal(child.exitCode,null,'caller must still be waiting');
+    assert.ok(Number.isSafeInteger(callerPid)&&callerPid>1);
+    killOwnedCaller();
+    assert.equal((await exited).signal,'SIGKILL');
+
+    const rows=await waitForFixture(async()=>{const current=await retained();return current.length?current:null;},'retained operation');
+    assert.equal(rows.length,1);assert.equal(rows[0].handle.kind,'session');
+    const {handle}=rows[0];unpublished(rows[0]);
+    assert.equal(await fileExists(returned),false,'proof must not complete before Stop');
+    closePromise=api.closeRoute({home:q.home,handle,mode:'remove'});
+    void closePromise.catch(()=>{});
+    await waitForFixture(()=>fileExists(aborted),'proof authority abortion');
+    await stopGate();
+    await waitForFixture(()=>fileExists(returned),'late proof return');
+    const closed=await closePromise;
+    assert.deepEqual(closed.handle,handle);unpublished(closed);
+    assert.equal(closed.cleanup.state,'confirmed');
+    const after=await retained();
+    assert.ok(after.length<=1);
+    if(after[0]){assert.deepEqual(after[0].handle,handle);unpublished(after[0]);}
+    assert.equal((await counts(f)).start,1,'recovery and Stop must not start another operation');
   }));
