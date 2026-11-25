@@ -38,7 +38,13 @@ type DraftRead = Awaited<ReturnType<Api['readConfigurationDraft']>>;
 type Setup = Awaited<ReturnType<Api['runSetupAction']>>;
 type Inventory = Awaited<ReturnType<Api['listProviders']>>;
 type Listed = Awaited<ReturnType<Api['listRoutes']>>;
+type DraftValues = DraftRead['configuration']['values'];
+type DraftValue = DraftValues[keyof DraftValues];
+type Revision = SetupOperation['scope']['configurationRevision'];
+type CleanupState = Awaited<ReturnType<Api['closeRoute']>>['cleanup']['state'];
 type NotAny = [
+ AssertFalse<IsAny<DraftValues>>, AssertFalse<IsAny<DraftValue>>,
+ AssertFalse<IsAny<Revision>>, AssertFalse<IsAny<CleanupState>>,
  AssertFalse<IsAny<Api>>, AssertFalse<IsAny<Catalog>>,
  AssertFalse<IsAny<RouteView['consentFactsDigest']>>, AssertFalse<IsAny<RouteView['consentChange']>>,
  AssertFalse<IsAny<Catalog['candidates'][number]>>,
@@ -203,12 +209,43 @@ async function consumeSetupOperation(api: Api) {
  const href: string | undefined = interactive.nextAction?.href;
  // @ts-expect-error the interactive result type requires opting in on the call
  await api.readSetupOperation<true>(setupOperation);
- // @ts-expect-error operation results exclude raw canonical input
- void read.nextAction?.review;
+ // @ts-expect-error operation results never carry a readable canonical review
+ const visibleReview: { readonly canonicalInput: string } = read.nextAction?.review;
+ void visibleReview;
  void href;
  const cancelled: SetupOperation = await api.cancelSetupOperation(setupOperation);
  return [view, read, cancelled];
 }
+
+type PublicSetupLeaf = SetupConsentSnapshot['disclosures']['action'];
+type OrdinaryAction = DraftRead['configuration']['actions'][number];
+type InteractiveOffer = NonNullable<Awaited<ReturnType<Api['readSetupOperation']>>['nextAction']>;
+declare const safeLeaf: PublicSetupLeaf;
+declare const interactiveOffer: InteractiveOffer;
+declare const ordinaryOffer: OrdinaryAction;
+declare const consentValue: NonNullable<OrdinaryAction['consent']>;
+const reviewValue = { canonicalInput: 'owner-only synthetic input' };
+const leafWithReview = { ...safeLeaf, review: reviewValue };
+const leafWithConsent = { ...safeLeaf, consent: consentValue };
+const interactiveWithReview = { ...interactiveOffer, review: reviewValue };
+// @ts-expect-error a non-fresh variable cannot carry review into a safe leaf
+const rejectedReview: PublicSetupLeaf = leafWithReview;
+// @ts-expect-error a non-fresh variable cannot carry consent into a safe leaf
+const rejectedConsent: PublicSetupLeaf = leafWithConsent;
+// @ts-expect-error offer consent is legitimate; raw review remains forbidden
+const rejectedInteractiveReview: InteractiveOffer = interactiveWithReview;
+const ordinaryConsent: OrdinaryAction['consent'] = ordinaryOffer.consent;
+const admittedOfferConsent: NonNullable<InteractiveOffer['consent']> = interactiveOffer.consent;
+// @ts-expect-error configuration values are structured, not a number
+const wrongValues: DraftValues = 7;
+// @ts-expect-error an individual configuration value is not a symbol
+const wrongValue: DraftValue = Symbol('fixture');
+// @ts-expect-error configuration revisions are text
+const wrongRevision: Revision = 1;
+// @ts-expect-error cleanup states are a closed union
+const wrongCleanup: CleanupState = 'perhaps';
+void [rejectedReview, rejectedConsent, rejectedInteractiveReview, ordinaryConsent,
+ admittedOfferConsent, wrongValues, wrongValue, wrongRevision, wrongCleanup];
 
 // The installed consumer must see the same discriminated scalar observations as the runtime.
 function observePresentation(row: ProviderInventory) {

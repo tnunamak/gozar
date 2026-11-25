@@ -104,7 +104,41 @@ for (const [id, label, idleTimeoutMs] of [['fake-meta-zero', 'Fixture Zero', 0],
     await registry.cleanup();
   }
 }
-console.log(JSON.stringify({ inventory, fixtureInventory, installedIds: installedInventory.providers.map(item => item.providerId), testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
+// Capture serialized inventory through the installed public testing facade. No route is started.
+async function inventoryProbe(id, wrapped) {
+  const fixture = await testing.fakeRegistry({ id, label:'Fixture relay', kinds:['session','durable'], reach:'internet' });
+  try {
+    const folder = join(fixture.root,'providers',id);
+    const declarationFile = join(folder,'definition.json');
+    const declaration = JSON.parse(await readFile(declarationFile, 'utf8'));
+    declaration.adapter.requiredCapabilities = ['runtime.attached'];
+    await writeFile(declarationFile, JSON.stringify(declaration));
+    const moduleFile = join(folder,'index.mjs');
+    const moduleBytes = await readFile(moduleFile, 'utf8');
+    await writeFile(join(folder,'registry-original.mjs'), moduleBytes);
+    const fixtureModule = [
+      "import original from './registry-original.mjs';",
+      'export default {...original,',
+      wrapped ? "operationalDefinition: {displayName:'Wrapped relay', idleTimeoutMs:null, copy:{human:{name:'Fallback name', address:'Fallback address', setup:'Fallback setup'}}}," : 'operationalDefinition:null,',
+      "async detect(ctx) {return {...await original.detect(ctx),rawProbe:'synthetic-probe-not-for-inventory', candidateToken:'synthetic-inventory-bearer', proof:'synthetic-inventory-proof'};},",
+      wrapped ? 'properties: () => original.properties(),' : "properties: () => {const p=original.properties();return {...p,address:{...p.address,stability:'ephemeral'}};},",
+      '};',
+    ].join('\\n');
+    await writeFile(moduleFile, fixtureModule);
+    const home = ${JSON.stringify(stateHome)};
+    const api = testing.createRouteApi({manifest:fixture.manifest,root:fixture.root,readContext:testing.fakeReadContext({home})});
+    const rows = [];
+    for (const capability of [{known:true,value:true},{known:true,value:false},{known:false,reason:'fixture-unobserved'}]) {
+      const result = await api.listProviders({home,owner:'example-app',refresh:true,hostCapabilities:{'runtime.attached':capability}});
+      rows.push(result.providers);
+    }
+    return rows;
+  } finally {
+    await fixture.cleanup();
+  }
+}
+const authorityInventory = await Promise.all([inventoryProbe('fixture-opaque-inventory-a7', false), inventoryProbe('fixture-opaque-inventory-b8', true)]);
+console.log(JSON.stringify({ inventory, fixtureInventory, authorityInventory, installedIds: installedInventory.providers.map(item => item.providerId), testingExports: Object.keys(testing).sort(), fakeIds: fakeCatalog.candidates.map(item => item.providerId), fakeEligible: fakeCatalog.candidates.map(item => item.eligible), rootExports: Object.keys(root).sort(), serviceExports: Object.keys(service).sort(), declared: [...new Set(declared)].sort(),
   types: pkg.types, exportsTypes: pkg.exports['.'].types, engines: pkg.engines.node, providers: manifest.providers.map(item => item.id),
   candidates: catalog.candidates.length, observedAt: typeof catalog.observedAt, tokens: catalog.candidates.filter(item => item.candidateToken).length }));
 `);
@@ -144,6 +178,40 @@ console.log(JSON.stringify({ inventory, fixtureInventory, installedIds: installe
     checkObservation(row.needsAccount, value => typeof value === 'boolean', 'needsAccount');
   }
   assertFixturePresentation(seen.fixtureInventory);
+  const known = value => ({known:true,value}), unknown = reason => ({known:false,reason});
+  for (const [index, id] of ['fixture-opaque-inventory-a7','fixture-opaque-inventory-b8'].entries()) {
+    const wrapped = index === 1;
+    const versions = seen.authorityInventory[index];
+    for (const [variant, providers] of versions.entries()) {
+      assert.deepEqual(providers.map(row => row.providerId), [id], 'lookup uses the exact unfamiliar provider ID');
+      const provider = providers.find(row => row.providerId === id);
+      assert.deepEqual(provider.displayName, known(wrapped ? 'Wrapped relay' : 'Fixture relay'));
+      assert.deepEqual(provider.copy.human, {
+        name:wrapped ? known('Fallback name') : unknown('not-declared'), summary:unknown('not-declared'),
+        address:wrapped ? known('Fallback address') : unknown('not-declared'),
+        setup:wrapped ? known('Fallback setup') : unknown('not-declared'),
+      });
+      assert.deepEqual(provider.addressStability, known(wrapped ? 'stable' : 'ephemeral'));
+      assert.deepEqual(provider.idleTimeoutMs, wrapped ? known(null) : unknown('not-declared'));
+      assert.deepEqual(provider.needsAccount, known(false));
+      const prereq = provider.prerequisites.find(row => row.id === 'runtime.attached');
+      assert.ok(prereq, 'the real capability prerequisite survives serialization');
+      if (variant === 1) {
+        assert.equal(prereq.state, 'denied');
+        assert.deepEqual(prereq.observation, known(false));
+      } else if (variant === 2) {
+        assert.equal(prereq.state, 'unknown');
+        assert.deepEqual(prereq.observation, unknown('fixture-unobserved'));
+      }
+      for (const kind of ['session','durable']) {
+        if (variant === 0) assert.equal(provider.availability[kind].state, 'available', kind);
+        else assert.deepEqual(provider.availability[kind], {
+          state:'unsupported', reason:variant === 1 ? 'host-capability-denied' : 'host-capability-unknown',
+        }, kind);
+      }
+      assert.doesNotMatch(JSON.stringify(provider), /synthetic-probe-not-for-inventory|synthetic-inventory-bearer|synthetic-inventory-proof|"candidateToken"|"rawProbe"/);
+    }
+  }
   assert.equal(seen.candidates, seen.providers.length, 'one candidate per installed registry entry');
   assert.equal(seen.tokens, 0, 'nothing is ready on a host with no provider tooling, so no token is issued');
   const example = join(installed, 'examples/remote-access-screen.mjs');
