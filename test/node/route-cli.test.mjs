@@ -4,9 +4,10 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { PassThrough } from 'node:stream';
 import { createRouteApi } from '../../packages/gozar-node/route-api.mjs';
 import { exitCodeFor, routeMain } from '../../packages/gozar-node/route-cli.mjs';
@@ -18,13 +19,20 @@ before(async () => { world = await journeyRoot(); });
 after(() => rm(world.root, { recursive: true, force: true }));
 
 /** Runs the real binary once. Resolves with exit code, stdout and stderr; never leaves the child behind. */
-function gozar(env, args, { input } = {}) {
+function gozar(env, args, { input, timeoutMs = 0 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--import', network, cli, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
-    child.once('error', reject);
-    child.once('close', code => resolve({ code, stdout, stderr }));
+    let timedOut = false;
+    const timer = timeoutMs > 0 ? setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs) : undefined;
+    child.once('error', error => { clearTimeout(timer); reject(error); });
+    child.once('close', (code, signal) => {
+      clearTimeout(timer);
+      if (timedOut) reject(new Error('gozar fixture timed out'));
+      else if (signal) reject(new Error('gozar fixture terminated by ' + signal));
+      else resolve({ code, stdout, stderr });
+    });
     child.stdin.end(input ?? '');
   });
 }
@@ -254,6 +262,37 @@ test('--provider-id sets query.providerId for catalog, and a query file value is
   await run([]);
   assert.deepEqual(seen, ['example-provider', 'from-file']);
   assert.equal(await routeMain(['setup', 'x', '--provider-id', 'a', '--json'], { api, stdout: { write() {} }, stderr: { write() {} } }), 3, 'a provider selection still needs an explicit current setup approval');
+});
+
+test('real routes binary lists a fresh private home without provider commands or state writes', { timeout: 12000 }, async t => {
+  const w = await durableWorld(world, t);
+  const home = join(world.root, 'empty real routes home');
+  await mkdir(home, { mode: 0o700 });
+  const log = join(world.root, 'routes-child-calls.txt');
+  const observer = join(world.root, 'routes-child-observer.mjs');
+  await writeFile(log, '');
+  await writeFile(observer, `
+    import cp from 'node:child_process';
+    import { appendFileSync } from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    for (const name of ['spawn','spawnSync','exec','execSync','execFile','execFileSync','fork']) {
+      const original = cp[name];
+      cp[name] = function (...args) {
+        appendFileSync(process.env.GOZAR_TEST_CHILD_LOG, name + '\\n');
+        return original.apply(this, args);
+      };
+    }
+    syncBuiltinESMExports();
+  `);
+  const owner = w.query().owner;
+  const opts = [w.env.NODE_OPTIONS, '--import=' + pathToFileURL(observer).href].filter(Boolean).join(' ');
+  const result = await gozar({ ...w.env, NODE_OPTIONS: opts, GOZAR_TEST_CHILD_LOG: log },
+    ['routes', '--home', home, '--owner', owner, '--json'], { timeoutMs: 10000 });
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(envelope(result).routes, []);
+  assert.deepEqual(await readdir(home), []);
+  assert.equal(await readFile(log, 'utf8'), '');
+  assert.deepEqual(w.state.writes, []);
 });
 
 test('routes help advertises syntax accepted by the real route parser', async () => {
