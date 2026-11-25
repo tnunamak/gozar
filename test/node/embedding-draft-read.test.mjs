@@ -1,4 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm,readFile,stat} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
+import {configurationFor} from '../../packages/gozar-node/embedding-state.mjs';
 import {createEmbeddingServices} from '../../packages/gozar-node/embedding-services.mjs';
 import {runEmbeddingSetup,readConfigurationDraft} from '../../packages/gozar-node/embedding-setup.mjs';
 test('draft mutation returns next scoped actions and restarted reader preserves current revision without writing',async()=>{
@@ -17,4 +18,27 @@ test('draft mutation returns next scoped actions and restarted reader preserves 
  await assert.rejects(readConfigurationDraft({...request,providerId:'foreign'},restarted),{code:'configuration_stale'});await assert.rejects(readConfigurationDraft({...request,owner:'foreign'},restarted),{code:'configuration_stale'});await assert.rejects(readConfigurationDraft({...request,draftId:'unknown'},restarted),{code:'configuration_stale'});
  assert.deepEqual((await services.readConfiguration(r)).values,{});
  }finally{await rm(home,{recursive:true,force:true});}
+});
+
+
+test('configuration keeps cloned saved credential observations when actions disappear',()=>{
+ const saved={revision:'fixture-revision',scopeId:'fixture-scope',values:{label:'display-only'},credentials:{
+  locked:{known:false,reason:'locked'},
+  unknown:{known:false,reason:'not-observed'},
+  present:{known:true,value:true},
+  absent:{known:true,value:false},
+ }};
+ const requirements=[{id:'new-secret',secret:true},{id:'label',secret:false}];
+ const before=structuredClone(saved);
+ const projected=configurationFor([],saved,requirements);
+ assert.deepEqual(projected.credentials,{'new-secret':{known:true,value:false},...before.credentials});
+ assert.deepEqual(projected.inputRequirements,requirements);
+ assert.deepEqual(projected.actions,[]);
+ assert.deepEqual(projected.values,before.values);
+ assert.equal(projected.revision,before.revision);
+ assert.equal(projected.scopeId,before.scopeId);
+ for(const id of Object.keys(saved.credentials))assert.notEqual(projected.credentials[id],saved.credentials[id]);
+ projected.credentials.locked.reason='changed fixture';
+ projected.credentials.present.value=false;
+ assert.deepEqual(saved,before);
 });
