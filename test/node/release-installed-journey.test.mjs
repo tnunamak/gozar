@@ -134,6 +134,39 @@ test('offline archive journey verifies installed bytes and strict lifecycle evid
  assert.ok(stub.calls[2].args[0].includes('/node_modules/@tnunamak/gozar/examples/'));
  assert.deepEqual(result.lifecycle,evidence);
 });
+
+test('installed journey installs the verified private archive copy',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const bytes=await readFile(f.input.tarball);
+ const result=await runInstalledJourney(f.input,{run:async(command,args,options)=>{
+  if(command==='npm'){
+   const archive=args.at(-1);
+   assert.equal(archive,join(options.cwd,'artifact.tgz'));
+   assert.notEqual(archive,f.input.tarball);
+   assert.deepEqual(await readFile(archive),bytes);
+  }
+  return stub.run(command,args,options);
+ }});
+ t.after(()=>rm(result.scratch,{recursive:true,force:true}));
+ assert.equal(result.status,'passed');
+});
+
+test('installed journey receipt records byte lengths and hashes for installed members',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ f.files['examples/remote-access-screen.mjs']='// café';
+ const bytes=tar(f.files);
+ await writeFile(f.input.tarball,bytes);
+ const sha256=createHash('sha256').update(bytes).digest('hex');
+ const result=await runInstalledJourney({...f.input,sha256},{run:stub.run});
+ t.after(()=>rm(result.scratch,{recursive:true,force:true}));
+ const receipt=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ const expected=Object.entries(f.files).map(([path,body])=>({
+  path,bytes:Buffer.byteLength(body),sha256:createHash('sha256').update(body).digest('hex')
+ }));
+ const byPath=(a,b)=>a.path.localeCompare(b.path);
+ assert.deepEqual([...receipt.members].sort(byPath),expected.sort(byPath));
+});
+
 for(const fault of [1,2,3])test('preserves exact subprocess failure '+fault,async t=>{
  const f=await fixture(t),stub=processStub(f,{fault});
  await assert.rejects(runInstalledJourney(f.input,{run:stub.run}),error=>{
@@ -504,4 +537,23 @@ test('public-types argv distinguishes missing values, duplicate options and rela
  assert.throws(()=>parsePublicTypesArgs(['--tsc',tsc]),{message:'Required: --installed-root ABS_INSTALL_PREFIX --tsc ABS_COMPILER'});
  assert.throws(()=>parsePublicTypesArgs(['--installed-root',installedRoot,'--tsc',tsc,'--tsc',tsc]),{message:'Unknown or duplicate argument: --tsc'});
  assert.throws(()=>parsePublicTypesArgs(['--installed-root',installedRoot,'--tsc','synthetic-compiler']),{message:'Both paths must be absolute'});
+});
+
+for(const [label,screen] of [
+ ['wrong heading','Unexpected screen\nHost inputs: {}\nChoice: Fixture\n'],
+ ['missing choice','Remote access\nHost inputs: {}\n'],
+])test('installed screen '+label+' fails before lifecycle starts',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const run=async(command,args,options)=>{
+  if(stub.calls.length===0)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  const result=await stub.run(command,args,options);
+  return args.includes('--fakes')?{...result,stdout:screen}:result;
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),{message:'Unknown screen outcome'});
+ assert.equal(stub.calls.length,2);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ assert.equal(report.status,'failed');
+ assert.deepEqual(report.steps.map(step=>step.name),['install','screen']);
+ assert.equal(report.failure.message,'Unknown screen outcome');
+ assert.equal(await readFile(join(f.input.outputDirectory,'screen.stdout'),'utf8'),screen);
 });
