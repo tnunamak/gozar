@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,mkdir,rm,readFile} from 'node:fs/promises';
+import {mkdtemp,writeFile,mkdir,rm,readFile,symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,dirname,sep} from 'node:path';
 import {gzipSync} from 'node:zlib';
@@ -74,6 +74,23 @@ test('digest refusal starts zero subprocesses',async t=>{
  const f=await fixture(t),stub=processStub(f);
  await assert.rejects(runInstalledJourney({...f.input,sha256:'0'.repeat(64)},{run:stub.run}),/digest/i);
  assert.equal(stub.calls.length,0);
+});
+
+test('a missing archive retains ENOENT and creates no output or subprocess',async t=>{
+ const f=await fixture(t);const {run,calls}=processStub(f);
+ await rm(f.input.tarball);
+ await assert.rejects(runInstalledJourney(f.input,{run}),{code:'ENOENT'});
+ assert.equal(calls.length,0);
+ await assert.rejects(readFile(f.input.outputDirectory),{code:'ENOENT'});
+});
+
+test('an archive symlink is not treated as the verified regular file',async t=>{
+ const f=await fixture(t);const {run,calls}=processStub(f);
+ const linked=join(f.root,'linked.tgz');
+ await symlink(f.input.tarball,linked,'file');
+ await assert.rejects(runInstalledJourney({...f.input,tarball:linked},{run}),/Archive must be a regular file/);
+ assert.equal(calls.length,0);
+ await assert.rejects(readFile(f.input.outputDirectory),{code:'ENOENT'});
 });
 
 test('invalid source revision is rejected before creating output',async t=>{
