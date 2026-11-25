@@ -76,6 +76,19 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
    assert.equal(writes,afterSuspend,'terminal removal and replay require no provider write after suspend');
    assert.deepEqual(config,foreign);
    assert.deepEqual(await readFile(terminalPath),terminalBytes);
+   const fresh=await createTestingGozar({effects});
+   try{
+    const freshReplay=await fresh.gozar.ensureRoute(request);
+    assert.equal(freshReplay.state,'released');
+    assert.equal(freshReplay.published,null);
+    assert.equal(freshReplay.operationId,q.operationId);
+    assert.deepEqual(freshReplay.handle,route.handle);
+    assert.deepEqual(freshReplay.cleanup,removed.cleanup);
+    await assert.rejects(fresh.gozar.ensureRoute({...request,target:'127.0.0.1:1'}),{code:'operation_conflict'});
+    assert.equal(writes,afterSuspend,'a fresh facade must not change provider state');
+    assert.deepEqual(config,foreign);
+    assert.deepEqual(await readFile(terminalPath),terminalBytes);
+   }finally{await fresh.close();}
    lifecycleProviders.add(provider.providerId);
    continue;
   }

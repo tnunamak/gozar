@@ -108,6 +108,69 @@ test('a reused PID is not signalled', async t => {
   assert.ok(await processIdentity(bystander.pid), 'the bystander must still be running');
 });
 
+test('identity replacement between grace expiry and escalation is never signalled', async () => {
+  const pid = 74123;
+  const states = ['original', 'original', 'replacement'];
+  const signals = [];
+  const outcome = await stopController({ pid, startIdentity: 'original' }, {
+    identity: async () => {
+      assert.ok(states.length, 'unexpected identity observation after replacement');
+      return states.shift();
+    },
+    kill: (...args) => signals.push(args),
+    graceMs: 0,
+    killWaitMs: 0,
+  });
+  assert.deepEqual(outcome, { state: 'stopped', pid });
+  assert.deepEqual(states, []);
+  assert.deepEqual(signals, [[-pid, 'SIGTERM']]);
+});
+
+test('an identity that becomes unreadable is not treated as gone or escalated', async () => {
+  const pid = 74124;
+  const error = new Error('fixture identity unavailable');
+  const signals = [];
+  let observed = false;
+  const outcome = await stopController({ pid, startIdentity: 'original' }, {
+    identity: async () => {
+      if (observed) throw error;
+      observed = true;
+      return 'original';
+    },
+    kill: (...args) => signals.push(args),
+    graceMs: 0,
+  });
+  assert.deepEqual(outcome, { state: 'unconfirmed', pid, error });
+  assert.deepEqual(signals, [[-pid, 'SIGTERM']]);
+});
+
+test('absence with a recorded identity is gone; absence of a record is unconfirmed', async () => {
+  const pid = 74125;
+  const options = {
+    identity: async () => null,
+    kill: () => assert.fail('no signal may be sent'),
+  };
+  assert.deepEqual(await stopController({ pid, startIdentity: 'original' }, options),
+    { state: 'gone', pid });
+  const unknown = await stopController({ pid, startIdentity: null }, options);
+  assert.equal(unknown.state, 'unconfirmed');
+  assert.equal(unknown.pid, pid);
+  assert.match(unknown.error.message, /no identity was recorded/);
+});
+
+test('acknowledged signals without observed cessation leave stop unconfirmed', async () => {
+  const pid = 74126;
+  const signals = [];
+  const outcome = await stopController({ pid, startIdentity: 'original' }, {
+    identity: async () => 'original',
+    kill: (...args) => { signals.push(args); return true; },
+    graceMs: 0,
+    killWaitMs: 0,
+  });
+  assert.deepEqual(outcome, { state: 'unconfirmed', pid });
+  assert.deepEqual(signals, [[-pid, 'SIGTERM'], [-pid, 'SIGKILL']]);
+});
+
 test('red: a group signal refused with EPERM (macOS, group already exiting) still stops the controller and reports it stopped', async t => {
   const child = detachedChild(t);
   await new Promise(resolve => child.once('spawn', resolve));
