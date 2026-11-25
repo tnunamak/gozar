@@ -111,3 +111,48 @@ test('each uncached inventory read projects the current host prerequisite observ
   assert.equal(row.prerequisites.find(item=>item.id==='local-setup')?.state,state);
  }
 });
+
+test('admitted wrapper gates each supported kind without changing inventory presentation', async t=>{
+ const home=await mkdtemp(join(tmpdir(),'recipe-host-observation-'));
+ t.after(()=>rm(home,{recursive:true,force:true}));
+ const id='host-observation', kinds=['attached','session','durable'];
+ const fixture=await fakeRegistry({id,kinds,reach:'lan',dir:home});
+ const definition=join(fixture.root,fixture.manifest.providers[0].definition);
+ const outer=JSON.parse(await readFile(definition,'utf8'));
+ const wrappedPath=join(dirname(definition),'wrapped.definition.json');
+ const wrapped=JSON.parse(await readFile(wrappedPath,'utf8'));
+ const capability='process-supervisor';
+ outer.adapter.requiredCapabilities=[capability];
+ wrapped.definition.displayName='Wrapped fixture';
+ wrapped.definition.copy={human:{name:'Wrapped name',address:'Wrapped address',summary:'Stable summary',setup:'Stable setup'}};
+ await writeFile(definition,JSON.stringify(outer));
+ await writeFile(wrappedPath,JSON.stringify(wrapped));
+ const adapter=recipeAdapter({definition,externalOwned:true});
+ const deps={adapters:[adapter],platform:'linux',
+  embeddingServices:createEmbeddingServices({registryId:'recipe-host-observation'}),readContext:{configuration:async()=>null}};
+ const presentation=({displayName,copy,addressStability,idleTimeoutMs,needsAccount})=>({displayName,copy,addressStability,idleTimeoutMs,needsAccount});
+ const observed=async hostCapabilities=>(await listProviders({home,hostCapabilities},deps)).providers[0];
+ const cases=[
+  [{[capability]:{known:true,value:true}},'available',null],
+  [{[capability]:{known:true,value:false}},'unsupported','host-capability-denied'],
+  [{[capability]:{known:true,value:'not-a-boolean'}},'unsupported','host-capability-unsupported'],
+  [{},'unsupported','host-capability-unknown'],
+ ];
+ const known=value=>({known:true,value});
+ const expected={displayName:known('Wrapped fixture'),copy:{human:{
+  name:known('Wrapped name'),address:known('Wrapped address'),summary:known('Stable summary'),setup:known('Stable setup'),
+ }},addressStability:known('stable'),idleTimeoutMs:known(null),needsAccount:known(false)};
+ for(const [hostCapabilities,state,reason] of cases){
+  const row=await observed(hostCapabilities);
+  for(const kind of kinds){
+   assert.equal(row.availability[kind].state,state,kind);
+   if(reason!==null)assert.equal(row.availability[kind].reason,reason,kind);
+  }
+  assert.deepEqual(presentation(row),expected);
+  assert.deepEqual(Object.keys(row.copy.human).sort(),['address','name','setup','summary']);
+ }
+ for(const extra of [{copy:{human:{name:'Not admitted'}}},{idleTimeoutMs:0},{undeclaredFixtureMarker:'inert'}]){
+  await writeFile(definition,JSON.stringify({...outer,adapter:{...outer.adapter,...extra}}));
+  assert.throws(()=>recipeAdapter({definition,externalOwned:true}),/invalid definition/i);
+ }
+});

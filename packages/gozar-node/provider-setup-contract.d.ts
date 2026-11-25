@@ -47,11 +47,12 @@ export type RunSetupOperationRequest = Omit<RunSetupActionRequest, keyof SetupOp
   };
 
 /** Ordinary documentation hrefs remain usable. Browser handoff URLs are opt-in. */
-export type SafeSetupAction = Omit<Action, 'consent' | 'review' | 'step' | 'href'> & (
+type SafeSetupActionFields = Omit<Action, 'consent' | 'review' | 'step' | 'href'> & { review?: never } & (
   | { step?: Omit<SetupStep, 'browser'> & { browser?: never }; href?: string }
   | { step: SetupStep & { browser: NonNullable<SetupStep['browser']> }; href?: never }
 );
-type SetupOffer = SafeSetupAction & { step: SetupStep; consent: NonNullable<Action['consent']> };
+export type SafeSetupAction = SafeSetupActionFields & { consent?: never };
+type SetupOffer = SafeSetupActionFields & { step: SetupStep; consent: NonNullable<Action['consent']> };
 
 export type SetupOperation = {
   schemaVersion: 1;
@@ -68,5 +69,5 @@ export type SetupOperation = {
 };
 
 export type InteractiveSetupOperation = Omit<SetupOperation, 'nextAction'> & {
-  nextAction: (Omit<Action, 'review'> & { step: SetupStep; consent: NonNullable<Action['consent']> }) | null;
+  nextAction: (Omit<Action, 'review'> & { step: SetupStep; consent: NonNullable<Action['consent']>; review?: never }) | null;
 };
