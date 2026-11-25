@@ -522,6 +522,36 @@ test('fake process output beyond the shared cap counts but does not retain the e
  assert.equal(result.observedBytes,cap+2);assert.equal(result.stderr,'A');
  assert.equal(result.signal,'SIGTERM');assert.deepEqual(signals,['SIGTERM']);
 });
+test('decoded diagnostics share the byte cap when invalid UTF-8 expands',async()=>{
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ const signals=[];child.kill=signal=>signals.push(signal);
+ const pending=runProcess('fixture',[],{timeoutMs:2000},{spawnProcess:()=>child});
+ const cap=16*1024*1024, invalidBytes=Math.floor(cap/3);
+ child.stdout.emit('data',Buffer.alloc(invalidBytes,255));
+ child.stderr.emit('data',Buffer.from([65,255,66]));
+ child.emit('close',0,null);
+ const result=await pending;
+ assert.equal(result.status,0);assert.equal(result.overflow,false);assert.equal(result.timedOut,false);
+ assert.equal(result.outputBytes,invalidBytes+3);assert.equal(result.observedBytes,invalidBytes+3);
+ assert.equal(result.stderr,'A');
+ assert.equal(Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr),cap);
+ assert.deepEqual(signals,[]);
+});
+test('decoded diagnostics drop a cap-split character that cannot fit',async()=>{
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+ const signals=[];child.kill=signal=>signals.push(signal);
+ const pending=runProcess('fixture',[],{timeoutMs:2000},{spawnProcess:()=>child});
+ const cap=16*1024*1024;
+ child.stdout.emit('data',Buffer.alloc(cap-2,120));
+ child.stderr.emit('data',Buffer.from([0xe2]));
+ child.stderr.emit('data',Buffer.from([0x82,0xac]));
+ child.emit('close',null,'SIGTERM');
+ const result=await pending;
+ assert.equal(result.overflow,true);assert.equal(result.outputBytes,cap);assert.equal(result.observedBytes,cap+1);
+ assert.equal(Buffer.byteLength(result.stdout),cap-2);assert.equal(result.stderr,'');
+ assert.equal(result.signal,'SIGTERM');assert.deepEqual(signals,['SIGTERM']);
+});
+
 test('missing close is bounded and explicitly retains uncertain cleanup',async()=>{
  const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.kill=()=>true;
  const result=await bounded(runProcess('fixture',[],{timeoutMs:10},{spawnProcess:()=>child}),3000);
