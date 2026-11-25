@@ -58,6 +58,52 @@ test('opaque imports widen source changes and missing smoke fails closed',()=>{
   files:files.slice(1),readSource:()=>''}),/missing required smoke/);
 });
 
+test('uncertain source fallback adds canonical suites, not unconnected manual suites', () => {
+  const smoke = 'test/node/error-normalizer.test.mjs';
+  const adapter = 'test/adapters/a.test.mjs';
+  const manual = 'test/acceptance/related.test.mjs';
+  const unrelated = 'test/e2e/unconnected.test.mjs';
+  const source = 'packages/fixture/index.mjs';
+  const files = [smoke, adapter, manual, unrelated, source];
+  const plan = (changedPaths, manualSource = '') => planChecks({
+    changedPaths,
+    files,
+    readSource: file => file === source ? 'import(variable)' : file === manual ? manualSource : '',
+  }).nodeTests;
+  assert.deepEqual(plan([source]), [adapter, smoke]);
+  assert.deepEqual(plan([source], 'import "../../packages/fixture/index.mjs"'), [manual, adapter, smoke]);
+  assert.deepEqual(plan([source, manual]), [manual, adapter, smoke]);
+});
+
+test('a manual suite with a literal core dependency remains selected', () => {
+  const smoke = 'test/node/error-normalizer.test.mjs';
+  const manual = 'test/acceptance/uses-core.test.mjs';
+  const unrelated = 'test/e2e/unconnected.test.mjs';
+  const core = 'crates/gozar-core/src/lib.rs';
+  const generated = 'packages/gozar-core/generated/gozar_core.js';
+  const result = planChecks({
+    changedPaths: [core],
+    files: [smoke, manual, unrelated, core, generated],
+    readSource: file => file === manual ? 'import "../../packages/gozar-core/generated/gozar_core.js"' : '',
+  });
+  assert.deepEqual(result.nodeTests, [manual, smoke]);
+  assert.deepEqual(result.rustPackages, ['gozar-core']);
+});
+
+test('workspace fallback still includes manual consumers of the generated core',()=>{
+ const smoke='test/node/error-normalizer.test.mjs';
+ const manual='test/acceptance/uses-core.test.mjs';
+ const unrelated='test/e2e/unconnected.test.mjs';
+ const generated='packages/gozar-core/generated/gozar_core.js';
+ const plan=planChecks({changedPaths:['Cargo.toml'],
+  files:[smoke,manual,unrelated,generated,'Cargo.toml'],
+  readSource:file=>file===manual?'import "../../packages/gozar-core/generated/gozar_core.js"':'',
+ });
+ assert.deepEqual(plan.nodeTests,[manual,smoke]);
+ assert.deepEqual(plan.rustPackages,['gozar-core']);
+ assert.equal(plan.buildWasm,true);
+});
+
 test('a Rust-core file selects its crate and invalidates generated WASM',()=>{
  const files=['test/node/error-normalizer.test.mjs','test/node/core.test.mjs'];
  const plan=planChecks({changedPaths:['crates/gozar-core/src/lib.rs'],files,readSource:()=>''});

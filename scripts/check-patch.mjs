@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 const smoke = 'test/node/error-normalizer.test.mjs';
 const moduleFile = /\.(?:[cm]?js|[cm]?ts|json)$/u;
 const nodeTest = /(?:^|\/)test\/.*\.test\.[cm]?js$/u;
+const canonicalTestFamily = /^test\/(?:node|adapters)\//u;
 const docs = /(?:^|\/)(?:README|CHANGELOG|INSTALL)(?:\.[^/]+)?$|^docs\//iu;
 const core = /^crates\/gozar-core\/|^packages\/gozar-core\/generated\//u;
 const buildInput = /^(?:Cargo\.(?:toml|lock)|rust-toolchain(?:\.toml)?|\.cargo\/.*|scripts\/build-wasm\.sh)$/u;
@@ -50,7 +51,7 @@ export function planChecks({ changedPaths, files, readSource, full = false }) {
   // Full integration preserves the registered gate's recursive Node families.
   // Patch mode can also select a changed acceptance or e2e test explicitly.
   const allTests = [...present].filter(file => nodeTest.test(file) &&
-    (!full || /^test\/(?:node|adapters)\//u.test(file))).sort();
+    (!full || canonicalTestFamily.test(file))).sort();
   const known = new Set([...present, ...changed]);
   const reverse = new Map();
   const forward = new Map();
@@ -141,7 +142,9 @@ export function planChecks({ changedPaths, files, readSource, full = false }) {
       selected.add(file);
     }
   }
-  if (fallback) for (const file of allTests) selected.add(file);
+  if (fallback) {
+    for (const file of allTests) if (canonicalTestFamily.test(file)) selected.add(file);
+  }
 
   function mayUseCore(root) {
     const stack = [root];
@@ -156,7 +159,7 @@ export function planChecks({ changedPaths, files, readSource, full = false }) {
     }
     return false;
   }
-  if (coreChanged && !fallback) {
+  if (coreChanged) {
     for (const file of allTests) {
       if (mayUseCore(file) || /(?:^|[/.\-])(?:core|wasm)(?:[.\-]|$)/u.test(file))
         selected.add(file);
