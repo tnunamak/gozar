@@ -6,6 +6,25 @@ import { createGate } from '../../packages/gozar-node/gate.mjs';
 import { prepareHost } from '../../packages/gozar-node/host.mjs';
 import { fixture } from './helpers.mjs';
 
+test('occupied loopback port yields a stable local gate refusal without replacing the listener', async t => {
+  const listener = http.createServer((_req, response) => response.end('owned'));
+  await new Promise((resolve, reject) => { listener.once('error', reject); listener.listen(0, '127.0.0.1', resolve); });
+  t.after(() => { listener.closeAllConnections(); listener.close(); });
+  const port = listener.address().port;
+  await assert.rejects(createGate(port, { listenPort: port }), error => {
+    assert.equal(error.code, 'provider_unavailable');
+    assert.equal(error.message, 'Local connector port is already in use');
+    assert.deepEqual(error.cause, { code: 'gate_port_in_use' });
+    return true;
+  });
+  assert.equal(await (await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(3000) })).text(), 'owned');
+  listener.closeAllConnections();
+  await new Promise((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+  const gate = await createGate(port, { listenPort: port });
+  t.after(() => gate.close());
+  assert.equal(gate.port, port);
+});
+
 test('instance gate forwards to exact app and proves nonce plus timed incremental SSE', async t => {
   const target = http.createServer((request, response) => response.end(`app:${request.url}`));
   await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
