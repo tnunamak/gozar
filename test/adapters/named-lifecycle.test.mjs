@@ -129,3 +129,116 @@ for (const {protocols, buffered} of [
     assert.equal(await stillRunning.text(), 'fixture app');
   });
 }
+
+test('aborting an in-flight named proof stops its observation but not the owned gate', {timeout: 15000}, async t => {
+  const app = createServer((_request, response) => response.end('fixture app'));
+  await new Promise((resolve, reject) => {
+    app.once('error', reject);
+    app.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(() => new Promise(resolve => {
+    app.closeAllConnections();
+    app.close(resolve);
+  }));
+
+  const origin = 'https://named.example.invalid';
+  const adapter = createNamedAdapter({
+    detectBinary: async () => true,
+    startConnector: async () => { throw new Error('proof must not start a connector'); },
+  });
+  const request = {
+    target: '127.0.0.1:' + app.address().port,
+    usage: {kind:'attached'},
+    requirements: {protocols:['streamable-http']},
+  };
+  let proof;
+  for (let tries = 0; tries < 4; tries += 1) {
+    const reservation = createServer();
+    await new Promise((resolve, reject) => {
+      reservation.once('error', reject);
+      reservation.listen(0, '127.0.0.1', resolve);
+    });
+    const port = reservation.address().port;
+    await new Promise((resolve, reject) =>
+      reservation.close(error => error ? reject(error) : resolve()));
+    try {
+      proof = await adapter.prepareProof({
+        platform:'linux', now:Date.now,
+        configuration:async () => ({token:'fixture-only', origin, 'gate-port':String(port)}),
+      }, request);
+      break;
+    } catch (error) {
+      const occupied = error?.code === 'EADDRINUSE' ||
+        (error?.code === 'provider_unavailable' && error?.cause?.code === 'gate_port_in_use');
+      if (!occupied || tries === 3) throw error;
+    }
+  }
+  assert.ok(proof);
+  const gatePort = Number(proof.target.split(':').at(-1));
+  let closing;
+  const closeGate = () => (closing ??= Promise.resolve().then(() => proof.close()));
+  t.after(closeGate);
+  await dialFixtureGate(gatePort);
+
+  const realFetch = globalThis.fetch;
+  const stop = new AbortController();
+  const reason = new Error('synthetic in-flight proof abort');
+  let entered, release;
+  const observation = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  let requests = 0;
+  globalThis.fetch = async (input, init) => {
+    requests += 1;
+    const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+    assert.equal(url.origin, origin);
+    assert.match(url.pathname, /\/identity$/);
+    const signal = init?.signal;
+    entered(signal);
+    return new Promise((resolve, reject) => {
+      const failed = () => reject(signal.reason);
+      if (signal?.aborted) { failed(); return; }
+      signal?.addEventListener('abort', failed, {once:true});
+      void held.then(() => {
+        signal?.removeEventListener('abort', failed);
+        resolve(new Response(null, {status:503}));
+      });
+    });
+  };
+
+  async function bounded(promise, label) {
+    let timer;
+    try {
+      return await Promise.race([
+        promise, new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(label)), 1500);
+        }),
+      ]);
+    } finally { clearTimeout(timer); }
+  }
+  const attempt = {id:'named-inflight-abort', signal:stop.signal, deadlineMs:Date.now()+10000};
+  const verification = proof.verify({origin, attempt});
+  void verification.catch(() => {});
+  try {
+    const forwarded = await bounded(observation, 'proof did not reach its network observation');
+    assert.ok(forwarded && !forwarded.aborted);
+    stop.abort(reason);
+    const result = await bounded(verification, 'proof did not settle on attempt abort');
+    assert.equal(forwarded.reason, reason);
+    assert.equal(requests, 1);
+    assert.equal(result.attemptId, attempt.id);
+    assert.equal(result.endpoint, origin);
+    assert.equal(result.vantage, 'this-device');
+    assert.equal(result.status, 'unverified');
+    assert.deepEqual(result.checks, []);
+    await dialFixtureGate(gatePort);
+    await closeGate();
+    await assert.rejects(dialFixtureGate(gatePort), {code:'ECONNREFUSED'});
+    const stillRunning = await realFetch('http://127.0.0.1:'+app.address().port, {signal:AbortSignal.timeout(2000)});
+    assert.equal(await stillRunning.text(), 'fixture app');
+  } finally {
+    stop.abort(reason);
+    release();
+    try { await bounded(verification.catch(() => {}), 'proof did not clean up'); }
+    finally { globalThis.fetch = realFetch; }
+  }
+});
