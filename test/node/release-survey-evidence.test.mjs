@@ -54,7 +54,8 @@ test('queued or wrong-revision receipts do not satisfy completed reviews',()=>{
  assert.deepEqual(assembleEvidence(input).reviewPrerequisites.missing,REQUIRED_REVIEWS);
  input.receipts=REQUIRED_REVIEWS.map(id=>({id,status:'completed',surveyRevision:'f'.repeat(40)}));
  assert.deepEqual(assembleEvidence(input).reviewPrerequisites.missing,REQUIRED_REVIEWS);
- input.receipts=REQUIRED_REVIEWS.map(id=>({id,status:'completed',surveyRevision:SURVEY_REVISION}));
+ const candidateInventorySha256=assembleEvidence(input).candidate.inventorySha256;
+ input.receipts=REQUIRED_REVIEWS.map(id=>({id,status:'completed',surveyRevision:SURVEY_REVISION,candidateRevision:input.candidate.revision,candidateInventorySha256}));
  input.clarity={incorporated:true,revision:'d'.repeat(40)};
  const result=assembleEvidence(input);
  assert.deepEqual(result.reviewPrerequisites.missing,[]);
@@ -62,6 +63,25 @@ test('queued or wrong-revision receipts do not satisfy completed reviews',()=>{
  assert.equal(result.hostAcceptance,'not-established');
  assert.equal(result.consumerAcceptance,'not-established');
 });
+test('parity receipts must qualify the exact candidate revision and raw inventory',()=>{
+ const baseline=fixture();
+ const candidate=assembleEvidence(baseline).candidate;
+ const expected=createHash('sha256').update(JSON.stringify(candidate.files)).digest('hex');
+ assert.equal(candidate.inventorySha256,expected);
+ assert.match(candidate.inventoryDigestBasis,/sorted by path/);
+ const id=REQUIRED_REVIEWS.find(id=>id.includes('data-parity'));
+ const receipt={id,status:'completed',surveyRevision:SURVEY_REVISION,candidateRevision:baseline.candidate.revision,candidateInventorySha256:expected};
+ const parity=input=>assembleEvidence({...input,receipts:[receipt]}).reviewPrerequisites.completed;
+ assert.deepEqual(parity(baseline),[id]);
+ const stale=fixture();stale.candidate.revision='d'.repeat(40);
+ assert.deepEqual(parity(stale),[]);
+ const changed=fixture();changed.candidate.files['adapters/providers/custom/index.mjs']+='\n';
+ assert.deepEqual(parity(changed),[]);
+ const reordered=fixture();reordered.candidate.files=Object.fromEntries(Object.entries(reordered.candidate.files).reverse());
+ assert.deepEqual(parity(reordered),[id]);
+ assert.equal(assembleEvidence(reordered).candidate.inventorySha256,expected);
+});
+
 test('missing bounded denominator language remains an explicit documentation gap',()=>{
  const input=fixture();input.candidate.files['docs/release-0.4-interface-coverage.md']='329 unknown; 306 historical; six';
  const result=assembleEvidence(input);
