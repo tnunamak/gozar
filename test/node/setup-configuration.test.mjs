@@ -399,3 +399,24 @@ test('an unknown listener diagnostic gives stable review instructions', async ()
   assert.equal(error.nextAction.label, 'Review connection and setup');
   assert.doesNotMatch(error.message, /fictional provider detail/);
 });
+
+test('Tailscale check still reports working LocalAPI when the macOS app discovery fails', async () => {
+  const { checkTailscaleApp } = await import('../../adapters/providers/_shared/check-tailscale-app.mjs');
+  const calls = [];
+  const discovered = new Error('synthetic app discovery unavailable');
+  const result = await checkTailscaleApp({
+    platform: 'darwin',
+    env: { PATH: '' },
+    resolve: () => null,
+    discover: async () => { calls.push('discover'); throw discovered; },
+    node: async () => { calls.push('status'); },
+    serveConfig: async () => { calls.push('serve-config'); },
+  });
+  assert.deepEqual(calls, ['discover', 'status', 'serve-config']);
+  assert.equal(result.ok, true);
+  assert.ok(result.lines.includes('Tailscale app LocalAPI: discovery failed; checking LocalAPI directly'));
+  assert.ok(result.lines.includes('LocalAPI status: ok'));
+  assert.ok(result.lines.includes('LocalAPI serve-config: ok'));
+  assert.equal(result.lines.at(-1), 'result: reachable');
+  assert.doesNotMatch(result.lines.join('\n'), /synthetic app discovery unavailable/);
+});
