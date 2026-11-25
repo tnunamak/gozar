@@ -76,6 +76,20 @@ function privateBodiesStayPrivate(f) {
   }
 }
 
+const refusalCode={denied:'host_policy_denied',undeclared:'unsupported'};
+
+function assertInstallerRefusal(state,error) {
+  assert.equal(error?.code,refusalCode[state],`correct refusal for ${state}`);
+  return true;
+}
+
+test('installer refusal oracle does not accept another nonempty error code',()=>{
+  for(const state of Object.keys(refusalCode)) {
+    assert.throws(()=>assertInstallerRefusal(state,{code:'fixture_unrelated_error'}),{code:'ERR_ASSERTION'});
+    assert.equal(assertInstallerRefusal(state,{code:refusalCode[state]}),true);
+  }
+});
+
 for(const capability of ['installer.execute','privilege.elevate']) for(const state of ['denied','undeclared'])
 test('public installer rejects '+state+' '+capability+' without fetching or executing',{timeout:10000},async()=>{
   let f;
@@ -83,7 +97,7 @@ test('public installer rejects '+state+' '+capability+' without fetching or exec
     f=await fixture();
     if(state==='denied')f.capabilities[capability]={known:true,value:false};
     else delete f.capabilities[capability];
-    await assert.rejects(f.invoke(),error=>typeof error.code==='string'&&error.code.length>0);
+    await assert.rejects(f.invoke(),error=>assertInstallerRefusal(state,error));
     assert.equal(f.calls.fetch.length,0);assert.equal(f.calls.execute.length,0);
     privateBodiesStayPrivate(f);
   } finally {await f?.close();}
