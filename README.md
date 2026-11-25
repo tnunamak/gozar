@@ -280,7 +280,7 @@ recovers partial and uncertain allocations after a host crash. Its snapshots are
 historical; use `routeStatus` for current subject-bound proof. Advertise only
 `published`. Runtime consent drift withdraws publication; review and approve the
 new snapshot for safe proof on the same generation, or stop when refresh is
-unsupported. `closeRoute` retains uncertainty until exact owned cleanup succeeds. Configure the factory's `acknowledgeOrigin` callback if your host needs to accept the exact allocated origin before proof. `watchRoutes` observes retained state; seeing an allocated origin there is not acknowledgment or publication. Use `routeStatus` to request fresh proof. See [host acknowledgment](docs/embedding-contract.md#exact-origin-host-acknowledgment-052).
+unsupported. `closeRoute` retains uncertainty until exact owned cleanup succeeds. Configure the factory's `acknowledgeOrigin` callback if your host needs to accept the exact allocated origin before proof. With that callback, `watchRoutes` observes retained state; seeing an allocated origin there is not acknowledgment or publication. Use `routeStatus` to request fresh proof. See [host acknowledgment](docs/embedding-contract.md#exact-origin-host-acknowledgment-052).
 
 Shipped execution in 0.5 is HTTP(S) only. Raw TCP/TLS profiles remain detect-only
 so the full embedding contract can ship together. Trusted extensions can declare
