@@ -342,6 +342,32 @@ test('diagnostic retention evicts the oldest rows at the event count cap', () =>
   assert.equal(rows.at(-1).sequence, 130);
 });
 
+test('diagnostic rows keep the newest bytes of an oversized chunk', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  const tail = 'x'.repeat(8192 - 'end-marker'.length) + 'end-marker';
+
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('old-prefix-' + tail));
+
+  const [row] = driver.readProcessOutput();
+  assert.equal(row.stream, 'stderr');
+  assert.equal(row.output, tail);
+  assert.equal(driver.outputBytes, 8192);
+});
+
+test('a diagnostic cursor older than retained history starts at the first retained row', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  for (let index = 0; index < 6; index++) {
+    driver.processOutput(effect, resource, 'stdout', Buffer.alloc(8192, 65 + index));
+  }
+
+  assert.deepEqual(driver.readProcessOutput(1).map(row => row.sequence), [3, 4, 5, 6]);
+  assert.deepEqual(driver.readProcessOutput(6), []);
+});
+
 test('diagnostic retention counts multibyte characters by UTF-8 bytes', () => {
   const driver = makeOutputOnlyDriver();
   const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
