@@ -61,7 +61,13 @@ test('public attached recovery preserves proof history but withdraws current aut
 const fileForRoute = id => createHash('sha256').update(id).digest('hex') + '.json';
 const durableRecord = (routeId, owner = 'fixture-owner') => ({
   schemaVersion: 1, routeId, owner, ownership: 'gozar-owned', generation: 3,
-  state: 'unknown',
+  state: 'usable', origin: 'https://fixture.example.invalid', target: '127.0.0.1:32101',
+  verification: {
+    status: 'verified', checkedAt: '2026-01-01T00:00:00.000Z',
+    observedAt: '2026-01-01T00:00:00.000Z', validUntil: '2099-01-01T00:00:00.000Z',
+    subject: { instanceId: 'fixture-host', bootId: 'fixture-boot', handleGeneration: 3,
+      origin: 'https://fixture.example.invalid', target: '127.0.0.1:32101' },
+  },
 });
 
 async function withDurableFixture(run) {
@@ -88,6 +94,10 @@ test('durable list retains the requested owner handle without claiming current p
     assert.equal(routes.length, 1);
     assert.deepEqual(routes[0].handle, { kind: 'durable', id: 'fixture-route', generation: 3 });
     assert.equal(routes[0].published, null);
+    assert.equal(routes[0].state, 'uncertain');
+    assert.equal(routes[0].verification.status, 'unverified');
+    assert.deepEqual(routes[0].verification.checks, []);
+    assert.deepEqual(routes[0].verification.subject, durableRecord('fixture-route').verification.subject);
     for (const { file, bytes } of [own, other]) assert.deepEqual(await readFile(file), bytes);
   });
 });
@@ -105,11 +115,17 @@ test('durable list refuses invalid recorded evidence without rewriting it', asyn
     ['fractional generation', { generation: 1.5 }, name],
     ['unsafe generation', { generation: Number.MAX_SAFE_INTEGER + 1 }, name],
     ['filename identity', {}, fileForRoute('another-id')],
+    ...['schemaVersion', 'routeId', 'owner', 'ownership', 'generation']
+      .map(field => ['missing ' + field, { [field]: undefined }, name]),
+    ['null record', null, name],
+    ['non-object record', 42, name],
   ];
   for (const [label, changes, filename] of cases) {
     await t.test(label, async () => {
       await withDurableFixture(async ({ list, write }) => {
-        const { file, bytes } = await write(filename, { ...durableRecord('fixture-route'), ...changes });
+        const value = changes === null || typeof changes !== 'object'
+          ? changes : { ...durableRecord('fixture-route'), ...changes };
+        const { file, bytes } = await write(filename, value);
         await assert.rejects(list(), { code: 'provider_unavailable', message: 'The durable route record is unreadable' });
         assert.deepEqual(await readFile(file), bytes);
       });
@@ -117,11 +133,21 @@ test('durable list refuses invalid recorded evidence without rewriting it', asyn
   }
 });
 
+test('one invalid durable record refuses the whole inventory without rewriting valid evidence', async () => {
+  await withDurableFixture(async ({ list, write }) => {
+    const valid = await write(fileForRoute('valid-route'), durableRecord('valid-route'));
+    const invalid = await write(fileForRoute('invalid-route'), { ...durableRecord('invalid-route'), generation: 0 });
+    await assert.rejects(list(), { code: 'provider_unavailable', message: 'The durable route record is unreadable' });
+    for (const { file, bytes } of [valid, invalid]) assert.deepEqual(await readFile(file), bytes);
+  });
+});
+
 test('durable list sanitizes malformed JSON at the public boundary', async () => {
   await withDurableFixture(async ({ list, write }) => {
     const { file, bytes } = await write(fileForRoute('fixture-route'), '{"fixture-private-marker":');
     await assert.rejects(list(), error => {
-      assert.equal(typeof error.code, 'string');
+      assert.equal(error.code, 'internal_error');
+      assert.equal(error.message, 'Unexpected Gozar fault');
       assert.equal(Object.hasOwn(error, 'cause'), false);
       assert.doesNotMatch(error.message, /fixture-private-marker|Unexpected end of JSON|JSON at position/i);
       assert.equal(error.message.includes(file), false);

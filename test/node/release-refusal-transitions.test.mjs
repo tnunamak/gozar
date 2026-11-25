@@ -256,6 +256,7 @@ test('independent refusal observer sees one successful owned TCP echo lifecycle'
     const endpoint = new URL(route.origin);
     assert.equal(endpoint.protocol, 'tcp:');
     assert.equal(endpoint.hostname, '127.0.0.1');
+    assert.notEqual(Number(endpoint.port), port, 'the route must be distinct from the app it forwards to');
     assert.deepEqual(await f.counts(), { starts: 1, removals: 0 });
     const routed = Buffer.from('provider forwarded these bytes');
     assert.deepEqual(await echoBytes(Number(endpoint.port), routed), routed);
@@ -265,6 +266,7 @@ test('independent refusal observer sees one successful owned TCP echo lifecycle'
     assert.equal(closed.state, 'released');
     assert.equal(closed.cleanup.state, 'confirmed');
     assert.deepEqual(await f.counts(), { starts: 1, removals: 1 });
+    await assert.rejects(echoBytes(Number(endpoint.port), Buffer.from('closed route')), { code: 'ECONNREFUSED' });
     const direct = Buffer.from('local app survives');
     assert.deepEqual(await echoBytes(port, direct), direct);
     assert.deepEqual(await f.counts(), { starts: 1, removals: 1 });
