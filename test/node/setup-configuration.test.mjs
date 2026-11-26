@@ -128,6 +128,11 @@ test('ngrok hostname validation does not treat missing labels as a complete host
   assert.equal(domainPattern.test('fixture..example'), false);
 });
 
+test('ngrok manual hostname rejects a final DNS label longer than 63 characters', () => {
+  assert.equal(domainPattern.test(`fixture.${'a'.repeat(63)}`), true);
+  assert.equal(domainPattern.test(`fixture.${'a'.repeat(64)}`), false);
+});
+
 test('ngrok setup journey: auth, then reserved domain, then ready; expose opens the listener with the stored values', async t => {
   const { home, api, forwards, candidateOf, provide, provideValue } = await ngrokWorld(t);
   let candidate = await candidateOf();
