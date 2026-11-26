@@ -49,6 +49,15 @@ function processStub(f,{fault,mutate=false,outcome=evidence}={}){
  };
  return {run,calls};
 }
+test('release pack metadata identifies a missing or incomplete JSON receipt',async()=>{
+ const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
+ for(const text of ['', '[{']){
+  assert.throws(()=>parsePackOutput(text),error=>
+   error.message==='Unknown or ambiguous npm pack output: expected valid JSON'&&
+   error.cause instanceof SyntaxError);
+ }
+});
+
 test('release pack metadata reports ambiguity instead of selecting a result',async()=>{
  const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
  const pack={name:'@tnunamak/gozar',version:'0.0.0-fixture',filename:'gozar-fixture.tgz'};
@@ -105,6 +114,26 @@ test('a verified archive for a different package never reaches npm',async t=>{
  await assert.rejects(runInstalledJourney(f.input,{run:stub.run}),/must be standalone @tnunamak\/gozar/);
  assert.deepEqual(stub.calls,[]);
  await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
+
+test('a non-string source revision is rejected before staging an otherwise valid archive',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const run=async(command,args,options)=>{
+  if(stub.calls.length===0)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  return stub.run(command,args,options);
+ };
+ await assert.rejects(runInstalledJourney({...f.input,sourceSha:[f.input.sourceSha]},{run}),/source SHA/);
+ assert.deepEqual(stub.calls,[]);
+ await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
+
+test('non-string digests are refused before accessing the archive', async t => {
+ const f=await fixture(t);
+ const tarball=join(f.root,'archive-must-not-be-accessed.tgz');
+ const run=async()=>assert.fail('invalid input reached a subprocess');
+ for(const invalid of [{sha256:[f.input.sha256]},{sourceSha:[f.input.sourceSha]}]){
+  await assert.rejects(runInstalledJourney({...f.input,tarball,...invalid},{run}),/source SHA/);
+ }
 });
 
 test('a runtime dependency refuses before output or subprocess creation',async t=>{
