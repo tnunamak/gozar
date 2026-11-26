@@ -13,6 +13,7 @@ import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, chmod, stat } from 'n
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { createRouteApi } from '../../packages/gozar-node/route-api.mjs';
 import { createServiceVerifier } from '../../packages/gozar-node/service.mjs';
 import { portHolders, reserveSession } from '../../packages/gozar-node/durable-route.mjs';
 import { selectAdoptable } from '../../adapters/providers/_shared/tailscale-adopt.mjs';
@@ -145,6 +146,40 @@ const foreignRule = (port, proxy) => ({ config }) => {
   (config.Web ??= {})[`${dnsName}:${port}`] = { Handlers: { '/': { Proxy: proxy } } };
 };
 const listener = proxy => ({ Handlers: { '/': { Proxy: proxy } } });
+
+test('public durable ensure rejects bad input before writing a reservation', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'gozar-invalid-ensure-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  let reads = 0;
+  const api = createRouteApi({ adapters: [], embeddingServices: { async readConfiguration() {
+    reads++; return { scopeId: 'test-scope', revision: 'test-revision' };
+  } } });
+  await assert.rejects(api.ensureRoute({ schemaVersion: 1, home, owner: 'test-host', providerId: 'test-provider',
+    operationId: 'invalid-target', target: 'not-loopback:80', usage: { kind: 'durable', routeId: 'test-route' }, requirements }),
+  { code: 'invalid_input' });
+  assert.equal(reads, 0, 'invalid input must not open a configuration');
+  const operations = await readdir(join(home, 'operations')).catch(error => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  assert.ok(!operations.some(name => name.endsWith('.json')), 'no operation reservation was recorded');
+});
+
+test('remove keeps an unconfirmed durable record that has neither ownership pin', async t => {
+  const w = await world(t);
+  assert.ok((await w.ensure()).result);
+  const record = await w.record();
+  const [name] = await w.records();
+  await writeFile(join(w.home, 'routes', name), JSON.stringify({ ...record, intent: null, receipt: null }));
+  const before = w.writes();
+  const released = await w.run('release', { routeId: record.routeId });
+  assert.equal(released.result?.removed, false);
+  assert.equal(released.result?.providerRemoved, false);
+  assert.deepEqual(released.result?.cleanupDebt, { reason: 'missing-ownership-receipt', port: null });
+  assert.equal(w.writes(), before);
+  assert.equal((await w.record()).state, 'releasing');
+  assert.deepEqual((await w.record()).cleanupDebt, released.result.cleanupDebt);
+});
 
 // Allocation and pinning
 

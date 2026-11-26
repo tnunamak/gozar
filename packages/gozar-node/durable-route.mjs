@@ -706,9 +706,12 @@ function requestFields(request) {
 // The app passes a Query, never an adapter. First creation needs `approval`: a single-use token
 // Gozar's catalog issued. Its grant names the adapter; the facts it was issued on are recomputed
 // here under the reservation lock. An existing record is the pin and needs no token.
-export async function ensureRoute(request, deps) {
+export function prevalidateDurableEnsure(request) {
   if (request?.intent !== undefined && request.intent !== 'create') throw refuse('invalid_input', 'ensureRoute creates; use adoptRoute for an existing route');
-  const { routeId, target, home, owner, origin, approval, reconsent } = requestFields(request);
+  return requestFields(request);
+}
+export async function ensureRoute(request, deps) {
+  const { routeId, target, home, owner, origin, approval, reconsent } = prevalidateDurableEnsure(request);
   const adapters = await adaptersOf(deps), ctx = durableContext(home,owner);
   return reserved(home, async dir => {
     // A user stop is a consent revocation until the user approves again.
@@ -818,11 +821,11 @@ async function removeListener(dir, record, adapters, ctx, { suspend = false } = 
   };
   const keep = async (reason, providerRemoved = false) => {
     if (suspend) throw refuse(reason === 'address_changed' ? reason : 'uncertain', `Cannot suspend: ${reason}; the rule was left in place`);
-    const cleanupDebt = { reason, port: pin.port };
+    const cleanupDebt = { reason, port: pin?.port ?? null };
     await save(dir, { ...record, cleanupDebt });
     return { removed: false, providerRemoved, cleanupDebt };
   };
-  if (!pin) { await drop(dir, record.routeId); return { removed: true, providerRemoved: false, cleanupDebt: null }; }
+  if (!pin) return keep('missing-ownership-receipt');
   // The adapter that wrote the rule may be gone (removed from the registry in a later version). Without its
   // facet nothing can be read or removed, so the record stays as cleanup debt instead of failing the release.
   const entry = adapters.find(item => item.id === record.adapterId && item.durable);
