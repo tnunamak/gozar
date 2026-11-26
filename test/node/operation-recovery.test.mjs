@@ -16,7 +16,7 @@ import {projectControllerObservation} from '../../packages/gozar-node/route-view
  // One ownership boundary replaces competing after hooks and scratch's eager deletion.
 async function withRecoveryCleanup(t, body, base=process.env.GOZAR_TEST_TMPDIR ?? join(homedir(),'.tmp','gozar-route-tests')) {
  await mkdir(base,{recursive:true,mode:0o700});
- const home=await mkdtemp(join(base,'op-')),owned=new Map(),confirmed=new Set(),children=[];
+ const home=await mkdtemp(join(base,'op-')),owned=new Map(),confirmed=new Set(),children=[],inFlight=new Set();
  let registry,api,recover,primary,failed=false;
  const diagnostic=(label,error)=>t.diagnostic(label+' '+inspect({
   stack:error?.stack??error,actual:error?.actual,expected:error?.expected,operator:error?.operator
@@ -26,7 +26,17 @@ async function withRecoveryCleanup(t, body, base=process.env.GOZAR_TEST_TMPDIR ?
   if(key&&route.cleanup?.state!=='confirmed'&&!(confirmed.has(key)&&route.state==='released'))owned.set(key,route.handle);
   return route;
  };
- const capture=async promise=>{try{return own(await promise);}catch(error){own(error?.route);throw error;}};
+ const capture=promise=>{
+  const operation=Promise.resolve(promise).then(own,error=>{
+   own(error?.route);
+   throw error;
+  }).finally(()=>inFlight.delete(operation));
+  inFlight.add(operation);
+  // Own the rejection even if the body exits without joining this operation.
+  // The caller still receives the original rejecting promise.
+  void operation.catch(()=>{});
+  return operation;
+ };
  const close=async handle=>{
   const result=await api.closeRoute({home,handle,mode:'remove'});
   if(result.cleanup.state==='confirmed'){const key=JSON.stringify(handle);owned.delete(key);confirmed.add(key);}
@@ -49,6 +59,9 @@ async function withRecoveryCleanup(t, body, base=process.env.GOZAR_TEST_TMPDIR ?
    throw new Error('Could not signal owned fixture child; evidence retained at '+home);
   await closed;
  }catch(error){cleanupErrors.push(error);diagnostic('child cleanup failure',error);}
+ // A body can fail while a captured operation is still reporting its route.
+ // Reap owned children first, then settle every capture before closing routes.
+ while(inFlight.size)await Promise.allSettled([...inFlight]);
  if(recover)try{(await recover()).routes.forEach(own);}catch(error){own(error?.route);cleanupErrors.push(error);diagnostic('recovery enumeration failure',error);}
  for(const handle of [...owned.values()])try{
   const result=await close(handle);
@@ -160,6 +173,52 @@ test('operation bootstrap association requires the exact session and attached ha
  await bootstrap(attachedDir,{id:'att_0000000000000002'});
  assert.equal(await operationReferenceForRoute({home,handle:attached}),null);
 }));
+
+test('cleanup drains a captured sibling after the fixture body rejects', {timeout:5000}, async t=>{
+ const parent=await mkdtemp(join(tmpdir(),'gozar-drain-recovery-'));
+ t.after(()=>rm(parent,{recursive:true,force:true}));
+ const handles=['success','error','late','foreign'].map(id=>({kind:'session',id,generation:1}));
+ const primary=new Error('synthetic body failure');
+ const rejected=Object.assign(new Error('synthetic operation refusal'),{route:{handle:handles[1]}});
+ let release,atTeardown,home,late;
+ const gate=new Promise(resolve=>{release=resolve;});
+ const teardownStarted=new Promise(resolve=>{atTeardown=resolve;});
+ const closed=[];
+ let registryCleanups=0;
+ const run=withRecoveryCleanup({diagnostic(message){
+  if(message.startsWith('primary failure '))atTeardown();
+ }},async owned=>{
+  home=owned.home;
+  owned.api({closeRoute:async ({handle,mode})=>{
+   assert.equal(mode,'remove');
+   closed.push(handle);
+   return {cleanup:{state:'confirmed'}};
+  }});
+  owned.registry({cleanup:async()=>{
+   assert.deepEqual(closed,handles.slice(0,3),'registry cleanup follows every confirmed close');
+   assert.equal((await stat(home)).isDirectory(),true);
+   registryCleanups++;
+  }});
+  await owned.capture(Promise.resolve({handle:handles[0]}));
+  await assert.rejects(owned.capture(Promise.reject(rejected)),error=>error===rejected);
+  late=owned.capture(gate.then(()=>({handle:handles[2]})));
+  throw primary;
+ },parent);
+ const outcome=run.then(()=>({resolved:true}),error=>({error}));
+ try {
+  await Promise.race([teardownStarted,outcome.then(()=>assert.fail('fixture settled before teardown began'))]);
+  assert.deepEqual(closed,[],'no route closed while a captured operation is pending');
+  assert.equal(registryCleanups,0);
+  assert.equal((await stat(home)).isDirectory(),true);
+ } finally {
+  release();
+  await Promise.allSettled([late,outcome]);
+ }
+ assert.equal((await outcome).error,primary,'the original body rejection survives');
+ assert.deepEqual(closed,handles.slice(0,3),'only exact owned handles are closed, once');
+ assert.equal(registryCleanups,1);
+ await assert.rejects(stat(home),{code:'ENOENT'});
+});
 
 test('cleanup waits for a held sibling and keeps the exact success and failure routes', async t=>{
  const parent=await mkdtemp(join(tmpdir(),'gozar-held-recovery-'));
