@@ -49,6 +49,15 @@ function processStub(f,{fault,mutate=false,outcome=evidence}={}){
  };
  return {run,calls};
 }
+test('release pack metadata identifies a missing or incomplete JSON receipt',async()=>{
+ const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
+ for(const text of ['', '[{']){
+  assert.throws(()=>parsePackOutput(text),error=>
+   error.message==='Unknown or ambiguous npm pack output: expected valid JSON'&&
+   error.cause instanceof SyntaxError);
+ }
+});
+
 test('release pack metadata reports ambiguity instead of selecting a result',async()=>{
  const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
  const pack={name:'@tnunamak/gozar',version:'0.0.0-fixture',filename:'gozar-fixture.tgz'};

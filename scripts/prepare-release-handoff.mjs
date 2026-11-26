@@ -10,7 +10,9 @@ const hash=b=>createHash('sha256').update(b).digest('hex');
 const json=async path=>JSON.parse(await readFile(path,'utf8'));
 const save=(path,value)=>writeFile(path,JSON.stringify(value,null,2)+'\n',{mode:0o600});
 export function parsePackOutput(text){
- const value=JSON.parse(text);
+ let value;
+ try{value=JSON.parse(text);}
+ catch(cause){throw new Error('Unknown or ambiguous npm pack output: expected valid JSON',{cause});}
  const entries=Array.isArray(value)?value:value?.filename?[value]:Object.values(value??{});
  if(entries.length!==1||typeof entries[0]?.filename!=='string'||entries[0].name!=='@tnunamak/gozar'||
     typeof entries[0].version!=='string'||!entries[0].version.trim())throw new Error('Unknown or ambiguous npm pack output');
