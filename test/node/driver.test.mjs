@@ -167,7 +167,7 @@ test('file reads require scoped regular non-symlink handle and byte bound', asyn
   assert.equal((await driver.execute(effect(recipe, 'detect', 'link'))).ok, false);
 });
 
-test('a missing scoped handle produces a distinct error before doing file IO', async t => {
+test('a missing scoped handle produces a distinct error', async t => {
   const { driver } = await fixture(t, {});
   await assert.rejects(driver.readHandle({ handleRef: 'missing-fixture' }), {
     message: 'Unknown scoped file handle',

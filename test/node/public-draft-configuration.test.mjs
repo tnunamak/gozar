@@ -131,7 +131,8 @@ test('partial draft discard checkpoints progress and retains only the unresolved
  const applied=await bind(primary,initial,appliedHandle);
  const begin=()=>api.beginConfigurationDraft({...primary,expectedConfigurationRevision:applied.revision});
  const sibling=await begin(),siblingHandle=await store(primary,sibling.configuration,sibling.draftId);
- await bind(primary,sibling.configuration,siblingHandle,sibling.draftId);
+ const siblingBound=await bind(primary,sibling.configuration,siblingHandle,sibling.draftId);
+ const siblingUnbound=await store(primary,siblingBound,sibling.draftId);
  const otherInitial=await config(other),otherHandle=await store(other,otherInitial);
  const otherApplied=await bind(other,otherInitial,otherHandle);
  target=await begin();
@@ -140,6 +141,9 @@ test('partial draft discard checkpoints progress and retains only the unresolved
  const discard={...primary,draftId:target.draftId};
  const before=await save(), laterRef=before.secrets[later];
  assert.equal(laterRef.draftId,target.draftId);
+ assert.notEqual(siblingUnbound,siblingHandle);
+ assert.equal(before.secrets[siblingUnbound].draftId,sibling.draftId);
+ assert.equal(before.configs[applied.scopeId].drafts[sibling.draftId].bindings.secret,siblingHandle);
  const setupReads=reads;
 
  phase='locked';
@@ -171,7 +175,7 @@ test('partial draft discard checkpoints progress and retains only the unresolved
  assert.equal(after.configs[applied.scopeId].bindings.secret,appliedHandle);
  assert.equal(after.configs[applied.scopeId].drafts[sibling.draftId].bindings.secret,siblingHandle);
  assert.equal(after.configs[otherApplied.scopeId].bindings.secret,otherHandle);
- for(const handle of [appliedHandle,siblingHandle,otherHandle]){
+ for(const handle of [appliedHandle,siblingHandle,siblingUnbound,otherHandle]){
   assert.deepEqual(after.secrets[handle],before.secrets[handle]);assert.ok(present.has(handle));
  }
  assert.equal(reads,setupReads,'discard and retry never request raw values');
