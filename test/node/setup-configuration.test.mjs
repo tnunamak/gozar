@@ -376,6 +376,54 @@ test('LAN setup ignores malformed address entries and entries missing an interna
   } }), []);
 });
 
+test('unavailable fixture listener runtime fails setup without trying the live SDK', async () => {
+  const { listenerSdk } = await import('../../adapters/providers/_shared/listener-effects.mjs');
+  const operations = [];
+  await assert.rejects(
+    listenerSdk({ dispatchEffect: async ({ operation }) => {
+      operations.push(operation);
+      return { available: false };
+    } }, () => assert.fail('must not load the live SDK')),
+    { code: 'setup_required', message: 'The listener runtime is unavailable in this fixture' },
+  );
+  assert.deepEqual(operations, ['detect']);
+});
+
+test('fixture listener refuses an invalid open result instead of returning a listener', async () => {
+  const { listenerSdk } = await import('../../adapters/providers/_shared/listener-effects.mjs');
+  const operations = [];
+  const sdk = await listenerSdk({ dispatchEffect: async ({ operation, input }) => {
+    operations.push({ operation, input });
+    return operation === 'detect' ? { available: true } : { handle: '', url: 'https://fixture.invalid' };
+  } }, () => assert.fail('must not load the live SDK'));
+  const options = { addr: '127.0.0.1:43210' };
+  await assert.rejects(sdk.forward(options), {
+    code: 'provider_unavailable',
+    message: 'The fixture listener effect returned an invalid resource',
+  });
+  assert.deepEqual(operations, [
+    { operation: 'detect', input: {} },
+    { operation: 'open', input: { options } },
+  ]);
+});
+
+test('fixture listener read treats missing evidence as unknown, not confirmed absent', async () => {
+  const { listenerSdk } = await import('../../adapters/providers/_shared/listener-effects.mjs');
+  const reads = [];
+  const sdk = await listenerSdk({ dispatchEffect: async ({ operation, input }) => {
+    if (operation === 'detect') return { available: true };
+    assert.equal(operation, 'read');
+    reads.push(input.handle);
+    return input.handle === 'gone' ? { present: false } : {};
+  } }, () => assert.fail('must not load the live SDK'));
+  assert.equal(await sdk.getListener('gone'), null);
+  await assert.rejects(sdk.getListener('unknown'), {
+    code: 'provider_unavailable',
+    message: 'The fixture listener presence is unknown',
+  });
+  assert.deepEqual(reads, ['gone', 'unknown']);
+});
+
 test('Tailscale setup presents the HTTPS default port implicitly and other ports explicitly', async () => {
   const { originOf } = await import('../../adapters/providers/_shared/tailscale-serve.mjs');
   assert.equal(originOf('demo.invalid', 443), 'https://demo.invalid');
