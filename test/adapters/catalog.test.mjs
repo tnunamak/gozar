@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { recipeAdapter } from '../../packages/gozar-node/adapter-runtime.mjs';
+import { definitionErrors, recipeAdapter } from '../../packages/gozar-node/adapter-runtime.mjs';
 import test from 'node:test';
 
 const root = new URL('../../', import.meta.url);
@@ -137,6 +137,31 @@ test('transport modes and named route remain distinct and owner-scoped', () => {
   assert.equal(named.transport.dnsMutation, false);
   assert.equal(named.transport.tunnelMutation, false);
   assert.ok(!named.recipes.create.args.includes('--token'));
+});
+
+test('stable tunnl.gg requires account enrollment and keeps its session and TLS limits', async () => {
+  const shipped = manifest.providers.find(provider => provider.id === 'tunnl-gg');
+  assert.ok(shipped);
+  const { adapter, evidence } = await json(`adapters/${shipped.definition}`);
+  const { address, cost, needsAccount, traffic } = adapter.capabilities;
+  assert.equal(needsAccount, true);
+  assert.deepEqual(definitionErrors(adapter), []);
+  assert.match(adapter.needs, /SSH key registered to a free tunnl\.gg account/i);
+  assert.match(cost.summary, /free account/i);
+  assert.doesNotMatch(`${adapter.needs} ${cost.summary}`, /needs no account|no account is needed|without an account/i);
+  assert.match(adapter.disclosure.text, /November 19, 2026/);
+  assert.match(adapter.disclosure.text, /December 1, 2026/);
+  const registration = adapter.facts.find(fact => fact.id === 'stable-key-registration');
+  assert.equal(registration?.known, true);
+  assert.equal(registration?.affectsConsent, true);
+  assert.equal(registration?.source, 'https://tunnl.gg/stable-urls');
+  assert.ok(evidence.sources.includes(registration.source));
+  assert.equal(address.stability, 'stable');
+  assert.ok(address.conditions.some(condition => /relay host-key change/i.test(condition)));
+  assert.deepEqual(adapter.supportedKinds, ['session']);
+  assert.deepEqual(adapter.capabilities.lifetimes, ['session']);
+  assert.equal(traffic.tlsTermination, 'provider');
+  assert.equal(traffic.providerCanReadPayload, true);
 });
 
 for (const fixture of fixtures) {
