@@ -41,6 +41,7 @@
     "consent_mismatch": "consent_mismatch",
     "consent_required": "consent_required",
     "provider_unavailable": "provider_unavailable",
+    "gate_port_in_use": "provider_unavailable",
     "provider_denied": "setup_required",
     "provider_unsupported": "unsupported",
     "provider_conflict": "provider_unavailable",
