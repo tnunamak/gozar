@@ -4,6 +4,7 @@ import {spawn} from 'node:child_process';
 import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
 
 // The README example is extracted verbatim and run against a recording stand-in for the package.
 // It checks the example's own control flow (recovery order), not the real route runtime.
@@ -144,4 +145,80 @@ test('README catalog failure retains the staged intent and never prompts or allo
   const saved = JSON.parse(await readFile(join(home, '.gozar-route-example', 'demo-route.json'), 'utf8'));
   assert.match(saved.operationId, /^[0-9a-f-]{36}$/);
   assert.equal(JSON.parse(saved.intent).owner, 'example-app');
+});
+
+test('embedding guide durably journals exact intent and closes only its retained handle', async t => {
+  const home = await seedHome(t);
+  const guide = await readFile(new URL('../../docs/embedding-contract.md', import.meta.url), 'utf8');
+  const block = guide.match(/<!-- gozar-public-host-example -->\n```js\n([\s\S]+?)\n```/);
+  assert.ok(block, 'the canonical example remains extractable');
+  await writeFile(join(home, 'host-route-example.mjs'), block[1]);
+  await writeFile(join(home, 'node_modules', '@tnunamak', 'gozar', 'index.mjs'),
+    'export const createGozar = ({ api, acknowledgeOrigin }) => ({ ...api, acknowledgeOrigin });');
+  const { createHost, openApproved, recoverAndClose } =
+    await import(pathToFileURL(join(home, 'host-route-example.mjs')).href);
+
+  const operationId = 'synthetic-operation', owner = 'synthetic-owner';
+  const target = 'http://127.0.0.1:8080', usage = { kind: 'attached' };
+  const requirements = { reach: 'public', transport: 'https', payloadAccess: 'allow-provider',
+    address: 'any', setup: 'none', protocols: [] };
+  const query = { schemaVersion: 1, home, owner, target, usage, requirements };
+  const handle = { kind: 'attached', id: 'owned-fixture', generation: 2 };
+  const candidate = { eligible: true, providerId: 'fixture-provider', setup: { state: 'ready' },
+    consent: { consentFactsDigest: 'fixture-digest', facts: [], disclosures: {} },
+    consentFactsDigest: 'fixture-digest', candidateToken: 'synthetic-bearer',
+    disclosure: { revision: 'fixture-revision' } };
+  const calls = [];
+  const journal = {
+    async saveIntent(value) { await writeFile(join(home, 'intent.json'), JSON.stringify(value)); calls.push('intent'); },
+    async saveHandle(id, value) {
+      assert.equal(id, operationId);
+      await writeFile(join(home, 'handle.json'), JSON.stringify(value));
+      calls.push('handle');
+    },
+  };
+  let retained = { operationId, handle, rawProviderSecret: 'synthetic-secret' };
+  const api = createHost({api: {
+    async catalogRoutes(args) { assert.deepEqual(args, query); calls.push('catalog'); return { candidates: [candidate] }; },
+    async expose(args) {
+      calls.push('expose');
+      assert.deepEqual(JSON.parse(await readFile(join(home, 'intent.json'), 'utf8')),
+        { home, owner, operationId, query, providerId: candidate.providerId });
+      assert.deepEqual(args, { ...query, operationId, wait: 'verified', approval: { kind: 'route',
+        candidateToken: candidate.candidateToken, consentFactsDigest: 'fixture-digest',
+        disclosureRevision: 'fixture-revision' } });
+      const origin = 'https://example.invalid', attemptId = 'only-attempt';
+      const reply = await api.acknowledgeOrigin({ home, owner, handle, origin, attemptId });
+      assert.deepEqual(reply, { acknowledged: true, origin, handle: { id: handle.id, generation: 2 }, attemptId });
+      return retained;
+    },
+    async listRoutes(args) {
+      assert.deepEqual(args, {home, owner});
+      calls.push('list');
+      return { routes: [{ operationId: 'another-operation', handle: { ...handle, id: 'other' } }, retained] };
+    },
+    async closeRoute(args) {
+      assert.deepEqual(args, { home, handle, mode: 'remove' });
+      calls.push('close');
+      return { cleanup: {state: 'confirmed'} };
+    },
+  }}, async request => {
+    assert.equal(request.origin, 'https://example.invalid');
+    assert.deepEqual(request.handle, handle);
+    calls.push('ack');
+    return true;
+  });
+  await openApproved({ api, home, owner, target, usage, requirements, operationId,
+    choose: candidates => candidates[0], confirm: consent => { assert.deepEqual(consent, candidate.consent); return true; },
+    journal });
+  const intentText = await readFile(join(home, 'intent.json'), 'utf8');
+  const handleText = await readFile(join(home, 'handle.json'), 'utf8');
+  assert.doesNotMatch(intentText + handleText, /synthetic-bearer|synthetic-secret/);
+  assert.deepEqual(JSON.parse(handleText), handle);
+  const args = { api, intent: JSON.parse(intentText), savedHandle: JSON.parse(handleText), journal };
+  retained = { ...retained, handle: { ...handle, generation: 3 } };
+  await assert.rejects(recoverAndClose(args), /exact retained route/);
+  retained = { ...retained, handle };
+  assert.equal((await recoverAndClose(args)).cleanup.state, 'confirmed');
+  assert.deepEqual(calls, ['catalog', 'intent', 'expose', 'ack', 'handle', 'list', 'list', 'handle', 'close']);
 });

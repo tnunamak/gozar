@@ -338,6 +338,96 @@ a conflict requires a fresh read and review, not a forced retry with old consent
 For secret descriptors, intake stays in the trusted host: bind the returned opaque
 handle to that same draft and revision, never expose bytes to the renderer.
 
+## Runnable host embedding example
+
+Save this block as `host-route-example.mjs` next to the release-matched
+`@tnunamak/gozar` package. Importing it does not start a route. The host supplies
+public, non-credential query parameters, a candidate picker, a UI that obtains
+explicit approval of the complete consent snapshot, and a private durable
+journal. `saveIntent` must commit before resolving; serialize journal writes and
+recovery in the host. Allocate an operation ID once for the logical intent, and
+use `recoverAndClose` for that journal entry after an ambiguous result. Do not
+restart allocation or mint a new ID merely because an await failed.
+
+`allowExactOrigin` is a trusted callback. It accepts only the validated origin
+named in the request for that exact handle generation and proof attempt. It
+resolves true only after the host verifier has bound that origin, never a
+wildcard. The host persists only the intended query, operation ID, selected
+provider and opaque handle fields; never a consent bearer value, approval
+object, returned route payload or raw secret bytes.
+
+<!-- gozar-public-host-example -->
+```js
+import { createGozar } from '@tnunamak/gozar';
+
+export const createHost = (options, allowExactOrigin) => createGozar({
+  ...options,
+  async acknowledgeOrigin(request) {
+    if (await allowExactOrigin(request) !== true) throw new Error('origin was not accepted');
+    const { origin, handle: { id, generation }, attemptId } = request;
+    return { acknowledged: true, origin, handle: { id, generation }, attemptId };
+  },
+});
+
+const copyHandle = ({ kind, id, generation }) => ({ kind, id, generation });
+const sameHandle = (a, b) => a.kind === b.kind && a.id === b.id && a.generation === b.generation;
+
+export async function openApproved({
+  api, home, owner, target, usage, requirements, operationId, choose, confirm, journal,
+}) {
+  if (!owner || !operationId || !['attached', 'session', 'durable'].includes(usage.kind))
+    throw new Error('explicit owner, operationId and supported usage required');
+  const query = structuredClone({ schemaVersion: 1, home, owner, target, usage, requirements });
+  const { candidates } = await api.catalogRoutes(query);
+  const candidate = await choose(candidates);
+  if (!candidates.includes(candidate) || !candidate.eligible
+      || candidate.setup.state !== 'ready' || !candidate.candidateToken
+      || candidate.consent.consentFactsDigest !== candidate.consentFactsDigest)
+    throw new Error('select an eligible ready candidate with consistent consent');
+  if (await confirm(structuredClone(candidate.consent)) !== true) return null;
+
+  const intent = { home, owner, operationId, query, providerId: candidate.providerId };
+  await journal.saveIntent(structuredClone(intent));
+  const request = { ...query, operationId, approval: {
+    kind: 'route', candidateToken: candidate.candidateToken,
+    consentFactsDigest: candidate.consentFactsDigest,
+    disclosureRevision: candidate.disclosure.revision,
+  } };
+  let result;
+  try {
+    result = usage.kind === 'durable'
+      ? await api.ensureRoute(request)
+      : await api.expose({ ...request, wait: 'verified' });
+  } catch (error) {
+    if (error.route?.operationId === operationId && error.route.handle)
+      await journal.saveHandle(operationId, copyHandle(error.route.handle));
+    throw error;
+  }
+  if (result.operationId !== operationId) throw new Error('unexpected operation receipt');
+  await journal.saveHandle(operationId, copyHandle(result.handle));
+  return result; // Only published can be shared, never origin.
+}
+
+export async function recoverAndClose({ api, intent, savedHandle, journal }) {
+  const { home, owner, operationId } = intent;
+  if (!owner || !operationId) throw new Error('explicit owner and operationId required');
+  const { routes } = await api.listRoutes({ home, owner });
+  const matches = routes.filter(route => route.operationId === operationId);
+  if (matches.length !== 1 || !matches[0].handle
+      || (savedHandle && !sameHandle(savedHandle, matches[0].handle)))
+    throw new Error('could not identify the exact retained route');
+  const handle = copyHandle(matches[0].handle);
+  await journal.saveHandle(operationId, handle);
+  return api.closeRoute({ home, handle, mode: 'remove' });
+}
+```
+
+Recovery is not recreation. An unreadable listing, missing or ambiguous match,
+or mismatched generation is a refusal, not evidence that nothing is left. Keep
+the journal until owned cleanup is confirmed. A retained route is historical;
+use `routeStatus` for fresh proof rather than advertising a cached origin or
+address. This example shows host control flow, not native provider acceptance.
+
 ## Display, recovery and qualification boundaries
 
 Render all open fact rows and every consent-affecting row, including unknown
