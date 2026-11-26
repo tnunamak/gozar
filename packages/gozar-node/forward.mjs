@@ -63,7 +63,7 @@ const CONSENT_REFUSALS = ['consent_mismatch', 'consent_unknown', 'consent_expire
 const GONE_STATES = new Set(['released', 'lost']);
 const SETUP_DONE = new Set(['complete', 'cancelled', 'expired', 'denied']);
 const NO_RETRY = new Set(['stopped_by_user', 'cleanup_debt']);
-const EVENTS = ['change', 'down', 'back', 'action'];
+const EVENTS = ['change', 'down', 'back', 'action', 'halted'];
 const sha256 = text => createHash('sha256').update(text, 'utf8').digest('hex');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const CONTENT_FIELDS = ['run', 'approval', 'origin', 'downSince', 'cleanup'];
@@ -159,17 +159,23 @@ export function createForward(api, { home, now = Date.now, reconnect } = {}) {
       throw gozarError('busy', `Another live process owns the managed forward lifecycle for app ${app}`, null, cause);
     }
     const run = new ManagedRun({ api, home, app, owner: `forward:${app}`, target: `127.0.0.1:${port}`,
-      policy, onAction, state, release, now, retry });
+      policy, onAction, state, release, leasePath, now, retry });
     return run.begin();
   }
   return forward;
 }
 
 class ManagedRun {
-  constructor({ api, home, app, owner, target, policy, onAction, state, release, now, retry }) {
+  constructor({ api, home, app, owner, target, policy, onAction, state, release, leasePath, now, retry }) {
     Object.assign(this, { api, home, app, owner, target, policy, onAction, state, now, retry });
-    let released = null;
-    this.releaseLease = () => released ??= Promise.resolve(release()).catch(() => {});
+    this.leasePath = leasePath;
+    this.releaseManager = release;
+    this.runIdentity = null;
+    this.releaseLease = async () => {
+      const release = this.releaseManager;
+      this.releaseManager = null;
+      if (release) await release();
+    };
     this.closing = false;        // set at close() entry: the fence for late UI, proof, watch, resume and retry
     this.stopped = false;        // set once the persisted run is committed stopped
     this.inflight = new Set();   // effectful sections (allocation + custody, removal, setup step) close() waits out
@@ -179,6 +185,7 @@ class ManagedRun {
     this.currentUrl = null;      // the CURRENT verified publication, never a remembered origin; null while down
     this.lastOrigin = null;      // the last announced verified origin (seeded from the record's origin)
     this.downSince = null;       // the current outage observation
+    this.halted = null;
     this.backEvent = null;       // the latest recovery observation, for first 'back' replay
     this.changes = [];           // ordered replay buffer for the first 'change' subscriber
     this.listeners = Object.fromEntries(EVENTS.map(type => [type, new Set()]));
@@ -202,15 +209,29 @@ class ManagedRun {
   async save(mutate) {
     for (let attempt = 0; ; attempt++) {
       const record = await this.state.read();
+      if (this.runIdentity && !this.owns(record)) throw this.stoppedByUser('A successor owns this managed service');
       const next = mutate(record ? structuredClone(contentOf(record)) : null, record);
       if (!next) return record;
       try {
-        return await this.state.commit(next, { expectedRevision: record ? record.revision : 0 });
+        const committed = await this.state.commit(next, { expectedRevision: record ? record.revision : 0 });
+        this.runIdentity = { id: committed.run.id, generation: committed.run.generation };
+        return committed;
       } catch (error) {
         if (error.code === 'candidate_stale' && attempt < CAS_ATTEMPTS) continue;
         throw error;
       }
     }
+  }
+
+  owns(record) {
+    return record && this.runIdentity && record.run.id === this.runIdentity.id &&
+      record.run.generation === this.runIdentity.generation;
+  }
+
+  /** Check and register work synchronously; check again before the callback can start an effect. */
+  effect(call) {
+    this.checkFenced();
+    return this.track(Promise.resolve().then(() => { this.checkFenced(); return call(); }));
   }
 
   /** Commit the run stopped with unconfirmed cleanup owned by the run it names; return the debt error. */
@@ -310,7 +331,8 @@ class ManagedRun {
    */
   async settleOwned(message) {
     let record = await this.state.read();
-    if (!record) return;
+    if (!record && this.runIdentity) throw gozarError('cleanup_debt', 'The managed recovery record is missing; owned cleanup cannot be confirmed', instructionAction('restore-managed-state', 'Restore the managed recovery record', 'Keep the saved route references until cleanup is confirmed.'));
+    if (!record || !this.owns(record)) return;
     if (record.run.phase === 'stopped' && record.cleanup.certainty === 'settled' && !record.run.setup) { this.stopped = true; return; }
     let unconfirmed = false;
     if (record.run.setup) {
@@ -462,6 +484,7 @@ class ManagedRun {
    */
   async startup() {
     let record = await this.state.read();
+    if (record) this.runIdentity = { id: record.run.id, generation: record.run.generation };
     if (record) record = await this.reconcile(record);
     this.lastOrigin = record?.origin?.url ?? null;
     let seed;
@@ -612,18 +635,19 @@ class ManagedRun {
     await this.save(content => ({ ...content, run: { ...content.run, provider: candidate.providerId, phase: 'awaiting' } }));
     const base = { home: this.home, owner: this.owner, providerId: candidate.providerId };
     if (!action.step) {
-      const answer = await this.ask(this.setupDescriptor(action, candidate, null));
+      const answer = await this.ask(this.setupDescriptor(action));
       if (answer.approve !== true) return this.stopRun('The user declined this forward step');
       this.checkFenced();
       // A click is never observed provider readiness: re-observe the action before running anything.
       const fresh = await this.pinnedCandidate(kind, candidate.providerId);
+      this.checkFenced();
       const current = this.locateAction(fresh, action);
       if (!current) return;
       const request = { ...base, expectedConfigurationRevision: fresh.configuration?.revision,
         actionId: current.id, approval: this.setupApproval(current) };
       if (current.kind === 'provide-value') request.value = answer.value;
       if (current.kind === 'provide-secret') request.secretHandle = await this.storeSecret(candidate, current, answer, fresh.configuration);
-      await this.track(this.api.runSetupAction(request));
+      await this.effect(() => this.api.runSetupAction(request));
       return;
     }
     // A stepped setup operation: persist its exact reference BEFORE it reserves anything, then walk its live
@@ -632,7 +656,7 @@ class ManagedRun {
     this.operation = { ...base, operationId };
     await this.save(content => ({ ...content, run: { ...content.run, setup: { operationId, provider: candidate.providerId } } }));
     this.checkFenced();
-    let view = await this.track(this.api.runSetupAction({ ...base, expectedConfigurationRevision: candidate.configuration?.revision,
+    let view = await this.effect(() => this.api.runSetupAction({ ...base, expectedConfigurationRevision: candidate.configuration?.revision,
       operationId, actionId: action.id, expectedSetupRevision: 0 }));
     this.checkFenced();
     let offers = 0;
@@ -640,14 +664,14 @@ class ManagedRun {
       const offer = view.nextAction;
       if (!offer) { view = await this.pollOperation(); continue; }
       if (++offers > STEP_BUDGET) throw gozarError('provider_unavailable', 'The setup operation did not settle within its offer budget');
-      const answer = await this.ask(this.setupDescriptor(offer, candidate, view));
+      const answer = await this.ask(this.setupDescriptor(offer));
       if (answer.approve !== true) return this.stopRun('The user declined this forward step');
       this.checkFenced();
       const request = { ...base, expectedConfigurationRevision: view.scope?.configurationRevision ?? candidate.configuration?.revision,
         operationId, actionId: offer.id, expectedSetupRevision: view.revision, approval: this.setupApproval(offer) };
       if (offer.kind === 'provide-value') request.value = answer.value;
       if (offer.kind === 'provide-secret') request.secretHandle = await this.storeSecret(candidate, offer, answer, view.scope);
-      view = await this.track(this.api.runSetupAction(request));
+      view = await this.effect(() => this.api.runSetupAction(request));
       this.checkFenced();
     }
     if (view?.state !== 'complete')
@@ -677,8 +701,8 @@ class ManagedRun {
     const inputId = action.inputId ?? scope?.inputRequirements?.find?.(row => row.actionId === action.id)?.id ?? action.id;
     const scopeId = scope?.scopeId ?? candidate.configuration?.scopeId;
     if (!scopeId) throw gozarError('setup_required', 'The offered secret step has no configuration scope');
-    const stored = await this.api.storeSecret({ home: this.home, owner: this.owner, providerId: candidate.providerId,
-      inputId, scopeId, bytes: new TextEncoder().encode(answer.secret) });
+    const stored = await this.effect(() => this.api.storeSecret({ home: this.home, owner: this.owner, providerId: candidate.providerId,
+      inputId, scopeId, bytes: new TextEncoder().encode(answer.secret) }));
     return stored.handle;
   }
 
@@ -729,7 +753,7 @@ class ManagedRun {
     await this.save(content => ({ ...content, run: { ...content.run, operationId, handle: null,
       provider: candidate.providerId, phase: 'starting' } }));
     this.checkFenced();
-    const view = await this.track(this.performAllocation(kind, candidate, identity, operationId));
+    const view = await this.effect(() => this.performAllocation(kind, candidate, identity, operationId));
     this.checkFenced();  // a close that began mid-proof fences here; its cleanup uses the recorded handle
     return view;
   }
@@ -742,6 +766,7 @@ class ManagedRun {
     try { view = await (kind === 'durable' ? this.api.ensureRoute(request) : this.api.expose({ ...request, wait: 'verified' })); }
     catch (error) {
       const normalized = normalizeError(error);
+      if (normalized.code === 'verification_failed') normalized.message += ' For HTTP targets, mount createServiceVerifier() before application routes and check the HTTPS path.';
       if (CONSENT_REFUSALS.includes(normalized.code)) {
         // The current SDK authority refused the grant before any effect: observe and ask again.
         await this.save(content => content.run.operationId === operationId && !content.run.handle
@@ -752,7 +777,7 @@ class ManagedRun {
       throw normalized;
     }
     if (!(view && view.verification?.status === 'verified' && typeof view.published === 'string' && view.published)) {
-      const refused = gozarError('provider_unavailable', 'The route was allocated but its publication was not verified');
+      const refused = gozarError('provider_unavailable', 'The route was allocated but its publication was not verified. For HTTP targets, mount createServiceVerifier() before application routes and check the HTTPS path.');
       if (view) refused.route = view;
       await this.retainFailedAllocation(refused, operationId);
       throw refused;
@@ -825,9 +850,9 @@ class ManagedRun {
   }
 
   on(type, listener) {
-    if (!EVENTS.includes(type)) throw gozarError('invalid_input', "on() subscribes to 'change', 'down', 'back' or 'action'");
+    if (!EVENTS.includes(type)) throw gozarError('invalid_input', "on() subscribes to 'change', 'down', 'back', 'action' or 'halted'");
     if (typeof listener !== 'function') throw gozarError('invalid_input', 'on() needs a listener function');
-    if (this.closing || this.stopped) throw this.stoppedByUser();
+    if (this.closing || (this.stopped && type !== 'halted')) throw this.stoppedByUser();
     this.listeners[type].add(listener);
     const unbind = () => { this.listeners[type].delete(listener); };
     // The replay owns the subscription gap. Change: startup change + every change since publication, in
@@ -838,16 +863,22 @@ class ManagedRun {
       if (type === 'down' && this.downSince) this.deliver(listener, { downSince: this.downSince });
       if (type === 'back' && !this.downSince && this.backEvent) this.deliver(listener, this.backEvent);
       if (type === 'action' && this.pending) this.deliver(listener, this.pending);
+      if (type === 'halted' && this.halted) this.deliver(listener, this.halted);
     }
     return unbind;
   }
 
   deliver(listener, event) {
-    queueMicrotask(() => { if (!this.closing) { try { listener(structuredClone(event)); } catch { /* a listener cannot steer the run */ } } });
+    const warn = () => process.emitWarning('A Gozar forward listener threw; route management continues', { code: 'GOZAR_FORWARD_LISTENER' });
+    queueMicrotask(() => {
+      if (this.closing) return;
+      try { Promise.resolve(listener(structuredClone(event))).catch(warn); }
+      catch { warn(); }
+    });
   }
 
   emit(type, event) {
-    if (this.closing || this.stopped) return;  // no callback after the stop is fenced
+    if (this.closing || (this.stopped && type !== 'halted')) return;  // only the terminal notice survives a background stop
     for (const listener of this.listeners[type]) this.deliver(listener, event);
   }
 
@@ -899,6 +930,7 @@ class ManagedRun {
     const outage = this.downSince;
     if (!force && !changed && !outage && this.currentUrl === url) return;
     await this.save(content => ({ ...content, origin: !force && content.origin?.url === url ? content.origin : { url, observedAt: at }, downSince: null }));
+    if (this.closing || this.stopped) return;
     const oldOrigin = this.lastOrigin;
     this.currentUrl = url;
     this.lastOrigin = url;
@@ -950,7 +982,12 @@ class ManagedRun {
             await this.nap(this.backoff(attempt));
           }
         }
-      } catch (error) { this.turn.reject(await this.fail(error, { background: true })); }
+      } catch (error) {
+        const failure = await this.fail(error, { background: true });
+        this.halted = { code: failure.code, downSince: this.downSince, retrying: false };
+        this.emit('halted', this.halted);
+        this.turn.reject(failure);
+      }
     })();
     return this.coroutine;
   }
@@ -988,7 +1025,7 @@ class ManagedRun {
     };
   }
 
-  setupDescriptor(action, candidate, operation) {
+  setupDescriptor(action) {
     const answer = action.kind === 'provide-value'
       ? { type: 'value', format: action.valueFormat ?? 'text', label: action.valueLabel ?? null, options: action.step?.options ?? null }
       : action.kind === 'provide-secret' ? { type: 'secret', label: action.secretLabel ?? null }
@@ -1003,7 +1040,6 @@ class ManagedRun {
       obtainUrl: action.obtainUrl ?? null,
       disclosure: action.disclosure ? { revision: action.disclosure.revision, text: action.disclosure.text, links: action.disclosure.links } : null,
       facts: action.consent?.facts ?? [],
-      ...(operation ? { operation: { id: operation.operationId, revision: operation.revision, state: operation.state } } : {}),
       answer,
     };
   }
@@ -1022,6 +1058,12 @@ class ManagedRun {
   }
 
   async doClose() {
+    if (!this.releaseManager) {
+      const record = await this.state.read();
+      if (record && !this.owns(record)) return;
+      try { this.releaseManager = await acquireProcessLock(this.leasePath, { waitMs: 0 }); }
+      catch (cause) { throw gozarError('busy', 'Another manager owns this managed service; retry its cleanup later', null, cause); }
+    }
     // 1. Fence first: no further UI acceptance, proof adoption, watch callback, retry or resume.
     this.closing = true;
     this.closeGate.resolve();

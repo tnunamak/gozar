@@ -16,6 +16,7 @@ try {
   if (route.url !== null) publishSignedAddress(route.url);
   route.on('down', ({ downSince }) => showOffline(downSince));
   route.on('back', showOnline);
+  route.on('halted', showRecoveryFailure);
   await ui.untilClosed();
 } finally {
   await route.close();
@@ -124,8 +125,11 @@ needed. A changed policy is re-evaluated, not ignored during recovery.
 
 While the app holds the resource, Gozar retries route loss with bounded backoff.
 If those attempts run out, it stays down with `url: null` and the observed
-`downSince`; it does not claim recovery. Close the old resource before requesting
-a new run with `forward`. No separate failure event is currently provided.
+`downSince`; it does not claim recovery. A `halted` event carries the error `code`,
+that outage time and `retrying: false`, including when cleanup debt blocks recovery.
+The first subscription receives this notice even if it happened before subscribing.
+Show the failure, close the old resource and settle any cleanup debt before requesting
+a new run with `forward`.
 
 If the retained provider no longer qualifies, Gozar must settle its owned
 cleanup before selecting another eligible provider; unresolved debt blocks

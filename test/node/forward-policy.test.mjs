@@ -55,14 +55,11 @@ const funnelDurableActionable = (over = {}) => funnelDurableReady(deepMerge({
 const row = (provider, kind, missing, policyChanges) => ({ provider, kind, missing, policyChanges });
 const unmetRows = result => result.unmet;
 
-test('an already usable lasting route wins over an account-free session, with typed existing-account evidence', () => {
+test('an already usable lasting route wins over an account-free session, using the current durable grant', () => {
   const result = selectForwardCandidate({ candidates: [localSessionReady(), funnelDurableReady()], policy: { accounts: 'existing-only', lifetime: 'prefer-lasting' } });
   assert.equal(result.outcome, 'selected');
   assert.equal(result.kind, 'durable');
   assert.equal(result.lifetime, 'lasting');
-  assert.equal(result.account, 'existing');
-  assert.match(result.accountEvidence, /durablePlanFacts/);
-  assert.match(result.accountEvidence, /Running/);
   assert.equal(result.candidate.providerId, 'tailscale-funnel');
 });
 test('without a lasting route the default falls back to an eligible account-free session', () => {
@@ -70,7 +67,6 @@ test('without a lasting route the default falls back to an eligible account-free
   assert.equal(result.outcome, 'selected');
   assert.equal(result.kind, 'session');
   assert.equal(result.lifetime, 'session');
-  assert.equal(result.account, 'account-free');
   assert.equal(result.candidate.properties.needsAccount, false);
 });
 test('attached routes share the managed session tier without becoming lasting routes', () => {
@@ -101,9 +97,6 @@ test('a ready registered-SSH trial is not account evidence and cannot masquerade
   assert.deepEqual(unmetRows(refused), [row('tunnl.gg', 'session', ['account'], { accounts: 'allow-setup' })]);
   const allowed = selectForwardCandidate({ candidates: [tunnlSessionReady()], policy: { accounts: 'allow-setup', lifetime: 'prefer-lasting' } });
   assert.equal(allowed.outcome, 'selected');
-  assert.equal(allowed.account, 'unknown');
-  assert.notEqual(allowed.account, 'account-free');
-  assert.match(allowed.accountEvidence, /No authenticated-account evidence/i);
 });
 test('setup readiness without the durable grant receipt is not generic account evidence', () => {
   const grantless = funnelDurableReady({ candidateToken: null });
@@ -132,7 +125,6 @@ test('one real offered setup action is returned; a fictional one never is', () =
     policy: { accounts: 'existing-only', lifetime: 'prefer-lasting' } });
   assert.equal(real.outcome, 'action');
   assert.equal(real.kind, 'session');
-  assert.equal(real.account, 'account-free');
   assert.equal(real.action.id, 'ssh-install');
   assert.equal(real.candidate.providerId, 'localhost.run');
   // No offered action in the candidate data: the policy change that would permit setup still cannot
@@ -149,7 +141,6 @@ test('an account-required setup action is offered only after the caller explicit
   const offered = selectForwardCandidate({ candidates: [funnelDurableActionable()], policy: { accounts: 'allow-setup', lifetime: 'prefer-lasting' } });
   assert.equal(offered.outcome, 'action');
   assert.equal(offered.action.id, 'tailscale-setup');
-  assert.equal(offered.account, 'unknown');
 });
 test('detect-only availability is never selected, offered or executed', () => {
   const result = selectForwardCandidate({ candidates: [funnelDurableReady({ availability: { durable: { state: 'detect-only', reason: 'fixture' } } })],

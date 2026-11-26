@@ -19,7 +19,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import test from 'node:test';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -41,7 +41,7 @@ async function waitFor(check, ms = 4000, step = 20) {
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 
 async function scratch(t) {
-  await mkdtemp(join(homedir(), '.tmp'), { recursive: true }).catch(() => {});
+  await mkdir(join(homedir(), '.tmp'), { recursive: true });
   const home = await mkdtemp(join(homedir(), '.tmp', 'gozar-forward-'));
   t.after(() => rm(home, { recursive: true, force: true }));
   return home;
@@ -1010,7 +1010,8 @@ test('stand-in: close during re-establishment prevents resurrection and removes 
 test('stand-in: re-establishment attempts are bounded; a persistently failing provider leaves the resource down', async t => {
   const s = await standIn(t, { reconnect: FAST });
   const resource = await published(s);
-  const downs = [];
+  const downs = [], halted = [];
+  resource.on('halted', event => halted.push(event));
   resource.on('down', event => downs.push(event));
   s.world.failAllocations = 1000;
   const handle = { kind: 'session', id: 's-1', generation: 1 };
@@ -1021,6 +1022,8 @@ test('stand-in: re-establishment attempts are bounded; a persistently failing pr
   assert.ok(s.world.allocations <= 1 + FAST.attempts, `bounded retries (${s.world.allocations})`);
   assert.equal(resource.url, null);
   assert.ok(resource.downSince);
+  assert.equal(halted.length, 1, 'the host learns that bounded recovery ended');
+  assert.deepEqual(halted[0], { code: 'provider_unavailable', downSince: resource.downSince, retrying: false });
   assert.equal(downs.length, 1, 'one outage, one down event');
   await resource.close();
   assert.equal((await s.state()).run.phase, 'stopped');
@@ -1302,7 +1305,8 @@ test('real SDK: a created-but-unverified route with refused removal keeps its ex
 test('real SDK: a vanished provider rule is detected as lost and re-established through a fresh scoped operation', async t => {
   const w = await durableWorld(t, { id: 'fw-real-loss', reconnect: FAST });
   const resource = await w.forward({ app: 'faravan', port: w.port, onAction: () => ({ approve: true }) });
-  const events = { down: [], back: [], change: [] };
+  const events = { down: [], back: [], change: [], halted: [] };
+  try {
   for (const type of Object.keys(events)) resource.on(type, event => events[type].push(event));
   const first = await stateOf(w.home).read();
   // REAL provider loss: the durable rule disappears from the provider's own store (what a removed or reset
@@ -1310,9 +1314,11 @@ test('real SDK: a vanished provider rule is detected as lost and re-established 
   const storePath = join(w.home, 'registry', 'providers', w.id, 'store.json');
   const store = JSON.parse(await readFile(storePath, 'utf8'));
   assert.ok(store.entries.a, 'the owned rule exists before the loss');
-  await writeFile(storePath, JSON.stringify({ ...store, entries: {} }));
+  // Replace the provider snapshot atomically: a concurrent status read must see loss, not truncated JSON.
+  await writeFile(storePath + '.loss', JSON.stringify({ ...store, entries: {} }));
+  await rename(storePath + '.loss', storePath);
   assert.ok(await waitFor(() => events.down.length === 1, 10000), 'the loss was observed and the url withdrawn');
-  assert.ok(await waitFor(() => events.back.length === 1, 15000), 'the managed intent re-established the route');
+  assert.ok(await waitFor(() => events.back.length === 1, 15000), 'the managed intent re-established the route: '+JSON.stringify({events,record:await stateOf(w.home).read()}));
   assert.equal(resource.url, `https://a.${w.id}.invalid`);
   assert.equal(resource.needsAction, null, 'unchanged exact assent needs no second consent');
   assert.equal(events.back[0].downSince, events.down[0].downSince);
@@ -1322,6 +1328,165 @@ test('real SDK: a vanished provider rule is detected as lost and re-established 
   assert.notEqual(record.run.operationId, first.run.operationId, 'a fresh scoped operation');
   assert.equal(record.downSince, null);
   assert.equal(record.cleanup.certainty, 'settled');
-  await resource.close();
+  } finally { await resource.close(); }
   assert.deepEqual((await w.store()).entries, {}, 'close removed the re-established rule');
+});
+
+// Regression cuts reproduced by the independent whole-candidate review.
+test('stand-in: an old cleanup retry cannot stop a successor run', async t => {
+  const s = await standIn(t);
+  const old = await published(s);
+  s.world.closeOutcome = 'unconfirmed';
+  await rejects(old.close(), 'cleanup_debt');
+  s.world.closeOutcome = 'confirmed';
+  const next = await published(s);
+  try {
+    const before = await s.state();
+    const calls = closeCalls(s).length;
+    await old.close();
+    assert.deepEqual(await s.state(), before, 'old cleanup cannot write the successor record');
+    assert.equal(closeCalls(s).length, calls, 'old cleanup cannot remove the successor handle');
+    assert.equal(s.world.routes.has(before.run.handle.id), true);
+    assert.equal(next.url, 'https://one.fixture.example');
+  } finally { await next.close(); }
+});
+
+test('stand-in: close during a held setup re-observation prevents the effect', async t => {
+  const s = await standIn(t);
+  s.world.mode = 'needs-setup';
+  const original = s.api.catalogRoutes, entered = deferred(), release = deferred();
+  s.api.catalogRoutes = async request => {
+    if (request.providerId) { entered.resolve(); await release.promise; }
+    return original(request);
+  };
+  const route = await s.forward({ app: 'faravan', port: s.port });
+  const resuming = route.resume({ approve: true });
+  void resuming.catch(() => {});
+  try {
+    await entered.promise;
+    await route.close();
+    release.resolve();
+    await rejects(resuming, 'stopped_by_user');
+    assert.equal(s.world.setupRan, undefined, 'no setup starts after confirmed close');
+    assert.equal((await s.state()).run.phase, 'stopped');
+  } finally { release.resolve(); await resuming.catch(() => {}); await route.close(); }
+});
+
+for (const stepped of [false, true]) test('stand-in: close joins secret storage and fences the next '+(stepped?'stepped':'direct')+' action', async t => {
+  const s = await standIn(t);
+  s.world.mode = 'needs-setup'; s.world.stepped = stepped;
+  const offered = s.world.offered;
+  s.world.offered = (kind, request) => offered(kind, request).map(row => {
+    if (!row.setup.actions.length) return row;
+    const action = setupAction({ kind: 'provide-secret', inputId: 'token', secretLabel: 'Token', ...(stepped ? { step: { kind: 'guided' } } : {}) });
+    row.setup.actions = [{ ...action, consent: setupConsent(action) }];
+    return row;
+  });
+  if (stepped) {
+    const run = s.api.runSetupAction;
+    s.api.runSetupAction = async request => {
+      const result = await run(request);
+      if (result.nextAction) {
+        const action = setupAction({ id: 'secret-step', kind: 'provide-secret', inputId: 'token', secretLabel: 'Token' });
+        result.nextAction = { ...action, consent: setupConsent(action) };
+      }
+      return result;
+    };
+  }
+  const entered = deferred(), release = deferred();
+  const store = s.api.storeSecret;
+  s.api.storeSecret = async request => { entered.resolve(); await release.promise; return store(request); };
+  const route = await s.forward({ app: 'faravan', port: s.port });
+  const resuming = route.resume({ approve: true, secret: 'fixture-secret' });
+  void resuming.catch(() => {});
+  let closing;
+  try {
+    await entered.promise;
+    const setupCalls = s.calls.filter(([name]) => name === 'runSetupAction').length;
+    let settled = false;
+    closing = route.close().then(() => { settled = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false, 'close joins the started secret intake');
+    release.resolve();
+    await closing;
+    await rejects(resuming, 'stopped_by_user');
+    assert.equal(s.calls.filter(([name]) => name === 'runSetupAction').length, setupCalls, 'no setup effect after close');
+  } finally { release.resolve(); await resuming.catch(() => {}); await closing?.catch(() => {}); await route.close(); }
+});
+
+test('stand-in: background cleanup debt reports halted and replays to a late subscriber', async t => {
+  const s = await standIn(t, { reconnect: FAST });
+  const route = await published(s);
+  const halted = [];
+  route.on('halted', event => halted.push(event));
+  s.world.closeOutcome = 'unconfirmed';
+  s.world.queue.push({ type: 'terminal', route: view({ handle: { kind: 'session', id: 's-1', generation: 1 }, state: 'lost', published: null }) });
+  try {
+    assert.ok(await waitFor(() => halted.length === 1));
+    assert.deepEqual(halted[0], { code: 'cleanup_debt', downSince: route.downSince, retrying: false });
+    assert.equal(route.url, null);
+    // A separate run below proves the first subscriber receives an already recorded terminal notice.
+  } finally { s.world.closeOutcome = 'confirmed'; await route.close(); }
+  const later = await published(s);
+  s.world.closeOutcome = 'unconfirmed';
+  const handle = (await s.state()).run.handle;
+  s.world.queue.push({ type: 'terminal', route: view({ handle, state: 'lost', published: null }) });
+  try {
+    assert.ok(await waitFor(async () => (await s.state()).cleanup.certainty === 'unconfirmed'));
+    const replay = new Promise(resolve => later.on('halted', resolve));
+    assert.deepEqual(await replay, { code: 'cleanup_debt', downSince: later.downSince, retrying: false });
+  } finally { s.world.closeOutcome = 'confirmed'; await later.close(); }
+});
+
+for (const asynchronous of [false, true]) test('stand-in: a failed '+(asynchronous?'async':'sync')+' event listener warns without exposing its message or stopping management', async t => {
+  const s = await standIn(t);
+  const route = await published(s);
+  const warned = deferred();
+  const warning = t.mock.method(process, 'emitWarning', (...args) => warned.resolve(args));
+  route.on('change', () => {
+    const error = new Error('fixture-secret-not-for-logs');
+    if (asynchronous) return Promise.reject(error);
+    throw error;
+  });
+  s.world.queue.push(view({ handle: (await s.state()).run.handle, url: 'https://changed.fixture.example' }));
+  try {
+    const args = await warned.promise;
+    assert.equal(args[1].code, 'GOZAR_FORWARD_LISTENER');
+    assert.doesNotMatch(JSON.stringify(args), /fixture-secret/);
+    assert.equal(route.url, 'https://changed.fixture.example');
+    assert.equal(warning.mock.callCount(), 1);
+  } finally { await route.close(); }
+});
+
+test('stand-in: an HTTP proof failure names the verifier integration step', async t => {
+  const s = await standIn(t);
+  s.api.expose = async () => { throw Object.assign(new Error('The service did not pass its challenge'), { code: 'verification_failed' }); };
+  const error = await rejects(s.forward({ app: 'faravan', port: s.port, onAction: () => ({ approve: true }) }), 'verification_failed');
+  assert.match(error.message, /mount createServiceVerifier\(\)/);
+  assert.equal(s.world.routes.size, 0);
+});
+
+test('stand-in: old cleanup cannot race the successor reconciling the same generation', async t => {
+  const s = await standIn(t);
+  const old = await published(s);
+  s.world.closeOutcome = 'unconfirmed';
+  await rejects(old.close(), 'cleanup_debt');
+  s.world.closeOutcome = 'confirmed';
+  const entered = deferred(), release = deferred(), close = s.api.closeRoute;
+  s.api.closeRoute = async request => { entered.resolve(); await release.promise; return close(request); };
+  const starting = s.forward({ app: 'faravan', port: s.port, onAction: () => ({ approve: true }) });
+  void starting.catch(() => {});
+  let next;
+  try {
+    await entered.promise;
+    const before = await s.state();
+    await rejects(old.close(), 'busy');
+    assert.deepEqual(await s.state(), before);
+    release.resolve();
+    next = await starting;
+    const active = await s.state();
+    await old.close();
+    assert.deepEqual(await s.state(), active);
+    assert.equal(s.world.routes.has(active.run.handle.id), true);
+  } finally { release.resolve(); next ??= await starting; await next.close(); }
 });

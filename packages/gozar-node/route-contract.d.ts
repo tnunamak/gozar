@@ -600,8 +600,6 @@ export type ForwardSetupAction = {
   obtainUrl: string | null;
   disclosure: Disclosure | null;
   facts: Fact[];
-  /** Present for a stepped setup operation; informational only. */
-  operation?: { id: string; revision: number; state: SetupOperation['state'] };
   answer: ForwardAnswerSpec;
 };
 
@@ -643,6 +641,8 @@ export type ForwardChange = { oldOrigin: string; newOrigin: string; at: string }
 export type ForwardDown = { downSince: string };
 /** The route verified again. `downSince` is the outage that ended; `at` is the recovery. */
 export type ForwardBack = { downSince: string; at: string };
+/** Recovery stopped: close this resource, settle any cleanup debt, then explicitly request a new run. */
+export type ForwardHalted = { code: GozarErrorCode; downSince: string | null; retrying: false };
 /** Stops one subscription. */
 export type ForwardUnsubscribe = () => void;
 
@@ -666,6 +666,8 @@ export type ForwardRoute = {
   on(type: 'down', listener: (event: ForwardDown) => void): ForwardUnsubscribe;
   on(type: 'back', listener: (event: ForwardBack) => void): ForwardUnsubscribe;
   on(type: 'action', listener: (action: ForwardAction) => void): ForwardUnsubscribe;
+  /** First subscription replays a terminal recovery failure if it already occurred. */
+  on(type: 'halted', listener: (event: ForwardHalted) => void): ForwardUnsubscribe;
   /** Stops this run. Resolves on confirmed owned cleanup; rejects cleanup_debt otherwise. Retry close(). */
   close(): Promise<void>;
 };

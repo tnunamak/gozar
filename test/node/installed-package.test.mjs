@@ -326,7 +326,7 @@ const lossEvidence = async fake => {
 
 test('installed forward: the exact first documentation example runs on the imported namespace and cleans up exactly', async t => {
   const w = await hostWorld(t);
-  const source = `const { port, ui, publishSignedAddress, showOffline, showOnline } = globalThis.faravanHost;\n${await exampleBlock()}\n`;
+  const source = `const { port, ui, publishSignedAddress, showOffline, showOnline, showRecoveryFailure } = globalThis.faravanHost;\n${await exampleBlock()}\n`;
   const host = await runHost(t, { entry: 'documentation-example.mjs', env: w.env, source });
   const published = await host.report('published');
   // The example's own steps ran: one consent decision the UI mock approved, then the verified origin reached the app's real bytes.
@@ -552,8 +552,9 @@ declare const ui: { show(action: gozar.ForwardAction): Promise<gozar.ForwardAnsw
 declare function publishSignedAddress(origin: string, previous?: { oldOrigin: string; at: string }): void;
 declare function showOffline(event: { downSince: string }): void;
 declare function showOnline(event: gozar.ForwardBack): void;
+declare function showRecoveryFailure(event: gozar.ForwardHalted): void;
 
-// The documented example. TypeScript needs one explicit state guard because a pending result has no route members.
+// The documented example uses current nullable properties on the same resource throughout.
 export async function firstUse() {
   let route = await gozar.forward({ app: 'faravan', port, policy: { accounts: 'existing-only', lifetime: 'prefer-lasting' } });
   try {
@@ -562,6 +563,7 @@ export async function firstUse() {
     if (route.url !== null) publishSignedAddress(route.url);
     route.on('down', ({ downSince }) => showOffline({ downSince }));
     route.on('back', showOnline);
+    route.on('halted', showRecoveryFailure);
     const stop = route.on('action', action => { void ui.show(action); });
     stop();
     await ui.untilClosed();

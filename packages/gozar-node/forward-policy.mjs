@@ -41,11 +41,11 @@
 //
 // --- Result ---------------------------------------------------------------------------
 //   { outcome: 'selected', kind, lifetime: 'lasting' | 'session',
-//     account: 'existing' | 'account-free' | 'unknown', accountEvidence, candidate }
+//     candidate }
 //     The best catalog-ranked candidate usable now: eligible, setup.state 'ready', an issued
 //     candidateToken, public internet reach over HTTPS, known traffic readability, and an account
 //     standing the policy admits. `candidate` is the input object by reference, unmodified.
-//   { outcome: 'action', kind, lifetime, account, accountEvidence, candidate, action }
+//   { outcome: 'action', kind, lifetime, candidate, action }
 //     The best catalog-ranked candidate whose own setup.actions are currently offered
 //     (setup.state 'action-required' with a non-empty list); `action` is the first offered action.
 //     Offered for account-free candidates under any accounts policy, and for all others only after
@@ -70,12 +70,6 @@ const ACCOUNT_POLICIES = ['existing-only', 'allow-setup'];
 const LIFETIME_POLICIES = ['prefer-lasting', 'lasting', 'session'];
 const FORWARD_KINDS = ['durable', 'session', 'attached'];
 const bad = why => { throw gozarError('invalid_input', `Invalid forward policy request: ${why}`); };
-
-const EVIDENCE = {
-  existing: "The catalog issued this candidate's one-time token only after the read-only durable grant path succeeded: durablePlanFacts observed the adapter's durable facet, which for the current Gozar-owned durable adapters reads the provider LocalAPI - a node status whose BackendState is 'Running' with the node's DNS name, and a serve config readable with an ETag. That is an authenticated provider session observed on this machine now; it does not establish a specific account email or tailnet entitlement.",
-  'account-free': 'The provider declares it needs no account (properties.needsAccount is false); there is nothing to register or sign in.',
-  unknown: 'No authenticated-account evidence exists in this candidate. A session-kind catalog grant is computed locally and proves only local prerequisites such as an installed client; account standing stays unknown. Allowing account setup would permit a real offered setup action, never a claim that sign-in already succeeded.',
-};
 
 /** The typed kind of one entry: the envelope's kind, or the candidate's consent scope. Never guessed. */
 function entryOf(item, index) {
@@ -164,12 +158,11 @@ export function selectForwardCandidate({ candidates, policy = {} } = {}) {
   for (const kinds of tiers) {
     const [best] = qualified(kinds);
     if (best) return { outcome: 'selected', kind: best.entry.kind, lifetime: best.entry.kind === 'durable' ? 'lasting' : 'session',
-      account: best.entry.standing, accountEvidence: EVIDENCE[best.entry.standing], candidate: best.entry.candidate };
+      candidate: best.entry.candidate };
   }
   for (const kinds of tiers) {
     const [best] = entries.filter(({ entry }) => kinds.includes(entry.kind) && actionable(entry, activePolicy)).sort(byRank);
     if (best) return { outcome: 'action', kind: best.entry.kind, lifetime: best.entry.kind === 'durable' ? 'lasting' : 'session',
-      account: best.entry.standing, accountEvidence: EVIDENCE[best.entry.standing],
       candidate: best.entry.candidate, action: best.entry.candidate.setup.actions[0] };
   }
   return { outcome: 'requirements_unsatisfied', code: 'requirements_unsatisfied',
