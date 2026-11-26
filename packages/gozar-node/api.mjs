@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import { canonicalHome } from './service-state.mjs';
 import { defaultHome } from './default-home.mjs';
 import { gozarError } from './error-normalizer.mjs';
@@ -6,10 +7,27 @@ import { createRouteApi } from './route-api.mjs';
 
 // The route API: by requirement, never by provider. See route-contract.d.ts.
 const routes = createRouteApi();
-/** Load a trusted provider registry. Modules execute with the host process authority. */
-export function createGozar({ manifest, root, secretBackend, hostCapabilities, identity, acknowledgeOrigin, originAckTimeoutMs, runtimeModules, detectionTtlMs, registryLineage } = {}) {
-  return createRouteApi({ manifest, root, secretBackend, hostCapabilities, identity, acknowledgeOrigin, originAckTimeoutMs, runtimeModules, detectionTtlMs, registryLineage });
+// `forward` is bound to one configured route API, so its registry, secret backend, host capabilities, identity and
+// origin-acknowledgment hook are the ones every other call on that API uses. The managed-forward engine loads and is
+// constructed on the first call: importing this module or creating a factory starts no provider and touches no disk.
+function bindForward(api, forwardHome) {
+  return async (...request) => {
+    const { createForward } = await import('./forward.mjs');
+    return createForward(api, { home: forwardHome ?? defaultHome() })(...request);
+  };
 }
+/**
+ * Load a trusted provider registry. Modules execute with the host process authority. `forwardHome` is where `forward` keeps its
+ * managed state (an absolute path); without it `forward` uses the default Gozar home. Every other call keeps taking `home` itself.
+ */
+export function createGozar({ forwardHome, manifest, root, secretBackend, hostCapabilities, identity, acknowledgeOrigin, originAckTimeoutMs, runtimeModules, detectionTtlMs, registryLineage } = {}) {
+  if (forwardHome !== undefined && (typeof forwardHome !== 'string' || !isAbsolute(forwardHome)))
+    throw gozarError('invalid_input', 'forwardHome must be an absolute path');
+  const api = createRouteApi({ manifest, root, secretBackend, hostCapabilities, identity, acknowledgeOrigin, originAckTimeoutMs, runtimeModules, detectionTtlMs, registryLineage });
+  return { ...api, forward: bindForward(api, forwardHome) };
+}
+/** Publish an existing loopback listener as a managed public HTTPS route, using the bundled providers and the default Gozar home. */
+export const forward = bindForward(routes, undefined);
 export const { catalogRoutes, inspectLegacyRoute, ensureRoute, adoptRoute, routeStatus, closeRoute, suspendRoute, watchRoutes,
   getRoutePreferences, setRoutePreferences, runSetupAction, readSetupOperation, cancelSetupOperation, resolveClientAddress, listProviders, storeSecret, discardSecret,
   beginConfigurationDraft,commitConfigurationDraft,discardConfigurationDraft,readConfigurationDraft,clearConfigurationInput,reviewRouteConsent,approveRouteConsent,listRoutes } = routes;

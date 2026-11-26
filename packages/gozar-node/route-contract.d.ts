@@ -546,7 +546,9 @@ export type RuntimeModuleDeclaration = BundledRuntimeModule | { kind: 'runtime-i
 /** Trusted executable extension registry. Relative provider paths resolve under root/providers. */
 /** Stable storage name for a host registry. `replaces` lists earlier registry ids whose saved configuration this registry carries forward once; it cannot name a published Gozar registry id. A saved input carries forward only when the provider's own current `provide-secret` / `provide-value` declaration still names that input id with the same role, and only when no route still holds the earlier configuration; otherwise `configuration_migration_required` is thrown and nothing changes. Without a lineage, storage stays bound to the registry content. */
 export type RegistryLineage={id:string;replaces:string[]};
-export type GozarOptions={registryLineage?:RegistryLineage;manifest?: string | {providers: {id:string; module:string; definition:string}[]}; root?: string;secretBackend?:import('./embedding-contract.js').SecretBackend;hostCapabilities?:import('./embedding-contract.js').HostCapabilities;identity?:import('./embedding-contract.js').HostIdentity;
+export type GozarOptions={registryLineage?:RegistryLineage;
+  /** Where `forward` keeps its managed state: an absolute path. Without it, `forward` uses the default Gozar home. Calls that take `home` still take it themselves. */
+  forwardHome?: string;manifest?: string | {providers: {id:string; module:string; definition:string}[]}; root?: string;secretBackend?:import('./embedding-contract.js').SecretBackend;hostCapabilities?:import('./embedding-contract.js').HostCapabilities;identity?:import('./embedding-contract.js').HostIdentity;
   /** Awaited exact-origin host boundary; see OriginAcknowledgmentRequest. */
   acknowledgeOrigin?: OriginAcknowledgmentHandler;
   /** Bound for one acknowledgment attempt, in milliseconds. Default 10_000. Used only when acknowledgeOrigin is declared. */
@@ -555,6 +557,146 @@ export type GozarOptions={registryLineage?:RegistryLineage;manifest?: string | {
   runtimeModules?: Record<string, RuntimeModuleDeclaration>;
   /** Short TTL for cached provider detection, in milliseconds (1000..300000; default 15000). */
   detectionTtlMs?: number;};
+
+// --- forward: publish an existing loopback listener as a managed public HTTPS route ---------------------------------
+// The host owns its listener, its UI and its saved On/Off intent. Gozar owns selection, operation IDs, consent receipts,
+// verification, recovery and cleanup. Nothing here carries a candidate token, consent digest or operation ID.
+
+/** What Gozar may do for this request. Both fields are optional; the defaults are 'existing-only' and 'prefer-lasting'. */
+export type ForwardPolicy = {
+  /** 'existing-only' admits a provider that needs no account or whose existing account Gozar observed. 'allow-setup' also permits offering a real setup step; it is never a claim that sign-in succeeded. */
+  accounts?: 'existing-only' | 'allow-setup';
+  /** 'prefer-lasting' picks a ready persistent-provider route first, then a session. 'lasting' admits only a persistent-provider route; 'session' only a session. */
+  lifetime?: 'prefer-lasting' | 'lasting' | 'session';
+};
+
+/** What the user must supply for one step. The matching answer is {approve} plus `value` or `secret` when the step asks for one. */
+export type ForwardAnswerSpec =
+  | { type: 'decision'; approve: 'boolean' }
+  | { type: 'value'; format: 'https-origin' | 'domain' | 'text'; label: string | null; options: { value: string; label: string }[] | null }
+  | { type: 'secret'; label: string | null };
+
+/** The one decision before a route is published: approve its disclosure or decline. */
+export type ForwardConsentAction = {
+  step: 'approve-route';
+  kind: 'consent';
+  label: string;
+  help: string;
+  disclosure: Disclosure;
+  facts: Fact[];
+  /** The loopback listener that will be published, as host:port. */
+  target: string;
+  answer: { type: 'decision'; approve: 'boolean' };
+};
+
+/** One provider setup step. Render `label`, `help`, `instructions`, `href` and `disclosure`; collect what `answer` asks for. */
+export type ForwardSetupAction = {
+  step: string;
+  kind: Action['kind'];
+  label: string;
+  help: string | null;
+  instructions: string | null;
+  href: string | null;
+  obtainUrl: string | null;
+  disclosure: Disclosure | null;
+  facts: Fact[];
+  /** Present for a stepped setup operation; informational only. */
+  operation?: { id: string; revision: number; state: SetupOperation['state'] };
+  answer: ForwardAnswerSpec;
+};
+
+/** One user step to render. Never an approval until the user answers it. */
+export type ForwardAction = ForwardConsentAction | ForwardSetupAction;
+
+/** The user's decision. `approve: false` declines and stops the run. A secret is stored by Gozar and never echoed. */
+export type ForwardAnswer =
+  | { approve: boolean }
+  | { approve: true; value: string }
+  | { approve: true; secret: string };
+
+/** `onAction` runs inside `forward` for each step and returns the answer; an unanswered or unknown step is never approval. */
+export type ForwardActionHandler = (action: ForwardAction) => ForwardAnswer | Promise<ForwardAnswer>;
+
+export type ForwardRequest = {
+  /** 1 to 64 lowercase letters, digits or hyphens. Within one state scope, the same `app` is the same managed service. */
+  app: string;
+  /** The loopback port the host already listens on. */
+  port: number;
+  policy?: ForwardPolicy;
+  onAction?: ForwardActionHandler;
+};
+
+/** Typed facts about the selected provider. `traffic.providerCanReadPayload` lets the app choose its own encryption. */
+export type ForwardProvider = {
+  id: string;
+  label: string | null;
+  ownership: RouteView['ownership'] | null;
+  needsAccount: boolean | null;
+  traffic: { tlsTermination: Properties['traffic']['tlsTermination']; providerCanReadPayload: boolean | null };
+  address: { stability: Properties['address']['stability'] };
+  cost: Cost;
+};
+
+/** A verified origin change since `forward` returned. `at` is when the new origin was verified. */
+export type ForwardChange = { oldOrigin: string; newOrigin: string; at: string };
+/** The route stopped verifying. `downSince` is when the outage was first observed. */
+export type ForwardDown = { downSince: string };
+/** The route verified again. `downSince` is the outage that ended; `at` is the recovery. */
+export type ForwardBack = { downSince: string; at: string };
+/** Stops one subscription. */
+export type ForwardUnsubscribe = () => void;
+
+/** A step is waiting. Render `needsAction`, then `resume` with the answer. `close()` cancels and cleans up the attempt. */
+export type ForwardPending = {
+  readonly needsAction: ForwardAction;
+  resume(answer: ForwardAnswer): Promise<ForwardResult>;
+  close(): Promise<void>;
+};
+
+/**
+ * A managed route. `url`, `downSince` and `needsAction` are read when you use them, not when `forward` returned.
+ * `url` is the current verified origin, or null while the route is down; never cache it as the address.
+ * `needsAction` is null unless a later user decision is waiting; then `resume(answer)` continues and `on('action')` announces it.
+ */
+export type ForwardPublished = {
+  readonly url: string | null;
+  /** 'lasting' is a persistent provider route; 'session' is a session. Neither promises uninterrupted access. */
+  readonly lifetime: 'lasting' | 'session';
+  readonly provider: ForwardProvider;
+  /** When the current outage was first observed, or null when the route is verified. */
+  readonly downSince: string | null;
+  readonly needsAction: ForwardAction | null;
+  resume(answer: ForwardAnswer): Promise<ForwardPublished>;
+  /** 'change' first receives the persisted startup change and every verified change since `forward` returned, in order. */
+  on(type: 'change', listener: (event: ForwardChange) => void): ForwardUnsubscribe;
+  on(type: 'down', listener: (event: ForwardDown) => void): ForwardUnsubscribe;
+  on(type: 'back', listener: (event: ForwardBack) => void): ForwardUnsubscribe;
+  /** A later user step is waiting; `route.needsAction` holds it too. */
+  on(type: 'action', listener: (action: ForwardAction) => void): ForwardUnsubscribe;
+  /** Stops this run and resolves once owned cleanup is confirmed. Rejects with code 'cleanup_debt' when it is not; retry `close()`. */
+  close(): Promise<void>;
+};
+
+/** A published route, or a step to render first. Check `needsAction` before using the route. */
+export type ForwardResult = ForwardPending | ForwardPublished;
+
+/** Why one considered provider cannot serve the policy. A closed vocabulary of observed facts. */
+export type ForwardMissing = 'usage' | 'detect-only' | 'public-internet-https' | 'traffic-readability' | 'account' | 'ready route' | 'lasting route' | 'session route';
+export type ForwardUnmet = {
+  provider: string | null;
+  kind: 'durable' | 'session' | 'attached' | null;
+  missing: ForwardMissing[];
+  /** A policy the caller may explicitly request instead, only when it would admit this provider. Never applied for you. */
+  policyChanges: ForwardPolicy | null;
+};
+/** No provider meets the policy. `nextAction` is null: no setup step can satisfy it; choose a different policy to retry. */
+export interface ForwardRequirementsError extends GozarThrownError { code: 'requirements_unsatisfied'; nextAction: null; unmet: ForwardUnmet[] }
+/** Cleanup is not confirmed. Report that, not that the route is off, then retry `close()` or call `forward` again for this app. */
+export interface ForwardCleanupDebtError extends GozarThrownError { code: 'cleanup_debt'; nextAction: Action }
+
+/** Publish the listener on `port`. With `onAction`, steps run inside the call and the result is the published route. */
+export function forward(request: ForwardRequest & { onAction: ForwardActionHandler }): Promise<ForwardPublished>;
+export function forward(request: ForwardRequest): Promise<ForwardResult>;
 export function createGozar(options?: GozarOptions): import('./embedding-contract.js').HostEmbeddingMethods & {
  catalogRoutes: typeof catalogRoutes; expose: (request:ExposeRequest)=>Promise<RouteView>;
  ensureRoute: typeof ensureRoute; adoptRoute: typeof adoptRoute; routeStatus: typeof routeStatus;
@@ -565,4 +707,6 @@ export function createGozar(options?: GozarOptions): import('./embedding-contrac
  resolveClientAddress: typeof resolveClientAddress;
  reviewRouteConsent:typeof reviewRouteConsent;approveRouteConsent:typeof approveRouteConsent;
  listRoutes:typeof listRoutes;
+ /** The same `forward` as the package root, bound to this configured API: its registry, secret backend, host capabilities, identity and origin acknowledgment apply. */
+ forward: typeof forward;
 };

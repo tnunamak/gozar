@@ -2,8 +2,10 @@
 
 ## The experience to ship
 
-**Proposed API, not implemented yet.** The app already owns its loopback listener
-and UI. These are the consumer lines the installed-package tests must import:
+The app already owns its loopback listener and UI. Its request handler calls
+`createServiceVerifier()` first, as for [service routes](service-routes.md), so Gozar can prove
+that the published address reaches this app. The installed-package tests import and run
+these consumer lines unchanged:
 
 ```js
 import * as gozar from '@tnunamak/gozar';
@@ -21,11 +23,24 @@ try {
 ```
 
 `forward` owns cataloging, selection, operation IDs, consent receipts, readiness,
-recovery and cleanup. A published result has `url`, `provider`, `lifetime` and
-`needsAction: null`. `lifetime` distinguishes a persistent provider route from
+recovery and cleanup. A published result has `url`, `provider`, `lifetime`,
+`downSince` and `needsAction`. `lifetime` distinguishes a persistent provider route from
 a session; neither describes a promise of uninterrupted access. `provider`
 includes typed facts about whether the provider can read the traffic, so the app
 can choose encryption.
+
+`url`, `downSince` and `needsAction` are current properties: read them each time
+you use them. `url` is the verified address, or `null` while the route is down, so
+never keep the startup value as the address. `downSince` is when the current outage
+began, or `null`. `needsAction` is `null` unless a later user step is waiting.
+In TypeScript, the result of `forward` is either a pending step or a published route.
+Check `'on' in route` once after the loop, as below, before calling `route.on`;
+`forward({ ..., onAction })` returns the published route directly.
+
+```ts
+while (route.needsAction) route = await route.resume(await ui.show(route.needsAction));
+if (!('on' in route)) throw new Error('forward returned a pending step');
+```
 
 An action result has one `needsAction` to render and `resume(answer)` to continue.
 The answer expresses the user's decision or supplied input, not a token/digest;
@@ -34,6 +49,21 @@ before acting. Action results also have `close()`, so a failed or dismissed UI
 can cancel and clean up the pending attempt. For a host that handles steps
 immediately, `onAction: ui.show` runs the same UI hook inside `forward`. It never
 turns an unknown or incomplete step into approval.
+
+The descriptor's `answer.type` says what to collect:
+
+| `answer.type` | The answer |
+|---|---|
+| `decision` | `{ approve: true }` or `{ approve: false }` |
+| `value` | `{ approve: true, value: '…' }`; `answer.format` names the kind of text and `answer.options`, when present, lists the accepted values |
+| `secret` | `{ approve: true, secret: '…' }`; Gozar hands it to the configured secret backend and does not return it |
+
+`{ approve: false }` declines. The run stops, nothing is published, and the call
+rejects with `stopped_by_user`. An answer the step does not accept, or an answer to
+a step that a newer step replaced, rejects with `invalid_input`; render the current
+`needsAction` again. A route that is already published can need a later user step
+too. Then `route.needsAction` holds it, `route.on('action', render)` announces it and
+`route.resume(answer)` answers it; the loop above handles it the same way.
 
 When no provider meets the policy, the developer catches a typed error with a
 per-provider explanation. For a strict lasting-route request on a machine
@@ -53,7 +83,8 @@ without a ready lasting provider, for example:
 }
 ```
 
-The app can render every entry without provider branches. `policyChanges`
+Each entry also has `kind` (`'durable'`, `'session'` or `'attached'`), the route type
+Gozar considered. The app can render every entry without provider branches. `policyChanges`
 explains an alternative the caller may explicitly request; it never applies
 it. Allowing account setup permits an action, not a claim that sign-in already
 succeeded. Unknown prerequisites remain unknown, and an explanation must not
@@ -73,14 +104,27 @@ reconciles that debt before starting anything and rejects with `cleanup_debt`
 if removal is still unconfirmed. No background retry is promised while the
 application is not running.
 
-The default scope is the app's private managed state. Advanced hosts can supply
-storage, backend and identity through their configured factory. A normal
-restart uses the same `forward({ app, port, policy })` call; the host does not
+The default scope is the app's private managed state under the default Gozar home
+(`GOZAR_HOME`, when set). Advanced hosts can supply storage, backend and identity
+through their configured factory, and a different scope for `forward`'s managed state:
+
+```js
+import { createGozar } from '@tnunamak/gozar';
+const gozar = createGozar({ forwardHome: '/var/lib/faravan/gozar', secretBackend, identity });
+const route = await gozar.forward({ app: 'faravan', port, onAction: ui.show });
+```
+
+`forwardHome` is an absolute path. It moves only `forward`'s managed state; every
+other call still takes its own `home`. The factory's registry, secret backend, host
+capabilities, identity and origin acknowledgment apply to its `forward`, exactly as
+to its other calls. Creating a factory starts nothing and writes nothing.
+
+A normal restart uses the same `forward({ app, port, policy })` call; the host does not
 look up a handle or run a separate recovery step. Within the app's state scope,
 the same `app` identifies its managed service. Gozar rechecks the supplied target,
 policy, current provider facts and saved approval before reattaching or
 re-establishing the route. An unchanged approved disclosure needs no second
-consent click. Reattachment can return `needsAction` when approval or setup is
+consent click; a different `port` is a different target and asks again. Reattachment can return `needsAction` when approval or setup is
 needed. A changed policy is re-evaluated, not ignored during recovery.
 
 If the retained provider no longer qualifies, Gozar must settle its owned
@@ -109,7 +153,7 @@ Assessment: 2026-11-26. The first consumer is an application exposing an existin
 loopback HTTP listener to public HTTPS clients. The application owns its listener;
 Gozar owns reachability, provider selection and the route lifecycle.
 
-## First use today
+## The same task without `forward`
 
 With the application's port and state directory already known, the first ten
 ordinary lines describe a request, rather than return an address:
@@ -182,8 +226,9 @@ streaming requirements still need provider/protocol evidence.
 Offer one host operation over an existing listener: return a published managed
 route or one current setup/consent action. Operational failures remain typed
 and carry retained cleanup state. The application supplies its identity,
-storage and approval UI, not provider branches. The proposed `forward` contract
-above is the README-driven target; it has not shipped.
+storage and approval UI, not provider branches. The `forward` contract
+above is implemented in the package source and exercised by the installed-package
+tests. Neither a release nor acceptance against a live provider is claimed.
 
 The resource must expose verified origin changes, publication withdrawal,
 `downSince`, events and close. Persisted intent and bounded reconnect belong in
