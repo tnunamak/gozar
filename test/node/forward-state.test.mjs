@@ -295,6 +295,33 @@ console.log(runId);
   await rejects(store(home).commit(content({ run: run({ id: RUN_B, generation: 2 }) }), { expectedRevision: 2 }), 'cleanup_debt');
 });
 
+test('an unrecorded allocation and a live setup operation keep their exact private references', async t => {
+  const home = await scratch(t);
+  const state = store(home);
+  const setup = { operationId: RUN_B, provider: 'tunnl.gg' };
+  // operationId with a null handle is an allocation whose result was never recorded: it round-trips as such.
+  const first = await state.commit(content({ run: run({ operationId: RUN_B, provider: 'tunnl.gg', setup }) }), { expectedRevision: 0 });
+  assert.deepEqual(first.run.setup, setup);
+  assert.equal(first.run.handle, null);
+  assert.equal(first.run.operationId, RUN_B);
+  assert.deepEqual((await store(home).read()).run.setup, setup, 'a reopened store keeps the setup reference');
+  // A stopped run with unconfirmed cleanup retains BOTH references across the debt: nothing is dropped.
+  const stopped = await state.commit({ run: run({ phase: 'stopped', operationId: RUN_B, handle: routeHandle('route-7'),
+    provider: 'tunnl.gg', setup }), approval: APPROVAL, origin: ORIGIN, downSince: null, cleanup: debtOf(run()) }, { expectedRevision: 1 });
+  assert.deepEqual(stopped.run.setup, setup);
+  assert.deepEqual(stopped.run.handle, routeHandle('route-7'));
+  // A record written without the field (an older private record shape) reads as no setup operation.
+  const bare = store(home, 'bare');
+  const { setup: _drop, ...legacyRun } = run();
+  const created = await bare.commit({ run: legacyRun, approval: null, origin: null, downSince: null, cleanup: settledCleanup() }, { expectedRevision: 0 });
+  assert.equal(created.run.setup, null);
+  // Malformed references are refused before any filesystem effect; the reference carries no extra fields.
+  for (const bad of [{ operationId: 'not-a-uuid', provider: 'p' }, { operationId: RUN_B, provider: '' },
+    { operationId: RUN_B }, { operationId: RUN_B, provider: 'p', token: 'secret' }, 'x', []])
+    await rejects(store(home, 'bad').commit(content({ run: run({ setup: bad }) }), { expectedRevision: 0 }), 'invalid_input', null, `setup ${JSON.stringify(bad)}`);
+  assert.equal(await store(home, 'bad').read(), null);
+});
+
 test('no bearer, candidate token, credential or raw payload can be persisted', async t => {
   const home = await scratch(t);
   const state = store(home);

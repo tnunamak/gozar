@@ -19,7 +19,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import test from 'node:test';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -56,6 +56,15 @@ async function loopbackApp(t) {
 }
 
 const stateOf = (home, app = 'faravan') => openForwardState({ home, app });
+
+/** SIGKILL a child and wait for its exit, even if it already exited. */
+async function killAndWait(child) {
+  if (child.exitCode === null && child.signalCode === null) {
+    const exited = new Promise(resolve => child.once('exit', resolve));
+    child.kill('SIGKILL');
+    await exited;
+  }
+}
 
 async function rejects(promise, code, label) {
   try { await promise; } catch (error) {
@@ -121,10 +130,12 @@ function setupConsent(action) {
 }
 
 /** A RouteView-shaped observation; only the fields the engine reads. */
-function view({ handle, url = 'https://one.fixture.example', state = 'usable', target = '127.0.0.1:18765', published = url }) {
-  return { handle, state, ownership: 'gozar-owned', published, origin: url,
+function view({ handle, url = 'https://one.fixture.example', state = 'usable', target = '127.0.0.1:18765', published = url,
+    consentFactsDigest, operationId = null, cleanup = { state: 'none' } }) {
+  return { handle, state, ownership: 'gozar-owned', published, origin: url, operationId,
+    ...(consentFactsDigest ? { consentFactsDigest } : {}),
     verification: { status: state === 'usable' ? 'verified' : 'unverified', checkedAt: ISO },
-    cleanup: { state: 'none' }, hostConfiguration: { target: { known: true, value: target } }, properties: properties() };
+    cleanup, hostConfiguration: { target: { known: true, value: target } }, properties: properties() };
 }
 
 // --- The RECORDING SDK STAND-IN: orchestration interleavings only, never provider semantics --------
@@ -155,12 +166,12 @@ function eventQueue() {
  */
 function standInWorld({ kindsOffered = ['session'], providerId = 'fixture-run', needsAccount = false,
     disclosureRevision = 'disc-1', trafficShape = traffic('provider', true), expiresAt = null, url = 'https://one.fixture.example' } = {}) {
-  const world = { mode: 'ready', serial: 0, tokenSerial: 0, routes: new Map(), closeOutcome: 'confirmed',
+  const world = { mode: 'ready', serial: 0, tokenSerial: 0, routes: new Map(), journal: new Map(), closeOutcome: 'confirmed',
     queue: eventQueue(), url, allocateLatch: null,
     offered: (kind, request) => {
       if (!kindsOffered.includes(kind)) return [];
       if (world.mode === 'needs-setup') return [candidate({ providerId, kind, needsAccount, disclosureRevision,
-        trafficShape, action: { ...setupAction(), consent: setupConsent(setupAction()) }, token: null, target: request?.target })];
+        trafficShape, action: { ...setupAction(world.stepped ? { step: { kind: 'guided' } } : {}), consent: setupConsent(setupAction()) }, token: null, target: request?.target })];
       if (world.mode === 'unsatisfied') return [
         candidate({ providerId: 'tunnl.gg', kind: 'session', needsAccount: true, token: `tok-tunnl-${world.serial}` }),
         candidate({ providerId: 'localhost.run', kind: 'session', trafficShape: traffic('unknown', null), token: `tok-local-${world.serial}` }),
@@ -181,28 +192,60 @@ function standInWorld({ kindsOffered = ['session'], providerId = 'fixture-run', 
     async routeStatus(request) {
       const route = world.routes.get(request.handle.id);
       if (!route) throw Object.assign(new Error('The managed route is gone'), { code: 'route_not_found' });
-      return view({ handle: request.handle, url: route.url, target: route.target });
+      return view({ handle: request.handle, url: route.url, target: route.target, consentFactsDigest: route.consentFactsDigest,
+        operationId: route.operationId, ...(route.down ? { state: 'unverified', published: null } : {}) });
     },
     async closeRoute(request) {
       if (world.closeOutcome !== 'confirmed') return { cleanup: { state: 'unconfirmed' } };
       world.routes.delete(request.handle.id);
+      for (const entry of world.journal.values()) if (entry.handle.id === request.handle.id) entry.released = true;
       return { cleanup: { state: 'confirmed' }, handle: request.handle };
     },
+    // The SDK's scoped recovery read: every operation journal, live or retained, with its exact handle.
+    async listRoutes() {
+      return { routes: [...world.journal.entries()].map(([operationId, entry]) => entry.released
+        ? view({ handle: entry.handle, state: 'released', published: null, operationId, cleanup: { state: 'confirmed' } })
+        : { ...view({ handle: entry.handle, state: 'uncertain', published: null, operationId, cleanup: { state: 'unconfirmed' } }) }) };
+    },
     async *watchRoutes(request) {
+      world.watchStarts = (world.watchStarts ?? 0) + 1;
+      if (world.watchBrokenFor === request.handle.id) throw new Error('watch transport broke');
       while (!request.signal?.aborted) {
         const pulled = await world.queue.pull(request.signal);
         if (!pulled || pulled.value === null || request.signal?.aborted) return;
+        if (pulled.value.throw) throw pulled.value.throw;
+        if (pulled.value.type) { yield pulled.value; return; }
         yield { route: pulled.value };
       }
     },
     async runSetupAction(request) {
       world.setupRan = request;
+      if (request.operationId !== undefined && world.stepped) {
+        // A stepped SDK operation: reserve, offer one action, complete after that action is run.
+        world.operations ??= new Map();
+        if (request.expectedSetupRevision === 0) {
+          world.operations.set(request.operationId, 'pending');
+          return pendingOperation(world, request.operationId, 1);
+        }
+        world.operations.set(request.operationId, 'complete'); world.mode = 'ready';
+        return operationView(world, request);
+      }
       if (request.operationId !== undefined) return operationView(world, request);
       world.mode = 'ready';
       return { schemaVersion: 1, state: 'complete', nextAction: null };
     },
-    async readSetupOperation(request) { return operationView(world, request); },
-    async cancelSetupOperation() { world.cancelled = true; return { schemaVersion: 1, state: 'cancelled', revision: 0, nextAction: null, evidence: { known: false, reason: 'fixture' }, resources: [] }; },
+    async readSetupOperation(request) {
+      world.reads = (world.reads ?? 0) + 1;
+      if (world.stepped && world.operations?.get(request.operationId) === 'pending') return pendingOperation(world, request.operationId, 1);
+      if (world.stepped && world.operations?.get(request.operationId) === 'cancelled') return { ...operationView(world, request), state: 'cancelled' };
+      return operationView(world, request);
+    },
+    async cancelSetupOperation(request) {
+      world.cancelled = true; (world.cancelRequests ??= []).push(structuredClone(request));
+      if (world.cancelRefused) throw Object.assign(new Error('the provider refused the cancel'), { code: 'provider_unavailable' });
+      world.operations?.set(request.operationId, 'cancelled');
+      return { schemaVersion: 1, state: 'cancelled', revision: 0, nextAction: null, evidence: { known: false, reason: 'fixture' }, resources: [] };
+    },
     async storeSecret(request) { return { handle: `sec_${request.inputId}`, configurationRevision: 'cfg-1', scopeId: request.scopeId }; },
   };
   const calls = [];
@@ -213,14 +256,28 @@ function standInWorld({ kindsOffered = ['session'], providerId = 'fixture-run', 
   } });
   async function allocate(kind, request) {
     world.allocated = request;
+    world.allocations = (world.allocations ?? 0) + 1;
+    if (world.failAllocations > 0) { world.failAllocations--; throw Object.assign(new Error('provider refused the allocation'), { code: 'provider_unavailable' }); }
     world.allocateLatch?.resolve(request);
     if (world.holdAllocate) await world.holdAllocate.promise;
+    // The SDK journals the handle under the operation id BEFORE any effect, then creates the route.
     const handle = { kind, id: `s-${++world.serial}`, generation: 1 };
+    world.journal.set(request.operationId, { handle });
     const routeUrl = world.nextUrl ?? world.url;
-    world.routes.set(handle.id, { url: routeUrl, target: request.target });
-    return view({ handle, url: routeUrl, target: request.target });
+    world.routes.set(handle.id, { url: routeUrl, target: request.target, consentFactsDigest: request.approval.consentFactsDigest, operationId: request.operationId });
+    world.effectCreated?.resolve(handle);
+    if (world.holdAfterEffect) await world.holdAfterEffect.promise;
+    if (world.unverifiedAllocation) return view({ handle, url: routeUrl, state: 'unverified', published: null, target: request.target, operationId: request.operationId });
+    return view({ handle, url: routeUrl, target: request.target, consentFactsDigest: request.approval.consentFactsDigest, operationId: request.operationId });
   }
   return { world, api: recorded, calls };
+}
+
+function pendingOperation(world, operationId, revision) {
+  const offer = { ...setupAction({ id: 'ssh-step', label: 'Run the offered step' }) };
+  return { schemaVersion: 1, operationId, revision, state: 'pending', evidence: { known: false, reason: 'fixture' },
+    nextAction: { ...offer, consent: setupConsent(offer) }, resources: [],
+    scope: { registryId: 'reg-test', scopeId: 'scope-1', providerId: 'fixture-run', configurationRevision: 'cfg-1', draftId: null } };
 }
 
 function operationView(world, request) {
@@ -231,12 +288,41 @@ function operationView(world, request) {
     scope: { registryId: 'reg-test', scopeId: 'scope-1', providerId: 'fixture-run', configurationRevision: 'cfg-1', draftId: null } };
 }
 
-async function standIn(t, options = {}) {
+const FAST = { attempts: 3, baseMs: 5, capMs: 20 };
+async function standIn(t, { reconnect, ...options } = {}) {
   const home = await scratch(t);
   const port = await loopbackApp(t);
   const stand = standInWorld({ url: 'https://one.fixture.example', ...options });
-  return { home, port, ...stand, forward: createForward(stand.api, { home }), state: () => stateOf(home).read() };
+  return { home, port, ...stand, forward: createForward(stand.api, { home, ...(reconnect ? { reconnect } : {}) }), state: () => stateOf(home).read() };
 }
+
+/** Publish through the stand-in with one approval click; returns the published resource. */
+async function published(s, extra = {}) {
+  const first = await s.forward({ app: 'faravan', port: s.port, ...extra });
+  return first.needsAction ? first.resume({ approve: true }) : first;
+}
+
+const exposeCalls = s => s.calls.filter(([name]) => name === 'expose');
+const closeCalls = s => s.calls.filter(([name]) => name === 'closeRoute');
+const closeOf = (s, id) => closeCalls(s).find(([, entry]) => entry.request.handle.id === id);
+const OP = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const ZERO_DIGEST = `consent-v1:${'0'.repeat(64)}`;
+
+/**
+ * The persisted record a manager that died mid-run leaves behind (an orchestration cut: the process itself is
+ * not killed here; the real SDK crash cuts below kill an actual child). Needs a prior saved approval.
+ */
+async function deadManagerRecord(s, { operationId, handle, phase = 'starting', downSince = null }) {
+  const rec = await s.state();
+  await stateOf(s.home).commit({ run: { id: RUN_X, generation: rec.run.generation + 1, operationId, handle, provider: 'fixture-run', phase, setup: null },
+    approval: rec.approval, origin: rec.origin, downSince, cleanup: { certainty: 'settled', debt: null } }, { expectedRevision: rec.revision });
+}
+const plantRoute = (s, { id, operationId, url, digest, target }) => {
+  const handle = { kind: 'session', id, generation: 1 };
+  s.world.journal.set(operationId, { handle });
+  s.world.routes.set(id, { url, target: target ?? `127.0.0.1:${s.port}`, consentFactsDigest: digest, operationId });
+  return handle;
+};
 
 const noBearerPlumbing = (value, label) => {
   const text = JSON.stringify(value);
@@ -358,6 +444,19 @@ test('stand-in: a changed disclosure is re-offered, never silently reused', asyn
   await rejects(second.resume({ approve: false }), 'stopped_by_user');
   // Declining preserves the earlier saved assent; stopping is not revoking.
   assert.deepEqual((await s.state()).approval, saved);
+});
+
+test('stand-in: saved assent is bound to the exact target; a changed port is a fresh decision', async t => {
+  const s = await standIn(t);
+  await (await published(s)).close();
+  const sameAgain = await s.forward({ app: 'faravan', port: s.port });
+  assert.equal(sameAgain.needsAction, null, 'the same port keeps the saved assent');
+  await sameAgain.close();
+  const other = await loopbackApp(t);
+  const moved = await s.forward({ app: 'faravan', port: other });
+  assert.equal(moved.needsAction.step, 'approve-route', 'another listener port is not the approved target');
+  assert.equal(moved.needsAction.target, `127.0.0.1:${other}`);
+  await moved.close();
 });
 
 test('stand-in: an expired grant is not current authority and nothing is exposed', async t => {
@@ -535,18 +634,477 @@ test('stand-in: an in-flight run without a handle is taken over, not resurrected
   await second.close();
 });
 
+// === Concern 1 + 4: an uncertain allocation and recovery are resolved from current SDK facts ============
+
+test('stand-in: a dead manager\'s recorded allocation intent resolves through the SDK journal and recovers the exact route', async t => {
+  const s = await standIn(t);
+  await (await published(s)).close();
+  const saved = (await s.state()).approval;
+  // The effect exists (a verified route + SDK journal), but the dead manager never recorded its handle.
+  const orphan = plantRoute(s, { id: 's-orphan', operationId: OP, url: 'https://orphan.fixture.example', digest: saved.factsDigest });
+  await deadManagerRecord(s, { operationId: OP, handle: null });
+  const exposes = exposeCalls(s).length;
+  let asked = 0;
+  const resource = await s.forward({ app: 'faravan', port: s.port, onAction: () => { asked++; return { approve: true }; } });
+  assert.equal(asked, 0, 'unchanged exact assent: no second consent click');
+  assert.equal(resource.url, 'https://orphan.fixture.example', 'the exact owned route is recovered');
+  assert.equal(exposeCalls(s).length, exposes, 'no new or competing allocation was made');
+  const record = await s.state();
+  assert.deepEqual(record.run.handle, orphan, 'the exact SDK handle was recorded from the operation journal');
+  assert.equal(record.run.operationId, OP);
+  // Recovery used the CURRENT SDK candidate (a pinned catalog read), never a placeholder token.
+  assert.ok(s.calls.some(([name, entry]) => name === 'catalogRoutes' && entry.request.providerId === 'fixture-run'), 'a current pinned catalog read');
+  assert.ok(!JSON.stringify(s.calls).includes('retained-managed-route'), 'no invented authority');
+  await resource.close();
+  assert.ok(!s.world.routes.has('s-orphan'), 'the recovered route was removed by close');
+});
+
+test('stand-in: an uncertain allocation that no longer qualifies is removed exactly before a fresh allocation', async t => {
+  const s = await standIn(t);
+  await (await published(s)).close();
+  const saved = (await s.state()).approval;
+  // Wrong target for this request: not the route the app asked for now, so it must be settled, not adopted.
+  const orphan = plantRoute(s, { id: 's-orphan', operationId: OP, url: 'https://orphan.fixture.example', digest: saved.factsDigest, target: '127.0.0.1:1' });
+  await deadManagerRecord(s, { operationId: OP, handle: null });
+  const resource = await s.forward({ app: 'faravan', port: s.port });
+  assert.equal(resource.needsAction, null, 'a settled stale route, then a fresh allocation under unchanged assent');
+  assert.deepEqual(closeOf(s, 's-orphan')[1].request.handle, orphan, 'the exact journaled handle was removed first');
+  const closeAt = s.calls.findIndex(([name, entry]) => name === 'closeRoute' && entry.request.handle.id === 's-orphan');
+  const exposeAt = s.calls.findIndex(([name], index) => name === 'expose' && index > closeAt);
+  assert.ok(exposeAt > closeAt, 'replacement happened only after confirmed cleanup');
+  assert.ok(!s.world.routes.has('s-orphan'));
+  assert.notEqual((await s.state()).run.operationId, OP, 'the new allocation has a fresh operation id');
+  await resource.close();
+});
+
+test('stand-in: an unreadable SDK journal blocks replacement; an absent journal proves no effects', async t => {
+  const s = await standIn(t);
+  await (await published(s)).close();
+  await deadManagerRecord(s, { operationId: OP, handle: null });
+  s.api.listRoutes = async () => { throw Object.assign(new Error('journal unreadable'), { code: 'provider_unavailable' }); };
+  await rejects(s.forward({ app: 'faravan', port: s.port }), null, 'an unresolved uncertain operation never allows a new allocation');
+  const record = await s.state();
+  assert.equal(record.run.operationId, OP, 'the exact operation reference is retained');
+  assert.equal(record.run.id, RUN_X);
+  assert.equal(exposeCalls(s).length, 1, 'only the first run ever allocated');
+  // With a readable journal that has no such operation, the SDK reserved nothing: it is safe to proceed.
+  s.api.listRoutes = async () => ({ routes: [] });
+  const resource = await s.forward({ app: 'faravan', port: s.port });
+  assert.equal(resource.needsAction, null);
+  assert.notEqual((await s.state()).run.operationId, OP);
+  await resource.close();
+});
+
+test('stand-in: allocation intent (operation id + provider) is persisted before the provider effect', async t => {
+  const s = await standIn(t);
+  s.world.holdAllocate = deferred();
+  s.world.allocateLatch = deferred();
+  const first = await s.forward({ app: 'faravan', port: s.port });
+  const resuming = first.resume({ approve: true });
+  const request = await s.world.allocateLatch.promise;   // inside the provider call; no effect yet
+  const record = await s.state();
+  assert.equal(record.run.operationId, request.operationId, 'the exact operation id is durable before the effect');
+  assert.equal(record.run.provider, 'fixture-run');
+  assert.equal(record.run.handle, null);
+  s.world.holdAllocate.resolve();
+  const resource = await resuming;
+  assert.equal((await s.state()).run.operationId, request.operationId);
+  await resource.close();
+});
+
+test('stand-in: recovery refuses a route whose approval no longer matches the current exact candidate', async t => {
+  const s = await standIn(t, { disclosureRevision: 'disc-1' });
+  await (await published(s)).close();
+  const saved = (await s.state()).approval;
+  const orphan = plantRoute(s, { id: 's-orphan', operationId: OP, url: 'https://orphan.fixture.example', digest: saved.factsDigest });
+  await deadManagerRecord(s, { operationId: OP, handle: orphan, phase: 'active' });
+  // The provider's disclosure moved while the manager was dead: the saved assent is for another candidate.
+  s.world.offered = (kind, request) => [candidate({ kind, disclosureRevision: 'disc-2', token: `tok-d2-${++s.world.tokenSerial}`, target: request?.target })];
+  const pending = await s.forward({ app: 'faravan', port: s.port });
+  assert.equal(pending.needsAction.step, 'approve-route', 'changed disclosure needs a fresh user decision');
+  assert.equal(pending.needsAction.disclosure.revision, 'disc-2');
+  assert.deepEqual(closeOf(s, 's-orphan')[1].request.handle, orphan, 'the unqualified route was removed, not adopted');
+  assert.equal(exposeCalls(s).length, 1, 'nothing re-exposed before approval');
+  await pending.close();
+});
+
+test('stand-in: recovery refuses a route approved under a different consent than the saved assent', async t => {
+  const s = await standIn(t);
+  await (await published(s)).close();
+  const orphan = plantRoute(s, { id: 's-orphan', operationId: OP, url: 'https://orphan.fixture.example', digest: ZERO_DIGEST });
+  await deadManagerRecord(s, { operationId: OP, handle: orphan, phase: 'active' });
+  const resource = await s.forward({ app: 'faravan', port: s.port });
+  assert.notEqual(resource.url, 'https://orphan.fixture.example', 'a route carrying other consent is never adopted');
+  assert.deepEqual(closeOf(s, 's-orphan')[1].request.handle, orphan);
+  await resource.close();
+});
+
+test('stand-in: a stopped run stays terminal even if its old route still looks live', async t => {
+  const s = await standIn(t);
+  const first = await published(s);
+  const oldRecord = await s.state();
+  await first.close();
+  // Late proof: the old run's route reappears live in the world after its run was stopped and settled.
+  const live = plantRoute(s, { id: 's-late', operationId: OP, url: 'https://late.fixture.example', digest: oldRecord.approval.factsDigest });
+  const next = await s.forward({ app: 'faravan', port: s.port });
+  assert.notEqual(next.url, 'https://late.fixture.example', 'a stopped run is never revived by an observed live route');
+  const record = await s.state();
+  assert.equal(record.run.generation, 2);
+  assert.notDeepEqual(record.run.handle, live);
+  await next.close();
+});
+
+// === Concern 2: failed-return cleanup refusal retains the exact operation and handle ===================
+
+test('stand-in: a failed allocation return whose removal is refused retains the exact handle across exit and blocks replacement', async t => {
+  const s = await standIn(t);
+  s.world.unverifiedAllocation = true;      // the provider created the route, but proof did not verify
+  s.world.closeOutcome = 'unconfirmed';     // and the removal is refused
+  const first = await s.forward({ app: 'faravan', port: s.port });
+  const error = await rejects(first.resume({ approve: true }), 'cleanup_debt');
+  assert.ok(error.message.length > 0);
+  const debt = await s.state();
+  assert.equal(debt.run.phase, 'stopped');
+  assert.equal(debt.cleanup.certainty, 'unconfirmed');
+  assert.deepEqual(debt.run.handle, { kind: 'session', id: 's-1', generation: 1 }, 'the exact handle of the failed return is retained');
+  assert.equal(debt.run.operationId, exposeCalls(s)[0][1].request.operationId, 'and the exact operation');
+  assert.equal(closeCalls(s).length, 1);
+  // The manager exited (lease released on failure). A restart reconciles with the retained handle first.
+  await rejects(s.forward({ app: 'faravan', port: s.port }), 'cleanup_debt');
+  assert.deepEqual(closeCalls(s).at(-1)[1].request.handle, { kind: 'session', id: 's-1', generation: 1 }, 'the retry removes exactly the retained handle');
+  assert.equal(exposeCalls(s).length, 1, 'replacement is blocked while cleanup is unconfirmed');
+  // The provider finally confirms removal: only then is a fresh run admitted.
+  s.world.closeOutcome = 'confirmed';
+  s.world.unverifiedAllocation = false;
+  const next = await s.forward({ app: 'faravan', port: s.port });
+  assert.equal(next.needsAction, null);
+  assert.ok(!s.world.routes.has('s-1'), 'the retained route was removed');
+  assert.equal((await s.state()).run.generation, 2);
+  await next.close();
+});
+
+test('stand-in: close() does not resolve while a failed allocation return and its custody are still pending', async t => {
+  const s = await standIn(t);
+  s.world.holdAllocate = deferred();
+  s.world.allocateLatch = deferred();
+  s.world.unverifiedAllocation = true;
+  s.world.closeOutcome = 'unconfirmed';
+  const first = await s.forward({ app: 'faravan', port: s.port });
+  const resuming = first.resume({ approve: true }).then(() => 'resolved', error => error.code);
+  await s.world.allocateLatch.promise;      // the API call is in flight
+  let closeSettled = null;
+  const closing = first.close().then(() => { closeSettled = 'resolved'; }, error => { closeSettled = error.code; });
+  s.world.holdAllocate.resolve();           // the call completes with a created-but-unverified route
+  await closing;
+  assert.equal(closeSettled, 'cleanup_debt', 'close cannot report success while the created route is unconfirmed');
+  assert.equal(await resuming, 'cleanup_debt');
+  const record = await s.state();
+  assert.deepEqual(record.run.handle, { kind: 'session', id: 's-1', generation: 1 }, 'the created route is retained, not forgotten');
+  assert.equal(record.cleanup.certainty, 'unconfirmed');
+  // A close retry settles it once the provider confirms.
+  s.world.closeOutcome = 'confirmed';
+  await first.close();
+  assert.ok(!s.world.routes.has('s-1'));
+  assert.equal((await s.state()).cleanup.certainty, 'settled');
+});
+
+test('stand-in: close() during an in-flight allocation waits for the custody write, not just the API promise', async t => {
+  const s = await standIn(t);
+  s.world.holdAllocate = deferred();
+  s.world.allocateLatch = deferred();
+  const first = await s.forward({ app: 'faravan', port: s.port });
+  const resuming = first.resume({ approve: true }).then(() => 'resolved', error => error.code);
+  await s.world.allocateLatch.promise;
+  const closing = first.close();
+  s.world.holdAllocate.resolve();
+  assert.equal(await resuming, 'stopped_by_user');
+  await closing;
+  const record = await s.state();
+  assert.equal(record.run.phase, 'stopped');
+  assert.deepEqual(record.run.handle, { kind: 'session', id: 's-1', generation: 1 }, 'the created route handle was recorded before the stop');
+  assert.equal(record.cleanup.certainty, 'settled');
+  assert.ok(!s.world.routes.has('s-1'), 'the created route was removed');
+});
+
+// === Concern 3: re-establishment while the managed intent stays active ================================
+
+const awaitNull = (resource, key = 'url') => waitFor(() => resource[key] === null);
+
+test('stand-in: provider termination re-establishes through a fresh scoped operation without a second click', async t => {
+  const s = await standIn(t, { reconnect: FAST });
+  const resource = await published(s);
+  const events = { change: [], down: [], back: [], action: [] };
+  for (const type of Object.keys(events)) resource.on(type, event => events[type].push(event));
+  const firstRecord = await s.state();
+  const oldOp = firstRecord.run.operationId;
+  s.world.nextUrl = 'https://two.fixture.example';
+  // The provider terminates the route: it is gone and the watch reports its terminal state.
+  const handle = { kind: 'session', id: 's-1', generation: 1 };
+  s.world.routes.delete('s-1');
+  s.world.queue.push({ type: 'terminal', route: view({ handle, state: 'released', published: null, cleanup: { state: 'confirmed' } }) });
+  assert.ok(await awaitNull(resource) || resource.url === 'https://two.fixture.example', 'the old origin is not presented as current once the route is lost');
+  assert.ok(await waitFor(() => events.back.length === 1), 'the managed intent re-established the route');
+  assert.equal(resource.url, 'https://two.fixture.example');
+  assert.equal(resource.downSince, null);
+  assert.equal(resource.needsAction, null, 'unchanged exact assent needs no second click');
+  assert.equal(events.down.length, 1);
+  assert.ok(events.down[0].downSince);
+  assert.equal(events.back[0].downSince, events.down[0].downSince);
+  assert.deepEqual({ oldOrigin: events.change[0].oldOrigin, newOrigin: events.change[0].newOrigin },
+    { oldOrigin: 'https://one.fixture.example', newOrigin: 'https://two.fixture.example' });
+  assert.deepEqual(events.action, []);
+  assert.equal(exposeCalls(s).length, 2);
+  const [one, two] = exposeCalls(s).map(([, entry]) => entry.request);
+  assert.notEqual(two.operationId, one.operationId, 'a fresh scoped operation');
+  assert.notEqual(two.approval.candidateToken, one.approval.candidateToken, 'a fresh single-use grant');
+  assert.equal(closeCalls(s)[0][1].request.handle.id, 's-1', 'the old route was settled before the replacement');
+  const closeAt = s.calls.findIndex(([name]) => name === 'closeRoute');
+  assert.ok(s.calls.findIndex(([name], index) => name === 'expose' && index > closeAt) > closeAt);
+  const record = await s.state();
+  assert.deepEqual(record.run.handle, { kind: 'session', id: 's-2', generation: 1 });
+  assert.equal(record.run.operationId, two.operationId);
+  assert.notEqual(record.run.operationId, oldOp);
+  assert.equal(record.run.id, firstRecord.run.id, 'the same managed run, not a restarted one');
+  assert.equal(record.origin.url, 'https://two.fixture.example');
+  assert.equal(record.downSince, null);
+  await resource.close();
+  assert.ok(!s.world.routes.has('s-2'), 'the replacement is cleaned up by close');
+});
+
+test('stand-in: a broken watch is retried a bounded number of times, then the route is re-established', async t => {
+  const s = await standIn(t, { reconnect: FAST });
+  const resource = await published(s);
+  const backs = [];
+  resource.on('back', event => backs.push(event));
+  s.world.nextUrl = 'https://two.fixture.example';
+  s.world.watchBrokenFor = 's-1';
+  s.world.queue.push({ throw: new Error('watch transport broke') });
+  assert.ok(await waitFor(() => backs.length === 1, 8000), 'a persistent watch failure ends in re-establishment');
+  assert.equal(resource.url, 'https://two.fixture.example');
+  const starts = s.world.watchStarts;
+  assert.ok(starts <= 1 + FAST.attempts + 1, `watch restarts were bounded (${starts})`);
+  assert.equal(closeCalls(s)[0][1].request.handle.id, 's-1', 'the old route was removed before the replacement');
+  assert.equal(exposeCalls(s).length, 2);
+  await resource.close();
+});
+
+test('stand-in: an unverified status withdraws the url and a verified one restores it', async t => {
+  const s = await standIn(t);
+  const resource = await published(s);
+  const handle = { kind: 'session', id: 's-1', generation: 1 };
+  assert.equal(resource.url, 'https://one.fixture.example');
+  s.world.queue.push(view({ handle, state: 'unverified', published: null }));
+  assert.ok(await awaitNull(resource), 'no stale origin is presented as current while unverified');
+  assert.ok(resource.downSince, 'downSince tracks the current outage');
+  s.world.queue.push(view({ handle, url: 'https://one.fixture.example' }));
+  assert.ok(await waitFor(() => resource.url === 'https://one.fixture.example'));
+  assert.equal(resource.downSince, null);
+  await resource.close();
+});
+
+test('stand-in: a changed disclosure during re-establishment is a user step; nothing publishes until approval', async t => {
+  const s = await standIn(t, { reconnect: FAST });
+  const resource = await published(s);
+  const actions = [];
+  resource.on('action', descriptor => actions.push(descriptor));
+  s.world.offered = (kind, request) => [candidate({ kind, disclosureRevision: 'disc-2', token: `tok-d2-${++s.world.tokenSerial}`, target: request?.target })];
+  s.world.nextUrl = 'https://two.fixture.example';
+  const handle = { kind: 'session', id: 's-1', generation: 1 };
+  s.world.routes.delete('s-1');
+  s.world.queue.push({ type: 'terminal', route: view({ handle, state: 'released', published: null, cleanup: { state: 'confirmed' } }) });
+  assert.ok(await waitFor(() => resource.needsAction), 'the pending step is exposed on the resource');
+  assert.equal(resource.needsAction.step, 'approve-route');
+  assert.equal(resource.needsAction.disclosure.revision, 'disc-2');
+  assert.equal(actions.length, 1, 'an action event carries the same descriptor');
+  assert.deepEqual(actions[0], resource.needsAction);
+  assert.equal(resource.url, null, 'unpublished until approval');
+  assert.equal(exposeCalls(s).length, 1, 'no allocation before the user decides');
+  const settled = await resource.resume({ approve: true });
+  assert.equal(settled, resource);
+  assert.ok(await waitFor(() => resource.url === 'https://two.fixture.example'));
+  assert.equal(resource.needsAction, null);
+  assert.equal(exposeCalls(s).length, 2);
+  assert.equal((await s.state()).approval.disclosureRevision, 'disc-2', 'the new decision is the saved assent');
+  await resource.close();
+});
+
+test('stand-in: a consent change observed on the live route removes it first and asks for a new decision', async t => {
+  const s = await standIn(t, { reconnect: FAST });
+  const resource = await published(s);
+  const handle = { kind: 'session', id: 's-1', generation: 1 };
+  s.world.offered = (kind, request) => [candidate({ kind, disclosureRevision: 'disc-2', token: `tok-d2-${++s.world.tokenSerial}`, target: request?.target })];
+  const moved = { ...view({ handle }), consentChange: { oldDigest: ZERO_DIGEST, newDigest: `consent-v1:${'1'.repeat(64)}` } };
+  s.world.queue.push({ type: 'consent_changed', route: moved });
+  assert.ok(await waitFor(() => resource.needsAction), 'the changed consent is a user step');
+  assert.equal(resource.needsAction.disclosure.revision, 'disc-2');
+  assert.equal(resource.url, null, 'the route is not presented as current under changed consent');
+  assert.ok(closeOf(s, 's-1'), 'the old route was removed before any replacement');
+  assert.equal(exposeCalls(s).length, 1);
+  await resource.close();
+  assert.equal((await s.state()).run.phase, 'stopped');
+});
+
+test('stand-in: onAction handles a later re-establishment step, and a denial stops the run for good', async t => {
+  const s = await standIn(t, { reconnect: FAST });
+  const asked = [];
+  const resource = await published(s, { onAction: descriptor => { asked.push(descriptor); return { approve: asked.length === 1 ? true : false }; } });
+  // (the first click is the hook's own answer when onAction is configured)
+  assert.equal(asked.length, 1);
+  s.world.offered = (kind, request) => [candidate({ kind, disclosureRevision: 'disc-2', token: `tok-d2-${++s.world.tokenSerial}`, target: request?.target })];
+  const handle = { kind: 'session', id: 's-1', generation: 1 };
+  s.world.routes.delete('s-1');
+  s.world.queue.push({ type: 'terminal', route: view({ handle, state: 'released', published: null, cleanup: { state: 'confirmed' } }) });
+  assert.ok(await waitFor(() => asked.length === 2), 'the same hook receives the later step');
+  assert.equal(asked[1].disclosure.revision, 'disc-2');
+  assert.ok(await waitFor(async () => (await s.state()).run.phase === 'stopped'), 'a denial stops the managed run');
+  assert.equal(resource.url, null);
+  assert.equal(exposeCalls(s).length, 1, 'no allocation after the denial');
+  await waitFor(() => false, 200);
+  assert.equal(exposeCalls(s).length, 1, 'no resurrection');
+  await resource.close();
+});
+
+test('stand-in: unknown cleanup of the lost route blocks any replacement and is retained as debt', async t => {
+  const s = await standIn(t, { reconnect: FAST });
+  const resource = await published(s);
+  s.world.closeOutcome = 'unconfirmed';
+  const handle = { kind: 'session', id: 's-1', generation: 1 };
+  s.world.queue.push({ type: 'terminal', route: view({ handle, state: 'released', published: null, cleanup: { state: 'confirmed' } }) });
+  assert.ok(await waitFor(async () => (await s.state()).cleanup.certainty === 'unconfirmed', 6000), 'the unconfirmed removal is persisted as debt');
+  const record = await s.state();
+  assert.deepEqual(record.run.handle, handle, 'the exact handle is retained');
+  assert.equal(record.run.phase, 'stopped');
+  assert.equal(exposeCalls(s).length, 1, 'no replacement while cleanup is unknown');
+  assert.equal(resource.url, null);
+  assert.ok(closeCalls(s).length >= 2, 'removal was retried a bounded number of times');
+  assert.ok(closeCalls(s).length <= FAST.attempts + 1);
+  await rejects(resource.close(), 'cleanup_debt');
+  s.world.closeOutcome = 'confirmed';
+  await resource.close();
+  assert.equal((await s.state()).cleanup.certainty, 'settled');
+  assert.equal(exposeCalls(s).length, 1);
+});
+
+test('stand-in: close during re-establishment prevents resurrection and removes what it created', async t => {
+  const s = await standIn(t, { reconnect: FAST });
+  const resource = await published(s);
+  s.world.holdAllocate = deferred();
+  s.world.allocateLatch = deferred();
+  const handle = { kind: 'session', id: 's-1', generation: 1 };
+  s.world.routes.delete('s-1');
+  s.world.queue.push({ type: 'terminal', route: view({ handle, state: 'released', published: null, cleanup: { state: 'confirmed' } }) });
+  await s.world.allocateLatch.promise;     // the replacement allocation is in flight
+  const closing = resource.close();
+  s.world.holdAllocate.resolve();
+  await closing;
+  assert.equal(exposeCalls(s).length, 2, 'only the in-flight replacement was ever allocated');
+  assert.ok(![...s.world.routes.keys()].length, 'the late replacement was removed by close');
+  const record = await s.state();
+  assert.equal(record.run.phase, 'stopped');
+  assert.equal(record.cleanup.certainty, 'settled');
+  await waitFor(() => false, 150);
+  assert.equal(exposeCalls(s).length, 2, 'nothing resurrects after the user closed');
+  assert.equal(resource.url, null);
+});
+
+test('stand-in: re-establishment attempts are bounded; a persistently failing provider leaves the resource down', async t => {
+  const s = await standIn(t, { reconnect: FAST });
+  const resource = await published(s);
+  const downs = [];
+  resource.on('down', event => downs.push(event));
+  s.world.failAllocations = 1000;
+  const handle = { kind: 'session', id: 's-1', generation: 1 };
+  s.world.routes.delete('s-1');
+  s.world.queue.push({ type: 'terminal', route: view({ handle, state: 'released', published: null, cleanup: { state: 'confirmed' } }) });
+  assert.ok(await waitFor(() => s.world.allocations >= 1 + FAST.attempts, 6000));
+  await waitFor(() => false, 300);
+  assert.ok(s.world.allocations <= 1 + FAST.attempts, `bounded retries (${s.world.allocations})`);
+  assert.equal(resource.url, null);
+  assert.ok(resource.downSince);
+  assert.equal(downs.length, 1, 'one outage, one down event');
+  await resource.close();
+  assert.equal((await s.state()).run.phase, 'stopped');
+});
+
+// === Setup operation custody, action-handler failure, and public error sanitation =====================
+
+test('stand-in: an onAction exception stops the run, cancels the exact live setup operation and leaks no cause text', async t => {
+  const s = await standIn(t);
+  s.world.mode = 'needs-setup'; s.world.stepped = true;
+  const secret = 'sk-live-SECRET-token-value';
+  let calls = 0;
+  const error = await rejects(s.forward({ app: 'faravan', port: s.port,
+    onAction: () => { if (++calls === 1) throw new Error(`ui crashed with ${secret}`); return { approve: true }; } }), 'stopped_by_user');
+  assert.ok(!error.message.includes(secret), `public error must not echo the cause: ${error.message}`);
+  assert.ok(!JSON.stringify(error, Object.getOwnPropertyNames(error)).includes(secret), 'nor carry it on a property');
+  assert.equal(s.world.cancelRequests?.length, 1, 'the live setup operation was cancelled');
+  const reserved = s.calls.find(([name, entry]) => name === 'runSetupAction' && entry.request.operationId)[1].request;
+  assert.equal(s.world.cancelRequests[0].operationId, reserved.operationId);
+  assert.equal(s.world.cancelRequests[0].providerId, 'fixture-run');
+  const record = await s.state();
+  assert.equal(record.run.setup, null, 'the confirmed cancel settled the setup reference');
+  // The lease was released: the app can ask again.
+  s.world.mode = 'ready';
+  const next = await s.forward({ app: 'faravan', port: s.port });
+  assert.equal(next.needsAction.step, 'approve-route');
+  await next.close();
+});
+
+test('stand-in: a refused setup cancel is retained as debt across exit, retried exactly, never reported settled', async t => {
+  const s = await standIn(t);
+  s.world.mode = 'needs-setup'; s.world.stepped = true;
+  s.world.cancelRefused = true;
+  const error = await rejects(s.forward({ app: 'faravan', port: s.port, onAction: () => { throw new Error('ui crashed'); } }), 'cleanup_debt');
+  assert.ok(error.message.length > 0);
+  const reserved = s.calls.find(([name, entry]) => name === 'runSetupAction' && entry.request.operationId)[1].request;
+  const debt = await s.state();
+  assert.deepEqual(debt.run.setup, { operationId: reserved.operationId, provider: 'fixture-run' }, 'the exact setup operation is retained');
+  assert.equal(debt.cleanup.certainty, 'unconfirmed');
+  assert.equal(debt.run.phase, 'stopped');
+  // A restart retries the exact reference first and blocks while it is refused.
+  await rejects(s.forward({ app: 'faravan', port: s.port }), 'cleanup_debt');
+  assert.equal(s.world.cancelRequests.length, 2);
+  assert.equal(s.world.cancelRequests[1].operationId, reserved.operationId);
+  assert.equal((await s.state()).cleanup.certainty, 'unconfirmed');
+  // Once the provider cancels, the debt settles and a fresh run starts.
+  s.world.cancelRefused = false; s.world.mode = 'ready';
+  const next = await s.forward({ app: 'faravan', port: s.port });
+  assert.equal(next.needsAction.step, 'approve-route');
+  const record = await s.state();
+  assert.equal(record.run.setup, null);
+  assert.equal(record.cleanup.certainty, 'settled');
+  await next.close();
+});
+
+test('stand-in: a setup reserved by a dead manager is cancelled by its exact private reference at restart', async t => {
+  const s = await standIn(t);
+  await (await published(s)).close();
+  const SETUP = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  s.world.stepped = true; s.world.operations = new Map([[SETUP, 'pending']]);
+  const rec = await s.state();
+  await stateOf(s.home).commit({ run: { id: RUN_X, generation: rec.run.generation + 1, operationId: null, handle: null, provider: 'fixture-run',
+    phase: 'awaiting', setup: { operationId: SETUP, provider: 'fixture-run' } }, approval: rec.approval, origin: rec.origin, downSince: null,
+    cleanup: { certainty: 'settled', debt: null } }, { expectedRevision: rec.revision });
+  const resource = await s.forward({ app: 'faravan', port: s.port });
+  assert.deepEqual(s.world.cancelRequests.map(row => row.operationId), [SETUP], 'the dead manager\'s setup was cancelled exactly');
+  assert.equal((await s.state()).run.setup, null);
+  assert.equal(resource.needsAction, null);
+  await resource.close();
+});
+
 // --- The REAL configured SDK: publication, cleanup, restart reuse ------------------------------------
 
 /** The durable fake world: real catalog, real single-use tokens, real durable engine and rule store. */
-async function durableWorld(t, { id = 'fw-real-durable' } = {}) {
+async function durableWorld(t, { id = 'fw-real-durable', verified = true, wrap = api => api, reconnect } = {}) {
   const home = await scratch(t);
   const registry = await fakeRegistry({ id, kinds: ['durable'], reach: 'internet', transport: 'https', dir: join(home, 'registry') });
   const port = await loopbackApp(t);
   const previous = process.env.GOZAR_HOME;
   process.env.GOZAR_HOME = home;
   t.after(() => { if (previous === undefined) delete process.env.GOZAR_HOME; else process.env.GOZAR_HOME = previous; });
-  const api = createTestingRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home }) });
-  return { home, port, registry, api, forward: createForward(api, { home }), id,
+  const real = createTestingRouteApi({ manifest: registry.manifest, root: registry.root, readContext: fakeReadContext({ home, verified }) });
+  const api = wrap(real);
+  return { home, port, registry, api, real, forward: createForward(api, { home, ...(reconnect ? { reconnect } : {}) }), id,
     store: () => readFile(join(home, 'registry', 'providers', id, 'store.json'), 'utf8').then(JSON.parse) };
 }
 
@@ -605,8 +1163,7 @@ await new Promise(() => {});
   await rejects(w.forward({ app: 'faravan', port: w.port }), 'busy');
   const before = await stateOf(w.home).read();
   assert.equal(before.run.phase, 'active');
-  child.kill('SIGKILL');
-  await new Promise(resolve => child.once('exit', resolve));
+  await killAndWait(child);
   // The crashed manager's run is recovered as-is: no new consent, no new operation, same verified origin.
   let asked = 0;
   const recovered = await w.forward({ app: 'faravan', port: w.port, onAction: () => { asked++; return { approve: true }; } });
@@ -676,4 +1233,95 @@ test('real SDK: a session publication runs through a real detached controller an
   await second.close();
   assert.equal(counts.closes, 1, 'the session transport was removed');
   assert.equal((await stateOf(home).read()).run.phase, 'stopped');
+});
+
+// --- REAL SDK crash and failed-return custody cuts ---------------------------------------------------
+
+test('real SDK: a host killed after the provider effect but before the result recovers the exact route', async t => {
+  const w = await durableWorld(t, { id: 'fw-real-crash' });
+  // ORCHESTRATION CUT (labeled): the REAL ensureRoute runs and its provider rule is durable; the host then hangs
+  // before the engine can record the result, and the test SIGKILLs the actual process.
+  const childSource = `
+import { createRouteApi, fakeReadContext } from ${JSON.stringify(pathToFileURL(join(repoRoot, 'packages/gozar-node/testing.mjs')).href)};
+import { createForward } from ${JSON.stringify(pathToFileURL(join(repoRoot, 'packages/gozar-node/forward.mjs')).href)};
+const real = createRouteApi({ manifest: ${JSON.stringify(w.registry.manifest)}, root: ${JSON.stringify(join(w.home, 'registry'))}, readContext: fakeReadContext({ home: ${JSON.stringify(w.home)} }) });
+setInterval(() => {}, 1 << 30);  // keep the event loop alive: the host hangs here until the test kills it
+const api = { ...real, ensureRoute: async request => { const view = await real.ensureRoute(request); process.stdout.write('EFFECT ' + view.handle.id + '\\n'); await new Promise(() => {}); } };
+const forward = createForward(api, { home: ${JSON.stringify(w.home)} });
+await forward({ app: 'faravan', port: ${w.port}, onAction: () => ({ approve: true }) });
+`;
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', childSource],
+    { cwd: repoRoot, env: { ...process.env, GOZAR_HOME: w.home }, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  let out = '', err = '';
+  child.stdout.on('data', b => { out += String(b); });
+  child.stderr.on('data', b => { err += String(b); });
+  assert.ok(await waitFor(() => out.includes('EFFECT') ? out : null, 30000, 25), `the provider effect happened: ${err}`);
+  const cut = await stateOf(w.home).read();
+  assert.ok(cut.run.operationId, 'the exact operation intent was durable BEFORE the effect returned');
+  assert.equal(cut.run.handle, null, 'the host died before it could record the handle');
+  assert.ok((await w.store()).entries.a, 'the provider rule really exists');
+  await killAndWait(child);
+  // Restart: the uncertain operation is resolved through the SDK journal; no orphan, no competing route.
+  let asked = 0;
+  const recovered = await w.forward({ app: 'faravan', port: w.port, onAction: () => { asked++; return { approve: true }; } });
+  assert.equal(asked, 0, 'recovery of an unchanged approved route needs no second consent');
+  assert.equal(recovered.url, `https://a.${w.id}.invalid`);
+  const listed = (await w.real.listRoutes({ home: w.home, owner: 'forward:faravan' })).routes;
+  assert.equal(listed.length, 1, 'exactly one route exists for the app');
+  const record = await stateOf(w.home).read();
+  assert.equal(record.run.operationId, cut.run.operationId, 'the original operation is the one recovered');
+  assert.deepEqual(record.run.handle, { kind: 'durable', id: 'forward-faravan', generation: 1 });
+  assert.deepEqual(Object.keys((await w.store()).entries), ['a'], 'no competing provider rule');
+  await recovered.close();
+  assert.deepEqual((await w.store()).entries, {}, 'cleanup removed the one owned rule');
+});
+
+test('real SDK: a created-but-unverified route with refused removal keeps its exact handle, blocks replacement and is removed on retry', async t => {
+  let refuse = true;
+  // ORCHESTRATION DOUBLE over the REAL api: only closeRoute can be told to refuse; every effect and every
+  // successful removal is the real durable engine's.
+  const w = await durableWorld(t, { id: 'fw-real-unverified', verified: false, wrap: real => ({ ...real,
+    closeRoute: async request => refuse ? { ...(await real.routeStatus({ home: request.home, handle: request.handle })), cleanup: { state: 'unconfirmed' } } : real.closeRoute(request) }) });
+  const first = await w.forward({ app: 'faravan', port: w.port });
+  const error = await rejects(first.resume({ approve: true }), 'cleanup_debt');
+  assert.ok(error.message.length > 0);
+  const debt = await stateOf(w.home).read();
+  assert.deepEqual(debt.run.handle, { kind: 'durable', id: 'forward-faravan', generation: 1 }, 'the exact handle of the failed return is retained');
+  assert.ok(debt.run.operationId);
+  assert.equal(debt.cleanup.certainty, 'unconfirmed');
+  assert.ok((await w.store()).entries.a, 'the real provider rule is honestly still there');
+  await rejects(w.forward({ app: 'faravan', port: w.port }), 'cleanup_debt');
+  assert.deepEqual(Object.keys((await w.store()).entries), ['a'], 'no replacement rule while removal is unconfirmed');
+  refuse = false;
+  await rejects(w.forward({ app: 'faravan', port: w.port }), 'provider_unavailable');   // unverified again, but this time removed
+  assert.deepEqual((await w.store()).entries, {}, 'the real cleanup removed the retained rule');
+  assert.equal((await stateOf(w.home).read()).cleanup.certainty, 'settled');
+});
+
+test('real SDK: a vanished provider rule is detected as lost and re-established through a fresh scoped operation', async t => {
+  const w = await durableWorld(t, { id: 'fw-real-loss', reconnect: FAST });
+  const resource = await w.forward({ app: 'faravan', port: w.port, onAction: () => ({ approve: true }) });
+  const events = { down: [], back: [], change: [] };
+  for (const type of Object.keys(events)) resource.on(type, event => events[type].push(event));
+  const first = await stateOf(w.home).read();
+  // REAL provider loss: the durable rule disappears from the provider's own store (what a removed or reset
+  // upstream rule looks like to the SDK: route state 'lost').
+  const storePath = join(w.home, 'registry', 'providers', w.id, 'store.json');
+  const store = JSON.parse(await readFile(storePath, 'utf8'));
+  assert.ok(store.entries.a, 'the owned rule exists before the loss');
+  await writeFile(storePath, JSON.stringify({ ...store, entries: {} }));
+  assert.ok(await waitFor(() => events.down.length === 1, 10000), 'the loss was observed and the url withdrawn');
+  assert.ok(await waitFor(() => events.back.length === 1, 15000), 'the managed intent re-established the route');
+  assert.equal(resource.url, `https://a.${w.id}.invalid`);
+  assert.equal(resource.needsAction, null, 'unchanged exact assent needs no second consent');
+  assert.equal(events.back[0].downSince, events.down[0].downSince);
+  assert.ok((await readFile(storePath, 'utf8')).includes('"a"'), 'the provider rule exists again');
+  const record = await stateOf(w.home).read();
+  assert.equal(record.run.id, first.run.id, 'the same managed run');
+  assert.notEqual(record.run.operationId, first.run.operationId, 'a fresh scoped operation');
+  assert.equal(record.downSince, null);
+  assert.equal(record.cleanup.certainty, 'settled');
+  await resource.close();
+  assert.deepEqual((await w.store()).entries, {}, 'close removed the re-established rule');
 });

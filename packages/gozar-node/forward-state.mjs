@@ -24,7 +24,10 @@
 // ForwardRecord = {
 //   schemaVersion: 1, kind: 'gozar-forward-state', app, revision,
 //   run: { id: uuid, generation: positive integer, operationId: uuid|null, handle: Handle|null,
-//          provider: provider id|null, phase: 'starting'|'awaiting'|'active'|'stopped' },
+//          provider: provider id|null, phase: 'starting'|'awaiting'|'active'|'stopped',
+//          setup?: null | { operationId: uuid, provider } },  // a live SDK setup operation this run owns
+//   (operationId with a null handle is an allocation whose result was never recorded: its effects are
+//    uncertain and are resolved through the SDK operation journal, never assumed absent.)
 //   approval: null | { fingerprint: 'sha256:<64 hex>', provider, disclosureRevision,
 //                      factsDigest: 'consent-v1:<64 hex>' }, // saved identities, never authority bearers
 //   origin: null | { url: https origin, observedAt: UTC ISO-8601 },  // last verified origin
@@ -56,6 +59,7 @@ const KIND = 'gozar-forward-state';
 const RECORD_FIELDS = ['schemaVersion', 'kind', 'app', 'revision', 'run', 'approval', 'origin', 'downSince', 'cleanup'];
 const CONTENT_FIELDS = ['run', 'approval', 'origin', 'downSince', 'cleanup'];
 const RUN_FIELDS = ['id', 'generation', 'operationId', 'handle', 'provider', 'phase'];
+const SETUP_FIELDS = ['operationId', 'provider'];
 const APPROVAL_FIELDS = ['fingerprint', 'provider', 'disclosureRevision', 'factsDigest'];
 const ORIGIN_FIELDS = ['url', 'observedAt'];
 const CLEANUP_FIELDS = ['certainty', 'debt'];
@@ -134,8 +138,22 @@ function originValue(value) {
   return url.origin;
 }
 
+// The private setup-operation reference: an SDK setup operation this run reserved and must settle.
+function validateSetup(setup) {
+  if (setup === undefined || setup === null) return null;
+  requireFields(setup, SETUP_FIELDS, 'run.setup');
+  if (typeof setup.operationId !== 'string' || !uuid.test(setup.operationId))
+    throw gozarError('invalid_input', 'run.setup.operationId must be a UUID');
+  if (typeof setup.provider !== 'string' || !PROVIDER.test(setup.provider))
+    throw gozarError('invalid_input', 'run.setup.provider must be a provider id');
+  return { operationId: setup.operationId, provider: setup.provider };
+}
+
 function validateRun(run) {
-  requireFields(run, RUN_FIELDS, 'run');
+  if (typeof run !== 'object' || run === null || Array.isArray(run)) throw gozarError('invalid_input', 'run must be an object');
+  const { setup, ...rest } = run;
+  requireFields(rest, RUN_FIELDS, 'run');
+  const setupRef = validateSetup(setup);
   if (typeof run.id !== 'string' || !uuid.test(run.id))
     throw gozarError('invalid_input', 'run.id must be a UUID run identity');
   if (!Number.isSafeInteger(run.generation) || run.generation < 1)
@@ -148,7 +166,7 @@ function validateRun(run) {
   if (typeof run.phase !== 'string' || !PHASES.has(run.phase))
     throw gozarError('invalid_input', 'run.phase must be starting, awaiting, active or stopped');
   return { id: run.id, generation: run.generation, operationId: run.operationId,
-    handle, provider: run.provider, phase: run.phase };
+    handle, provider: run.provider, phase: run.phase, setup: setupRef };
 }
 
 function validateApproval(approval) {
