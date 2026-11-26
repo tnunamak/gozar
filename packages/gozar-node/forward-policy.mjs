@@ -14,7 +14,7 @@
 //                               already succeeded.
 //     lifetime  'prefer-lasting'  a ready durable-kind route first, then a ready session (default).
 //                 'lasting'        only a durable-kind route.
-//                 'session'        only a session-kind route.
+//                 'session'        a session or attached route, not a persistent provider rule.
 //   candidates: an array built by flattening catalogRoutes/buildCatalog output over the supported
 //     forward usage kinds. Each entry is either
 //       - a typed envelope { kind: 'durable' | 'session' | 'attached', candidate }, or
@@ -68,7 +68,7 @@ import { gozarError } from './error-normalizer.mjs';
 
 const ACCOUNT_POLICIES = ['existing-only', 'allow-setup'];
 const LIFETIME_POLICIES = ['prefer-lasting', 'lasting', 'session'];
-const FORWARD_KINDS = ['durable', 'session'];
+const FORWARD_KINDS = ['durable', 'session', 'attached'];
 const bad = why => { throw gozarError('invalid_input', `Invalid forward policy request: ${why}`); };
 
 const EVIDENCE = {
@@ -92,7 +92,7 @@ function entryOf(item, index) {
 /** Account standing from observed data only: the durable grant receipt, or the declared account-free mode. */
 function standingOf({ kind, candidate }) {
   if (candidate.properties?.needsAccount === false) return 'account-free';
-  if (kind === 'durable' && candidate.ownership === 'gozar-owned' && candidate.eligible === true &&
+  if (candidate.properties?.needsAccount === true && kind === 'durable' && candidate.ownership === 'gozar-owned' && candidate.eligible === true &&
       candidate.setup?.state === 'ready' && typeof candidate.candidateToken === 'string' && candidate.candidateToken) return 'existing';
   return 'unknown';
 }
@@ -113,7 +113,7 @@ function missingFacts({ kind, candidate, standing }, { accounts, lifetime }) {
   if (!trafficKnown(candidate)) missing.push('traffic-readability');
   if (standing === 'unknown' && accounts === 'existing-only') missing.push('account');
   if (!usableNow(candidate)) missing.push('ready route');
-  if (kind === 'session' && lifetime === 'lasting') missing.push('lasting route');
+  if (kind !== 'durable' && lifetime === 'lasting') missing.push('lasting route');
   if (kind === 'durable' && lifetime === 'session') missing.push('session route');
   return missing;
 }
@@ -144,6 +144,7 @@ const rankKey = ({ entry }) => Number.isSafeInteger(entry.candidate?.rank) && en
 export function selectForwardCandidate({ candidates, policy = {} } = {}) {
   if (arguments.length === 0 || arguments[0] === undefined) bad('a request object is required');
   if (policy === null || typeof policy !== 'object' || Array.isArray(policy)) bad('policy must be an object');
+  for (const key of Object.keys(policy)) if (!['accounts', 'lifetime'].includes(key)) bad(`unknown policy field ${key}`);
   const accounts = policy.accounts ?? 'existing-only';
   const lifetime = policy.lifetime ?? 'prefer-lasting';
   if (!ACCOUNT_POLICIES.includes(accounts)) bad('accounts must be existing-only or allow-setup');
@@ -156,18 +157,18 @@ export function selectForwardCandidate({ candidates, policy = {} } = {}) {
     return { entry, index };
   });
   const activePolicy = { accounts, lifetime };
-  const tiers = lifetime === 'session' ? ['session'] : lifetime === 'lasting' ? ['durable'] : ['durable', 'session'];
-  const qualified = kind => entries.filter(({ entry }) => kind === entry.kind &&
+  const tiers = lifetime === 'session' ? [['session', 'attached']] : lifetime === 'lasting' ? [['durable']] : [['durable'], ['session', 'attached']];
+  const qualified = kinds => entries.filter(({ entry }) => kinds.includes(entry.kind) &&
     missingFacts(entry, activePolicy).length === 0).sort(byRank);
 
-  for (const kind of tiers) {
-    const [best] = qualified(kind);
-    if (best) return { outcome: 'selected', kind, lifetime: kind === 'durable' ? 'lasting' : 'session',
+  for (const kinds of tiers) {
+    const [best] = qualified(kinds);
+    if (best) return { outcome: 'selected', kind: best.entry.kind, lifetime: best.entry.kind === 'durable' ? 'lasting' : 'session',
       account: best.entry.standing, accountEvidence: EVIDENCE[best.entry.standing], candidate: best.entry.candidate };
   }
-  for (const kind of tiers) {
-    const [best] = entries.filter(({ entry }) => kind === entry.kind && actionable(entry, activePolicy)).sort(byRank);
-    if (best) return { outcome: 'action', kind, lifetime: kind === 'durable' ? 'lasting' : 'session',
+  for (const kinds of tiers) {
+    const [best] = entries.filter(({ entry }) => kinds.includes(entry.kind) && actionable(entry, activePolicy)).sort(byRank);
+    if (best) return { outcome: 'action', kind: best.entry.kind, lifetime: best.entry.kind === 'durable' ? 'lasting' : 'session',
       account: best.entry.standing, accountEvidence: EVIDENCE[best.entry.standing],
       candidate: best.entry.candidate, action: best.entry.candidate.setup.actions[0] };
   }

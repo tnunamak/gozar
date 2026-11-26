@@ -73,6 +73,28 @@ test('without a lasting route the default falls back to an eligible account-free
   assert.equal(result.account, 'account-free');
   assert.equal(result.candidate.properties.needsAccount, false);
 });
+test('attached routes share the managed session tier without becoming lasting routes', () => {
+  const attached = envelope('attached', {providerId: 'attached-fixture', rank: 1,
+    availability: availability({attached: {state: 'available', reason: 'admitted'}}),
+    properties: properties({lifetimes: ['attached']})});
+  const selected = selectForwardCandidate({candidates: [localSessionReady(), attached]});
+  assert.equal(selected.outcome, 'selected');
+  assert.equal(selected.kind, 'attached');
+  assert.equal(selected.lifetime, 'session');
+  assert.equal(selected.candidate.providerId, 'attached-fixture');
+  const strict = selectForwardCandidate({candidates: [attached], policy: {lifetime: 'lasting'}});
+  assert.equal(strict.outcome, 'requirements_unsatisfied');
+  assert.deepEqual(strict.unmet[0].missing, ['lasting route']);
+});
+test('unknown account declaration remains unknown despite a durable catalog grant', () => {
+  const result = selectForwardCandidate({candidates: [funnelDurableReady({properties: {needsAccount: null}})]});
+  assert.equal(result.outcome, 'requirements_unsatisfied');
+  assert.deepEqual(result.unmet[0].missing, ['account']);
+});
+test('unknown policy fields are rejected instead of silently applying defaults', () => {
+  assert.throws(() => selectForwardCandidate({candidates: [localSessionReady()], policy: {lifetimes: 'lasting'}}),
+    {code: 'invalid_input'});
+});
 test('a ready registered-SSH trial is not account evidence and cannot masquerade as anonymous', () => {
   const refused = selectForwardCandidate({ candidates: [tunnlSessionReady()], policy: { accounts: 'existing-only', lifetime: 'prefer-lasting' } });
   assert.equal(refused.outcome, 'requirements_unsatisfied');
