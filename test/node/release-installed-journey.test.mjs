@@ -49,6 +49,15 @@ function processStub(f,{fault,mutate=false,outcome=evidence}={}){
  };
  return {run,calls};
 }
+test('release pack metadata identifies a missing or incomplete JSON receipt',async()=>{
+ const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
+ for(const text of ['', '[{']){
+  assert.throws(()=>parsePackOutput(text),error=>
+   error.message==='Unknown or ambiguous npm pack output: expected valid JSON'&&
+   error.cause instanceof SyntaxError);
+ }
+});
+
 test('release pack metadata reports ambiguity instead of selecting a result',async()=>{
  const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
  const pack={name:'@tnunamak/gozar',version:'0.0.0-fixture',filename:'gozar-fixture.tgz'};
@@ -96,6 +105,17 @@ test('an archive symlink is not treated as the verified regular file',async t=>{
 test('invalid source revision is rejected before creating output',async t=>{
  const f=await fixture(t),stub=processStub(f);
  await assert.rejects(runInstalledJourney({...f.input,sourceSha:'short'},{run:stub.run}),/source SHA/);
+ assert.deepEqual(stub.calls,[]);
+ await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
+
+test('a non-string source revision is rejected before staging an otherwise valid archive',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const run=async(command,args,options)=>{
+  if(stub.calls.length===0)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  return stub.run(command,args,options);
+ };
+ await assert.rejects(runInstalledJourney({...f.input,sourceSha:[f.input.sourceSha]},{run}),/source SHA/);
  assert.deepEqual(stub.calls,[]);
  await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
 });
@@ -215,6 +235,35 @@ test('changed installed member refuses before consumer execution',async t=>{
  const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
  t.after(()=>rm(report.scratch,{recursive:true,force:true}));
 });
+for(const [kind,reason] of [
+ ['an extra regular file','Archive and installed bytes differ'],
+ ['a symlink replacing a member','Installed package contains symlink'],
+])test('installed byte verification refuses '+kind+' before consumers run',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const run=async(command,args,options)=>{
+  t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  const result=await stub.run(command,args,options);
+  if(command==='npm'){
+   const pkg=join(options.cwd,'node_modules','@tnunamak','gozar');
+   if(kind==='an extra regular file')await writeFile(join(pkg,'extra.txt'),'not in the archive');
+   else{
+    const screen=join(pkg,'examples','remote-access-screen.mjs');
+    const sameBytes=join(options.cwd,'same-bytes.mjs');
+    await writeFile(sameBytes,f.files['examples/remote-access-screen.mjs']);
+    await rm(screen);
+    await symlink(sameBytes,screen,'file');
+   }
+  }
+  return result;
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),{message:reason});
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ assert.equal(report.status,'failed');
+ assert.equal(report.failure.message,reason);
+ assert.deepEqual(stub.calls.map(call=>call.command),['npm']);
+ assert.deepEqual(report.steps.map(step=>step.name),['install']);
+});
+
 for(const outcome of [{...evidence,cleanup:{state:'unconfirmed'}},{...evidence,proof:{status:'unverified'}},{unknown:true}]){
  test('unknown or cleanup-debt outcome fails closed',async t=>{
   const f=await fixture(t),stub=processStub(f,{outcome});
@@ -651,4 +700,52 @@ test('the release journey CLI rejects duplicate or missing flag values before st
   assert.match(out.stderr,/Unknown, repeated or missing argument/);
   await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
  }
+});
+
+test('an output file is preserved and no install starts',async t=>{
+ const f=await fixture(t);
+ await writeFile(f.input.outputDirectory,'fixture already present');
+ let calls=0;
+ await assert.rejects(runInstalledJourney(f.input,{run:async()=>{calls++;throw new Error('install must not start');}}),
+  {code:'EEXIST'});
+ assert.equal(calls,0);
+ assert.equal(await readFile(f.input.outputDirectory,'utf8'),'fixture already present');
+});
+
+test('a missing output parent is reported before any install starts',async t=>{
+ const f=await fixture(t);
+ f.input.outputDirectory=join(f.root,'missing-parent','receipt');
+ let calls=0;
+ await assert.rejects(runInstalledJourney(f.input,{run:async()=>{calls++;throw new Error('install must not start');}}),
+  {code:'ENOENT'});
+ assert.equal(calls,0);
+ await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
+
+test('a lifecycle subprocess failure keeps the completed screen and the lifecycle diagnostics',async t=>{
+ const f=await fixture(t),stub=processStub(f,{fault:3});
+ const run=async(command,args,options)=>{
+  if(stub.calls.length===0)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  return stub.run(command,args,options);
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),/Installed journey subprocess failed: lifecycle/);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ assert.equal(report.status,'failed');
+ assert.deepEqual(report.steps.map(step=>[step.name,step.result.status]),[['install',0],['screen',0],['lifecycle',17]]);
+ assert.equal(await readFile(join(f.input.outputDirectory,'lifecycle.stderr'),'utf8'),'exact failure');
+});
+
+test('an unexpected installed file fails the package identity check before screen execution',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const run=async(command,args,options)=>{
+  if(stub.calls.length===0)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  const result=await stub.run(command,args,options);
+  if(command==='npm')await writeFile(join(options.cwd,'node_modules','@tnunamak','gozar','extra.txt'),'fixture extras');
+  return result;
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),/Archive and installed bytes differ/);
+ assert.equal(stub.calls.length,1);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ assert.equal(report.status,'failed');
+ assert.deepEqual(report.steps.map(step=>step.name),['install']);
 });

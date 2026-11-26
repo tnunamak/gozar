@@ -8,7 +8,7 @@ const domainSource = 'ngrok-domain-source';
 const maxPageBytes = 256 * 1024;
 const maxPages = 10;
 const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-export const domainPattern = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
+export const domainPattern = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
 function credential(bytes) {
   if (!bytes?.length || bytes.length > 512) return null;

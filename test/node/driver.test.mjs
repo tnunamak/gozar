@@ -217,6 +217,30 @@ test('HTTP validates exact URL, rejects redirects, and SSE only reports event re
   assert.equal(changed.ok, false);
 });
 
+for (const [label, contentType, body, detail] of [
+  ['wrong content type', 'text/plain', 'data: looks like an event\n\n', 'SSE content type missing'],
+  ['incomplete event at EOF', 'text/event-stream', 'data: partial\n', 'SSE ended before a complete event'],
+]) {
+  test(`SSE probe rejects ${label} and releases its request`, async t => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': contentType });
+      res.end(body);
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => { server.closeAllConnections(); server.close(); });
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const { driver } = await fixture(t, {}, { origin: url });
+    driver.adapters[0].recipes.probe = { kind: 'http-probe', url, vantage: 'local', sse: true };
+    const result = await driver.execute({
+      id: 'sse-failure', sessionId: 'test', generation: 1, kind: 'http-probe',
+      operation: 'probe', url, vantage: 'local', sse: true,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.result.detail, detail);
+    assert.equal(driver.activeRequests.size, 0);
+  });
+}
+
 test('owned loopback forwarder selects ephemeral port, serves exact target, removes exact socket', async t => {
   const target = net.createServer(socket => socket.end('target'));
   await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
@@ -365,6 +389,25 @@ test('owned process output frames complete lines across chunks without diagnosti
   assert.equal(JSON.stringify(driver.journal.value).includes('lhr.life'), false);
 });
 
+test('complete output lines preserve UTF-8 characters split between pipe chunks', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  const lines = [];
+  driver.onProcessOutput = row => {
+    if (row.completeLine !== undefined) lines.push([row.stream, row.completeLine]);
+  };
+  const output = Buffer.from('caf\u00e9 \ud83d\ude00\n');
+  driver.processOutput(effect, resource, 'stdout', output.subarray(0, 4));
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('other stream\n'));
+  driver.processOutput(effect, resource, 'stdout', output.subarray(4, 8));
+  driver.processOutput(effect, resource, 'stdout', output.subarray(8));
+
+  assert.deepEqual(lines, [['stderr', 'other stream'], ['stdout', 'caf\u00e9 \ud83d\ude00']]);
+});
+
 test('an observer callback failure does not discard diagnostic output', () => {
   const driver = makeOutputOnlyDriver();
   const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
@@ -477,6 +520,26 @@ function makeOutputOnlyDriver() {
   });
 }
 
+test('private-materialized process diagnostics never reach retention or callbacks', () => {
+  const driver = makeOutputOnlyDriver();
+  const callbacks = [];
+  driver.onProcessOutput = event => callbacks.push(event);
+  const resource = { id: 'synthetic-private', generation: 2, adapterId: 'example', privateMaterialized: true };
+  driver.processOutput({ id: 'synthetic-effect' }, resource, 'stderr', Buffer.from('fixture only\n'));
+  assert.deepEqual(callbacks, []);
+  assert.deepEqual(driver.readProcessOutput(), []);
+  assert.equal(driver.outputSequence, 0);
+});
+
+test('output without an owned resource yields no diagnostics and consumes no sequence', () => {
+  const driver = makeOutputOnlyDriver();
+  driver.processOutput({ id: 'missing-resource' }, undefined, 'stderr', Buffer.from('fixture noise'));
+  const resource = { id: 'synthetic-existing', generation: 2, adapterId: 'example' };
+  driver.processOutput({ id: 'owned-output' }, resource, 'stderr', Buffer.from('recorded fixture'));
+  assert.deepEqual(driver.readProcessOutput().map(row => [row.sequence, row.resourceId, row.output]),
+    [[1, resource.id, 'recorded fixture']]);
+});
+
 test('initial create URL is handled by the core result and never re-emitted as a route change', async t => {
   const recipe = { kind: 'spawn', program, args: ['-e', 'process.stdout.write("https://a.lhr.life\\n");setTimeout(()=>process.stdout.write("https://b.lhr.life\\n"),120);setInterval(()=>{},1000)'],
     timeoutMs: 1000, maxOutputBytes: 4096, longRunning: true, collectMs: 30 };
@@ -578,3 +641,25 @@ console.log(JSON.stringify({ id: record.id, pid: record.pid, startIdentity: reco
     assert.notEqual(journal.value.owned[owned.id]?.retired, true);
   });
 }
+
+test('line framing does not count the CRLF delimiter against the payload cap', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'fixture', generation: 2, adapterId: 'fixture' };
+  const effect = { id: 'fixture-effect' };
+  const lines = [];
+  const exact = 'x'.repeat(4096);
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  driver.onProcessOutput = event => {
+    if (event.completeLine !== undefined) lines.push(event.completeLine);
+  };
+
+  driver.processOutput(effect, resource, 'stderr', Buffer.from(exact + '\r'));
+  assert.deepEqual(lines, []);
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('\n'));
+  assert.deepEqual(lines.map(line => line.length), [4096]);
+  assert.equal(lines[0], exact);
+
+  driver.processOutput(effect, resource, 'stderr', Buffer.from(exact + '\ry\r\nnext\r\n'));
+  assert.deepEqual(lines.slice(1), ['next']);
+});

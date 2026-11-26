@@ -123,6 +123,46 @@ fn status_at_the_same_explicit_clock_tick_has_no_effects() {
     assert_eq!(next["events"], json!([]));
 }
 
+#[test]
+fn status_rejects_non_unsigned_clock_values_at_the_json_boundary() {
+    let expected = json!({
+        "error": {
+            "code": "invalid-input",
+            "message": "invalid input JSON or protocol shape"
+        }
+    });
+    for now in [json!(-1), json!(1.25), json!("25")] {
+        let input = json!({"command":{"type":"status"},"host":{"nowMs":now}});
+        let result: Value =
+            serde_json::from_str(&gozar_core::step(&input.to_string())).unwrap();
+        assert_eq!(result, expected, "clock value: {now}");
+    }
+}
+
+#[test]
+fn a_rejected_clock_sample_does_not_prevent_retry_with_the_saved_state() {
+    let first = run(json!({"command":{"type":"status"},"host":{"nowMs":25}}));
+    let rejected = json!({
+        "state": first["state"],
+        "command": {"type":"status"},
+        "host": {"nowMs":24}
+    });
+    let refusal: Value = serde_json::from_str(&gozar_core::step(&rejected.to_string())).unwrap();
+    assert_eq!(refusal["error"]["code"], "invalid-input");
+    assert!(refusal.get("state").is_none());
+
+    let next = run(json!({
+        "state": first["state"],
+        "command": {"type":"status"},
+        "host": {"nowMs":26}
+    }));
+    for field in ["sessionId", "generation", "phase"] {
+        assert_eq!(next["snapshot"][field], first["snapshot"][field], "{field}");
+    }
+    assert_eq!(next["effects"], json!([]));
+    assert_eq!(next["events"], json!([]));
+}
+
 fn fixture() -> Value {
     serde_json::from_str(include_str!("../../../test/adapters/fixtures/plan-v1.json")).unwrap()
 }
@@ -296,6 +336,59 @@ fn nondurable_ack_clears_the_pending_intent_without_emitting_execution() {
         assert_eq!(denied["state"]["resources"], out["state"]["resources"]);
     }
 }
+#[test]
+fn late_result_from_another_generation_leaves_current_preflight_pending() {
+    let f = fixture();
+    let a = definition("private");
+    let out = begin(&a, &f["host"]);
+    let effect = &out["effects"][0];
+    let id = effect["id"].as_str().unwrap();
+    let next_generation = effect["generation"].as_u64().unwrap() + 1;
+    let result = response(&out, &a, &f["host"], &f["baselineConfig"]);
+    let mismatch = run(json!({
+        "state": out["state"], "host": f["host"],
+        "command": {"type": "effect-result", "effectId": id,
+            "sessionId": effect["sessionId"], "generation": next_generation,
+            "ok": true, "result": result}
+    }));
+
+    assert_eq!(mismatch["events"][0]["type"], "effect-scope-mismatch");
+    assert_eq!(mismatch["effects"], json!([]));
+    assert_eq!(mismatch["state"]["pending"][id], out["state"]["pending"][id]);
+
+    let accepted = ack(&out, result.clone(), &f["host"]);
+    let current = run(json!({
+        "state": mismatch["state"], "host": f["host"],
+        "command": {"type": "effect-result", "effectId": id,
+            "sessionId": effect["sessionId"], "generation": effect["generation"],
+            "ok": true, "result": result}
+    }));
+    assert_eq!(current, accepted);
+}
+
+#[test]
+fn repeated_preflight_result_does_not_consume_the_next_effect() {
+    let f = fixture();
+    let a = definition("private");
+    let out = begin(&a, &f["host"]);
+    let effect = &out["effects"][0];
+    let id = effect["id"].as_str().unwrap();
+    let result = response(&out, &a, &f["host"], &f["baselineConfig"]);
+    let accepted = ack(&out, result.clone(), &f["host"]);
+    assert!(accepted["state"]["pending"].get(id).is_none());
+    assert!(!accepted["effects"].as_array().unwrap().is_empty());
+
+    let replayed = run(json!({
+        "state": accepted["state"], "host": f["host"],
+        "command": {"type": "effect-result", "effectId": id,
+            "sessionId": effect["sessionId"], "generation": effect["generation"],
+            "ok": true, "result": result}
+    }));
+    assert_eq!(replayed["events"][0]["type"], "unknown-or-duplicate-effect");
+    assert_eq!(replayed["effects"], json!([]));
+    assert_eq!(replayed["state"], accepted["state"]);
+}
+
 #[test]
 fn durable_ack_cannot_execute_after_preflight_authority_expiry() {
     let f = fixture();
@@ -717,6 +810,48 @@ fn a_declared_reach_does_not_show_the_unknown_reach_notice() {
         "requirements": {"clientReach": "this-device"}
     }));
     assert_eq!(out["snapshot"]["limitations"], json!([]));
+    assert_eq!(out["effects"], json!([]));
+}
+
+#[test]
+fn recommendation_recomputes_choices_when_requirements_change_before_start() {
+    let first = run(json!({
+        "command": {"type": "recommend"},
+        "requirements": {"clientReach": "this-device"},
+        "adapters": [
+            {"id": "local-fixture", "audience": "local", "ownership": "external-owned"},
+            {"id": "public-fixture", "audience": "public", "ownership": "external-owned"}
+        ]
+    }));
+    assert_eq!(first["action"]["choices"], json!(["local-fixture", "public-fixture"]));
+
+    let second = run(json!({
+        "state": first["state"],
+        "command": {"type": "recommend"},
+        "requirements": {"clientReach": "internet"}
+    }));
+    assert_eq!(second["action"]["choices"], json!(["public-fixture"]));
+    assert_eq!(second["snapshot"]["plans"].as_array().unwrap().len(), 1);
+    assert_eq!(second["snapshot"]["plans"][0]["adapterId"], "public-fixture");
+    assert_eq!(second["effects"], json!([]));
+}
+
+#[test]
+fn recommendation_deduplicates_shared_adapter_limitations_in_first_seen_order() {
+    let out = run(json!({
+        "command": {"type": "recommend"},
+        "requirements": {"clientReach": "internet"},
+        "adapters": [
+            {"id": "first-fixture", "audience": "public", "ownership": "external-owned",
+             "unknowns": ["first adapter detail", "shared detail"]},
+            {"id": "second-fixture", "audience": "public", "ownership": "external-owned",
+             "unknowns": ["shared detail", "second adapter detail"]}
+        ]
+    }));
+    assert_eq!(
+        out["snapshot"]["limitations"],
+        json!(["first adapter detail", "shared detail", "second adapter detail"])
+    );
     assert_eq!(out["effects"], json!([]));
 }
 
@@ -1266,6 +1401,62 @@ fn stopping_an_empty_session_is_idempotent() {
 }
 
 
+fn run_native_jsonl(input: &[u8]) -> std::process::Output {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gozar-core-json"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start native JSONL transport");
+    child
+        .stdin
+        .take()
+        .expect("open child stdin")
+        .write_all(input)
+        .expect("write JSONL fixture");
+    child.wait_with_output().expect("collect native JSONL output")
+}
+
+#[test]
+fn native_jsonl_recovers_after_a_malformed_line() {
+    let out = run_native_jsonl(
+        b"{\n{\"command\":{\"type\":\"status\",\"sessionId\":\"native-after-malformed\"}}",
+    );
+    assert!(out.status.success(), "{:?}", out.stderr);
+    let stdout = std::str::from_utf8(&out.stdout).unwrap();
+    let receipts: Vec<Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(
+        receipts[0],
+        json!({"error":{
+            "code":"invalid-input",
+            "message":"invalid input JSON or protocol shape"
+        }})
+    );
+    assert_eq!(receipts[1]["snapshot"]["sessionId"], "native-after-malformed");
+    assert_eq!(receipts[1]["effects"], json!([]));
+}
+
+#[test]
+fn native_jsonl_flushes_prior_receipts_before_rejecting_a_non_utf8_line() {
+    let out = run_native_jsonl(
+        b"{\"command\":{\"type\":\"status\",\"sessionId\":\"native-before-invalid-bytes\"}}\n\xff\n",
+    );
+    assert!(!out.status.success());
+    let stdout = std::str::from_utf8(&out.stdout).unwrap();
+    let receipts: Vec<_> = stdout.lines().collect();
+    assert_eq!(receipts.len(), 1);
+    let receipt: Value = serde_json::from_str(receipts[0]).unwrap();
+    assert_eq!(receipt["snapshot"]["sessionId"], "native-before-invalid-bytes");
+    assert_eq!(receipt["effects"], json!([]));
+}
+
 #[test]
 fn recommendation_without_adapters_has_no_choices_or_effects() {
     let out = run(json!({"command": {"type": "recommend"}, "adapters": []}));
@@ -1275,4 +1466,94 @@ fn recommendation_without_adapters_has_no_choices_or_effects() {
     assert_eq!(out["action"], json!({"kind": "choose", "choices": []}));
     assert_eq!(out["effects"], json!([]));
     assert_eq!(out["events"], json!([]));
+}
+
+#[test]
+fn requesting_an_unknown_adapter_does_not_change_the_session() {
+    let session = "fixture-no-such-adapter";
+    let before = run(json!({"command": {"type": "status", "sessionId": session}}));
+    let after = run(json!({
+        "state": before["state"],
+        "command": {"type": "start", "adapterId": "fixture-unknown", "consent": true}
+    }));
+
+    assert_eq!(after["state"], before["state"]);
+    assert_eq!(after["snapshot"], before["snapshot"]);
+    assert_eq!(after["effects"], json!([]));
+    assert!(after.get("action").is_none());
+    assert_eq!(
+        after["events"],
+        json!([{"type": "adapter-unknown", "sessionId": session,
+                "generation": before["snapshot"]["generation"]}])
+    );
+}
+
+#[test]
+fn an_unrecognized_effect_result_does_not_change_an_idle_session() {
+    let session = "fixture-idle-result";
+    let before = run(json!({"command": {"type": "status", "sessionId": session}}));
+    let after = run(json!({
+        "state": before["state"],
+        "command": {"type": "effect-result", "effectId": "fixture-unrecognized",
+                    "sessionId": session, "generation": before["snapshot"]["generation"],
+                    "ok": true, "result": {}}
+    }));
+
+    assert_eq!(after["state"], before["state"]);
+    assert_eq!(after["snapshot"], before["snapshot"]);
+    assert_eq!(after["effects"], json!([]));
+    assert!(after.get("action").is_none());
+    assert_eq!(
+        after["events"],
+        json!([{"type": "unknown-or-duplicate-effect", "sessionId": session,
+                "generation": before["snapshot"]["generation"]}])
+    );
+}
+
+#[test]
+fn failed_detection_leaves_observation_unknown_and_consumes_the_effect() {
+    let detected = run(json!({
+        "command": {"type": "detect", "sessionId": "detection-fixture"},
+        "adapters": [{
+            "id": "fixture",
+            "audience": "local",
+            "ownership": "owned",
+            "recipes": {"detect": {"kind": "spawn", "program": "fixture-not-executed"}}
+        }]
+    }));
+    let effect = &detected["effects"][0];
+    assert_eq!(effect["operation"], "detect");
+
+    let failed = run(json!({
+        "state": detected["state"],
+        "command": {
+            "type": "effect-result",
+            "effectId": effect["id"],
+            "sessionId": effect["sessionId"],
+            "generation": effect["generation"],
+            "ok": false,
+            "result": {"exitCode": 1}
+        }
+    }));
+    assert_eq!(failed["snapshot"]["observations"]["fixture"], "unknown");
+    assert_eq!(failed["events"][0]["type"], "detection-recorded");
+    assert_eq!(failed["state"]["pending"], json!({}));
+    assert_eq!(failed["effects"], json!([]));
+}
+
+#[test]
+fn owned_adapter_without_create_recipe_reports_failed_without_allocating() {
+    let failed = run(json!({
+        "command": {"type": "start", "adapterId": "fixture", "consent": true},
+        "requirements": {"clientReach": "this-device"},
+        "adapters": [{"id": "fixture", "audience": "local", "ownership": "owned"}]
+    }));
+    assert_eq!(failed["snapshot"]["phase"], "failed");
+    assert_eq!(
+        failed["snapshot"]["limitations"],
+        json!(["Adapter has no admitted create recipe"])
+    );
+    assert_eq!(failed["snapshot"]["resources"], json!([]));
+    assert_eq!(failed["effects"], json!([]));
+    assert!(failed.get("action").is_none());
 }

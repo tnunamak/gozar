@@ -128,6 +128,11 @@ test('ngrok hostname validation does not treat missing labels as a complete host
   assert.equal(domainPattern.test('fixture..example'), false);
 });
 
+test('ngrok manual hostname rejects a final DNS label longer than 63 characters', () => {
+  assert.equal(domainPattern.test(`fixture.${'a'.repeat(63)}`), true);
+  assert.equal(domainPattern.test(`fixture.${'a'.repeat(64)}`), false);
+});
+
 test('ngrok setup journey: auth, then reserved domain, then ready; expose opens the listener with the stored values', async t => {
   const { home, api, forwards, candidateOf, provide, provideValue } = await ngrokWorld(t);
   let candidate = await candidateOf();
@@ -376,6 +381,54 @@ test('LAN setup ignores malformed address entries and entries missing an interna
   } }), []);
 });
 
+test('unavailable fixture listener runtime fails setup without trying the live SDK', async () => {
+  const { listenerSdk } = await import('../../adapters/providers/_shared/listener-effects.mjs');
+  const operations = [];
+  await assert.rejects(
+    listenerSdk({ dispatchEffect: async ({ operation }) => {
+      operations.push(operation);
+      return { available: false };
+    } }, () => assert.fail('must not load the live SDK')),
+    { code: 'setup_required', message: 'The listener runtime is unavailable in this fixture' },
+  );
+  assert.deepEqual(operations, ['detect']);
+});
+
+test('fixture listener refuses an invalid open result instead of returning a listener', async () => {
+  const { listenerSdk } = await import('../../adapters/providers/_shared/listener-effects.mjs');
+  const operations = [];
+  const sdk = await listenerSdk({ dispatchEffect: async ({ operation, input }) => {
+    operations.push({ operation, input });
+    return operation === 'detect' ? { available: true } : { handle: '', url: 'https://fixture.invalid' };
+  } }, () => assert.fail('must not load the live SDK'));
+  const options = { addr: '127.0.0.1:43210' };
+  await assert.rejects(sdk.forward(options), {
+    code: 'provider_unavailable',
+    message: 'The fixture listener effect returned an invalid resource',
+  });
+  assert.deepEqual(operations, [
+    { operation: 'detect', input: {} },
+    { operation: 'open', input: { options } },
+  ]);
+});
+
+test('fixture listener read treats missing evidence as unknown, not confirmed absent', async () => {
+  const { listenerSdk } = await import('../../adapters/providers/_shared/listener-effects.mjs');
+  const reads = [];
+  const sdk = await listenerSdk({ dispatchEffect: async ({ operation, input }) => {
+    if (operation === 'detect') return { available: true };
+    assert.equal(operation, 'read');
+    reads.push(input.handle);
+    return input.handle === 'gone' ? { present: false } : {};
+  } }, () => assert.fail('must not load the live SDK'));
+  assert.equal(await sdk.getListener('gone'), null);
+  await assert.rejects(sdk.getListener('unknown'), {
+    code: 'provider_unavailable',
+    message: 'The fixture listener presence is unknown',
+  });
+  assert.deepEqual(reads, ['gone', 'unknown']);
+});
+
 test('Tailscale setup presents the HTTPS default port implicitly and other ports explicitly', async () => {
   const { originOf } = await import('../../adapters/providers/_shared/tailscale-serve.mjs');
   assert.equal(originOf('demo.invalid', 443), 'https://demo.invalid');
@@ -398,4 +451,64 @@ test('an unknown listener diagnostic gives stable review instructions', async ()
   assert.equal(error.nextAction.kind, 'instructions');
   assert.equal(error.nextAction.label, 'Review connection and setup');
   assert.doesNotMatch(error.message, /fictional provider detail/);
+});
+
+test('Tailscale check still reports working LocalAPI when the macOS app discovery fails', async () => {
+  const { checkTailscaleApp } = await import('../../adapters/providers/_shared/check-tailscale-app.mjs');
+  const calls = [];
+  const discovered = new Error('synthetic app discovery unavailable');
+  const result = await checkTailscaleApp({
+    platform: 'darwin',
+    env: { PATH: '' },
+    resolve: () => null,
+    discover: async () => { calls.push('discover'); throw discovered; },
+    node: async () => { calls.push('status'); },
+    serveConfig: async () => { calls.push('serve-config'); },
+  });
+  assert.deepEqual(calls, ['discover', 'status', 'serve-config']);
+  assert.equal(result.ok, true);
+  assert.ok(result.lines.includes('Tailscale app LocalAPI: discovery failed; checking LocalAPI directly'));
+  assert.ok(result.lines.includes('LocalAPI status: ok'));
+  assert.ok(result.lines.includes('LocalAPI serve-config: ok'));
+  assert.equal(result.lines.at(-1), 'result: reachable');
+  assert.doesNotMatch(result.lines.join('\n'), /synthetic app discovery unavailable/);
+});
+
+test('Tailscale diagnostic skips macOS app discovery on Linux', async () => {
+  const { checkTailscaleApp } = await import('../../adapters/providers/_shared/check-tailscale-app.mjs');
+  const calls = [];
+  const result = await checkTailscaleApp({
+    platform: 'linux',
+    env: { PATH: '' },
+    resolve: () => null,
+    discover: async () => { calls.push('discover'); },
+    node: async () => { calls.push('status'); },
+    serveConfig: async () => { calls.push('serve-config'); },
+  });
+  assert.deepEqual(calls, ['status', 'serve-config']);
+  assert.equal(result.lines.some(line => line.startsWith('Tailscale app LocalAPI:')), false);
+  assert.equal(result.ok, true);
+});
+
+test('Tailscale diagnostic checks serve config even if the status request fails', async () => {
+  const { checkTailscaleApp } = await import('../../adapters/providers/_shared/check-tailscale-app.mjs');
+  const calls = [];
+  const result = await checkTailscaleApp({
+    platform: 'darwin',
+    env: { PATH: '' },
+    resolve: () => null,
+    discover: async () => ({ variant: 'standalone', port: 12345 }),
+    node: async () => {
+      calls.push('status');
+      throw new Error('synthetic status detail');
+    },
+    serveConfig: async () => { calls.push('serve-config'); },
+  });
+  assert.deepEqual(calls, ['status', 'serve-config']);
+  assert.ok(result.lines.some(line => line.includes('standalone app on loopback port 12345')));
+  assert.ok(result.lines.includes('LocalAPI status: failed'));
+  assert.ok(result.lines.includes('LocalAPI serve-config: ok'));
+  assert.doesNotMatch(result.lines.join('\n'), /synthetic status detail/);
+  assert.equal(result.ok, false);
+  assert.equal(result.lines.at(-1), 'result: not reachable');
 });
