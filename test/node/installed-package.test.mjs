@@ -313,6 +313,16 @@ const hostWorld = async t => {
   return durableWorld(world, t);
 };
 const providerRules = fake => Object.keys(fake.state.config.Web ?? {});
+// Owned failure evidence, taken before the world is torn down: the provider's rule shape, the stored managed record's phase and
+// cleanup certainty, and the provider writes seen. No paths, secrets, tokens or digests.
+const lossEvidence = async fake => {
+  const dir = join(fake.home, 'forward');
+  const records = await Promise.all((await readdir(dir).catch(() => [])).filter(name => name.endsWith('.json'))
+    .map(async name => JSON.parse(await readFile(join(dir, name), 'utf8'))));
+  return JSON.stringify({ providerConfigKeys: Object.fromEntries(Object.entries(fake.state.config).map(([key, value]) => [key, Object.keys(value)])),
+    providerWrites: fake.state.writes.length, records: records.map(record => ({ phase: record.run?.phase, hasHandle: Boolean(record.run?.handle),
+      downSince: Boolean(record.downSince), cleanup: record.cleanup?.certainty })) });
+};
 
 test('installed forward: the exact first documentation example runs on the imported namespace and cleans up exactly', async t => {
   const w = await hostWorld(t);
@@ -371,12 +381,16 @@ try {
   const host = await runHost(t, { entry: 'lost-rule.mjs', env: w.env, source });
   await host.report('published');
   assert.equal(providerRules(w).length, 1);
-  w.state.config.Web = {};
+  // A lost provider rule is a vanished serve config (what `tailscale serve reset` or a reinstalled node leaves, and how the durable
+  // route suite models loss): the whole rule of TCP listener, web handler and Funnel flag is gone and tailscaled's ETag moves on.
+  // Emptying only the web handler leaves a rule the SDK reads as changed, not lost (next test).
+  w.state.config = {};
+  w.state.etag++;
   const down = await host.report('outage');
   assert.equal(down.url, null, 'an observed outage must withdraw the current address');
   assert.equal(down.currentDownSince, down.downSince);
   assert.ok(Number.isFinite(Date.parse(down.downSince)));
-  const back = await host.report('recovered');
+  const back = await host.report('recovered').catch(async error => { throw new Error(`${error.message}\nowned evidence: ${await lossEvidence(w)}`); });
   assert.equal(back.url, w.origin);
   assert.equal(back.currentDownSince, null);
   assert.equal(back.downSince, down.downSince);
@@ -388,6 +402,39 @@ try {
   assert.equal(done.shown.length, 1, 'unchanged disclosure does not ask again during recovery');
   assert.equal(done.listenerSurvived, true);
   assert.deepEqual(providerRules(w), []);
+});
+
+test('installed forward: a partly changed provider rule is not removed or replaced and is retained as cleanup debt', async t => {
+  const w = await hostWorld(t);
+  const source = `import * as gozar from '@tnunamak/gozar';
+const { port, ui } = globalThis.faravanHost;
+const route = await gozar.forward({ app: 'faravan', port, onAction: ui.show });
+route.on('down', event => console.log(JSON.stringify({ type: 'outage', ...event, url: route.url })));
+route.on('back', event => console.log(JSON.stringify({ type: 'recovered', ...event })));
+await ui.untilClosed();
+await route.close();
+`;
+  const host = await runHost(t, { entry: 'changed-rule.mjs', env: w.env, source });
+  await host.report('published');
+  // The web handler alone vanishes; the TCP listener and Funnel flag stay. That is no longer the rule Gozar wrote, so it is not Gozar's
+  // to delete or to overwrite: the SDK keeps it as cleanup debt and the managed forward must not publish a second rule beside it.
+  const left = structuredClone(w.state.config);
+  left.Web = {};
+  w.state.config = structuredClone(left);
+  w.state.etag++;
+  const writesBefore = w.state.writes.length;
+  assert.equal((await host.report('outage')).url, null);
+  const owed = async () => (await lossEvidence(w)).includes('"cleanup":"unconfirmed"');
+  const deadline = Date.now() + 40_000;
+  while (!await owed() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 250));
+  assert.ok(await owed(), `the unremovable rule is retained as debt; evidence: ${await lossEvidence(w)}`);
+  assert.deepEqual(w.state.config, left, 'the changed rule is left exactly as found');
+  assert.equal(w.state.writes.length, writesBefore, 'nothing was written to the provider');
+  assert.equal(host.reports().some(item => item.type === 'recovered'), false, 'no recovery is claimed');
+  host.close();
+  const done = await host.report('done');
+  assert.equal(done.failure.code, 'cleanup_debt', 'close() names the retained debt');
+  assert.deepEqual(w.state.config, left, 'close does not remove a rule it cannot attribute');
 });
 
 test('installed forward: with no ready provider the namespace rejects with a per-provider explanation and no invented next action', async t => {
