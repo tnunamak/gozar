@@ -504,6 +504,26 @@ function makeOutputOnlyDriver() {
   });
 }
 
+test('private-materialized process diagnostics never reach retention or callbacks', () => {
+  const driver = makeOutputOnlyDriver();
+  const callbacks = [];
+  driver.onProcessOutput = event => callbacks.push(event);
+  const resource = { id: 'synthetic-private', generation: 2, adapterId: 'example', privateMaterialized: true };
+  driver.processOutput({ id: 'synthetic-effect' }, resource, 'stderr', Buffer.from('fixture only\n'));
+  assert.deepEqual(callbacks, []);
+  assert.deepEqual(driver.readProcessOutput(), []);
+  assert.equal(driver.outputSequence, 0);
+});
+
+test('output without an owned resource yields no diagnostics and consumes no sequence', () => {
+  const driver = makeOutputOnlyDriver();
+  driver.processOutput({ id: 'missing-resource' }, undefined, 'stderr', Buffer.from('fixture noise'));
+  const resource = { id: 'synthetic-existing', generation: 2, adapterId: 'example' };
+  driver.processOutput({ id: 'owned-output' }, resource, 'stderr', Buffer.from('recorded fixture'));
+  assert.deepEqual(driver.readProcessOutput().map(row => [row.sequence, row.resourceId, row.output]),
+    [[1, resource.id, 'recorded fixture']]);
+});
+
 test('initial create URL is handled by the core result and never re-emitted as a route change', async t => {
   const recipe = { kind: 'spawn', program, args: ['-e', 'process.stdout.write("https://a.lhr.life\\n");setTimeout(()=>process.stdout.write("https://b.lhr.life\\n"),120);setInterval(()=>{},1000)'],
     timeoutMs: 1000, maxOutputBytes: 4096, longRunning: true, collectMs: 30 };
