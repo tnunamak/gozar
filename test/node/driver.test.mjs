@@ -512,3 +512,36 @@ console.log(JSON.stringify({ id: record.id, pid: record.pid, startIdentity: reco
     assert.notEqual(journal.value.owned[owned.id]?.retired, true);
   });
 }
+
+test('line framing keeps two resources on the same output stream independent', () => {
+  const driver = makeOutputOnlyDriver();
+  const left = { id: 'left', generation: 2, adapterId: 'fixture' };
+  const right = { ...left, id: 'right' };
+  const effect = { id: 'fixture-effect' };
+  const lines = [];
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([left.id, right.id]);
+  driver.onProcessOutput = event => {
+    if (event.completeLine !== undefined) lines.push([event.resourceId, event.completeLine]);
+  };
+  driver.processOutput(effect, left, 'stdout', Buffer.from('left-'));
+  driver.processOutput(effect, right, 'stdout', Buffer.from('right\n'));
+  driver.processOutput(effect, left, 'stdout', Buffer.from('line\n'));
+  assert.deepEqual(lines, [['right', 'right'], ['left', 'left-line']]);
+});
+
+test('line framing consumes a CRLF delimiter split across chunks exactly once', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'fixture', generation: 2, adapterId: 'fixture' };
+  const effect = { id: 'fixture-effect' };
+  const lines = [];
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  driver.onProcessOutput = event => {
+    if (event.completeLine !== undefined) lines.push(event.completeLine);
+  };
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('first\r'));
+  assert.deepEqual(lines, []);
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('\nsecond\r\n'));
+  assert.deepEqual(lines, ['first', 'second']);
+});
