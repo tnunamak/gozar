@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { readFile, readdir, writeFile, access } from 'node:fs/promises';
+import { readFile, readdir, writeFile, access, appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { attachedStatus, closeAttachedRoute, controlAttached, openAttachedRoute, openSessionRoute, redeemApproval } from '../../packages/gozar-node/attached-route.mjs';
+import { createRouteApi } from '../../packages/gozar-node/route-api.mjs';
+import { fakeRegistry } from '../../packages/gozar-node/testing.mjs';
 import { routeStatus, closeRoute } from '../../packages/gozar-node/route-view.mjs';
 import { processIdentity } from '../../packages/gozar-node/process-identity.mjs';
 import { assertShape, codeOf, query, scratch, attachedScratch, stubAdapter, tokenStubs } from './route-schema-check.mjs';
@@ -259,5 +261,42 @@ test('URL targets ending in a port remain accepted for session and attached usag
     assert.equal(view.handle.kind, kind);
     if (kind === 'session') assert.match(view.handle.id, /^port-8799:/);
     await closeAttachedRoute({ home, handle: view.handle, mode: 'remove' });
+  }
+});
+
+for (const kind of ['attached', 'session']) test(`stale executable registry refuses ${kind} before reservation`, async t => {
+  const home = await attachedScratch(t), id = `recheck-${kind}`;
+  const registry = await fakeRegistry({ id, kinds: [kind], reach: 'this-device', transport: 'tcp', proofProtocol: 'echo' });
+  t.after(() => registry.cleanup());
+  const options = { manifest: registry.manifest, root: registry.root, readContext };
+  const api = createRouteApi(options);
+  const q = query({ home, owner: 'registry-witness', operationId: 'registry-witness',
+    usage: kind === 'session' ? { kind, lifetimeMs: 60_000 } : { kind }, target: '127.0.0.1:8799',
+    requirements: { reach: 'this-device', transport: 'tcp', payloadAccess: 'allow-provider', address: 'any', setup: 'allow', protocols: [] } });
+  const approve = async sdk => {
+    const candidate = (await sdk.catalogRoutes(q)).candidates.find(item => item.candidateToken);
+    assert.ok(candidate?.candidateToken, 'fixture provides an approvable candidate');
+    return { ...q, wait: 'verified', approval: { kind: 'route', candidateToken: candidate.candidateToken,
+      disclosureRevision: candidate.disclosure.revision, consentFactsDigest: candidate.consentFactsDigest } };
+  };
+  const original = await approve(api);
+  const provider = join(registry.root, 'providers', id);
+  const readEvents = () => readFile(join(provider, 'events.jsonl'), 'utf8').catch(error => {
+    if (error.code === 'ENOENT') return '';
+    throw error;
+  });
+  const before = await readEvents();
+  await appendFile(join(provider, 'index.mjs'), '\n// Change executable registry bytes without changing behavior.\n');
+  await assert.rejects(api.expose(original), { code: 'artifact_integrity_failed' });
+  await assert.rejects(access(join(home, 'operations')), { code: 'ENOENT' });
+  assert.equal(await readEvents(), before, 'preallocation refusal must have no provider effects');
+  const fresh = createRouteApi(options);
+  const view = await fresh.expose(await approve(fresh));
+  try {
+    assert.equal(view.handle.kind, kind);
+    assert.equal(view.operationId, q.operationId);
+  } finally {
+    const closed = await fresh.closeRoute({ home, owner: q.owner, handle: view.handle, mode: 'remove' });
+    assert.equal(closed.cleanup.state, 'confirmed');
   }
 });
