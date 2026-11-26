@@ -1,15 +1,171 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import net from 'node:net';
+import {randomUUID,randomBytes} from 'node:crypto';
+import {readFile,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {createGozar} from '@tnunamak/gozar';
+import {fakeRegistry} from '@tnunamak/gozar/testing';
 import {proofObservedDuring} from '../../packages/gozar-node/attached-route.mjs';
+import {scratch} from './route-schema-check.mjs';
 
-// Pure negative controls for the shared initial/refresh timestamp boundary.
-// These do not stand in for the still-required public proof mutation matrix.
+// Pure negative controls for the shared initial/refresh timestamp boundary. The public proof mutation matrix below
+// now carries the subject cells; this control remains the direct evidence for the observation-window predicate.
 test('proof observation must belong to the current verification interval', () => {
- const start=1000,end=2000;
- for(const checkedAt of [undefined,null,'invalid',new Date(999).toISOString(),new Date(2001).toISOString()]){
-  assert.equal(proofObservedDuring({checkedAt},start,end),false);
- }
- assert.equal(proofObservedDuring({checkedAt:new Date(start).toISOString()},start,end),true);
- assert.equal(proofObservedDuring({checkedAt:new Date(end).toISOString()},start,end),true);
- assert.equal(proofObservedDuring({checkedAt:new Date(1500).toISOString()},start,end),true);
+  const start=1000,end=2000;
+  for(const checkedAt of [undefined,null,'invalid',new Date(999).toISOString(),new Date(2001).toISOString()]){
+    assert.equal(proofObservedDuring({checkedAt},start,end),false);
+  }
+  assert.equal(proofObservedDuring({checkedAt:new Date(start).toISOString()},start,end),true);
+  assert.equal(proofObservedDuring({checkedAt:new Date(end).toISOString()},start,end),true);
+  assert.equal(proofObservedDuring({checkedAt:new Date(1500).toISOString()},start,end),true);
 });
+
+// The public initial-proof subject matrix, on the current runtime: one owned echo app behind the fakeRegistry echo
+// provider, driven only through createGozar/catalogRoutes/expose/closeRoute. The fault wrapper is the owned provider
+// fixture beside the fake module, never controller state. A wrong nonce is sent through the real verifier, so the
+// echo protocol itself must answer it; a mutated endpoint or attempt id in the returned observation is an
+// adversarial provider answer and must never create usable publication.
+//
+// Cells that already have a real public-path test are not duplicated here: attached wrong-endpoint and
+// stale-attempt are provider-lifecycle.test.mjs's "core rejects another endpoint/attempt and cleans up the owned
+// fixture"; the observation-window cells are the control above plus session-proof-staging.test.mjs; retained-handle
+// custody on a failed expose is weekend-initial-proof and ngrok-bundled-runtime. Still missing were the wrong-nonce
+// rejection for both kinds and the wrong-endpoint/stale-attempt rejections for sessions.
+const WRAPPER = fault => `
+import provider from './index.mjs';
+const fault=${JSON.stringify(fault)};
+export default {...provider,
+  async prepareProof(ctx, request, attempt) {
+    const proof = await provider.prepareProof(ctx, request, attempt);
+    return {...proof, async verify(input) {
+      const asked = fault === 'wrong-nonce'
+        ? {...input, attempt: {...input.attempt, nonce: (input.attempt.nonce[0] === '0' ? '1' : '0') + input.attempt.nonce.slice(1)}}
+        : input;
+      const checked = await proof.verify(asked);
+      return fault === 'wrong-endpoint' ? {...checked, endpoint: 'tcp://127.0.0.1:1'}
+        : fault === 'stale-attempt' ? {...checked, attemptId: 'previous-' + checked.attemptId}
+        : checked;
+    }};
+  },
+};
+`;
+
+async function subjectWorld(t, kind, fault) {
+  const home = await scratch(t);
+  const sockets = new Set();
+  const app = net.createServer({allowHalfOpen: true}, socket => {
+    sockets.add(socket); socket.once('close', () => sockets.delete(socket));
+    socket.on('error', () => {}); socket.pipe(socket);
+  });
+  t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise(resolve => app.close(resolve)); });
+  await new Promise((resolve, reject) => { app.once('error', reject); app.listen(0, '127.0.0.1', resolve); });
+  const target = '127.0.0.1:' + app.address().port;
+  const id = 'subject-' + randomUUID().slice(0, 8);
+  const registry = await fakeRegistry({id, dir: join(home, 'registry'), kinds: ['attached', 'session'],
+    reach: 'this-device', transport: 'tcp', protocols: [], proofProtocol: 'echo'});
+  t.after(() => registry.cleanup());
+  const folder = join(registry.root, 'providers', id);
+  await writeFile(join(folder, 'observed.mjs'), WRAPPER(fault));
+  const manifest = structuredClone(registry.manifest);
+  manifest.providers[0].module = 'providers/' + id + '/observed.mjs';
+  const identity = {instanceId: randomUUID(), bootId: randomUUID()};
+  const api = createGozar({manifest, root: registry.root, identity});
+  const query = {schemaVersion: 1, home, owner: 'subject-owner', providerId: id, target,
+    usage: kind === 'session' ? {kind, lifetimeMs: 60000} : {kind},
+    requirements: {reach: 'this-device', transport: 'any', payloadAccess: 'allow-provider', address: 'any', setup: 'allow', protocols: []}};
+  const candidate = (await api.catalogRoutes(query)).candidates.find(row => row.providerId === id);
+  assert.ok(candidate?.candidateToken, 'the real catalog must issue approval');
+  return {
+    api, home, target, identity, folder,
+    request: {...query, operationId: randomUUID(), wait: 'verified',
+      approval: {kind: 'route', candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision, consentFactsDigest: candidate.consentFactsDigest}},
+    exchange: (origin, bytes) => new Promise((resolve, reject) => {
+      const endpoint = new URL(origin);
+      const socket = net.connect(Number(endpoint.port), endpoint.hostname);
+      const chunks = [];
+      const timer = setTimeout(() => socket.destroy(new Error('fixture exchange timeout')), 5000);
+      socket.once('connect', () => socket.end(bytes));
+      socket.on('data', chunk => chunks.push(chunk));
+      socket.once('error', error => { clearTimeout(timer); reject(error); });
+      socket.once('end', () => { clearTimeout(timer); resolve(Buffer.concat(chunks)); });
+    }),
+    events: async () => (await readFile(join(folder, 'events.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line).event),
+  };
+}
+
+async function settle(f) {
+  try { return {route: await f.api.expose(f.request)}; }
+  catch (error) { return {failure: error, route: error.route}; }
+}
+
+for (const kind of ['attached', 'session']) {
+  test(`an honest ${kind} initial proof publishes the route bound to its exact subject`, {timeout: 60000}, async t => {
+    const f = await subjectWorld(t, kind, null);
+    const payload = randomBytes(96);
+    const {failure, route} = await settle(f);
+    try {
+      assert.ifError(failure);
+      assert.equal(route.handle.kind, kind); assert.equal(route.handle.generation, 1);
+      assert.equal(route.verification.status, 'verified');
+      assert.equal(route.published, route.origin);
+      assert.deepEqual(route.verification.subject, {origin: route.origin, target: f.target, ...f.identity, handleGeneration: 1});
+      assert.deepEqual(await f.exchange(route.origin, payload), payload, 'the published route forwards real bytes');
+      assert.deepEqual(await f.events(), ['start', 'proof'], 'exactly one allocation and one proof observation');
+      const closed = await f.api.closeRoute({home: f.home, handle: route.handle, mode: 'remove'});
+      assert.equal(closed.cleanup.state, 'confirmed');
+      assert.deepEqual(await f.events(), ['start', 'proof', 'stop', 'cleanup'], 'owned cleanup ran exactly once');
+      assert.deepEqual(await f.exchange('tcp://' + f.target, payload), payload, 'the foreign app survives owned cleanup');
+    } finally {
+      await f.api.closeRoute({home: f.home, handle: route.handle, mode: 'remove'}).catch(() => {});
+    }
+  });
+
+  test(`a ${kind} initial proof with the wrong nonce is rejected without publication`, {timeout: 60000}, async t => {
+    const f = await subjectWorld(t, kind, 'wrong-nonce');
+    const payload = randomBytes(96);
+    const {failure, route} = await settle(f);
+    try {
+      assert.equal(failure?.code, 'verification_failed');
+      assert.ok(route?.handle, 'the failed expose retains the exact cleanup handle');
+      assert.equal(route.handle.kind, kind); assert.equal(route.handle.generation, 1);
+      assert.equal(route.published, null);
+      assert.equal(route.verification.status, 'unverified');
+      assert.equal(route.verification.subject, null, 'a rejected proof never binds a publication subject');
+      assert.ok(Number.isFinite(Date.parse(route.verification.checkedAt)), 'the real nonce check answered and failed');
+      assert.equal(route.cleanup.state, 'confirmed', 'the withdrawn route already confirmed its owned cleanup');
+      assert.deepEqual(await f.events(), ['start', 'proof', 'stop', 'cleanup'], 'one allocation, one failed proof, one withdrawal');
+      const closed = await f.api.closeRoute({home: f.home, handle: route.handle, mode: 'remove'});
+      assert.equal(closed.cleanup.state, 'confirmed', 'the retained handle still closes idempotently');
+      assert.deepEqual(await f.events(), ['start', 'proof', 'stop', 'cleanup'], 'closing the retained handle starts nothing');
+      assert.deepEqual(await f.exchange('tcp://' + f.target, payload), payload, 'the foreign app survives owned cleanup');
+    } finally {
+      await f.api.closeRoute({home: f.home, handle: route?.handle, mode: 'remove'}).catch(() => {});
+    }
+  });
+}
+
+for (const [fault, claim] of [['wrong-endpoint', 'naming another endpoint'], ['stale-attempt', 'naming a stale attempt']]) {
+  test(`a session initial proof ${claim} is rejected without publication`, {timeout: 60000}, async t => {
+    const f = await subjectWorld(t, 'session', fault);
+    const payload = randomBytes(96);
+    const {failure, route} = await settle(f);
+    try {
+      assert.equal(failure?.code, 'verification_failed');
+      assert.ok(route?.handle, 'the failed expose retains the exact cleanup handle');
+      assert.equal(route.handle.kind, 'session'); assert.equal(route.handle.generation, 1);
+      assert.equal(route.published, null);
+      assert.equal(route.verification.status, 'unverified');
+      assert.equal(route.verification.subject, null, 'a rejected proof never binds a publication subject');
+      assert.equal(route.verification.checkedAt, null, 'the mutated observation was discarded before any staging');
+      assert.equal(route.cleanup.state, 'confirmed', 'the withdrawn route already confirmed its owned cleanup');
+      assert.deepEqual(await f.events(), ['start', 'proof', 'stop', 'cleanup'], 'one allocation, one rejected observation, one withdrawal');
+      const closed = await f.api.closeRoute({home: f.home, handle: route.handle, mode: 'remove'});
+      assert.equal(closed.cleanup.state, 'confirmed', 'the retained handle still closes idempotently');
+      assert.deepEqual(await f.events(), ['start', 'proof', 'stop', 'cleanup'], 'closing the retained handle starts nothing');
+      assert.deepEqual(await f.exchange('tcp://' + f.target, payload), payload, 'the foreign app survives owned cleanup');
+    } finally {
+      await f.api.closeRoute({home: f.home, handle: route?.handle, mode: 'remove'}).catch(() => {});
+    }
+  });
+}
