@@ -69,6 +69,16 @@ test('operator walk checks package version, setup command dispatch and refused s
   ]);
 });
 
+// The provider reference is generated; this guards its account of proof, not the table itself.
+test('provider reference separates the declared proof profile from observed verification checks', async () => {
+  const reference = await readFile(new URL('../../docs/providers.md', import.meta.url), 'utf8');
+  assert.match(reference, /The Proof column is the provider's declared profile, not live verification/);
+  assert.match(reference, /observation actually ran are recorded per\s+route in `RouteView\.verification\.checks`/);
+  assert.doesNotMatch(reference, /Proof is what Gozar checks before it publishes/);
+  assert.doesNotMatch(reference, /sse check only when the app asks for SSE/);
+  assert.doesNotMatch(reference, /first publication check/);
+});
+
 test('managed cancellation and reconciliation precede general dashboard cleanup and state deletion', async () => {
   const guide = await readFile(new URL('../../docs/live-provider-walk.md', import.meta.url), 'utf8');
   const choose = guide.indexOf('Choose the cleanup path');

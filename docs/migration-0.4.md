@@ -106,6 +106,8 @@ current proof. Unreadable state is an error, not an empty success.
 
 ## Host integration and CLI
 
+For current host integration, use the [runnable embedding example](embedding-contract.md#runnable-host-embedding-example).
+
 Use one configured createGozar factory for setup/runtime. Its secretBackend stays
 in the host; authenticated scoped IPC serves detached controllers. Resolver loss
 withdraws availability; host bytes never enter Gozar files, argv, env or bootstrap.
