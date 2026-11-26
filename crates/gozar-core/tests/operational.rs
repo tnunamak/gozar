@@ -123,6 +123,46 @@ fn status_at_the_same_explicit_clock_tick_has_no_effects() {
     assert_eq!(next["events"], json!([]));
 }
 
+#[test]
+fn status_rejects_non_unsigned_clock_values_at_the_json_boundary() {
+    let expected = json!({
+        "error": {
+            "code": "invalid-input",
+            "message": "invalid input JSON or protocol shape"
+        }
+    });
+    for now in [json!(-1), json!(1.25), json!("25")] {
+        let input = json!({"command":{"type":"status"},"host":{"nowMs":now}});
+        let result: Value =
+            serde_json::from_str(&gozar_core::step(&input.to_string())).unwrap();
+        assert_eq!(result, expected, "clock value: {now}");
+    }
+}
+
+#[test]
+fn a_rejected_clock_sample_does_not_prevent_retry_with_the_saved_state() {
+    let first = run(json!({"command":{"type":"status"},"host":{"nowMs":25}}));
+    let rejected = json!({
+        "state": first["state"],
+        "command": {"type":"status"},
+        "host": {"nowMs":24}
+    });
+    let refusal: Value = serde_json::from_str(&gozar_core::step(&rejected.to_string())).unwrap();
+    assert_eq!(refusal["error"]["code"], "invalid-input");
+    assert!(refusal.get("state").is_none());
+
+    let next = run(json!({
+        "state": first["state"],
+        "command": {"type":"status"},
+        "host": {"nowMs":26}
+    }));
+    for field in ["sessionId", "generation", "phase"] {
+        assert_eq!(next["snapshot"][field], first["snapshot"][field], "{field}");
+    }
+    assert_eq!(next["effects"], json!([]));
+    assert_eq!(next["events"], json!([]));
+}
+
 fn fixture() -> Value {
     serde_json::from_str(include_str!("../../../test/adapters/fixtures/plan-v1.json")).unwrap()
 }
