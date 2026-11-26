@@ -714,8 +714,14 @@ class ManagedRun {
   // --- close: fence, settle, persist, then notify ---------------------------------------------------
 
   close() {
-    this.closed ??= this.doClose();
-    return this.closed;
+    // Idempotent once resolved; one attempt at a time; a rejected attempt (cleanup_debt above all)
+    // leaves the run fenced and the debt persisted, and a later close() retries the settlement.
+    if (this.closeDone) return this.closeDone;
+    if (this.closeInFlight) return this.closeInFlight;
+    const attempt = this.doClose().then(value => { this.closeDone = attempt; return value; },
+      error => { if (this.closeInFlight === attempt) this.closeInFlight = null; throw error; });
+    this.closeInFlight = attempt;
+    return attempt;
   }
 
   async doClose() {
@@ -739,9 +745,16 @@ class ManagedRun {
     }
     // 4. Actual owned cleanup, then the persisted outcome, then (and only then) the notification.
     const view = await this.removeRoute(handle);
-    if (await this.finishStop(view, 'Cleanup of this managed run is unconfirmed')) {
+    try {
+      if (await this.finishStop(view, 'Cleanup of this managed run is unconfirmed')) {
+        await this.releaseLease();
+        return;
+      }
+    } catch (error) {
+      // The debt is persisted with its exact recovery refs. Abandon the lease too: a close retry,
+      // or a later forward for this app, must be able to settle it without this manager alive.
       await this.releaseLease();
-      return;
+      throw error;
     }
   }
 }
