@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {readFile,readdir,writeFile,mkdtemp,mkdir,chmod,rm} from 'node:fs/promises';
-import {homedir} from 'node:os';
+import {readFile,readdir,writeFile,mkdtemp,mkdir,chmod,rm,stat} from 'node:fs/promises';
+import {homedir,tmpdir} from 'node:os';
 import {inspect} from 'node:util';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -14,9 +14,8 @@ import {listRecordedRoutes,operationReferenceForRoute} from '../../packages/goza
 import {projectControllerObservation} from '../../packages/gozar-node/route-view.mjs';
 
  // One ownership boundary replaces competing after hooks and scratch's eager deletion.
-async function withRecoveryCleanup(t, body) {
- const base=process.env.GOZAR_TEST_TMPDIR ?? join(homedir(),'.tmp','gozar-route-tests');
- await mkdir(base,{recursive:true,mode:0o700});await chmod(base,0o700);
+async function withRecoveryCleanup(t, body, base=process.env.GOZAR_TEST_TMPDIR ?? join(homedir(),'.tmp','gozar-route-tests')) {
+ await mkdir(base,{recursive:true,mode:0o700});
  const home=await mkdtemp(join(base,'op-')),owned=new Map(),confirmed=new Set(),children=[];
  let registry,api,recover,primary,failed=false;
  const diagnostic=(label,error)=>t.diagnostic(label+' '+inspect({
@@ -34,6 +33,7 @@ async function withRecoveryCleanup(t, body) {
   return result;
  };
  try {
+  await chmod(home,0o700);
   await body({home,own,capture,close,diagnostic,
    registry:value=>(registry=value),api:value=>(api=value),recover:value=>(recover=value),
    child:value=>{
@@ -63,6 +63,20 @@ async function withRecoveryCleanup(t, body) {
  }
  if(failed)throw primary;
 }
+
+test('recovery cleanup preserves caller scratch parent mode and contents', async t=>{
+ const parent=await mkdtemp(join(tmpdir(),'gozar-shared-recovery-'));
+ t.after(()=>rm(parent,{recursive:true,force:true}));
+ const marker=join(parent,'caller-marker');
+ await chmod(parent,0o750);
+ await writeFile(marker,'keep');
+ await withRecoveryCleanup(t,async ({home})=>{
+  assert.equal((await stat(home)).mode&0o777,0o700);
+ },parent);
+ assert.equal((await stat(parent)).mode&0o777,0o750);
+ assert.deepEqual(await readdir(parent),['caller-marker']);
+ assert.equal(await readFile(marker,'utf8'),'keep');
+});
 
 test('host crash before saving its handle recovers by operation enumeration and exact close',async t=>withRecoveryCleanup(t,async owned=>{
  const {home}=owned,owner='crashed-host',operationId='saved-before-call';
