@@ -1303,12 +1303,25 @@ test('real SDK: a created-but-unverified route with refused removal keeps its ex
 });
 
 test('real SDK: a vanished provider rule is detected as lost and re-established through a fresh scoped operation', async t => {
-  const w = await durableWorld(t, { id: 'fw-real-loss', reconnect: FAST });
+  const firstSnapshot = deferred();
+  const w = await durableWorld(t, { id: 'fw-real-loss', reconnect: FAST, wrap: api => ({
+    ...api,
+    async *watchRoutes(request) {
+      // Use the SDK polling option for the fixture; production durable polls remain one minute.
+      for await (const event of api.watchRoutes({ ...request, intervalMs: 250 })) {
+        firstSnapshot.resolve(event.route);
+        yield event;
+      }
+    },
+  }) });
   const resource = await w.forward({ app: 'faravan', port: w.port, onAction: () => ({ approve: true }) });
   const events = { down: [], back: [], change: [], halted: [] };
   try {
   for (const type of Object.keys(events)) resource.on(type, event => events[type].push(event));
   const first = await stateOf(w.home).read();
+  const initial = await firstSnapshot.promise;
+  assert.equal(initial.state, 'usable', 'the watch observed the rule before it disappears');
+  assert.equal(initial.limits.recommendedPollIntervalMs, 60000, 'durable production observations default to one minute');
   // REAL provider loss: the durable rule disappears from the provider's own store (what a removed or reset
   // upstream rule looks like to the SDK: route state 'lost').
   const storePath = join(w.home, 'registry', 'providers', w.id, 'store.json');
@@ -1451,7 +1464,7 @@ for (const asynchronous of [false, true]) test('stand-in: a failed '+(asynchrono
   s.world.queue.push(view({ handle: (await s.state()).run.handle, url: 'https://changed.fixture.example' }));
   try {
     const args = await warned.promise;
-    assert.equal(args[1].code, 'GOZAR_FORWARD_LISTENER');
+    assert.equal(args[1].type, 'GozarForwardListenerWarning');
     assert.doesNotMatch(JSON.stringify(args), /fixture-secret/);
     assert.equal(route.url, 'https://changed.fixture.example');
     assert.equal(warning.mock.callCount(), 1);

@@ -869,7 +869,7 @@ class ManagedRun {
   }
 
   deliver(listener, event) {
-    const warn = () => process.emitWarning('A Gozar forward listener threw; route management continues', { code: 'GOZAR_FORWARD_LISTENER' });
+    const warn = () => process.emitWarning('A Gozar forward listener threw; route management continues', { type: 'GozarForwardListenerWarning' });
     queueMicrotask(() => {
       if (this.closing) return;
       try { Promise.resolve(listener(structuredClone(event))).catch(warn); }
