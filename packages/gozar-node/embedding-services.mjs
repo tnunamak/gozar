@@ -39,7 +39,18 @@ function reservationKey(value){
 }
 const registryIdPattern=/^registry-v1:[0-9a-f]{64}$/,lineageIdPattern=/^[a-z0-9][a-z0-9._-]{0,63}$/;
 const plain=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
-const refuseMigration=reason=>{throw Object.assign(embeddingError('configuration_migration_required'),{reason,message:`configuration migration required: ${{
+const migrationReasons=new Set(['ambiguous','incompatible','taken','conflict','absent','inflight','in_use','retired']);
+const migrationIds=ids=>ids.filter(id=>typeof id==='string'&&/^[a-zA-Z0-9_-]{1,128}$/.test(id)).sort();
+export function publicMigrationDetails(value){
+ if(!migrationReasons.has(value?.reason)||!Array.isArray(value.candidates))return undefined;
+ return {reason:value.reason,candidates:value.candidates.filter(row=>registryIdPattern.test(row?.fromRegistryId??'')).map(row=>({
+  fromRegistryId:row.fromRegistryId,
+  draftIds:migrationIds(Array.isArray(row.draftIds)?row.draftIds:[]),
+  setupOperationIds:migrationIds(Array.isArray(row.setupOperationIds)?row.setupOperationIds:[]),
+  uses:Number.isSafeInteger(row.uses)&&row.uses>=0?row.uses:0,
+ }))};
+}
+const refuseMigration=(reason,candidates=[])=>{throw Object.assign(embeddingError('configuration_migration_required'),{reason,migration:publicMigrationDetails({reason,candidates}),message:`configuration migration required: ${{
  ambiguous:'more than one earlier configuration matches this provider; choose one with adoptConfiguration({fromRegistryId})',
  incompatible:'the saved inputs do not match the inputs this release can carry forward; nothing was changed',
  taken:'the earlier configuration already moved to another registry lineage',
@@ -107,14 +118,19 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
  const scope=(home,providerId,owner)=>{if(owner!==undefined&&(typeof owner!=='string'||!owner))fail('invalid_input');if(typeof providerId!=='string'||!providerId)fail('invalid_input');return hash(JSON.stringify([custodian,home,owner??null,providerId]));};
  const legacyScope=(earlierRegistryId,home,providerId,owner)=>hash(JSON.stringify([earlierRegistryId,home,owner??null,providerId]));
  // Recompute the earlier scope from a trusted registry id and the exact home, owner and provider. Never scan or guess.
+ function migrationCandidate(state,{R,key,rec}){
+  return {fromRegistryId:R,draftIds:Object.keys(plain(rec?.drafts)?rec.drafts:{}),
+   setupOperationIds:Object.entries(state.setupOperations??{}).filter(([,op])=>op?.scopeId===key).map(([id])=>id),
+   uses:Array.isArray(rec?.uses)?rec.uses.length:0};
+ }
  function candidates(state,home,providerId,owner,scopeId,fromIds){
   const found=[];
-  for(const R of fromIds){
+  for(const R of new Set(fromIds)){
    const key=legacyScope(R,home,providerId,owner),rec=state.configs[key];if(!rec)continue;
-   if(rec.migratedTo&&rec.migratedTo!==scopeId)refuseMigration('taken');
-   if(rec.migratedTo)refuseMigration('incompatible');
    found.push({R,key,rec});
   }
+  const moved=found.find(({rec})=>rec.migratedTo);
+  if(moved)refuseMigration(moved.rec.migratedTo!==scopeId?'taken':'incompatible',found.map(row=>migrationCandidate(state,row)));
   return found;
  }
  // The earlier record moves to the stable scope in one in-memory edit that is made durable by ONE atomic write (the claim)
@@ -127,38 +143,40 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
  // The promise is about ordinary supported resolution after the commit; it does not recall bytes a trusted earlier host
  // already read into memory.
  async function adopt(state,providerId,scopeId,{R,key,rec},home,owner){
+  const details=[migrationCandidate(state,{R,key,rec})];
   const sound=plain(rec)&&rec.scopeId===key&&plain(rec.bindings)&&plain(rec.values)&&plain(rec.drafts)&&typeof rec.revision==='string'&&Array.isArray(rec.uses)&&rec.uses.every(x=>typeof x==='string');
-  if(!sound)refuseMigration('incompatible');
+  if(!sound)refuseMigration('incompatible',details);
   // Open drafts, setup operations and operation-held credentials are not ordinary bindings: refuse until they are closed.
-  if(Object.keys(rec.drafts).length||Object.values(state.secrets).some(ref=>ref.scopeId===key&&(ref.draftId||ref.operationId)))refuseMigration('inflight');
+  if(Object.keys(rec.drafts).length||Object.values(state.secrets).some(ref=>ref.scopeId===key&&(ref.draftId||ref.operationId)))refuseMigration('inflight',details);
   const retiring=[];
   for(const [id,op]of Object.entries(state.setupOperations??{})){
    if(op?.scopeId!==key)continue;
    if(!plain(op)||op.draftId!==null||!Array.isArray(op.resources)||op.resources.length||!plain(op.management)||Object.keys(op.management).length||
       op.connectorSecrets!==undefined&&(!plain(op.connectorSecrets)||Object.keys(op.connectorSecrets).length)||
-      typeof op.cancelled!=='boolean'||!Number.isSafeInteger(op.revision)||op.revision<0||typeof op.configurationRevision!=='string')refuseMigration('inflight');
+      typeof op.cancelled!=='boolean'||!Number.isSafeInteger(op.revision)||op.revision<0||typeof op.configurationRevision!=='string')refuseMigration('inflight',details);
    // Empty custody alone is not terminal evidence. Older writers did not persist
    // completion, so ask the current adapter through its read-only setup interface.
    const terminal=op.terminal?.revision===op.revision?op.terminal:null;
    let observation=terminal;
    if(!observation){
     try{observation=await observeEarlierSetupOperation?.({home,owner,providerId,operationKey:id,registryId:R,operation:clone(op)});}
-    catch{refuseMigration('inflight');}
+    catch{refuseMigration('inflight',details);}
    }
    if(!observation||!['complete','cancelled'].includes(observation.state)||observation.nextAction!==null||
-      observation.state==='cancelled'&&!op.cancelled)refuseMigration('inflight');
+      observation.state==='cancelled'&&!op.cancelled)refuseMigration('inflight',details);
    retiring.push(id);
   }
   for(const [inputId,handle]of Object.entries(rec.bindings)){
    const ref=typeof handle==='string'?state.secrets[handle]:undefined;
-   if(!ref||ref.registryId!==R||ref.scopeId!==key||ref.inputId!==inputId||ref.draftId||ref.operationId||ref.backendScopeId!==undefined)refuseMigration('incompatible');
+   if(!ref||ref.registryId!==R||ref.scopeId!==key||ref.inputId!==inputId||ref.draftId||ref.operationId||ref.backendScopeId!==undefined)refuseMigration('incompatible',details);
   }
-  for(const value of Object.values(rec.values))if(typeof value!=='string')refuseMigration('incompatible');
+  for(const value of Object.values(rec.values))if(typeof value!=='string')refuseMigration('incompatible',details);
   // The provider's CURRENT declaration decides: an id must still exist there with the role it was saved in. No declaration, no carry-forward.
-  await compatibleInputs(providerId,rec);
+  try { await compatibleInputs(providerId,rec); }
+  catch(error){if(error?.code==='configuration_migration_required')refuseMigration(error.reason,details);throw error;}
   // A reservation was made through the earlier registry, and only that registry's release (or the exact handle, see
   // releaseConfigurationUse) ends it. Copying it would leave the stable scope held after that release.
-  if(rec.uses.length)refuseMigration('in_use');
+  if(rec.uses.length)refuseMigration('in_use',details);
   // Build the successor from the validated fields first; only then empty the predecessor, in the same in-memory edit.
   const adopted={scopeId,revision:rec.revision,bindings:clone(rec.bindings),values:clone(rec.values),drafts:{},uses:[],migratedFrom:[key]};
   for(const handle of Object.values(adopted.bindings))Object.assign(state.secrets[handle],{registryId:custodian,scopeId,backendScopeId:key});
@@ -174,7 +192,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   if(state.configs[scopeId]?.migratedTo)refuseMigration('retired');
   if(state.configs[scopeId])return state.configs[scopeId];
   const found=candidates(state,home,providerId,owner,scopeId,lineage?.replaces??[]);
-  if(found.length>1)refuseMigration('ambiguous');
+  if(found.length>1)refuseMigration('ambiguous',found.map(row=>migrationCandidate(state,row)));
   if(found.length===1)return adopt(state,providerId,scopeId,found[0],home,owner);
   const c={scopeId,revision:fresh(),bindings:{},values:{},drafts:{},uses:[]};
   // Legacy records have home/provider scope only. Never claim them for a named owner.
@@ -292,7 +310,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
    if(!found)refuseMigration('absent');
    if(existing){
     const pristine=!Object.keys(existing.bindings).length&&!Object.keys(existing.values).length&&!Object.keys(existing.drafts).length&&!existing.uses.length&&!existing.migratedFrom;
-    if(!pristine)refuseMigration('conflict');
+    if(!pristine)refuseMigration('conflict',[migrationCandidate(s,found)]);
     delete s.configs[scopeId];
    }
    return redacted(h,s,await adopt(s,r.providerId,scopeId,found));

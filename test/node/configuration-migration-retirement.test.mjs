@@ -76,6 +76,38 @@ for(const [label,change,observation]of [
  assert.equal(await readFile(path,'utf8'),before);
 });
 
+test('one blocked predecessor keeps cached provider inventory usable and exposes only migration metadata',async t=>{
+ const home=await mkdtemp(join(homedir(),'.tmp','g-upgrade-'));
+ t.after(()=>rm(home,{recursive:true,force:true}));
+ const fromRegistryId='registry-v1:'+'e'.repeat(64);
+ const request={home,owner:'upgrade-fixture',providerId:'localhost-run'};
+ const earlier=createEmbeddingServices({registryId:fromRegistryId});
+ const configuration=await earlier.readConfiguration(request);
+ const draft=await earlier.beginConfigurationDraft({...request,expectedConfigurationRevision:configuration.revision});
+ const api=createRouteApi({
+  registryLineage:{id:'inventory-upgrade-fixture',replaces:[fromRegistryId]},
+  readContext:{now:Date.now,probe:async()=>({ok:true})}
+ });
+ const migration={reason:'inflight',candidates:[{fromRegistryId,draftIds:[draft.draftId],setupOperationIds:[],uses:0}]};
+ for(const refresh of [false,true,false]){
+  const report=await api.listProviders({...request,refresh});
+  assert.ok(report.catalogRevision);
+  const blocked=report.providers.find(row=>row.providerId===request.providerId);
+  assert.deepEqual(blocked.configuration,{known:false,reason:'configuration_migration_required',migration});
+  assert.ok(Object.values(blocked.availability).every(row=>row.state!=='available'));
+  assert.ok(report.providers.some(row=>row.providerId!==request.providerId&&row.configuration.reason!=='configuration_migration_required'));
+  assert.equal(JSON.stringify(blocked.configuration).includes(home),false);
+ }
+ await assert.rejects(api.adoptConfiguration({...request,fromRegistryId}),error=>{
+  assert.equal(error.code,'configuration_migration_required');
+  assert.equal(error.reason,'inflight');
+  assert.deepEqual(error.migration,migration);
+  return true;
+ });
+ const preserved=await earlier.readConfigurationDraft({...request,draftId:draft.draftId});
+ assert.equal(preserved.draftId,draft.draftId);
+});
+
 test('configuration-migration-retirement: bundled inventory observes historical localhost.run setup before adopting',async t=>{
  const home=await mkdtemp(join(homedir(),'.tmp','g-upgrade-'));t.after(()=>rm(home,{recursive:true,force:true}));
  const request={home,owner:'upgrade-fixture',providerId:'localhost-run',operationId:'terminal-setup'};
