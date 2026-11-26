@@ -106,14 +106,14 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   for(const[id,handle]of present)values[id]=await call(home,'withSecret',{scopeId:backendScope(s,c,handle),handle},async bytes=>new TextDecoder().decode(bytes));
   return Object.keys(values).length?values:null;
  }
- async function transaction(home,run,{readOnly=false}={}){
+ async function transaction(home,run,{readOnly=false,checkpointOnly=false}={}){
   home=await canonicalHome(home,true);
   return withExclusiveLock(join(home,'.embedding-lock'),async()=>{
    let state;try{const file=await checkedFile(join(home,'embedding-state.json'),constants.O_RDONLY,'embedding state');try{state=JSON.parse(await file.readFile('utf8'));}finally{await file.close();}}catch(e){if(e.code!=='ENOENT')throw e;state={schemaVersion:1,configs:{},secrets:{},instanceId:fresh()};}
    if(state?.schemaVersion!==1||!state.configs||!state.secrets||typeof state.instanceId!=='string')fail('internal_error');
    const persist=()=>atomicWrite(join(home,'embedding-state.json'),state);persisters.set(state,persist);
    const checkpoint=async()=>{if(readOnly)fail('internal_error');await persist();};
-   const result=await run(state,home,checkpoint);if(!readOnly)await checkpoint();return result;
+   const result=await run(state,home,checkpoint);if(!readOnly&&!checkpointOnly)await checkpoint();return result;
   },{waitSeconds:30});
  }
  const scope=(home,providerId,owner)=>{if(owner!==undefined&&(typeof owner!=='string'||!owner))fail('invalid_input');if(typeof providerId!=='string'||!providerId)fail('invalid_input');return hash(JSON.stringify([custodian,home,owner??null,providerId]));};
@@ -301,6 +301,39 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   };
   return tx;
  }
+ async function discardDraftResources(s,h,c,draftId,registry,checkpoint,{earlier=false}={}){
+  const d=Object.hasOwn(c.drafts,draftId)?c.drafts[draftId]:null;
+  const owned=Object.entries(s.secrets).filter(([,ref])=>ref?.registryId===registry&&ref.scopeId===c.scopeId&&ref.draftId===draftId);
+  if(earlier){
+   if(Object.values(s.setupOperations??{}).some(op=>op?.scopeId===c.scopeId&&op.draftId===draftId)||
+      owned.some(([,ref])=>ref.operationId))refuseMigration('inflight');
+   if(owned.some(([,ref])=>ref.backendScopeId!==undefined&&ref.backendScopeId!==c.scopeId))refuseMigration('incompatible');
+   // The default presence implementation opens credential contents. Earlier
+   // scope cleanup can use metadata-only presence on an injected backend.
+   if(owned.length&&typeof secretBackend?.presence!=='function')fail('secret_backend_unavailable');
+  }
+  // Detach first. Secret metadata retains the authority to retry orphan cleanup.
+  if(d){delete c.drafts[draftId];await checkpoint();}
+  const presence=async handle=>{
+   const result=await call(h,'presence',{scopeId:backendScope(s,c,handle),handle});
+   if(result?.known!==true||typeof result.value!=='boolean')fail(result?.reason==='secret_backend_locked'?'secret_backend_locked':'secret_backend_unavailable');
+   return result.value;
+  };
+  for(const [handle] of owned){
+   const stillReferenced=earlier?
+    Object.values(c.bindings).includes(handle)||Object.values(c.drafts).some(draft=>Object.values(draft.bindings).includes(handle)):
+    referenced(s,handle);
+   if(stillReferenced)continue;
+   if(await presence(handle)){
+    await call(h,'delete',{scopeId:backendScope(s,c,handle),handle});
+    if(await presence(handle))fail('secret_backend_unavailable');
+   }
+   delete s.secrets[handle];
+   // Keep each confirmed removal durable before starting the next backend call.
+   await checkpoint();
+  }
+  return {discarded:!!d};
+ }
  const api={hostCapabilities,
   readConfiguration:r=>transaction(r.home,async(s,h)=>redacted(h,s,select(await config(s,h,r.providerId,r.owner),r.draftId))),
   readConfigurationDraft:r=>transaction(r.home,async(s,h)=>{if(!r.draftId)fail('invalid_input');const c=await config(s,h,r.providerId,r.owner),d=select(c,r.draftId);return {draftId:r.draftId,scopeId:d.scopeId,baseRevision:d.baseRevision,configuration:await redacted(h,s,d)};},{readOnly:true}),
@@ -391,28 +424,25 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   }),
   beginConfigurationDraft:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner);compare(c,r.expectedConfigurationRevision);const draftId=fresh();const d={scopeId:c.scopeId,revision:fresh(),baseRevision:c.revision,bindings:clone(c.bindings),values:clone(c.values)};c.drafts[draftId]=d;return {draftId,scopeId:c.scopeId,baseRevision:c.revision,configuration:await redacted(h,s,d)};}),
   commitConfigurationDraft:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner),d=select(c,r.draftId);if(!r.draftId)fail('invalid_input');compare(d,r.expectedConfigurationRevision);compare(c,d.baseRevision);if(c.uses.length)fail('configuration_in_use');c.bindings=d.bindings;c.values=d.values;c.revision=fresh();delete c.drafts[r.draftId];return redacted(h,s,c);}),
+  discardEarlierConfigurationDraft:async r=>{
+   const from=r?.fromRegistryId,draftId=r?.draftId;
+   if(typeof r?.home!=='string'||!r.home||typeof from!=='string'||!registryIdPattern.test(from)||
+      !lineage?.replaces.includes(from)||(PUBLISHED_REGISTRY_IDS.includes(from)&&!isBundledLineage(lineage))||
+      typeof draftId!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(draftId))fail('invalid_input');
+   return transaction(r.home,async(s,h,checkpoint)=>{
+    const successor=scope(h,r.providerId,r.owner);
+    const key=legacyScope(from,h,r.providerId,r.owner);
+    if(!Object.hasOwn(s.configs,key))return {discarded:false};
+    const c=s.configs[key];
+    if(!plain(c)||c.scopeId!==key||!plain(c.bindings)||!plain(c.drafts))refuseMigration('incompatible');
+    if(c.migratedTo)refuseMigration(c.migratedTo===successor?'retired':'taken');
+    return discardDraftResources(s,h,c,draftId,from,checkpoint,{earlier:true});
+   },{checkpointOnly:true});
+  },
   discardConfigurationDraft:r=>transaction(r.home,async(s,h,checkpoint)=>{
    if(typeof r.draftId!=='string'||!r.draftId)fail('invalid_input');
-   const c=await config(s,h,r.providerId,r.owner),d=c.drafts[r.draftId];
-   const owned=Object.entries(s.secrets).filter(([,v])=>v.registryId===custodian&&v.scopeId===c.scopeId&&v.draftId===r.draftId).map(([handle])=>handle);
-   // Detach first. Secret metadata retains the authority to retry orphan cleanup.
-   if(d){delete c.drafts[r.draftId];await checkpoint();}
-   const presence=async handle=>{
-    const result=await call(h,'presence',{scopeId:backendScope(s,c,handle),handle});
-    if(result?.known!==true||typeof result.value!=='boolean')fail(result?.reason==='secret_backend_locked'?'secret_backend_locked':'secret_backend_unavailable');
-    return result.value;
-   };
-   for(const handle of owned){
-    if(referenced(s,handle))continue;
-    if(await presence(handle)){
-     await call(h,'delete',{scopeId:backendScope(s,c,handle),handle});
-     if(await presence(handle))fail('secret_backend_unavailable');
-    }
-    delete s.secrets[handle];
-    // Keep each confirmed removal durable before starting the next backend call.
-    await checkpoint();
-   }
-   return {discarded:!!d};
+   const c=await config(s,h,r.providerId,r.owner);
+   return discardDraftResources(s,h,c,r.draftId,custodian,checkpoint);
   }),
   discardSecret:r=>transaction(r.home,(s,h)=>remove(s,h,r.handle)),
   registerConfigurationUse:async r=>{
