@@ -1,5 +1,65 @@
 # Gozar as an imported library
 
+## The experience to ship
+
+**Proposed API, not implemented yet.** The app already owns its loopback listener
+and UI. These are the consumer lines the installed-package tests must import:
+
+```js
+import * as gozar from '@tnunamak/gozar';
+let route = await gozar.forward({ app: 'faravan', port, policy: { accounts: 'existing-only', lifetime: 'prefer-lasting' } });
+while (route.needsAction) {
+  route = await route.resume(await ui.show(route.needsAction));
+}
+publishSignedAddress(route.url);
+route.on('change', ({ oldOrigin, newOrigin, at }) => publishSignedAddress(newOrigin, { oldOrigin, at }));
+route.on('down', ({ downSince }) => showOffline(downSince));
+route.on('back', showOnline);
+await ui.untilClosed();
+await route.close();
+```
+
+`forward` owns cataloging, selection, operation IDs, consent receipts, readiness,
+recovery and cleanup. A published result has `url`, `provider`, `lifetime` and
+`needsAction: null`. `lifetime` distinguishes a persistent provider route from
+a session; neither describes a promise of uninterrupted access. `provider`
+includes the typed payload-visibility facts the app uses to choose encryption.
+
+An action result has one `needsAction` to render and `resume(answer)` to continue.
+The answer expresses the user's decision or supplied input, not a token/digest;
+Gozar rechecks the current step before acting. For a host that handles steps
+immediately, `onAction: ui.show` runs the same UI hook inside `forward`. It never
+turns an unknown or incomplete step into approval.
+
+When no provider meets the policy, the developer catches a typed error, for example:
+
+```js
+{
+  code: 'requirements_unsatisfied',
+  message: 'No public HTTPS provider meets the requested account and address policy.',
+  nextAction: null
+}
+```
+
+This is a failure, not a fictitious setup step that cannot satisfy the policy.
+`close()` resolves only when owned cleanup is confirmed; otherwise it rejects
+with `cleanup_debt`, retaining its journal and retry authority inside Gozar.
+
+The default scope is the app's private managed state. Advanced hosts can supply
+storage, backend and identity through their configured factory. A normal
+crash/restart or reconnect does not require another click when the approved
+disclosure is unchanged. Explicit stop/revocation and changed disclosure still
+require fresh approval. Selection prefers an already usable lasting route,
+then an eligible anonymous session, using Gozar's provider data rather than
+branches in the host.
+
+The first change subscription must receive a persisted startup origin change
+as well as later changes; an event must not be lost before `forward` returns.
+Its `at` records when the new verified origin was observed, not an invented
+time during offline operation. The app signs/distributes its address records;
+Gozar does neither. A verified recovery emits `back` and clears the current
+`downSince` while preserving the outage observation for that event.
+
 Assessment: 2026-11-26. The first consumer is an application exposing an existing
 loopback HTTP listener to public HTTPS clients. The application owns its listener;
 Gozar owns reachability, provider selection and the route lifecycle.
@@ -66,22 +126,22 @@ The separate continuity survey found no documented anonymous, exclusively
 retained weeks-long address among those services, Serveo and localtunnel.
 A requested name is insufficient evidence. No hosted route was tested.
 
-The viable anonymous direction is a managed logical route that can publish a
-new verified origin to the host's signed address directory. It cannot promise
-an unchanged URL for weeks. Reconnecting after sleep also cannot preserve an
-already broken HTTP request. Five-minute quiet responses require an eligible
-provider and protocol evidence, not SSH keepalives alone.
+The consumer accepts a managed logical route that can publish a new verified
+origin to its signed address directory. It no longer requires an unchanged
+anonymous URL or long quiet responses; both sides retry short polls. Reconnecting
+after sleep cannot preserve an already broken HTTP request. Other consumers'
+streaming requirements still need provider/protocol evidence.
 
 ## Build target and acceptance
 
 Offer one host operation over an existing listener: return a published managed
 route or one current setup/consent action. Operational failures remain typed
 and carry retained cleanup state. The application supplies its identity,
-storage and approval UI, not provider branches. Final API naming follows the
-current-contract survey; no convenience method described here is implemented yet.
+storage and approval UI, not provider branches. The proposed `forward` contract
+above is the README-driven target; it has not shipped.
 
 The resource must expose verified origin changes, publication withdrawal,
-`downSince`, watch and close. Persisted intent and bounded reconnect belong in
+`downSince`, events and close. Persisted intent and bounded reconnect belong in
 Gozar. Provider order and account, stability, streaming and payload-visibility
 constraints belong in catalog data. A fallback must satisfy the approved policy;
 a changed disclosure requires fresh approval. Debt must not disappear to make
