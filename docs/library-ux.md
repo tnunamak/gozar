@@ -31,15 +31,30 @@ Gozar rechecks the current step before acting. For a host that handles steps
 immediately, `onAction: ui.show` runs the same UI hook inside `forward`. It never
 turns an unknown or incomplete step into approval.
 
-When no provider meets the policy, the developer catches a typed error, for example:
+When no provider meets the policy, the developer catches a typed error with a
+per-provider explanation. For a strict lasting-route request on a machine
+without a ready lasting provider, for example:
 
 ```js
 {
   code: 'requirements_unsatisfied',
   message: 'No public HTTPS provider meets the requested account and address policy.',
+  unmet: [
+    { provider: 'tunnl.gg', missing: ['account', 'lasting route'],
+      policyChanges: { accounts: 'allow-setup', lifetime: 'session' } },
+    { provider: 'localhost.run', missing: ['lasting route'],
+      policyChanges: { lifetime: 'session' } },
+  ],
   nextAction: null
 }
 ```
+
+The app can render every entry without provider branches. `policyChanges`
+explains an alternative the caller may explicitly request; it never applies
+it. Allowing account setup permits an action, not a claim that sign-in already
+succeeded. Unknown prerequisites remain unknown, and an explanation must not
+suggest a policy change that still cannot admit the provider. Diagnostics cover
+every considered provider, including unavailable and unknown candidates.
 
 This is a failure, not a fictitious setup step that cannot satisfy the policy.
 `close()` resolves only when owned cleanup is confirmed; otherwise it rejects
