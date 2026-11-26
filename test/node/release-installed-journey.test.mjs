@@ -235,6 +235,35 @@ test('changed installed member refuses before consumer execution',async t=>{
  const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
  t.after(()=>rm(report.scratch,{recursive:true,force:true}));
 });
+for(const [kind,reason] of [
+ ['an extra regular file','Archive and installed bytes differ'],
+ ['a symlink replacing a member','Installed package contains symlink'],
+])test('installed byte verification refuses '+kind+' before consumers run',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const run=async(command,args,options)=>{
+  t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  const result=await stub.run(command,args,options);
+  if(command==='npm'){
+   const pkg=join(options.cwd,'node_modules','@tnunamak','gozar');
+   if(kind==='an extra regular file')await writeFile(join(pkg,'extra.txt'),'not in the archive');
+   else{
+    const screen=join(pkg,'examples','remote-access-screen.mjs');
+    const sameBytes=join(options.cwd,'same-bytes.mjs');
+    await writeFile(sameBytes,f.files['examples/remote-access-screen.mjs']);
+    await rm(screen);
+    await symlink(sameBytes,screen,'file');
+   }
+  }
+  return result;
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),{message:reason});
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ assert.equal(report.status,'failed');
+ assert.equal(report.failure.message,reason);
+ assert.deepEqual(stub.calls.map(call=>call.command),['npm']);
+ assert.deepEqual(report.steps.map(step=>step.name),['install']);
+});
+
 for(const outcome of [{...evidence,cleanup:{state:'unconfirmed'}},{...evidence,proof:{status:'unverified'}},{unknown:true}]){
  test('unknown or cleanup-debt outcome fails closed',async t=>{
   const f=await fixture(t),stub=processStub(f,{outcome});
