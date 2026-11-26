@@ -1467,3 +1467,51 @@ fn an_unrecognized_effect_result_does_not_change_an_idle_session() {
                 "generation": before["snapshot"]["generation"]}])
     );
 }
+
+#[test]
+fn failed_detection_leaves_observation_unknown_and_consumes_the_effect() {
+    let detected = run(json!({
+        "command": {"type": "detect", "sessionId": "detection-fixture"},
+        "adapters": [{
+            "id": "fixture",
+            "audience": "local",
+            "ownership": "owned",
+            "recipes": {"detect": {"kind": "spawn", "program": "fixture-not-executed"}}
+        }]
+    }));
+    let effect = &detected["effects"][0];
+    assert_eq!(effect["operation"], "detect");
+
+    let failed = run(json!({
+        "state": detected["state"],
+        "command": {
+            "type": "effect-result",
+            "effectId": effect["id"],
+            "sessionId": effect["sessionId"],
+            "generation": effect["generation"],
+            "ok": false,
+            "result": {"exitCode": 1}
+        }
+    }));
+    assert_eq!(failed["snapshot"]["observations"]["fixture"], "unknown");
+    assert_eq!(failed["events"][0]["type"], "detection-recorded");
+    assert_eq!(failed["state"]["pending"], json!({}));
+    assert_eq!(failed["effects"], json!([]));
+}
+
+#[test]
+fn owned_adapter_without_create_recipe_reports_failed_without_allocating() {
+    let failed = run(json!({
+        "command": {"type": "start", "adapterId": "fixture", "consent": true},
+        "requirements": {"clientReach": "this-device"},
+        "adapters": [{"id": "fixture", "audience": "local", "ownership": "owned"}]
+    }));
+    assert_eq!(failed["snapshot"]["phase"], "failed");
+    assert_eq!(
+        failed["snapshot"]["limitations"],
+        json!(["Adapter has no admitted create recipe"])
+    );
+    assert_eq!(failed["snapshot"]["resources"], json!([]));
+    assert_eq!(failed["effects"], json!([]));
+    assert!(failed.get("action").is_none());
+}
