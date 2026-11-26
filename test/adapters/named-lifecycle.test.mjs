@@ -66,6 +66,55 @@ function dialFixtureGate(port, signal) {
   });
 }
 
+async function prepareFixtureProof(adapter, origin, request) {
+  for (let tries = 0; tries < 4; tries += 1) {
+    const reservation = createServer();
+    await new Promise((resolve, reject) => {
+      reservation.once('error', reject);
+      reservation.listen(0, '127.0.0.1', resolve);
+    });
+    const port = reservation.address().port;
+    await new Promise((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
+    try {
+      return await adapter.prepareProof({
+        platform:'linux', now:Date.now,
+        configuration:async () => ({token:'fixture-only', origin, 'gate-port':String(port)}),
+      }, request);
+    } catch (error) {
+      const occupied = error?.code === 'EADDRINUSE' ||
+        (error?.code === 'provider_unavailable' && error?.cause?.code === 'gate_port_in_use');
+      if (!occupied || tries === 3) throw error;
+    }
+  }
+}
+
+test('proof fixture retries a real occupied-port failure before binding cleanly', async t => {
+  const app = createServer((_request, response) => response.end('fixture app'));
+  const occupied = createServer();
+  for (const server of [app, occupied]) {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject); server.listen(0, '127.0.0.1', resolve);
+    });
+    t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  }
+  const adapter = createNamedAdapter({detectBinary:async()=>true,startConnector:async()=>assert.fail('no connector')});
+  let calls = 0;
+  const firstOccupied = {async prepareProof(ctx, request) {
+    calls += 1;
+    if (calls !== 1) return adapter.prepareProof(ctx, request);
+    const configured = await ctx.configuration();
+    return adapter.prepareProof({...ctx, configuration:async()=>({
+      ...configured, 'gate-port':String(occupied.address().port),
+    })}, request);
+  }};
+  const proof = await prepareFixtureProof(firstOccupied, 'https://named.example.invalid', {
+    target:'127.0.0.1:'+app.address().port, usage:{kind:'attached'}, requirements:{protocols:[]},
+  });
+  t.after(() => proof.close());
+  assert.ok(calls >= 2 && calls <= 4, 'the real occupied-port refusal must retry within the fixture budget');
+  assert.equal(await (await fetch('http://'+proof.target)).text(), 'fixture app');
+});
+
 for (const {protocols, buffered} of [
   {protocols:['sse','streamable-http'],buffered:false},
   {protocols:['sse','streamable-http'],buffered:true},
@@ -78,15 +127,11 @@ for (const {protocols, buffered} of [
     const app = createServer((_request, response) => response.end('fixture app'));
     await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
     t.after(() => new Promise(resolve => { app.closeAllConnections(); app.close(resolve); }));
-    const reservation = createServer();
-    await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
-    const gatePort = reservation.address().port;
-    await new Promise(resolve => reservation.close(resolve));
     const adapter = createNamedAdapter({detectBinary:async()=>true,startConnector:async()=>{throw new Error('proof must not start a connector');}});
     const origin = 'https://named.example.invalid';
-    const context = {platform:'linux',now:Date.now,configuration:async()=>({token:'fixture-only',origin,'gate-port':String(gatePort)})};
     const request = {target:'127.0.0.1:'+app.address().port,usage:{kind:'attached'},requirements:{protocols}};
-    const proof = await adapter.prepareProof(context, request);
+    const proof = await prepareFixtureProof(adapter, origin, request);
+    const gatePort = Number(proof.target.split(':').at(-1));
     let closing;
     const closeGate = () => (closing ??= Promise.resolve().then(() => proof.close()));
     t.after(closeGate);
@@ -151,29 +196,7 @@ test('aborting an in-flight named proof stops its observation but not the owned 
     usage: {kind:'attached'},
     requirements: {protocols:['streamable-http']},
   };
-  let proof;
-  for (let tries = 0; tries < 4; tries += 1) {
-    const reservation = createServer();
-    await new Promise((resolve, reject) => {
-      reservation.once('error', reject);
-      reservation.listen(0, '127.0.0.1', resolve);
-    });
-    const port = reservation.address().port;
-    await new Promise((resolve, reject) =>
-      reservation.close(error => error ? reject(error) : resolve()));
-    try {
-      proof = await adapter.prepareProof({
-        platform:'linux', now:Date.now,
-        configuration:async () => ({token:'fixture-only', origin, 'gate-port':String(port)}),
-      }, request);
-      break;
-    } catch (error) {
-      const occupied = error?.code === 'EADDRINUSE' ||
-        (error?.code === 'provider_unavailable' && error?.cause?.code === 'gate_port_in_use');
-      if (!occupied || tries === 3) throw error;
-    }
-  }
-  assert.ok(proof);
+  const proof = await prepareFixtureProof(adapter, origin, request);
   const gatePort = Number(proof.target.split(':').at(-1));
   let closing;
   const closeGate = () => (closing ??= Promise.resolve().then(() => proof.close()));
