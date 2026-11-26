@@ -1266,6 +1266,62 @@ fn stopping_an_empty_session_is_idempotent() {
 }
 
 
+fn run_native_jsonl(input: &[u8]) -> std::process::Output {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gozar-core-json"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start native JSONL transport");
+    child
+        .stdin
+        .take()
+        .expect("open child stdin")
+        .write_all(input)
+        .expect("write JSONL fixture");
+    child.wait_with_output().expect("collect native JSONL output")
+}
+
+#[test]
+fn native_jsonl_recovers_after_a_malformed_line() {
+    let out = run_native_jsonl(
+        b"{\n{\"command\":{\"type\":\"status\",\"sessionId\":\"native-after-malformed\"}}",
+    );
+    assert!(out.status.success(), "{:?}", out.stderr);
+    let stdout = std::str::from_utf8(&out.stdout).unwrap();
+    let receipts: Vec<Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(
+        receipts[0],
+        json!({"error":{
+            "code":"invalid-input",
+            "message":"invalid input JSON or protocol shape"
+        }})
+    );
+    assert_eq!(receipts[1]["snapshot"]["sessionId"], "native-after-malformed");
+    assert_eq!(receipts[1]["effects"], json!([]));
+}
+
+#[test]
+fn native_jsonl_flushes_prior_receipts_before_rejecting_a_non_utf8_line() {
+    let out = run_native_jsonl(
+        b"{\"command\":{\"type\":\"status\",\"sessionId\":\"native-before-invalid-bytes\"}}\n\xff\n",
+    );
+    assert!(!out.status.success());
+    let stdout = std::str::from_utf8(&out.stdout).unwrap();
+    let receipts: Vec<_> = stdout.lines().collect();
+    assert_eq!(receipts.len(), 1);
+    let receipt: Value = serde_json::from_str(receipts[0]).unwrap();
+    assert_eq!(receipt["snapshot"]["sessionId"], "native-before-invalid-bytes");
+    assert_eq!(receipt["effects"], json!([]));
+}
+
 #[test]
 fn recommendation_without_adapters_has_no_choices_or_effects() {
     let out = run(json!({"command": {"type": "recommend"}, "adapters": []}));
