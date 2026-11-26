@@ -8,26 +8,30 @@ and UI. These are the consumer lines the installed-package tests must import:
 ```js
 import * as gozar from '@tnunamak/gozar';
 let route = await gozar.forward({ app: 'faravan', port, policy: { accounts: 'existing-only', lifetime: 'prefer-lasting' } });
-while (route.needsAction) {
-  route = await route.resume(await ui.show(route.needsAction));
+try {
+  while (route.needsAction) route = await route.resume(await ui.show(route.needsAction));
+  route.on('change', ({ oldOrigin, newOrigin, at }) => publishSignedAddress(newOrigin, { oldOrigin, at }));
+  publishSignedAddress(route.url);
+  route.on('down', ({ downSince }) => showOffline(downSince));
+  route.on('back', showOnline);
+  await ui.untilClosed();
+} finally {
+  await route.close();
 }
-publishSignedAddress(route.url);
-route.on('change', ({ oldOrigin, newOrigin, at }) => publishSignedAddress(newOrigin, { oldOrigin, at }));
-route.on('down', ({ downSince }) => showOffline(downSince));
-route.on('back', showOnline);
-await ui.untilClosed();
-await route.close();
 ```
 
 `forward` owns cataloging, selection, operation IDs, consent receipts, readiness,
 recovery and cleanup. A published result has `url`, `provider`, `lifetime` and
 `needsAction: null`. `lifetime` distinguishes a persistent provider route from
 a session; neither describes a promise of uninterrupted access. `provider`
-includes the typed payload-visibility facts the app uses to choose encryption.
+includes typed facts about whether the provider can read the traffic, so the app
+can choose encryption.
 
 An action result has one `needsAction` to render and `resume(answer)` to continue.
 The answer expresses the user's decision or supplied input, not a token/digest;
-Gozar rechecks the current step before acting. For a host that handles steps
+the descriptor lists acceptable answers, and Gozar rechecks the current step
+before acting. Action results also have `close()`, so a failed or dismissed UI
+can cancel and clean up the pending attempt. For a host that handles steps
 immediately, `onAction: ui.show` runs the same UI hook inside `forward`. It never
 turns an unknown or incomplete step into approval.
 
@@ -57,19 +61,45 @@ suggest a policy change that still cannot admit the provider. Diagnostics cover
 every considered provider, including unavailable and unknown candidates.
 
 This is a failure, not a fictitious setup step that cannot satisfy the policy.
-`close()` resolves only when owned cleanup is confirmed; otherwise it rejects
-with `cleanup_debt`, retaining its journal and retry authority inside Gozar.
+Here `nextAction: null` means there is no setup action that can satisfy the
+current policy. The caller must explicitly choose a different policy to retry.
+
+`close()` is the explicit stop of this managed run. It first records that the
+run must not reconnect, then resolves only when owned cleanup is confirmed.
+Otherwise it rejects with `code: 'cleanup_debt'`; the app must report that
+cleanup is unconfirmed, not that the route is off. It can retry `route.close()`.
+The cleanup record survives process exit. A later `forward` call for this app
+reconciles that debt before starting anything and rejects with `cleanup_debt`
+if removal is still unconfirmed. No background retry is promised while the
+application is not running.
 
 The default scope is the app's private managed state. Advanced hosts can supply
 storage, backend and identity through their configured factory. A normal
-crash/restart or reconnect does not require another click when the approved
-disclosure is unchanged. Explicit stop/revocation and changed disclosure still
-require fresh approval. Selection prefers an already usable lasting route,
-then an eligible anonymous session, using Gozar's provider data rather than
-branches in the host.
+restart uses the same `forward({ app, port, policy })` call; the host does not
+look up a handle or run a separate recovery step. Within the app's state scope,
+the same `app` identifies its managed service. Gozar rechecks the supplied target,
+policy, current provider facts and saved approval before reattaching or
+re-establishing the route. An unchanged approved disclosure needs no second
+consent click. Reattachment can return `needsAction` when approval or setup is
+needed. A changed policy is re-evaluated, not ignored during recovery.
+
+If the retained provider no longer qualifies, Gozar must settle its owned
+cleanup before selecting another eligible provider; unresolved debt blocks
+replacement. Selection prefers an already usable lasting route, then an
+eligible anonymous session, using provider data rather than branches in the
+host. Unknown prerequisites do not count as eligible.
+
+A stopped run never restarts itself, even after a late proof or process restart.
+A later explicit `forward` call requests a new run and may reuse unchanged
+approved disclosure; stopping the old run does not itself revoke that saved
+approval. Changed or revoked approval still requires a fresh decision. The
+host decides whether to request a run at app startup; Gozar does not turn an
+app's saved Off setting back on.
 
 The first change subscription must receive a persisted startup origin change
-as well as later changes; an event must not be lost before `forward` returns.
+and every verified origin change since `forward` returned, then future changes
+in order. The subscription gap cannot lose an event. The example subscribes
+before its initial address publication; Gozar owns the replay buffer.
 Its `at` records when the new verified origin was observed, not an invented
 time during offline operation. The app signs/distributes its address records;
 Gozar does neither. A verified recovery emits `back` and clears the current
