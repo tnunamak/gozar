@@ -102,7 +102,11 @@ test('internal JSON reservation identities release exactly and allow commit',asy
  for(const [index,identity]of identities.entries()){
   const scope={home,owner:'owner',providerId:'provider-'+index};
   const c=await services.readConfiguration(scope);
-  await services.registerConfigurationUse({...scope,revision:c.revision,handle:identity});
+  const persistedUses=async()=>JSON.parse(await readFile(join(home,'embedding-state.json'),'utf8')).configs[c.scopeId].uses;
+  for(const replay of [identity,identity,JSON.parse(JSON.stringify(identity))]){
+   await services.registerConfigurationUse({...scope,revision:c.revision,handle:replay});
+  }
+  assert.deepEqual(await persistedUses(),[JSON.stringify(identity)],'three registrations store one identity');
   const second={reservation:'second'};
   await services.registerConfigurationUse({...scope,revision:c.revision,handle:second});
   const draft=await services.beginConfigurationDraft({...scope,expectedConfigurationRevision:c.revision});
@@ -116,6 +120,7 @@ test('internal JSON reservation identities release exactly and allow commit',asy
   await services.releaseConfigurationUse({...scope,handle:{b:2,a:1}});
   assert.equal(await readFile(join(home,'embedding-state.json'),'utf8'),before);
   await services.releaseConfigurationUse({...scope,handle:JSON.parse(JSON.stringify(identity))});
+  assert.deepEqual(await persistedUses(),[JSON.stringify(second)],'only the independent hold remains after release');
   await assert.rejects(commit(),{code:'configuration_in_use'},'second exact reservation remains');
   await services.releaseConfigurationUse({...scope,handle:second});
   const released=await readFile(join(home,'embedding-state.json'),'utf8');
