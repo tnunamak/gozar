@@ -43,6 +43,20 @@ export async function withSecret(home, handle, use) {
   } finally { buffer.fill(0); await file.close(); }
 }
 
+/** Checks an owned secret file without reading its credential contents. */
+export async function secretPresence(home, handle) {
+  if (typeof handle !== 'string' || !handlePattern.test(handle)) throw gozarError('invalid_input', 'secretHandle is not a Gozar secret handle');
+  let file;
+  try {
+    const directory = await secretDirectory(home, false);
+    file = await checkedFile(join(directory, handle), constants.O_RDONLY, 'secret');
+    return { known: true, value: true };
+  } catch (error) {
+    if (error.code === 'ENOENT') return { known: true, value: false };
+    throw error;
+  } finally { await file?.close(); }
+}
+
 /** Deletes one secret file. A secret that is already gone is not an error. */
 export async function deleteSecret(home, handle) {
   if (typeof handle !== 'string' || !handlePattern.test(handle)) throw gozarError('invalid_input', 'secretHandle is not a Gozar secret handle');

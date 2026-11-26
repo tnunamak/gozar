@@ -4,7 +4,7 @@ import {constants} from 'node:fs';
 import {join} from 'node:path';
 import {canonicalHome,withExclusiveLock,checkedFile,trustedDirectory,privateDirectory} from './service-state.mjs';
 import {atomicWrite} from './journal.mjs';
-import {storeSecret,withSecret,deleteSecret,handlePattern} from './secret-store.mjs';
+import {storeSecret,withSecret,deleteSecret,secretPresence,handlePattern} from './secret-store.mjs';
 import {BUNDLED_LINEAGE_ID,PUBLISHED_REGISTRY_IDS,isBundledLineage} from './registry-lineage.mjs';
 
 export const embeddingError=(code)=>Object.assign(new Error(code.replaceAll('_',' ')),{code,nextAction:null});
@@ -43,13 +43,15 @@ const migrationReasons=new Set(['ambiguous','incompatible','taken','conflict','a
 const migrationIds=ids=>ids.filter(id=>typeof id==='string'&&/^[a-zA-Z0-9_-]{1,128}$/.test(id)).sort();
 export function publicMigrationDetails(value){
  if(!migrationReasons.has(value?.reason)||!Array.isArray(value.candidates))return undefined;
- return {reason:value.reason,candidates:value.candidates.filter(row=>registryIdPattern.test(row?.fromRegistryId??'')).map(row=>({
+ const candidates=value.candidates.filter(row=>registryIdPattern.test(row?.fromRegistryId??'')).map(row=>({
   fromRegistryId:row.fromRegistryId,
   draftIds:migrationIds(Array.isArray(row.draftIds)?row.draftIds:[]),
   setupOperationIds:migrationIds(Array.isArray(row.setupOperationIds)?row.setupOperationIds:[]),
   uses:Number.isSafeInteger(row.uses)&&row.uses>=0?row.uses:0,
   ...(Number.isSafeInteger(row.unaddressableSetupOperations)&&row.unaddressableSetupOperations>0?{unaddressableSetupOperations:row.unaddressableSetupOperations}:{}),
- }))};
+ }));
+ return {reason:value.reason,candidates,...(value.reason==='inflight'&&candidates.some(row=>row.unaddressableSetupOperations>0)?
+  {recovery:{available:false,reason:'unaddressable_setup_operations'}}:{})};
 }
 const refuseMigration=(reason,candidates=[])=>{throw Object.assign(embeddingError('configuration_migration_required'),{reason,migration:publicMigrationDetails({reason,candidates}),message:`configuration migration required: ${{
  ambiguous:'more than one earlier configuration matches this provider; choose one with adoptConfiguration({fromRegistryId})',
@@ -83,7 +85,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
  const backend=home=>secretBackend??{
   put:({bytes})=>storeSecret({home,value:bytes}),
   withSecret:({handle},use)=>withSecret(home,handle,use),
-  presence:async({handle})=>{try{await withSecret(home,handle,async()=>{});return {known:true,value:true};}catch(e){if(e.code==='setup_required')return {known:true,value:false};throw e;}},
+  presence:({handle})=>secretPresence(home,handle),
   delete:async({handle})=>{await deleteSecret(home,handle);return {deleted:true};},
  };
  const call=async(home,method,...args)=>{try{return await backend(home)[method](...args);}catch(e){throw embeddingError(e?.code==='secret_backend_locked'?'secret_backend_locked':'secret_backend_unavailable');}};
@@ -106,14 +108,14 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   for(const[id,handle]of present)values[id]=await call(home,'withSecret',{scopeId:backendScope(s,c,handle),handle},async bytes=>new TextDecoder().decode(bytes));
   return Object.keys(values).length?values:null;
  }
- async function transaction(home,run,{readOnly=false}={}){
+ async function transaction(home,run,{readOnly=false,checkpointOnly=false}={}){
   home=await canonicalHome(home,true);
   return withExclusiveLock(join(home,'.embedding-lock'),async()=>{
    let state;try{const file=await checkedFile(join(home,'embedding-state.json'),constants.O_RDONLY,'embedding state');try{state=JSON.parse(await file.readFile('utf8'));}finally{await file.close();}}catch(e){if(e.code!=='ENOENT')throw e;state={schemaVersion:1,configs:{},secrets:{},instanceId:fresh()};}
    if(state?.schemaVersion!==1||!state.configs||!state.secrets||typeof state.instanceId!=='string')fail('internal_error');
    const persist=()=>atomicWrite(join(home,'embedding-state.json'),state);persisters.set(state,persist);
    const checkpoint=async()=>{if(readOnly)fail('internal_error');await persist();};
-   const result=await run(state,home,checkpoint);if(!readOnly)await checkpoint();return result;
+   const result=await run(state,home,checkpoint);if(!readOnly&&!checkpointOnly)await checkpoint();return result;
   },{waitSeconds:30});
  }
  const scope=(home,providerId,owner)=>{if(owner!==undefined&&(typeof owner!=='string'||!owner))fail('invalid_input');if(typeof providerId!=='string'||!providerId)fail('invalid_input');return hash(JSON.stringify([custodian,home,owner??null,providerId]));};
@@ -208,14 +210,14 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
    let file;try{await trustedDirectory(join(home,'setup'),false);await privateDirectory(join(home,'setup'));file=await checkedFile(join(home,'setup',`${providerId}.json`),constants.O_RDONLY,'legacy setup record');}
    catch(e){if(!['ENOENT','ENOTDIR'].includes(e.code))throw e;}
    if(file){let legacy;try{legacy=JSON.parse(await file.readFile('utf8'));}finally{await file.close();}
-    if(owner!==undefined)fail('configuration_migration_required');
-    if(legacy?.schemaVersion!==1||!legacy.values||typeof legacy.values!=='object'||Array.isArray(legacy.values))fail('configuration_migration_required');
+    if(owner!==undefined)refuseMigration('incompatible');
+    if(legacy?.schemaVersion!==1||!legacy.values||typeof legacy.values!=='object'||Array.isArray(legacy.values))refuseMigration('incompatible');
     for(const [inputId,handle]of Object.entries(legacy.values)){
-     if(!handlePattern.test(handle))fail('configuration_migration_required');
+     if(!handlePattern.test(handle))refuseMigration('incompatible');
      c.bindings[inputId]=handle;state.secrets[handle]??={registryId:custodian,scopeId,inputId,revision:c.revision,draftId:null};
-     if(state.secrets[handle].scopeId!==scopeId)fail('configuration_migration_required');
+     if(state.secrets[handle].scopeId!==scopeId)refuseMigration('incompatible');
     }
-    for(const [inputId,value]of Object.entries(legacy.text??{})){if(typeof value!=='string')fail('configuration_migration_required');c.values[inputId]=value;}
+    for(const [inputId,value]of Object.entries(legacy.text??{})){if(typeof value!=='string')refuseMigration('incompatible');c.values[inputId]=value;}
    }
   }
   state.configs[scopeId]=c;
@@ -300,6 +302,34 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
    },
   };
   return tx;
+ }
+ async function discardDraftResources(s,h,c,draftId,registry,checkpoint,{earlier=false}={}){
+  const d=Object.hasOwn(c.drafts,draftId)?c.drafts[draftId]:null;
+  const owned=Object.entries(s.secrets).filter(([,ref])=>ref?.registryId===registry&&ref.scopeId===c.scopeId&&ref.draftId===draftId);
+  if(earlier){
+   if(Object.values(s.setupOperations??{}).some(op=>op?.scopeId===c.scopeId&&op.draftId===draftId)||
+      owned.some(([,ref])=>ref.operationId))refuseMigration('inflight',[migrationCandidate(s,{R:registry,key:c.scopeId,rec:c})]);
+   if(owned.some(([,ref])=>ref.backendScopeId!==undefined&&ref.backendScopeId!==c.scopeId))refuseMigration('incompatible',[migrationCandidate(s,{R:registry,key:c.scopeId,rec:c})]);
+  }
+  // Detach first. Secret metadata retains the authority to retry orphan cleanup.
+  if(d){delete c.drafts[draftId];await checkpoint();}
+  const presence=async handle=>{
+   const result=await call(h,'presence',{scopeId:backendScope(s,c,handle),handle});
+   if(result?.known!==true||typeof result.value!=='boolean')fail(result?.reason==='secret_backend_locked'?'secret_backend_locked':'secret_backend_unavailable');
+   return result.value;
+  };
+  for(const [handle] of owned){
+   const stillReferenced=referenced(s,handle);
+   if(stillReferenced)continue;
+   if(await presence(handle)){
+    await call(h,'delete',{scopeId:backendScope(s,c,handle),handle});
+    if(await presence(handle))fail('secret_backend_unavailable');
+   }
+   delete s.secrets[handle];
+   // Keep each confirmed removal durable before starting the next backend call.
+   await checkpoint();
+  }
+  return {discarded:!!d};
  }
  const api={hostCapabilities,
   readConfiguration:r=>transaction(r.home,async(s,h)=>redacted(h,s,select(await config(s,h,r.providerId,r.owner),r.draftId))),
@@ -391,28 +421,32 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   }),
   beginConfigurationDraft:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner);compare(c,r.expectedConfigurationRevision);const draftId=fresh();const d={scopeId:c.scopeId,revision:fresh(),baseRevision:c.revision,bindings:clone(c.bindings),values:clone(c.values)};c.drafts[draftId]=d;return {draftId,scopeId:c.scopeId,baseRevision:c.revision,configuration:await redacted(h,s,d)};}),
   commitConfigurationDraft:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner),d=select(c,r.draftId);if(!r.draftId)fail('invalid_input');compare(d,r.expectedConfigurationRevision);compare(c,d.baseRevision);if(c.uses.length)fail('configuration_in_use');c.bindings=d.bindings;c.values=d.values;c.revision=fresh();delete c.drafts[r.draftId];return redacted(h,s,c);}),
+  discardEarlierConfigurationDraft:async r=>{
+   const from=r?.fromRegistryId,draftId=r?.draftId;
+   if(typeof r?.home!=='string'||!r.home||typeof from!=='string'||!registryIdPattern.test(from)||
+      !lineage?.replaces.includes(from)||(PUBLISHED_REGISTRY_IDS.includes(from)&&!isBundledLineage(lineage))||
+      typeof draftId!=='string'||!draftId)fail('invalid_input');
+   return transaction(r.home,async(s,h,checkpoint)=>{
+    const successor=scope(h,r.providerId,r.owner);
+    const key=legacyScope(from,h,r.providerId,r.owner);
+    if(!Object.hasOwn(s.configs,key))return {discarded:false};
+    const c=s.configs[key];
+    if(!plain(c)||c.scopeId!==key||!plain(c.bindings)||!plain(c.drafts))refuseMigration('incompatible');
+    if(c.migratedTo){
+     const adopted=s.configs[successor];
+     if(c.migratedTo===successor&&adopted&&!adopted.migratedTo&&adopted.migratedFrom?.includes(key)&&
+        !Object.keys(c.bindings).length&&!Object.keys(c.drafts).length&&plain(c.values)&&!Object.keys(c.values).length&&
+        Array.isArray(c.uses)&&!c.uses.length&&
+        !Object.values(s.secrets).some(ref=>ref.registryId===from&&ref.scopeId===key&&ref.draftId===draftId))return {discarded:false};
+     refuseMigration(c.migratedTo===successor?'retired':'taken',[migrationCandidate(s,{R:from,key,rec:c})]);
+    }
+    return discardDraftResources(s,h,c,draftId,from,checkpoint,{earlier:true});
+   },{checkpointOnly:true});
+  },
   discardConfigurationDraft:r=>transaction(r.home,async(s,h,checkpoint)=>{
    if(typeof r.draftId!=='string'||!r.draftId)fail('invalid_input');
-   const c=await config(s,h,r.providerId,r.owner),d=c.drafts[r.draftId];
-   const owned=Object.entries(s.secrets).filter(([,v])=>v.registryId===custodian&&v.scopeId===c.scopeId&&v.draftId===r.draftId).map(([handle])=>handle);
-   // Detach first. Secret metadata retains the authority to retry orphan cleanup.
-   if(d){delete c.drafts[r.draftId];await checkpoint();}
-   const presence=async handle=>{
-    const result=await call(h,'presence',{scopeId:backendScope(s,c,handle),handle});
-    if(result?.known!==true||typeof result.value!=='boolean')fail(result?.reason==='secret_backend_locked'?'secret_backend_locked':'secret_backend_unavailable');
-    return result.value;
-   };
-   for(const handle of owned){
-    if(referenced(s,handle))continue;
-    if(await presence(handle)){
-     await call(h,'delete',{scopeId:backendScope(s,c,handle),handle});
-     if(await presence(handle))fail('secret_backend_unavailable');
-    }
-    delete s.secrets[handle];
-    // Keep each confirmed removal durable before starting the next backend call.
-    await checkpoint();
-   }
-   return {discarded:!!d};
+   const c=await config(s,h,r.providerId,r.owner);
+   return discardDraftResources(s,h,c,r.draftId,custodian,checkpoint);
   }),
   discardSecret:r=>transaction(r.home,(s,h)=>remove(s,h,r.handle)),
   registerConfigurationUse:async r=>{

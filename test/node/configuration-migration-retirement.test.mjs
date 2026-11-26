@@ -76,6 +76,121 @@ for(const [label,change,observation]of [
  assert.equal(await readFile(path,'utf8'),before);
 });
 
+test('earlier draft discard is restricted to exact declared predecessor and is a byte-stable no-op on repeat',async t=>{
+ const home=await mkdtemp(join(homedir(),'.tmp','g-upgrade-'));
+ t.after(()=>rm(home,{recursive:true,force:true}));
+ const fromRegistryId='registry-v1:'+'c'.repeat(64);
+ const request={home,owner:'draft-owner-fixture',providerId:'localhost-run'};
+ const old=createEmbeddingServices({registryId:fromRegistryId});
+ const oldConfig=await old.readConfiguration(request);
+ const {draftId}=await old.beginConfigurationDraft({...request,expectedConfigurationRevision:oldConfig.revision});
+ const current=createEmbeddingServices({
+  registryId:'registry-v1:'+'d'.repeat(64),lineage:{id:'draft-cleanup-fixture',replaces:[fromRegistryId]},
+  currentInputKinds:async()=>({})
+ });
+ const discard={...request,fromRegistryId,draftId};
+ const filename=join(home,'embedding-state.json');
+ const before=await readFile(filename,'utf8');
+ await assert.rejects(current.readConfiguration(request),{code:'configuration_migration_required',reason:'inflight'});
+ assert.deepEqual(await current.discardEarlierConfigurationDraft({...discard,owner:'other-fixture'}),{discarded:false});
+ assert.deepEqual(await current.discardEarlierConfigurationDraft({...discard,providerId:'other-fixture'}),{discarded:false});
+ await assert.rejects(current.discardEarlierConfigurationDraft({...discard,fromRegistryId:'registry-v1:'+'b'.repeat(64)}),{code:'invalid_input'});
+ await assert.rejects(current.discardEarlierConfigurationDraft({...discard,draftId:''}),{code:'invalid_input'});
+ assert.equal(await readFile(filename,'utf8'),before);
+ assert.deepEqual(await current.discardEarlierConfigurationDraft(discard),{discarded:true});
+ const after=await readFile(filename,'utf8');
+ assert.deepEqual(await current.discardEarlierConfigurationDraft(discard),{discarded:false});
+ assert.equal(await readFile(filename,'utf8'),after);
+ assert.notEqual((await current.readConfiguration(request)).scopeId,oldConfig.scopeId);
+ const adopted=await readFile(filename,'utf8');
+ assert.deepEqual(await current.discardEarlierConfigurationDraft(discard),{discarded:false});
+ assert.equal(await readFile(filename,'utf8'),adopted);
+ const rival=createEmbeddingServices({registryId:'rival-test',lineage:{id:'rival-draft-cleanup',replaces:[fromRegistryId]}});
+ await assert.rejects(rival.discardEarlierConfigurationDraft(discard),{code:'configuration_migration_required',reason:'taken'});
+ assert.equal(await readFile(filename,'utf8'),adopted);
+});
+
+test('earlier draft cleanup checkpoints partial progress, retries after restart, and preserves shared references',async t=>{
+ const home=await mkdtemp(join(homedir(),'.tmp','g-upgrade-'));
+ t.after(()=>rm(home,{recursive:true,force:true}));
+ const fromRegistryId='registry-v1:'+'a'.repeat(64);
+ const request={home,owner:'cleanup-fixture',providerId:'localhost-run'};
+ const previous=createEmbeddingServices({registryId:fromRegistryId});
+ const old=await previous.readConfiguration(request);
+ const begin=()=>previous.beginConfigurationDraft({...request,expectedConfigurationRevision:old.revision});
+ const {draftId}=await begin(),sibling=await begin();
+ const filename=join(home,'embedding-state.json'),state=JSON.parse(await readFile(filename,'utf8'));
+ const record=state.configs[old.scopeId];
+ const ids={first:'fixture-first',retry:'fixture-retry',applied:'fixture-applied',sibling:'fixture-sibling'};
+ for(const [name,handle]of Object.entries(ids)){
+  state.secrets[handle]={registryId:fromRegistryId,scopeId:old.scopeId,draftId,inputId:name,revision:old.revision};
+  record.drafts[draftId].bindings[name]=handle;
+ }
+ record.bindings.applied=ids.applied;
+ record.drafts[sibling.draftId].bindings.sibling=ids.sibling;
+ await writeFile(filename,JSON.stringify(state));
+ const present=new Set(Object.values(ids)),removed=[];
+ let refusal='locked',byteReads=0;
+ const secretBackend={
+  presence:async({scopeId,handle})=>{
+   assert.equal(scopeId,old.scopeId);
+   return handle===ids.retry&&refusal==='locked'
+    ?{known:false,reason:'secret_backend_locked'}:{known:true,value:present.has(handle)};
+  },
+  delete:async({scopeId,handle})=>{
+   assert.equal(scopeId,old.scopeId);removed.push(handle);
+   if(!(handle===ids.retry&&refusal==='lying'))present.delete(handle);
+   return {deleted:true};
+  },
+  withSecret:async()=>{byteReads++;assert.fail('cleanup requested secret bytes');}
+ };
+ const make=()=>createEmbeddingServices({registryId:'registry-v1:'+'b'.repeat(64),
+  lineage:{id:'cleanup-fixture',replaces:[fromRegistryId]},currentInputKinds:async()=>({}),secretBackend});
+ const selector={...request,fromRegistryId,draftId};
+ await assert.rejects(make().discardEarlierConfigurationDraft(selector),{code:'secret_backend_locked'});
+ const after=JSON.parse(await readFile(filename,'utf8'));
+ assert.equal(after.configs[old.scopeId].drafts[draftId],undefined);
+ assert.equal(after.secrets[ids.first],undefined);
+ assert.ok(after.secrets[ids.retry]);
+ await assert.rejects(make().readConfiguration(request),error=>{
+  assert.equal(error.reason,'inflight');
+  assert.ok(error.migration.candidates[0].draftIds.includes(draftId));
+  return true;
+ });
+ refusal='lying';
+ await assert.rejects(make().discardEarlierConfigurationDraft(selector),{code:'secret_backend_unavailable'});
+ assert.ok(JSON.parse(await readFile(filename,'utf8')).secrets[ids.retry]);
+ refusal=null;
+ assert.deepEqual(await make().discardEarlierConfigurationDraft(selector),{discarded:false});
+ const final=JSON.parse(await readFile(filename,'utf8'));
+ assert.equal(final.secrets[ids.retry],undefined);
+ assert.equal(final.configs[old.scopeId].bindings.applied,ids.applied);
+ assert.equal(final.configs[old.scopeId].drafts[sibling.draftId].bindings.sibling,ids.sibling);
+ assert.deepEqual(removed,[ids.first,ids.retry,ids.retry]);
+ assert.equal(byteReads,0);
+});
+
+test('earlier discard refuses same-draft setup custody without detaching it',async t=>{
+ const home=await mkdtemp(join(homedir(),'.tmp','g-upgrade-'));
+ t.after(()=>rm(home,{recursive:true,force:true}));
+ const fromRegistryId='registry-v1:'+'f'.repeat(64);
+ const request={home,owner:'custody-fixture',providerId:'localhost-run'};
+ const previous=createEmbeddingServices({registryId:fromRegistryId});
+ const old=await previous.readConfiguration(request);
+ const {draftId}=await previous.beginConfigurationDraft({...request,expectedConfigurationRevision:old.revision});
+ await previous.setupTransaction({...request,draftId,operationId:'setup-fixture'},async storage=>{
+  const configuration=await storage.tx.configuration();
+  storage.reserve({scopeId:old.scopeId,draftId,revision:1,configurationRevision:configuration.revision,
+   cancelled:false,management:{},resources:[]});
+ });
+ const current=createEmbeddingServices({registryId:'registry-v1:'+'9'.repeat(64),
+  lineage:{id:'custody-fixture',replaces:[fromRegistryId]}});
+ const filename=join(home,'embedding-state.json'),before=await readFile(filename,'utf8');
+ await assert.rejects(current.discardEarlierConfigurationDraft({...request,fromRegistryId,draftId}),
+  {code:'configuration_migration_required',reason:'inflight'});
+ assert.equal(await readFile(filename,'utf8'),before);
+});
+
 test('one blocked predecessor keeps cached provider inventory usable and exposes only migration metadata',async t=>{
  const home=await mkdtemp(join(homedir(),'.tmp','g-upgrade-'));
  t.after(()=>rm(home,{recursive:true,force:true}));
@@ -139,8 +254,24 @@ test('earlier setup journal keys are not advertised as actionable public operati
   const candidate=error.migration.candidates[0];
   assert.deepEqual(candidate.setupOperationIds,[]);
   assert.equal(candidate.unaddressableSetupOperations,1);
+  assert.deepEqual(error.migration.recovery,{available:false,reason:'unaddressable_setup_operations'});
   assert.equal(JSON.stringify(candidate).includes(journalKey),false);
   return error.code==='configuration_migration_required'&&error.reason==='inflight';
  });
  assert.equal(await readFile(path,'utf8'),before);
+});
+
+
+test('earlier draft cleanup also removes default-store draft-owned files',async t=>{
+ const home=await mkdtemp(join(homedir(),'.tmp','g-upgrade-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const fromRegistryId='registry-v1:'+'8'.repeat(64),request={home,owner:'default-store-fixture',providerId:'localhost-run'};
+ const earlier=createEmbeddingServices({registryId:fromRegistryId}),configuration=await earlier.readConfiguration(request);
+ const draft=await earlier.beginConfigurationDraft({...request,expectedConfigurationRevision:configuration.revision});
+ const stored=await earlier.storeSecret({...request,draftId:draft.draftId,scopeId:configuration.scopeId,
+  expectedConfigurationRevision:draft.configuration.revision,inputId:'token',bytes:new TextEncoder().encode('inert-fixture-credential')});
+ const current=createEmbeddingServices({registryId:'default-store-current',lineage:{id:'default-store-lineage',replaces:[fromRegistryId]},currentInputKinds:async()=>({token:'secret'})});
+ assert.deepEqual(await current.discardEarlierConfigurationDraft({...request,fromRegistryId,draftId:draft.draftId}),{discarded:true});
+ await assert.rejects(readFile(join(home,'secrets',stored.handle)),{code:'ENOENT'});
+ const saved=JSON.parse(await readFile(join(home,'embedding-state.json'),'utf8'));
+ assert.equal(saved.secrets[stored.handle],undefined);
 });
