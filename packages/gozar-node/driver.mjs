@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { randomUUID, randomInt } from 'node:crypto';
@@ -125,8 +126,8 @@ export class EffectDriver {
     }
     if (this.onProcessOutput) {
       const key = `${resource.id}\0${stream}`;
-      const frame = this.routeLineBuffers.get(key) ?? { buffer: '', dropping: false };
-      for (const char of chunk.toString('utf8')) {
+      const frame = this.routeLineBuffers.get(key) ?? { buffer: '', dropping: false, decoder: new StringDecoder('utf8') };
+      for (const char of frame.decoder.write(chunk)) {
         if (char === '\n') {
           const line = frame.buffer.endsWith('\r') ? frame.buffer.slice(0, -1) : frame.buffer;
           if (!frame.dropping && line.length <= 4096) {
@@ -134,7 +135,7 @@ export class EffectDriver {
           }
           frame.buffer = ''; frame.dropping = false;
         } else if (!frame.dropping) {
-          if (frame.buffer.length >= 4096) { frame.buffer = ''; frame.dropping = true; }
+          if (frame.buffer.length >= 4096 && !(frame.buffer.length === 4096 && char === '\r')) { frame.buffer = ''; frame.dropping = true; }
           else frame.buffer += char;
         }
       }
