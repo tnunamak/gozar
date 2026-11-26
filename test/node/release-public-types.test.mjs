@@ -112,14 +112,29 @@ test('deadline settles even after compiler exit when a detached descendant holds
  let pid,deadline;
  let socketClosed;
  connected.then(socket=>{socketClosed=new Promise(resolve=>socket.once('close',resolve));socket.resume();});
- const pending=checkPublicTypes({installedRoot:f.root,tsc:f.compiler,timeoutMs:1000});
+ let fireDeadline,recordExit;
+ const exited=new Promise(resolve=>{recordExit=resolve;});
+ const pending=checkPublicTypes({installedRoot:f.root,tsc:f.compiler,timeoutMs:1000},{
+  scheduleDeadline(fire,ms,child){
+   assert.equal(ms,1000);
+   fireDeadline=fire;
+   child.once('exit',(code,signal)=>recordExit({code,signal}));
+   return ()=>{fireDeadline=undefined;};
+  },
+ });
  // Attach rejection handling immediately; the finally block still joins it.
  const settled=pending.then(result=>({result}),error=>({error}));
  try{
-  const answer=await Promise.race([
-   settled,
-   new Promise((_,reject)=>{deadline=setTimeout(()=>reject(new Error('checkPublicTypes did not settle within its outer deadline')),3000);}),
+  const outer=new Promise((_,reject)=>{deadline=setTimeout(()=>reject(new Error('checkPublicTypes did not settle within its outer deadline')),5000);});
+  const ready=await Promise.race([
+   Promise.all([connected,exited]).then(([,status])=>status),
+   settled.then(({error})=>{throw error??new Error('compiler settled before both readiness signals');}),
+   outer,
   ]);
+  assert.deepEqual(ready,{code:0,signal:null});
+  assert.equal(typeof fireDeadline,'function');
+  fireDeadline();
+  const answer=await Promise.race([settled,outer]);
   if(answer.error)throw answer.error;
   const result=answer.result;
   assert.equal(result.timedOut,true);
@@ -153,15 +168,38 @@ test('deadline settles even after compiler exit when a detached descendant holds
  }
 });
 
+test('an early compiler failure settles without waiting for pipe-holder readiness',async t=>{
+ const f=await fixture(t,"process.stderr.write('failed before readiness');process.exitCode=7;");
+ let captured,cancelled=false;
+ const result=await checkPublicTypes({installedRoot:f.root,tsc:f.compiler},{
+  scheduleDeadline(fire){captured=fire;return ()=>{cancelled=true;};},
+ });
+ assert.equal(typeof captured,'function');
+ assert.equal(cancelled,true);
+ assert.equal(result.code,7);
+ assert.equal(result.timedOut,false);
+ assert.equal(result.outputTruncated,false);
+ assert.match(result.stderr,/failed before readiness/);
+});
+
 test('output budget is shared across stdout and stderr and never splits a UTF-8 character',{skip:process.platform==='win32'},async t=>{
- // 3-byte characters, cap 4096 not a multiple of 3, two streams: total raw bytes stay within the one budget.
- const f=await fixture(t,`const c='€'.repeat(100000);process.stdout.write(c);process.stderr.write(c);setInterval(()=>{},1000)`);
- const result=await checkPublicTypes({installedRoot:f.root,tsc:f.compiler,outputCapBytes:4096,timeoutMs:5000});
- assert.equal(result.overflow,true);
- assert.ok(Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr)<=4096);
+ // Each stream writes only 2700 bytes. Both streams are required to overflow a 4096-byte shared budget.
+ const f=await fixture(t,`
+  setInterval(()=>{},1000);
+  process.stdout.write('€'.repeat(900),()=>{
+   process.stderr.write('あ'.repeat(900));
+  });
+ `);
+ const result=await checkPublicTypes({installedRoot:f.root,tsc:f.compiler,outputCapBytes:4096,timeoutMs:2000});
+ assert.equal(result.overflow,true,'two individually sub-cap writes must overflow only their shared budget');
+ assert.equal(result.timedOut,false,'overflow, not the fixture deadline, must retire the compiler');
+ assert.match(result.stdout,/^€+$/);
+ assert.match(result.stderr,/^あ+$/);
+ const retained=Buffer.byteLength(result.stdout)+Buffer.byteLength(result.stderr);
+ assert.ok(retained<=4096 && retained>=4094,'cap may drop at most one partial three-byte character');
  assert.equal((result.stdout+result.stderr).includes('�'),false);
 });
-test('overflow or timeout is a CLI failure even when the compiler exits 0',{skip:process.platform==='win32'},async t=>{
+test('overflow is a CLI failure even when the compiler exits 0',{skip:process.platform==='win32'},async t=>{
  const f=await fixture(t,`process.stdout.write('x'.repeat(5000000),()=>process.exit(0))`);
  const run=spawnSync(process.execPath,['scripts/check-public-types.mjs','--installed-root',f.root,'--tsc',f.compiler],{encoding:'utf8'});
  assert.notEqual(run.status,0);

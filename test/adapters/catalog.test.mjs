@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { recipeAdapter } from '../../packages/gozar-node/adapter-runtime.mjs';
 import test from 'node:test';
 
 const root = new URL('../../', import.meta.url);
@@ -147,5 +150,36 @@ test('completion must match exact effect, session and generation', () => {
   const fixture = fixtures.find(item => item.pending);
   for (const item of fixture.cases) {
     assert.equal(['effectId', 'sessionId', 'generation'].every(key => item.completion[key] === fixture.pending[key]), item.expected, item.id);
+  }
+});
+
+test('wrapped recipe loader admits schema 1 and refuses invalid envelope without path or cause', async t => {
+  const candidates = await Promise.all(manifest.providers.map(row => json(`adapters/${row.definition}`)));
+  const template = candidates.find(value => value.wraps && value.adapter);
+  assert.ok(template, 'registry has a current wrapped adapter definition');
+  const folder = await mkdtemp(join(tmpdir(), 'gozar-wrapped-loader-'));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  const definition = join(folder, 'definition.json');
+  const wrapped = join(folder, 'wrapped.definition.json');
+  const fixture = { id: template.adapter.id, recipes: {}, actions: [] };
+  await writeFile(definition, JSON.stringify({ adapter: template.adapter, wraps: './wrapped.definition.json' }));
+  await writeFile(wrapped, JSON.stringify({ schemaVersion: 1, definition: fixture }));
+  assert.deepEqual(recipeAdapter({ definition }).operationalDefinition, fixture);
+  for (const source of [
+    JSON.stringify({ definition: fixture }),
+    JSON.stringify({ schemaVersion: 2, definition: fixture }),
+    JSON.stringify({ schemaVersion: '1', definition: fixture }),
+    'null',
+    '{ raw synthetic inspection detail',
+  ]) {
+    await writeFile(wrapped, source);
+    assert.throws(() => recipeAdapter({ definition }), error => {
+      assert.equal(error.code, 'internal_error');
+      assert.match(error.message, /unsupported wrapped recipe schema|wrapped recipe is not readable JSON/);
+      assert.equal(error.message.includes(folder), false);
+      assert.equal(error.message.includes('raw synthetic inspection detail'), false);
+      assert.equal(error.cause, undefined);
+      return true;
+    });
   }
 });

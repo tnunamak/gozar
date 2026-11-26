@@ -277,7 +277,11 @@ function readDefinition(location) {
   let wrapped = null;
   if (file.wraps) {
     if (!/^(\.\/|(\.\.\/)+)[A-Za-z0-9_.-]+\.definition\.json$/.test(file.wraps)) throw loadError(file.adapter.id, 'wraps must name an adapters/*.definition.json file');
-    wrapped = JSON.parse(readFileSync(new URL(file.wraps, url), 'utf8')).definition;
+    let recipeFile;
+    try { recipeFile = JSON.parse(readFileSync(new URL(file.wraps, url), 'utf8')); }
+    catch { throw loadError(file.adapter.id, 'wrapped recipe is not readable JSON'); }
+    if (recipeFile?.schemaVersion !== 1) throw loadError(file.adapter.id, 'unsupported wrapped recipe schema');
+    wrapped = recipeFile.definition;
     if (wrapped?.id !== file.adapter.id) throw loadError(file.adapter.id, 'wrapped recipe definition has a different id');
   }
   return { adapter: file.adapter, wrapped };
