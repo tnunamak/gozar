@@ -69,6 +69,35 @@ const OPAQUE = /^[\x21-\x7e]{1,256}$/;
 const PROVIDER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const REVISION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
+// The forward scope's directory: canonical home + a private `forward` directory. Shared by the state
+// store and the live-manager ownership lease so one app identity maps to exactly one scope.
+async function forwardDirectory(home, create) {
+  const path = join(await canonicalHome(home, create), 'forward');
+  await trustedDirectory(path, create);
+  await privateDirectory(path);
+  return path;
+}
+
+const scopeKeyOf = app => createHash('sha256').update(`${KIND}\0${app}`).digest('hex');
+
+function validateScope({ home, app } = {}) {
+  if (typeof home !== 'string' || !isAbsolute(home))
+    throw gozarError('invalid_input', 'a forward scope needs an absolute home directory');
+  if (typeof app !== 'string' || !APP.test(app))
+    throw gozarError('invalid_input', 'app must be 1..64 lowercase letters, digits or hyphens');
+}
+
+/**
+ * The live-manager ownership lease path: `<home>/forward/<scope>.manager`, one dedicated process lock
+ * per app scope. It is a DIFFERENT lock from the per-commit record lock above: holding it means "this
+ * process is the live manager for this app", proven by process identity (process-lock.mjs), never by a
+ * state revision. A short CAS commit is not a lifetime claim, and a dead holder's lease is take-over-able.
+ */
+export async function forwardManagerLock({ home, app } = {}) {
+  validateScope({ home, app });
+  return join(await forwardDirectory(home, true), `${scopeKeyOf(app)}.manager`);
+}
+
 function validateHandle(handle) {
   if (handle === null) return null;
   requireFields(handle, ['kind', 'id', 'generation'], 'run.handle');
@@ -208,20 +237,12 @@ function checkStoredRecord(app, value) {
 }
 
 export function openForwardState({ home, app } = {}) {
-  if (typeof home !== 'string' || !isAbsolute(home))
-    throw gozarError('invalid_input', 'openForwardState needs an absolute home directory');
-  if (typeof app !== 'string' || !APP.test(app))
-    throw gozarError('invalid_input', 'app must be 1..64 lowercase letters, digits or hyphens');
+  validateScope({ home, app });
   // The stored name is the hash of the app identity: no identifier can alias another or escape
   // the forward scope, and the record itself re-verifies the app on every read.
-  const key = createHash('sha256').update(`${KIND}\0${app}`).digest('hex');
+  const key = scopeKeyOf(app);
   const fileName = `${key}.json`, lockName = `${key}.lock`;
-  const directory = async create => {
-    const path = join(await canonicalHome(home, create), 'forward');
-    await trustedDirectory(path, create);
-    await privateDirectory(path);
-    return path;
-  };
+  const directory = async create => forwardDirectory(home, create);
   // Missing state is null; anything unreadable or invalid is an error, never an empty success.
   const readCurrent = async () => {
     let dir;
