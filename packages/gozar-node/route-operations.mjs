@@ -29,7 +29,7 @@ function newHandle(request){
 }
 // Fresh proofs this incarnation may attempt for a route with no controller before the replay settles as recovery.
 const REPROOF_ATTEMPTS=3;
-export async function withRouteOperation(request,{registryId,embeddingServices,adapters,run,status,progress,startTimeoutMs=120_000,replayWait=ms=>new Promise(resolve=>setTimeout(resolve,ms))}){
+export async function withRouteOperation(request,{registryId,embeddingServices,adapters,run,status,progress,prevalidate,startTimeoutMs=120_000,replayWait=ms=>new Promise(resolve=>setTimeout(resolve,ms))}){
  if(request.operationId===undefined)return run(null);
  if(typeof request.operationId!=='string'||!request.operationId||request.operationId.length>256||typeof request.owner!=='string'||!request.owner)throw gozarError('invalid_input','A route operation needs a non-empty operationId and owner');
  const home=await canonicalHome(request.home,true),dir=await directory(home,true),path=join(dir,hash(JSON.stringify([request.owner,request.operationId]))+'.json');
@@ -39,13 +39,14 @@ export async function withRouteOperation(request,{registryId,embeddingServices,a
   const grant=await peekConsentGrant({home,token:request.approval?.candidateToken});
   const providerId=request.providerId??grant?.adapterId??prior?.intent.providerId;
   if(!providerId)throw gozarError('consent_required','The operation needs a current exact provider approval');
+  const external=ownershipFor(adapters?.find(a=>a.id===providerId)?.definition)==='external-owned';
+  if(!prior&&prevalidate)await prevalidate({external});
   const configuration=await embeddingServices.readConfiguration({home,owner:request.owner,providerId});
   const intent={registryId,providerId,configurationRevision:configuration.revision,scopeId:configuration.scopeId,usage:request.usage,
     owner:request.owner,target:request.target,origin:request.origin??null,requirements:request.requirements,route:request.route??null,intent:request.intent??'create',
     consentFactsDigest:request.approval?.consentFactsDigest??grant?.consentFactsDigest??prior?.intent.consentFactsDigest??null};
   const intentDigest=canonicalDigest(intent);
   if(prior){if(prior.intentDigest!==intentDigest)throw gozarError('operation_conflict','This operationId already names a different route intent');return prior;}
-  const external=ownershipFor(adapters?.find(a=>a.id===providerId)?.definition)==='external-owned';
   const origin=request.origin??grant?.origin??(prior?.view.handle.kind==='external'?prior.view.handle.id:null);
   if(external&&!origin)throw gozarError('consent_required','An owner route needs the approved exact origin');
   const handle=external?{kind:'external',id:origin,generation:1}:newHandle(request);
