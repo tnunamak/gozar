@@ -357,6 +357,39 @@ test('installed forward: the exact first documentation example runs on the impor
   assert.deepEqual(providerRules(w), []);
 });
 
+test('installed forward: provider rule loss withdraws the current url and re-establishes without another consent', async t => {
+  const w = await hostWorld(t);
+  const source = `import * as gozar from '@tnunamak/gozar';
+const { port, ui } = globalThis.faravanHost;
+const route = await gozar.forward({ app: 'faravan', port, onAction: ui.show });
+try {
+  route.on('down', event => console.log(JSON.stringify({ type: 'outage', ...event, url: route.url, currentDownSince: route.downSince })));
+  route.on('back', event => console.log(JSON.stringify({ type: 'recovered', ...event, url: route.url, currentDownSince: route.downSince })));
+  await ui.untilClosed();
+} finally { await route.close(); }
+`;
+  const host = await runHost(t, { entry: 'lost-rule.mjs', env: w.env, source });
+  await host.report('published');
+  assert.equal(providerRules(w).length, 1);
+  w.state.config.Web = {};
+  const down = await host.report('outage');
+  assert.equal(down.url, null, 'an observed outage must withdraw the current address');
+  assert.equal(down.currentDownSince, down.downSince);
+  assert.ok(Number.isFinite(Date.parse(down.downSince)));
+  const back = await host.report('recovered');
+  assert.equal(back.url, w.origin);
+  assert.equal(back.currentDownSince, null);
+  assert.equal(back.downSince, down.downSince);
+  assert.ok(Date.parse(back.at) >= Date.parse(down.downSince));
+  assert.equal(providerRules(w).length, 1, 'recovery restores one owned rule');
+  host.close();
+  const done = await host.report('done');
+  assert.deepEqual(await host.exited, { code: 0, signal: null }, host.stderr());
+  assert.equal(done.shown.length, 1, 'unchanged disclosure does not ask again during recovery');
+  assert.equal(done.listenerSurvived, true);
+  assert.deepEqual(providerRules(w), []);
+});
+
 test('installed forward: with no ready provider the namespace rejects with a per-provider explanation and no invented next action', async t => {
   const { base } = await installedPackage();
   const home = join(base, 'home-no-match'), emptyBin = join(base, 'bin-no-match');
@@ -478,7 +511,6 @@ export async function firstUse() {
   let route = await gozar.forward({ app: 'faravan', port, policy: { accounts: 'existing-only', lifetime: 'prefer-lasting' } });
   try {
     while (route.needsAction) route = await route.resume(await ui.show(route.needsAction));
-    if (!('on' in route)) throw new Error('unreachable: a result without needsAction is published');
     route.on('change', ({ oldOrigin, newOrigin, at }) => publishSignedAddress(newOrigin, { oldOrigin, at }));
     if (route.url !== null) publishSignedAddress(route.url);
     route.on('down', ({ downSince }) => showOffline({ downSince }));
@@ -493,20 +525,20 @@ export async function firstUse() {
 
 // The host-handled form returns the published route directly; the factory carries the same call and an explicit managed home.
 export async function handled() {
-  const route: gozar.ForwardPublished = await gozar.forward({ app: 'faravan', port, onAction: ui.show });
+  const route: gozar.ForwardRoute = await gozar.forward({ app: 'faravan', port, onAction: ui.show });
   const configured = createGozar({ forwardHome: '/var/lib/faravan/gozar' });
-  const result: gozar.ForwardResult = await configured.forward({ app: 'faravan', port, policy: { lifetime: 'session' } });
-  const direct: gozar.ForwardPublished = await configured.forward({ app: 'faravan', port, onAction: answer => ({ approve: answer.kind === 'consent' }) });
+  const result: gozar.ForwardRoute = await configured.forward({ app: 'faravan', port, policy: { lifetime: 'session' } });
+  const direct: gozar.ForwardRoute = await configured.forward({ app: 'faravan', port, onAction: answer => ({ approve: answer.kind === 'consent' }) });
   return [route, result, direct];
 }
 
 // The published route is current state, not a cached address.
-declare const published: gozar.ForwardPublished;
+declare const published: gozar.ForwardRoute;
 const address: string | null = published.url;
 const outage: string | null = published.downSince;
 const pendingStep: gozar.ForwardAction | null = published.needsAction;
-const lifetime: 'lasting' | 'session' = published.lifetime;
-const traffic: boolean | null = published.provider.traffic.providerCanReadPayload;
+const lifetime: 'lasting' | 'session' | null = published.lifetime;
+const traffic: boolean | null = published.provider?.traffic.providerCanReadPayload ?? null;
 // @ts-expect-error url is null while the route is down.
 published.url.length;
 // @ts-expect-error a later decision may or may not be waiting.
@@ -554,13 +586,13 @@ void gozar.forward({ app: 'faravan' });
 void gozar.forward({ app: 'faravan', port: '8080' });
 // @ts-expect-error onAction returns the user's answer.
 void gozar.forward({ app: 'faravan', port, onAction: () => true });
-// @ts-expect-error without onAction the result may be a pending step.
-export const notPublished: gozar.ForwardPublished = await gozar.forward({ app: 'faravan', port });
+// @ts-expect-error the current address can be null, even after an onAction call.
+export const notPublished: string = (await gozar.forward({ app: 'faravan', port, onAction: ui.show })).url;
 // @ts-expect-error forwardHome is a path.
 createGozar({ forwardHome: 5 });
 
 // Wrong answers.
-declare const pending: gozar.ForwardPending;
+declare const pending: gozar.ForwardRoute;
 // @ts-expect-error approve is a boolean.
 void pending.resume({ approve: 'yes' });
 // @ts-expect-error an answer needs approve.
@@ -586,18 +618,19 @@ published.on('down', event => { const typed: AssertFalse<IsAny<typeof event>> = 
 published.on('back', event => { const typed: AssertFalse<IsAny<typeof event>> = false; void typed; });
 published.on('action', event => { const typed: AssertFalse<IsAny<typeof event>> = false; void typed; });
 
-// Pending results are not routes.
-// @ts-expect-error a pending step has no address yet.
-void pending.url;
-// @ts-expect-error a pending step has no provider yet.
-void pending.provider;
-// @ts-expect-error a pending step has no subscriptions.
-void pending.on('change', () => {});
-// @ts-expect-error a pending step has no outage state.
-void pending.downSince;
+// A waiting run is the same resource. Nullable state must be checked before use.
+const waitingAddress: string | null = pending.url;
+const waitingProvider: gozar.ForwardProvider | null = pending.provider;
+pending.on('change', () => {});
+const waitingOutage: string | null = pending.downSince;
+// @ts-expect-error provider is null before first publication.
+pending.provider.id;
+// @ts-expect-error route kind is null before first publication.
+const waitingKind: 'durable' | 'session' | 'attached' = pending.kind;
+void [waitingAddress, waitingProvider, waitingOutage];
 
 type NotAny = [
-  AssertFalse<IsAny<gozar.ForwardResult>>, AssertFalse<IsAny<gozar.ForwardPublished>>, AssertFalse<IsAny<gozar.ForwardPending>>,
+  AssertFalse<IsAny<gozar.ForwardRoute>>, AssertFalse<IsAny<gozar.ForwardRoute>>, AssertFalse<IsAny<gozar.ForwardRoute>>,
   AssertFalse<IsAny<gozar.ForwardAction>>, AssertFalse<IsAny<gozar.ForwardAnswer>>, AssertFalse<IsAny<gozar.ForwardPolicy>>,
   AssertFalse<IsAny<gozar.ForwardProvider>>, AssertFalse<IsAny<gozar.ForwardUnmet>>, AssertFalse<IsAny<gozar.ForwardChange>>,
   AssertFalse<IsAny<gozar.ForwardRequirementsError['unmet']>>, AssertFalse<IsAny<Awaited<ReturnType<typeof gozar.forward>>>>,

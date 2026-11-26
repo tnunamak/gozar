@@ -646,39 +646,29 @@ export type ForwardBack = { downSince: string; at: string };
 /** Stops one subscription. */
 export type ForwardUnsubscribe = () => void;
 
-/** A step is waiting. Render `needsAction`, then `resume` with the answer. `close()` cancels and cleans up the attempt. */
-export type ForwardPending = {
-  readonly needsAction: ForwardAction;
-  resume(answer: ForwardAnswer): Promise<ForwardResult>;
-  close(): Promise<void>;
-};
-
 /**
- * A managed route. `url`, `downSince` and `needsAction` are read when you use them, not when `forward` returned.
- * `url` is the current verified origin, or null while the route is down; never cache it as the address.
- * `needsAction` is null unless a later user decision is waiting; then `resume(answer)` continues and `on('action')` announces it.
+ * One managed run, including its initial and later user steps. Every property is current state.
+ * Before first publication, kind, lifetime and provider are null. Metadata remains available during an outage.
+ * url is the verified origin or null while unpublished; needsAction is the one waiting user step or null.
  */
-export type ForwardPublished = {
+export type ForwardRoute = {
   readonly url: string | null;
-  /** 'lasting' is a persistent provider route; 'session' is a session. Neither promises uninterrupted access. */
-  readonly lifetime: 'lasting' | 'session';
-  readonly provider: ForwardProvider;
-  /** When the current outage was first observed, or null when the route is verified. */
+  readonly kind: 'durable' | 'session' | 'attached' | null;
+  /** A persistent provider route or a session; neither promises uninterrupted access. */
+  readonly lifetime: 'lasting' | 'session' | null;
+  readonly provider: ForwardProvider | null;
   readonly downSince: string | null;
   readonly needsAction: ForwardAction | null;
-  resume(answer: ForwardAnswer): Promise<ForwardPublished>;
-  /** 'change' first receives the persisted startup change and every verified change since `forward` returned, in order. */
+  /** Answers the current step and returns this same resource. Rejects invalid_input when no step is pending. */
+  resume(answer: ForwardAnswer): Promise<ForwardRoute>;
+  /** First receives the persisted startup change and every verified change since forward returned, in order. */
   on(type: 'change', listener: (event: ForwardChange) => void): ForwardUnsubscribe;
   on(type: 'down', listener: (event: ForwardDown) => void): ForwardUnsubscribe;
   on(type: 'back', listener: (event: ForwardBack) => void): ForwardUnsubscribe;
-  /** A later user step is waiting; `route.needsAction` holds it too. */
   on(type: 'action', listener: (action: ForwardAction) => void): ForwardUnsubscribe;
-  /** Stops this run and resolves once owned cleanup is confirmed. Rejects with code 'cleanup_debt' when it is not; retry `close()`. */
+  /** Stops this run. Resolves on confirmed owned cleanup; rejects cleanup_debt otherwise. Retry close(). */
   close(): Promise<void>;
 };
-
-/** A published route, or a step to render first. Check `needsAction` before using the route. */
-export type ForwardResult = ForwardPending | ForwardPublished;
 
 /** Why one considered provider cannot serve the policy. A closed vocabulary of observed facts. */
 export type ForwardMissing = 'usage' | 'detect-only' | 'public-internet-https' | 'traffic-readability' | 'account' | 'ready route' | 'lasting route' | 'session route';
@@ -694,9 +684,8 @@ export interface ForwardRequirementsError extends GozarThrownError { code: 'requ
 /** Cleanup is not confirmed. Report that, not that the route is off, then retry `close()` or call `forward` again for this app. */
 export interface ForwardCleanupDebtError extends GozarThrownError { code: 'cleanup_debt'; nextAction: Action }
 
-/** Publish the listener on `port`. With `onAction`, steps run inside the call and the result is the published route. */
-export function forward(request: ForwardRequest & { onAction: ForwardActionHandler }): Promise<ForwardPublished>;
-export function forward(request: ForwardRequest): Promise<ForwardResult>;
+/** Publish the listener on port. With onAction, user steps run inside the call. Returns one current resource. */
+export function forward(request: ForwardRequest): Promise<ForwardRoute>;
 export function createGozar(options?: GozarOptions): import('./embedding-contract.js').HostEmbeddingMethods & {
  catalogRoutes: typeof catalogRoutes; expose: (request:ExposeRequest)=>Promise<RouteView>;
  ensureRoute: typeof ensureRoute; adoptRoute: typeof adoptRoute; routeStatus: typeof routeStatus;

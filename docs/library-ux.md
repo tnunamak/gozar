@@ -13,7 +13,7 @@ let route = await gozar.forward({ app: 'faravan', port, policy: { accounts: 'exi
 try {
   while (route.needsAction) route = await route.resume(await ui.show(route.needsAction));
   route.on('change', ({ oldOrigin, newOrigin, at }) => publishSignedAddress(newOrigin, { oldOrigin, at }));
-  publishSignedAddress(route.url);
+  if (route.url !== null) publishSignedAddress(route.url);
   route.on('down', ({ downSince }) => showOffline(downSince));
   route.on('back', showOnline);
   await ui.untilClosed();
@@ -33,16 +33,11 @@ can choose encryption.
 you use them. `url` is the verified address, or `null` while the route is down, so
 never keep the startup value as the address. `downSince` is when the current outage
 began, or `null`. `needsAction` is `null` unless a later user step is waiting.
-In TypeScript, the result of `forward` is either a pending step or a published route.
-Check `'on' in route` once after the loop, as below, before calling `route.on`;
-`forward({ ..., onAction })` returns the published route directly.
+The same resource supports subscriptions and `resume` before and after its first
+publication. Its `kind`, `lifetime` and `provider` are null before that publication.
+Check those properties before using them; they remain available during an outage.
 
-```ts
-while (route.needsAction) route = await route.resume(await ui.show(route.needsAction));
-if (!('on' in route)) throw new Error('forward returned a pending step');
-```
-
-An action result has one `needsAction` to render and `resume(answer)` to continue.
+A waiting resource has one `needsAction` to render and `resume(answer)` to continue.
 The answer expresses the user's decision or supplied input, not a token/digest;
 the descriptor lists acceptable answers, and Gozar rechecks the current step
 before acting. Action results also have `close()`, so a failed or dismissed UI
@@ -126,6 +121,11 @@ policy, current provider facts and saved approval before reattaching or
 re-establishing the route. An unchanged approved disclosure needs no second
 consent click; a different `port` is a different target and asks again. Reattachment can return `needsAction` when approval or setup is
 needed. A changed policy is re-evaluated, not ignored during recovery.
+
+While the app holds the resource, Gozar retries route loss with bounded backoff.
+If those attempts run out, it stays down with `url: null` and the observed
+`downSince`; it does not claim recovery. Close the old resource before requesting
+a new run with `forward`. No separate failure event is currently provided.
 
 If the retained provider no longer qualifies, Gozar must settle its owned
 cleanup before selecting another eligible provider; unresolved debt blocks

@@ -49,7 +49,7 @@ const publishSignedAddress = (origin, previous) => {
   verifications.push(get(origin, https).then(result => ({ origin, ...result }), error => ({ origin, error: error.message })));
 };
 globalThis.faravanHost = { port, ui, publishSignedAddress,
-  showOffline: ({ downSince }) => transitions.push({ down: downSince }), showOnline: event => transitions.push({ back: event }) };
+  showOffline: downSince => transitions.push({ down: downSince }), showOnline: event => transitions.push({ back: event }) };
 // An error is data for the test, not a crash: it keeps its code, its per-provider rows and the absence of a next action.
 const describe = error => ({ code: error?.code ?? null, message: String(error?.message ?? error), nextAction: error?.nextAction ?? null,
   unmet: error?.unmet ?? null });
