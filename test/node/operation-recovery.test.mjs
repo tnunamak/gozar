@@ -160,3 +160,41 @@ test('operation bootstrap association requires the exact session and attached ha
  await bootstrap(attachedDir,{id:'att_0000000000000002'});
  assert.equal(await operationReferenceForRoute({home,handle:attached}),null);
 }));
+
+test('cleanup waits for a held sibling and keeps the exact success and failure routes', async t=>{
+ const parent=await mkdtemp(join(tmpdir(),'gozar-held-recovery-'));
+ t.after(()=>rm(parent,{recursive:true,force:true}));
+ const handles=['resolved','rejected','held','foreign'].map(id=>({kind:'session',id,generation:1}));
+ const closed=[];
+ const primary=Object.assign(new Error('synthetic primary failure'),{route:{handle:handles[1]}});
+ let release,entered;
+ const gate=new Promise(resolve=>{release=resolve;});
+ const siblingsStarted=new Promise(resolve=>{entered=resolve;});
+ const run=withRecoveryCleanup({diagnostic(){}},async owned=>{
+  owned.api({closeRoute:async ({handle,mode})=>{
+   assert.equal(mode,'remove');
+   closed.push(handle);
+   return {cleanup:{state:'confirmed'}};
+  }});
+  const fulfilled=owned.capture(Promise.resolve({handle:handles[0]}));
+  const rejected=owned.capture(Promise.reject(primary));
+  const sibling=owned.capture(gate.then(()=>({handle:handles[2]})));
+  const settled=Promise.allSettled([fulfilled,rejected,sibling]);
+  await fulfilled;
+  await rejected.catch(()=>undefined);
+  entered();
+  const results=await settled;
+  assert.deepEqual(results.map(result=>result.status),['fulfilled','rejected','fulfilled']);
+  assert.equal(results[1].reason,primary);
+  assert.deepEqual(closed,[],'teardown has not begun before the body leaves');
+  throw primary;
+ },parent);
+ const primaryPreserved=assert.rejects(run,error=>error===primary);
+ try{
+  await Promise.race([siblingsStarted,primaryPreserved.then(()=>{throw new Error('fixture ended before sibling gate');})]);
+  assert.deepEqual(closed,[],'no teardown while the sibling is held');
+ }finally{release();}
+ await primaryPreserved;
+ assert.deepEqual(closed,handles.slice(0,3),'close each owned handle once, in capture order');
+ assert.ok(!closed.includes(handles[3]),'the unrelated handle is untouched');
+});
