@@ -193,6 +193,12 @@ export function createRouteApi(deps = {}) {
     expose: request => guard(async () => {
       const options = { ...await shared(request), ...deps.expose };
       await preflightExpose(request, options);
+      // Recheck the same executable registry snapshot that minted this factory's approval.
+      // The detached receiver still verifies at admission for races after reservation.
+      if (!deps.adapters) {
+        const current = await registryIdentity({ manifest: deps.manifest, root: deps.root }).catch(() => null);
+        if (current !== options.registryId) throw gozarError('artifact_integrity_failed', 'The route registry content changed');
+      }
       if (request?.usage?.kind === 'attached') return withRouteGuidance(request,await withRouteOperation(request,{...options,status:routeStatus,progress:attachedReplayProgress,run:reservedHandle=>openAttachedRoute(request,{...options,reservedHandle})}));
       if (request?.usage?.kind === 'session') return withRouteGuidance(request,await withRouteOperation(request,{...options,status:routeStatus,progress:attachedReplayProgress,run:async reservedHandle=>(await verified(()=>ownerKept(request),request))??openSessionRoute(request,{...options,reservedHandle})}));
       throw gozarError('invalid_input', "expose needs usage 'session' or 'attached'");
