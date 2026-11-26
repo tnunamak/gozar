@@ -32,6 +32,7 @@ export async function startDummy({ host = '127.0.0.1', port = 0, intervalMs = 25
       return;
     }
     if (mcpPath && req.method === 'POST') {
+      req.setEncoding('utf8');
       let body = '';
       for await (const chunk of req) {
         body += chunk;
