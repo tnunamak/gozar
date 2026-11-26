@@ -30,7 +30,7 @@ export function createGozar({ forwardHome, manifest, root, secretBackend, hostCa
 export const forward = bindForward(routes, undefined);
 export const { catalogRoutes, inspectLegacyRoute, ensureRoute, adoptRoute, routeStatus, closeRoute, suspendRoute, watchRoutes,
   getRoutePreferences, setRoutePreferences, runSetupAction, readSetupOperation, cancelSetupOperation, resolveClientAddress, listProviders, storeSecret, discardSecret,
-  beginConfigurationDraft,commitConfigurationDraft,discardConfigurationDraft,readConfigurationDraft,clearConfigurationInput,reviewRouteConsent,approveRouteConsent,listRoutes } = routes;
+  beginConfigurationDraft,commitConfigurationDraft,discardConfigurationDraft,discardEarlierConfigurationDraft,readConfigurationDraft,clearConfigurationInput,reviewRouteConsent,approveRouteConsent,listRoutes } = routes;
 /** Alias of catalogRoutes. */
 export const detect = catalogRoutes;
 

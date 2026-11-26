@@ -34,7 +34,7 @@ export async function listProviders(request,deps={},admission){
    inspections[index]=item;
    const {displayName,human,addressStability,idleTimeoutMs,needsAccount}=providerPresentation(adapter,item.properties);
    const availability=Object.fromEntries(Object.keys(availabilityFor(adapter.definition)).map(kind=>[kind,
-    {state:'unknown',reason:'configuration_migration_required'}]));
+    {state:'unsupported',reason:'configuration_migration_required'}]));
    return {providerId:adapter.id,label:adapter.definition.label??adapter.id,reach:item.properties?.reach,
     transport:item.properties?.transport,displayName,copy:{human},addressStability,idleTimeoutMs,needsAccount,
     availability,prerequisites:[],configuration:{known:false,reason:'configuration_migration_required',migration:error.migration},facts:catalogFactsFor(item)};

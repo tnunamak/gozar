@@ -326,7 +326,7 @@ export function createRouteApi(deps = {}) {
       }
       return {routes:[...views.values()]};
     }),
-    ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft','adoptConfiguration'].map(method=>[method,request=>guard(async()=>{const resolved=await services();const result=await resolved.embeddingServices[method](request);
+    ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft','adoptConfiguration','discardEarlierConfigurationDraft'].map(method=>[method,request=>guard(async()=>{const resolved=await services();const result=await resolved.embeddingServices[method](request);
       // A stored or discarded secret or draft changes what a scope offers: its retained detection is dropped.
       detection.invalidate({registryId:resolved.registryId,home:request.home,owner:request.owner,providerId:request.providerId});return result;})])),
     beginConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const draft=await context.embeddingServices.beginConfigurationDraft(request);
