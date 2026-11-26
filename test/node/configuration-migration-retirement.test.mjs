@@ -76,6 +76,40 @@ for(const [label,change,observation]of [
  assert.equal(await readFile(path,'utf8'),before);
 });
 
+test('one blocked predecessor keeps cached provider inventory usable and exposes only migration metadata',async t=>{
+ const home=await mkdtemp(join(homedir(),'.tmp','g-upgrade-'));
+ t.after(()=>rm(home,{recursive:true,force:true}));
+ const fromRegistryId='registry-v1:'+'e'.repeat(64);
+ const request={home,owner:'upgrade-fixture',providerId:'localhost-run'};
+ const earlier=createEmbeddingServices({registryId:fromRegistryId});
+ const configuration=await earlier.readConfiguration(request);
+ const draft=await earlier.beginConfigurationDraft({...request,expectedConfigurationRevision:configuration.revision});
+ const api=createRouteApi({
+  registryLineage:{id:'inventory-upgrade-fixture',replaces:[fromRegistryId]},
+  readContext:{now:Date.now,probe:async()=>({ok:true})}
+ });
+ const migration={reason:'inflight',candidates:[{fromRegistryId,draftIds:[draft.draftId],setupOperationIds:[],uses:0}]};
+ for(const refresh of [false,true,false]){
+  const report=await api.listProviders({...request,refresh});
+  assert.ok(report.catalogRevision);
+  const blocked=report.providers.find(row=>row.providerId===request.providerId);
+  assert.deepEqual(blocked.configuration,{known:false,reason:'configuration_migration_required',migration});
+  assert.equal(blocked.reach,'internet');
+  assert.equal(blocked.transport,'https');
+  assert.ok(Object.values(blocked.availability).every(row=>row.state!=='available'));
+  assert.ok(report.providers.some(row=>row.providerId!==request.providerId&&row.configuration.reason!=='configuration_migration_required'));
+  assert.equal(JSON.stringify(blocked.configuration).includes(home),false);
+ }
+ await assert.rejects(api.adoptConfiguration({...request,fromRegistryId}),error=>{
+  assert.equal(error.code,'configuration_migration_required');
+  assert.equal(error.reason,'inflight');
+  assert.deepEqual(error.migration,migration);
+  return true;
+ });
+ const preserved=await earlier.readConfigurationDraft({...request,draftId:draft.draftId});
+ assert.equal(preserved.draftId,draft.draftId);
+});
+
 test('configuration-migration-retirement: bundled inventory observes historical localhost.run setup before adopting',async t=>{
  const home=await mkdtemp(join(homedir(),'.tmp','g-upgrade-'));t.after(()=>rm(home,{recursive:true,force:true}));
  const request={home,owner:'upgrade-fixture',providerId:'localhost-run',operationId:'terminal-setup'};
@@ -89,4 +123,24 @@ test('configuration-migration-retirement: bundled inventory observes historical 
  assert.ok(saved.configs[config.scopeId].migratedTo);
  assert.equal(Object.keys(saved.setupOperations).length,0);
  assert.ok(probes>0);
+});
+
+
+test('earlier setup journal keys are not advertised as actionable public operation IDs',async t=>{
+ const home=await mkdtemp(join(homedir(),'.tmp','g-upgrade-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const fromRegistryId='registry-v1:'+'d'.repeat(64),request={home,owner:'scope-owner',providerId:'localhost-run',operationId:'public-operation-id'};
+ const earlier=createEmbeddingServices({registryId:fromRegistryId}),configuration=await earlier.readConfiguration(request);
+ await earlier.setupTransaction(request,storage=>storage.reserve({scopeId:configuration.scopeId,draftId:null,configurationRevision:configuration.revision,
+  revision:1,cancelled:false,management:{},resources:[],offerKey:null}));
+ const current=createEmbeddingServices({registryId:'current-test',lineage:{id:'setup-diagnostic-scope',replaces:[fromRegistryId]},currentInputKinds:async()=>({})});
+ const path=join(home,'embedding-state.json'),before=await readFile(path,'utf8');
+ const journalKey=Object.keys(JSON.parse(before).setupOperations)[0];
+ await assert.rejects(current.readConfiguration(request),error=>{
+  const candidate=error.migration.candidates[0];
+  assert.deepEqual(candidate.setupOperationIds,[]);
+  assert.equal(candidate.unaddressableSetupOperations,1);
+  assert.equal(JSON.stringify(candidate).includes(journalKey),false);
+  return error.code==='configuration_migration_required'&&error.reason==='inflight';
+ });
+ assert.equal(await readFile(path,'utf8'),before);
 });
