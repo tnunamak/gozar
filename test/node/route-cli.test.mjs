@@ -4,9 +4,10 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { PassThrough } from 'node:stream';
 import { createRouteApi } from '../../packages/gozar-node/route-api.mjs';
 import { exitCodeFor, routeMain } from '../../packages/gozar-node/route-cli.mjs';
@@ -18,13 +19,24 @@ before(async () => { world = await journeyRoot(); });
 after(() => rm(world.root, { recursive: true, force: true }));
 
 /** Runs the real binary once. Resolves with exit code, stdout and stderr; never leaves the child behind. */
-function gozar(env, args, { input } = {}) {
+function gozar(env, args, { input, timeoutMs = 0 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--import', network, cli, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
-    child.once('error', reject);
-    child.once('close', code => resolve({ code, stdout, stderr }));
+    let timedOut = false;
+    const timer = timeoutMs > 0 ? setTimeout(() => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, timeoutMs) : undefined;
+    child.once('error', error => { clearTimeout(timer); reject(error); });
+    child.once('close', (code, signal) => {
+      clearTimeout(timer);
+      if (timedOut) reject(new Error('gozar fixture timed out'));
+      else if (signal) reject(new Error('gozar fixture terminated by ' + signal));
+      else resolve({ code, stdout, stderr });
+    });
     child.stdin.end(input ?? '');
   });
 }
@@ -254,6 +266,111 @@ test('--provider-id sets query.providerId for catalog, and a query file value is
   await run([]);
   assert.deepEqual(seen, ['example-provider', 'from-file']);
   assert.equal(await routeMain(['setup', 'x', '--provider-id', 'a', '--json'], { api, stdout: { write() {} }, stderr: { write() {} } }), 3, 'a provider selection still needs an explicit current setup approval');
+});
+
+// This observes the test subprocess's Node child_process boundary, not every possible OS effect.
+async function routesObserver(root, env, label) {
+  const log = join(root, label + '-child-calls.txt');
+  const observer = join(root, label + '-child-observer.mjs');
+  await writeFile(log, '');
+  await writeFile(observer, `
+    import cp from 'node:child_process';
+    import { appendFileSync } from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    for (const name of ['spawn','spawnSync','exec','execSync','execFile','execFileSync','fork']) {
+      const original = cp[name];
+      cp[name] = function (...args) {
+        appendFileSync(process.env.GOZAR_TEST_CHILD_LOG, name + '\\n');
+        return original.apply(this, args);
+      };
+    }
+    syncBuiltinESMExports();
+  `);
+  const opts = [env.NODE_OPTIONS, '--import=' + pathToFileURL(observer).href].filter(Boolean).join(' ');
+  return {log, env: {...env, NODE_OPTIONS: opts, GOZAR_TEST_CHILD_LOG: log}};
+}
+
+test('real routes binary lists a fresh private home without provider commands or state writes', { timeout: 12000 }, async t => {
+  const w = await durableWorld(world, t);
+  const home = join(world.root, 'empty real routes home');
+  await mkdir(home, { mode: 0o700 });
+  const {env, log} = await routesObserver(world.root, w.env, 'empty-routes');
+  const owner = w.query().owner;
+  const result = await gozar(env,
+    ['routes', '--home', home, '--owner', owner, '--json'], { timeoutMs: 10000 });
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(envelope(result).routes, []);
+  assert.deepEqual(await readdir(home), []);
+  assert.equal(await readFile(log, 'utf8'), '');
+  assert.deepEqual(w.state.writes, []);
+});
+
+test('real routes binary selects exact rows in a nonempty home and optional owner', {timeout:60000}, async t => {
+  const primary = await durableWorld(world, t);
+  const decoy = await durableWorld(world, t);
+  primary.state.funnelPorts = [8443,10000]; // Admit separate provider slots for the two owned listeners.
+  async function seed(w, owner, routeId, target = w.target) {
+    const query = w.query({owner, target, usage:{kind:'durable', routeId}});
+    const queryFile = await privateFile(await files(w, 'routes-' + routeId + '-query.json'), query);
+    const catalog = await gozar(w.env, ['catalog', '--query-file', queryFile, '--json'], {timeoutMs:10000});
+    assert.equal(catalog.code, 0, catalog.stderr);
+    const {approval} = approvalFrom(envelope(catalog));
+    const approvalFile = await privateFile(await files(w, 'routes-' + routeId + '-approval.json'), approval);
+    const ensured = await gozar(w.env, [
+      'ensure', '--query-file', queryFile, '--approval-file', approvalFile, '--json',
+    ], {timeoutMs:10000});
+    assert.equal(ensured.code, 0, ensured.stderr + ensured.stdout);
+    const view = envelope(ensured);
+    assert.equal(view.state, 'usable');
+    assert.equal(view.handle.kind, 'durable');
+    return view.handle;
+  }
+  const alice = await seed(primary, 'fixture-alice', 'alpha');
+  const bob = await seed(primary, 'fixture-bob', 'beta', decoy.target);
+  const other = await seed(decoy, 'fixture-alice', 'decoy');
+  assert.equal(new Set([alice.id, bob.id, other.id]).size, 3, 'positive fixtures must be distinguishable');
+
+  async function snapshot(home, relative = '') {
+    const dir = relative ? join(home, relative) : home;
+    const entries = await readdir(dir, {withFileTypes:true});
+    const rows = [];
+    for (const entry of entries.sort((a,b) => a.name.localeCompare(b.name))) {
+      const path = join(relative, entry.name);
+      if (entry.isDirectory()) rows.push([path+'/', null], ...await snapshot(home, path));
+      else {
+        assert.ok(entry.isFile(), 'unexpected fixture node: ' + path);
+        rows.push([path, await readFile(join(home, path))]);
+      }
+    }
+    return rows;
+  }
+  const initial = {
+    primary: await snapshot(primary.home), decoy: await snapshot(decoy.home),
+    primaryWrites: structuredClone(primary.state.writes), decoyWrites: structuredClone(decoy.state.writes),
+    primaryConfig: structuredClone(primary.state.config), decoyConfig: structuredClone(decoy.state.config),
+  };
+  const mask = handles => handles.map(h => [h.kind, h.id, h.generation]).sort((a,b) => a[1].localeCompare(b[1]));
+  const scopes = [
+    [primary, decoy, 'fixture-alice', [alice]],
+    [primary, decoy, 'fixture-bob', [bob]],
+    [primary, decoy, undefined, [alice,bob]],
+    [primary, decoy, 'missing-owner', []],
+    [decoy, primary, 'fixture-alice', [other]],
+  ];
+  for (const [w, fallback, owner, expected] of scopes) {
+    const {env, log} = await routesObserver(world.root, {...w.env, GOZAR_HOME:fallback.home}, 'nonempty-routes');
+    const result = await gozar(env, ['routes', '--home', w.home,
+      ...(owner === undefined ? [] : ['--owner', owner]), '--json'], {timeoutMs:10000});
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(mask(envelope(result).routes.map(row => row.handle)), mask(expected));
+    assert.equal(await readFile(log, 'utf8'), '', 'listing made a Node child_process call');
+    assert.deepEqual(await snapshot(primary.home), initial.primary);
+    assert.deepEqual(await snapshot(decoy.home), initial.decoy);
+    assert.deepEqual(primary.state.writes, initial.primaryWrites);
+    assert.deepEqual(decoy.state.writes, initial.decoyWrites);
+    assert.deepEqual(primary.state.config, initial.primaryConfig);
+    assert.deepEqual(decoy.state.config, initial.decoyConfig);
+  }
 });
 
 test('routes help advertises syntax accepted by the real route parser', async () => {
