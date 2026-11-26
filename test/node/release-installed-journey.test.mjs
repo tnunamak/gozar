@@ -721,3 +721,31 @@ test('a missing output parent is reported before any install starts',async t=>{
  assert.equal(calls,0);
  await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
 });
+
+test('a lifecycle subprocess failure keeps the completed screen and the lifecycle diagnostics',async t=>{
+ const f=await fixture(t),stub=processStub(f,{fault:3});
+ const run=async(command,args,options)=>{
+  if(stub.calls.length===0)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  return stub.run(command,args,options);
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),/Installed journey subprocess failed: lifecycle/);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ assert.equal(report.status,'failed');
+ assert.deepEqual(report.steps.map(step=>[step.name,step.result.status]),[['install',0],['screen',0],['lifecycle',17]]);
+ assert.equal(await readFile(join(f.input.outputDirectory,'lifecycle.stderr'),'utf8'),'exact failure');
+});
+
+test('an unexpected installed file fails the package identity check before screen execution',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const run=async(command,args,options)=>{
+  if(stub.calls.length===0)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  const result=await stub.run(command,args,options);
+  if(command==='npm')await writeFile(join(options.cwd,'node_modules','@tnunamak','gozar','extra.txt'),'fixture extras');
+  return result;
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),/Archive and installed bytes differ/);
+ assert.equal(stub.calls.length,1);
+ const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ assert.equal(report.status,'failed');
+ assert.deepEqual(report.steps.map(step=>step.name),['install']);
+});
