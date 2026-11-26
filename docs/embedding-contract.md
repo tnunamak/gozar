@@ -348,6 +348,8 @@ action IDs are distinct; the host chooses controls for the generic descriptors.
 
 Persist an operation ID before start. Same-intent replay recovers the original
 handle; a changed intent conflicts and a stopped operation stays terminal.
+A factory whose trusted registry bytes changed refuses start and replay;
+`routeStatus` and `closeRoute` still recover recorded handles.
 `listRoutes({home,owner})` is recovery enumeration, not proof renewal. Retain
 partial allocations and cleanup debt. Use `routeStatus` for current proof and
 advertise only `published`, never a historical origin. Proof binds origin,
