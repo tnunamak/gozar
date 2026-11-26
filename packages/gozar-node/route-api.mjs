@@ -113,13 +113,16 @@ export function createRouteApi(deps = {}) {
    * engine: Gozar records it as a service route and checks it. The approval's grant names the adapter, so this looks
    * at the grant, never at an id. Anything else returns undefined and goes to the durable engine.
    */
+  function validateOwnerKeptEnsure(request) {
+    if (!['durable', 'session'].includes(request.usage?.kind) || (request.intent !== undefined && request.intent !== 'create')) throw gozarError('invalid_input', 'An owner-run route is created with usage durable or session and intent create');
+  }
   async function ownerKept(request) {
     if (typeof request?.approval?.candidateToken !== 'string' || typeof request.home !== 'string') return undefined;
     let grant;
     try { grant = await peekConsentGrant({ home: request.home, token: request.approval.candidateToken }); } catch { return undefined; }
     const adapter = grant && (await adapters()).find(item => item.id === grant.adapterId);
     if (ownershipFor(adapter?.definition) !== 'external-owned') return undefined;
-    if (!['durable', 'session'].includes(request.usage?.kind) || (request.intent !== undefined && request.intent !== 'create')) throw gozarError('invalid_input', 'An owner-run route is created with usage durable or session and intent create');
+    validateOwnerKeptEnsure(request);
     const redeemed = await redeemApproval(request, await shared(request));
     const service = deps.service?.addService ?? (await import('./service.mjs')).addService;
     const context=await shared(request),handle={kind:'external',id:redeemed.plan.origin,generation:1};
@@ -186,7 +189,11 @@ export function createRouteApi(deps = {}) {
     inspectLegacyRoute: request => guard(async () => (await legacy()).inspectLegacyRoute(request)),
 
     // The loaded adapters go to every durable engine call as an optional second argument; an engine that does not use it ignores it.
-    ensureRoute: request => guard(async()=>withRouteGuidance(request,await withRouteOperation(request,{...await shared(request),status:routeStatus,progress:attachedReplayProgress,run:()=>verified(async () => (await ownerKept(request)) ?? durableView((await (await engine()).ensureRoute(request, { adapters: await adapters() })).route),request)}))),
+    ensureRoute: request => guard(async()=>withRouteGuidance(request,await withRouteOperation(request,{
+      ...await shared(request),status:routeStatus,progress:attachedReplayProgress,
+      prevalidate:async ({external})=>external?validateOwnerKeptEnsure(request):(await engine()).prevalidateDurableEnsure(request),
+      run:()=>verified(async () => (await ownerKept(request)) ?? durableView((await (await engine()).ensureRoute(request, { adapters: await adapters() })).route),request)
+    }))),
     adoptRoute: request => guard(() => verified(async () => durableView((await (await engine()).adoptRoute(request, { adapters: await adapters() })).route),request)),
 
     /** A request with schemaVersion 1 is the route API; anything else is the legacy session call (handled by the caller). */
