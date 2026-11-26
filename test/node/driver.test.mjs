@@ -408,6 +408,37 @@ test('complete output lines preserve UTF-8 characters split between pipe chunks'
   assert.deepEqual(lines, [['stderr', 'other stream'], ['stdout', 'caf\u00e9 \ud83d\ude00']]);
 });
 
+test('startup output is retained but only ready resources emit complete route lines', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = {id: 'fixture', generation: 2, adapterId: 'example'};
+  const effect = {id: 'fixture-effect'};
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set();
+  const complete = [];
+  driver.onProcessOutput = event => {
+    if (event.completeLine !== undefined) complete.push(event.completeLine);
+  };
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('startup\n'));
+  driver.routeOutputReady.add(resource.id);
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('ready\n'));
+  assert.deepEqual(complete, ['ready']);
+  assert.deepEqual(driver.readProcessOutput().map(event => event.output), ['startup\n', 'ready\n']);
+});
+
+test('consecutive blank complete output lines are not dropped or coalesced', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = {id: 'fixture', generation: 2, adapterId: 'example'};
+  const effect = {id: 'fixture-effect'};
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  const complete = [];
+  driver.onProcessOutput = event => {
+    if (event.completeLine !== undefined) complete.push(event.completeLine);
+  };
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('first\n\n\nlast\n'));
+  assert.deepEqual(complete, ['first', '', '', 'last']);
+});
+
 test('an observer callback failure does not discard diagnostic output', () => {
   const driver = makeOutputOnlyDriver();
   const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
