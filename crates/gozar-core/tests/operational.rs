@@ -1425,3 +1425,45 @@ fn recommendation_without_adapters_has_no_choices_or_effects() {
     assert_eq!(out["effects"], json!([]));
     assert_eq!(out["events"], json!([]));
 }
+
+#[test]
+fn requesting_an_unknown_adapter_does_not_change_the_session() {
+    let session = "fixture-no-such-adapter";
+    let before = run(json!({"command": {"type": "status", "sessionId": session}}));
+    let after = run(json!({
+        "state": before["state"],
+        "command": {"type": "start", "adapterId": "fixture-unknown", "consent": true}
+    }));
+
+    assert_eq!(after["state"], before["state"]);
+    assert_eq!(after["snapshot"], before["snapshot"]);
+    assert_eq!(after["effects"], json!([]));
+    assert!(after.get("action").is_none());
+    assert_eq!(
+        after["events"],
+        json!([{"type": "adapter-unknown", "sessionId": session,
+                "generation": before["snapshot"]["generation"]}])
+    );
+}
+
+#[test]
+fn an_unrecognized_effect_result_does_not_change_an_idle_session() {
+    let session = "fixture-idle-result";
+    let before = run(json!({"command": {"type": "status", "sessionId": session}}));
+    let after = run(json!({
+        "state": before["state"],
+        "command": {"type": "effect-result", "effectId": "fixture-unrecognized",
+                    "sessionId": session, "generation": before["snapshot"]["generation"],
+                    "ok": true, "result": {}}
+    }));
+
+    assert_eq!(after["state"], before["state"]);
+    assert_eq!(after["snapshot"], before["snapshot"]);
+    assert_eq!(after["effects"], json!([]));
+    assert!(after.get("action").is_none());
+    assert_eq!(
+        after["events"],
+        json!([{"type": "unknown-or-duplicate-effect", "sessionId": session,
+                "generation": before["snapshot"]["generation"]}])
+    );
+}
