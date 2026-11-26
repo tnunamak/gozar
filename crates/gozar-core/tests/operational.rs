@@ -337,6 +337,59 @@ fn nondurable_ack_clears_the_pending_intent_without_emitting_execution() {
     }
 }
 #[test]
+fn late_result_from_another_generation_leaves_current_preflight_pending() {
+    let f = fixture();
+    let a = definition("private");
+    let out = begin(&a, &f["host"]);
+    let effect = &out["effects"][0];
+    let id = effect["id"].as_str().unwrap();
+    let next_generation = effect["generation"].as_u64().unwrap() + 1;
+    let result = response(&out, &a, &f["host"], &f["baselineConfig"]);
+    let mismatch = run(json!({
+        "state": out["state"], "host": f["host"],
+        "command": {"type": "effect-result", "effectId": id,
+            "sessionId": effect["sessionId"], "generation": next_generation,
+            "ok": true, "result": result}
+    }));
+
+    assert_eq!(mismatch["events"][0]["type"], "effect-scope-mismatch");
+    assert_eq!(mismatch["effects"], json!([]));
+    assert_eq!(mismatch["state"]["pending"][id], out["state"]["pending"][id]);
+
+    let accepted = ack(&out, result.clone(), &f["host"]);
+    let current = run(json!({
+        "state": mismatch["state"], "host": f["host"],
+        "command": {"type": "effect-result", "effectId": id,
+            "sessionId": effect["sessionId"], "generation": effect["generation"],
+            "ok": true, "result": result}
+    }));
+    assert_eq!(current, accepted);
+}
+
+#[test]
+fn repeated_preflight_result_does_not_consume_the_next_effect() {
+    let f = fixture();
+    let a = definition("private");
+    let out = begin(&a, &f["host"]);
+    let effect = &out["effects"][0];
+    let id = effect["id"].as_str().unwrap();
+    let result = response(&out, &a, &f["host"], &f["baselineConfig"]);
+    let accepted = ack(&out, result.clone(), &f["host"]);
+    assert!(accepted["state"]["pending"].get(id).is_none());
+    assert!(!accepted["effects"].as_array().unwrap().is_empty());
+
+    let replayed = run(json!({
+        "state": accepted["state"], "host": f["host"],
+        "command": {"type": "effect-result", "effectId": id,
+            "sessionId": effect["sessionId"], "generation": effect["generation"],
+            "ok": true, "result": result}
+    }));
+    assert_eq!(replayed["events"][0]["type"], "unknown-or-duplicate-effect");
+    assert_eq!(replayed["effects"], json!([]));
+    assert_eq!(replayed["state"], accepted["state"]);
+}
+
+#[test]
 fn durable_ack_cannot_execute_after_preflight_authority_expiry() {
     let f = fixture();
     let a = definition("private");
