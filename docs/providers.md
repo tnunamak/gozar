@@ -8,10 +8,9 @@ ports Gozar tries, in order; where a durable route tries other ports, they follo
 catalog reports them, with the durable Needs line, for a durable query.
 Usage kinds describe the declared interfaces. A non-executing availability state appears in parentheses;
 for example, `attached (detect-only)` does not offer route execution. Use the catalog for current eligibility.
-Proof is what Gozar checks before it publishes. The catalog lists the sse check only when the app asks for SSE.
-What a check actually runs depends on the route: a generic attached route's first publication check follows
-the provider's declared SSE capability, an adapter that supplies `prepareProof` (for example the Cloudflare named adapter) follows
-the request, and a later refresh can differ. These rows are declarations, not evidence from a real deployment.
+The Proof column is the provider's declared profile, not live verification: it is the vantage and checks
+the provider's definition declares. The checks a particular observation actually ran are recorded per
+route in `RouteView.verification.checks`. These rows are declarations, not evidence from a real deployment.
 
 Gozar supports Linux and macOS. On any other platform (for example Windows) every candidate answers
 `unsupported`.
