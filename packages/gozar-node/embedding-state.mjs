@@ -59,8 +59,12 @@ export function configurationFor(actions, saved, declared) {
     kind: action.valueFormat ?? 'text', secret: action.kind === 'provide-secret', help: action.help ?? action.label,
     required: action.required !== false, obtainUrl: action.obtainUrl ?? null, validation: 'syntax-only',
   }));
-  return { inputRequirements, ...(saved.revision ? {revision:saved.revision,scopeId:saved.scopeId} : {}), values: saved.values, credentials: Object.fromEntries(inputRequirements.filter(field => field.secret)
-    .map(field => [field.id, saved.credentials[field.id] ?? known(false)])),
+  // Saved observations are already redacted and independent of which actions are offered.
+  const credentials = {
+    ...Object.fromEntries(inputRequirements.filter(field => field.secret).map(field => [field.id, known(false)])),
+    ...structuredClone(saved.credentials),
+  };
+  return { inputRequirements, ...(saved.revision ? {revision:saved.revision,scopeId:saved.scopeId} : {}), values: saved.values, credentials,
     actions: actions.filter(action => ['provide-secret', 'provide-value'].includes(action.kind)) };
 }
 

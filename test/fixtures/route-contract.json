@@ -10198,6 +10198,11 @@
       "target": "provider_unavailable",
       "source": "tailscale-localapi.mjs"
     },
+    "gate_port_in_use": {
+      "target": "provider_unavailable",
+      "source": "gate.mjs",
+      "rule": "Occupied local connector port; diagnostic cause of provider_unavailable."
+    },
     "provider_denied": {
       "target": "setup_required",
       "source": "tailscale-localapi.mjs",
