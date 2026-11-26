@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import {randomUUID,randomBytes} from 'node:crypto';
-import {readFile,writeFile} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createGozar} from '@tnunamak/gozar';
 import {fakeRegistry} from '@tnunamak/gozar/testing';
 import {proofObservedDuring} from '../../packages/gozar-node/attached-route.mjs';
-import {scratch} from './route-schema-check.mjs';
 
 // Pure negative controls for the shared initial/refresh timestamp boundary. The public proof mutation matrix below
 // now carries the subject cells; this control remains the direct evidence for the observation-window predicate.
@@ -52,34 +52,57 @@ export default {...provider,
 `;
 
 async function subjectWorld(t, kind, fault) {
-  const home = await scratch(t);
+  const home = await mkdtemp(join(tmpdir(), 'gozar-proof-subject-'));
+  let registry, api, request;
   const sockets = new Set();
   const app = net.createServer({allowHalfOpen: true}, socket => {
     sockets.add(socket); socket.once('close', () => sockets.delete(socket));
     socket.on('error', () => {}); socket.pipe(socket);
   });
-  t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise(resolve => app.close(resolve)); });
+  // Retain custody even if an assertion fails or expose omits its partial handle.
+  // Confirm owned cleanup before deleting the private evidence; never chmod its parent.
+  t.after(async () => {
+    let confirmed = false;
+    try {
+      if (api && request) {
+        const {routes} = await api.listRoutes({home, owner: request.owner});
+        for (const retained of routes.filter(row => row.operationId === request.operationId)) {
+          assert.ok(retained.handle, 'retained operation must have a cleanup handle');
+          const closed = await api.closeRoute({home, handle: retained.handle, mode: 'remove'});
+          assert.equal(closed.cleanup.state, 'confirmed', 'fixture must retire its owned operation');
+        }
+      }
+      confirmed = true;
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      if (app.listening) await new Promise(resolve => app.close(resolve));
+      if (confirmed) {
+        try { await registry?.cleanup(); }
+        finally { await rm(home, {recursive: true, force: true}); }
+      }
+    }
+  });
   await new Promise((resolve, reject) => { app.once('error', reject); app.listen(0, '127.0.0.1', resolve); });
   const target = '127.0.0.1:' + app.address().port;
   const id = 'subject-' + randomUUID().slice(0, 8);
-  const registry = await fakeRegistry({id, dir: join(home, 'registry'), kinds: ['attached', 'session'],
+  registry = await fakeRegistry({id, dir: join(home, 'registry'), kinds: ['attached', 'session'],
     reach: 'this-device', transport: 'tcp', protocols: [], proofProtocol: 'echo'});
-  t.after(() => registry.cleanup());
   const folder = join(registry.root, 'providers', id);
   await writeFile(join(folder, 'observed.mjs'), WRAPPER(fault));
   const manifest = structuredClone(registry.manifest);
   manifest.providers[0].module = 'providers/' + id + '/observed.mjs';
   const identity = {instanceId: randomUUID(), bootId: randomUUID()};
-  const api = createGozar({manifest, root: registry.root, identity});
+  api = createGozar({manifest, root: registry.root, identity});
   const query = {schemaVersion: 1, home, owner: 'subject-owner', providerId: id, target,
     usage: kind === 'session' ? {kind, lifetimeMs: 60000} : {kind},
     requirements: {reach: 'this-device', transport: 'any', payloadAccess: 'allow-provider', address: 'any', setup: 'allow', protocols: []}};
   const candidate = (await api.catalogRoutes(query)).candidates.find(row => row.providerId === id);
   assert.ok(candidate?.candidateToken, 'the real catalog must issue approval');
+  request = {...query, operationId: randomUUID(), wait: 'verified',
+    approval: {kind: 'route', candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision, consentFactsDigest: candidate.consentFactsDigest}};
   return {
     api, home, target, identity, folder,
-    request: {...query, operationId: randomUUID(), wait: 'verified',
-      approval: {kind: 'route', candidateToken: candidate.candidateToken, disclosureRevision: candidate.disclosure.revision, consentFactsDigest: candidate.consentFactsDigest}},
+    request,
     exchange: (origin, bytes) => new Promise((resolve, reject) => {
       const endpoint = new URL(origin);
       const socket = net.connect(Number(endpoint.port), endpoint.hostname);
@@ -117,7 +140,7 @@ for (const kind of ['attached', 'session']) {
       assert.deepEqual(await f.events(), ['start', 'proof', 'stop', 'cleanup'], 'owned cleanup ran exactly once');
       assert.deepEqual(await f.exchange('tcp://' + f.target, payload), payload, 'the foreign app survives owned cleanup');
     } finally {
-      await f.api.closeRoute({home: f.home, handle: route.handle, mode: 'remove'}).catch(() => {});
+      if (route?.handle) await f.api.closeRoute({home: f.home, handle: route.handle, mode: 'remove'}).catch(() => {});
     }
   });
 
