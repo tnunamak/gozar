@@ -6,19 +6,27 @@
 // plus the deterministic CAS/late-transition cases; that is replay evidence against
 // the real store, not a formal proof.
 import assert from 'node:assert/strict';
-import { chmod, lstat, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import test from 'node:test';
 import { openForwardState } from '../../packages/gozar-node/forward-state.mjs';
-import { scratch } from './route-schema-check.mjs';
+import { consentReview } from '../../packages/gozar-node/consent-facts.mjs';
+
+async function scratch(t) {
+  const home = await mkdtemp(join(tmpdir(), 'gozar-forward-state-'));
+  t.after(() => rm(home, {recursive: true, force: true}));
+  return home;
+}
 
 const moduleUrl = new URL('../../packages/gozar-node/forward-state.mjs', import.meta.url).href;
 const RUN_A = '11111111-1111-4111-8111-111111111111';
 const RUN_B = '22222222-2222-4222-8222-222222222222';
 const ISO = '2026-11-26T10:00:00.000Z';
 const APPROVAL = { fingerprint: `sha256:${'ab'.repeat(32)}`, provider: 'tunnl.gg', disclosureRevision: 'd-1',
-  factsDigest: `sha256:${'cd'.repeat(32)}` };
+  factsDigest: `consent-v1:${'cd'.repeat(32)}` };
+const routeHandle = id => ({kind: 'session', id, generation: 1});
 const ORIGIN = { url: 'https://try.tunnl.gg', observedAt: ISO };
 const settledCleanup = () => ({ certainty: 'settled', debt: null });
 const debtOf = r => ({ certainty: 'unconfirmed', debt: { runId: r.id, generation: r.generation, since: ISO } });
@@ -44,6 +52,21 @@ const recordFile = async home => {
   return join(home, 'forward', name[0]);
 };
 
+test('SDK handle and consent encodings persist without an invented representation', async t => {
+  const home = await scratch(t);
+  await t.test('structured SDK handle', async () => {
+    const handle = {kind: 'session', id: 'route-7', generation: 3};
+    await store(home, 'handle').commit(content({run: run({handle})}), {expectedRevision: 0});
+    assert.deepEqual((await store(home, 'handle').read()).run.handle, handle);
+  });
+  await t.test('real consent-v1 digest', async () => {
+    const {consentFactsDigest} = consentReview({scope: {kind: 'route'}, typedDisclosures: {}, facts: []});
+    const approval = {...APPROVAL, factsDigest: consentFactsDigest};
+    await store(home, 'consent').commit(content({approval}), {expectedRevision: 0});
+    assert.equal((await store(home, 'consent').read()).approval.factsDigest, consentFactsDigest);
+  });
+});
+
 test('a fresh app reads as missing and admits an explicit revision-0 commit', async t => {
   const home = await scratch(t);
   const state = store(home);
@@ -57,12 +80,12 @@ test('revisions advance monotonically and all fields survive reopening', async t
   const home = await scratch(t);
   const state = store(home);
   const first = await state.commit(content(), { expectedRevision: 0 });
-  const second = await state.commit(content({ run: run({ phase: 'active', operationId: RUN_B, handle: 'route-7',
+  const second = await state.commit(content({ run: run({ phase: 'active', operationId: RUN_B, handle: routeHandle('route-7'),
     provider: 'tunnl.gg' }), approval: APPROVAL, origin: ORIGIN, downSince: ISO }), { expectedRevision: first.revision });
   assert.equal(second.revision, 2);
   assert.deepEqual(await store(home).read(), second);
   // Stopping keeps the saved approval and last verified origin: closing is not revoking.
-  const third = await state.commit(content({ run: run({ phase: 'stopped', handle: 'route-7',
+  const third = await state.commit(content({ run: run({ phase: 'stopped', handle: routeHandle('route-7'),
     provider: 'tunnl.gg' }), approval: APPROVAL, origin: ORIGIN, downSince: ISO }), { expectedRevision: 2 });
   assert.equal(third.revision, 3);
   assert.deepEqual(third.approval, APPROVAL);
@@ -87,13 +110,13 @@ test('managed directories are 0700 and records and locks are 0600 non-symlinks',
 test('two apps keep isolated records; hostile app names cannot alias or escape the scope', async t => {
   const home = await scratch(t);
   const a = store(home, 'faravan'), b = store(home, 'other-app');
-  await a.commit(content({ run: run({ handle: 'h-a' }) }), { expectedRevision: 0 });
-  await b.commit(content({ run: run({ handle: 'h-b' }) }), { expectedRevision: 0 });
-  assert.equal((await a.read()).run.handle, 'h-a');
-  assert.equal((await b.read()).run.handle, 'h-b');
+  await a.commit(content({ run: run({ handle: routeHandle('h-a') }) }), { expectedRevision: 0 });
+  await b.commit(content({ run: run({ handle: routeHandle('h-b') }) }), { expectedRevision: 0 });
+  assert.equal((await a.read()).run.handle.id, 'h-a');
+  assert.equal((await b.read()).run.handle.id, 'h-b');
   assert.equal((await readdir(join(home, 'forward'))).filter(n => n.endsWith('.json')).length, 2);
   // A stale CAS on one app cannot touch the other.
-  await rejects(a.commit(content({ run: run({ handle: 'h-a2' }) }), { expectedRevision: 0 }), 'candidate_stale');
+  await rejects(a.commit(content({ run: run({ handle: routeHandle('h-a2') }) }), { expectedRevision: 0 }), 'candidate_stale');
   assert.equal((await b.read()).revision, 1);
   for (const bad of ['../../etc', 'Faravan', '', 'a'.repeat(65), 'has/slash', 'has.dot', '..', null, 7])
     assert.throws(() => openForwardState({ home, app: bad }), error => error.code === 'invalid_input', `app ${JSON.stringify(bad)}`);
@@ -201,12 +224,12 @@ test('a stale expectedRevision commits nothing', async t => {
 test('competing commits on one revision: exactly one wins', async t => {
   const home = await scratch(t);
   const results = await Promise.allSettled([1, 2, 3, 4].map(n =>
-    store(home).commit(content({ run: run({ handle: `h-${n}` }) }), { expectedRevision: 0 })));
+    store(home).commit(content({ run: run({ handle: routeHandle(`h-${n}`) }) }), { expectedRevision: 0 })));
   assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
   assert.ok(results.filter(r => r.status === 'rejected').every(r => r.reason.code === 'candidate_stale'));
   const record = await store(home).read();
   assert.equal(record.revision, 1);
-  assert.match(record.run.handle, /^h-[1-4]$/);
+  assert.match(record.run.handle.id, /^h-[1-4]$/);
 });
 
 test('a stopped run cannot become active again', async t => {
@@ -226,7 +249,7 @@ test('unconfirmed cleanup blocks a fresh run until a retry settles it', async t 
   const home = await scratch(t);
   const state = store(home);
   await state.commit(content({ approval: APPROVAL, origin: ORIGIN, downSince: ISO }), { expectedRevision: 0 });
-  const stopped = { run: run({ phase: 'stopped', handle: 'route-7', provider: 'tunnl.gg' }),
+  const stopped = { run: run({ phase: 'stopped', handle: routeHandle('route-7'), provider: 'tunnl.gg' }),
     approval: APPROVAL, origin: ORIGIN, downSince: ISO, cleanup: debtOf(run()) };
   await state.commit(stopped, { expectedRevision: 1 });
   // Debt blocks replacement.
@@ -252,7 +275,7 @@ const { randomUUID } = await import('node:crypto');
 const runId = randomUUID();
 const state = openForwardState({ home: process.env.GOZAR_CHILD_HOME, app: 'faravan' });
 const base = { approval: null, origin: null, downSince: null };
-const run = { id: runId, generation: 1, operationId: null, handle: 'route-7', provider: 'tunnl.gg' };
+const run = { id: runId, generation: 1, operationId: null, handle: {kind: 'session', id: 'route-7', generation: 1}, provider: 'tunnl.gg' };
 await state.commit({ ...base, run: { ...run, phase: 'starting' }, cleanup: { certainty: 'settled', debt: null } }, { expectedRevision: 0 });
 await state.commit({ ...base, run: { ...run, phase: 'stopped' }, cleanup: { certainty: 'unconfirmed',
   debt: { runId, generation: 1, since: '2026-11-26T00:00:00.000Z' } } }, { expectedRevision: 1 });
@@ -277,7 +300,7 @@ test('no bearer, candidate token, credential or raw payload can be persisted', a
   const state = store(home);
   const attempts = [
     content({ approval: { fingerprint: 'Bearer eyJhbGci.eyJzdWIi.sig', provider: 'tunnl.gg',
-      disclosureRevision: 'd-1', factsDigest: `sha256:${'ab'.repeat(32)}` } }),
+      disclosureRevision: 'd-1', factsDigest: `consent-v1:${'ab'.repeat(32)}` } }),
     content({ approval: { ...APPROVAL, consentBearer: 'tok_bearer' } }),
     content({ candidateToken: 'tok_candidate' }),
     content({ run: run({ handle: 'Bearer tok with spaces' }) }),

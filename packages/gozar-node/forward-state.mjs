@@ -23,11 +23,10 @@
 //
 // ForwardRecord = {
 //   schemaVersion: 1, kind: 'gozar-forward-state', app, revision,
-//   run: { id: uuid, generation: positive integer, operationId: uuid|null, handle: opaque|null,
+//   run: { id: uuid, generation: positive integer, operationId: uuid|null, handle: Handle|null,
 //          provider: provider id|null, phase: 'starting'|'awaiting'|'active'|'stopped' },
 //   approval: null | { fingerprint: 'sha256:<64 hex>', provider, disclosureRevision,
-//                      factsDigest: 'sha256:<64 hex>' },  // a digest bound to scope/provider/
-//                                                      // disclosure/facts; never a token or bearer
+//                      factsDigest: 'consent-v1:<64 hex>' }, // saved identities, never authority bearers
 //   origin: null | { url: https origin, observedAt: UTC ISO-8601 },  // last verified origin
 //   downSince: null | UTC ISO-8601,                                  // retained outage start
 //   cleanup: { certainty: 'settled'|'unconfirmed',
@@ -64,10 +63,21 @@ const DEBT_FIELDS = ['runId', 'generation', 'since'];
 const PHASES = new Set(['starting', 'awaiting', 'active', 'stopped']);
 const APP = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
+const CONSENT_DIGEST = /^consent-v1:[0-9a-f]{64}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const OPAQUE = /^[\x21-\x7e]{1,256}$/;
 const PROVIDER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const REVISION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+function validateHandle(handle) {
+  if (handle === null) return null;
+  requireFields(handle, ['kind', 'id', 'generation'], 'run.handle');
+  if (!['session', 'attached', 'durable', 'external'].includes(handle.kind) ||
+      typeof handle.id !== 'string' || !OPAQUE.test(handle.id) ||
+      !Number.isSafeInteger(handle.generation) || handle.generation < 1)
+    throw gozarError('invalid_input', 'run.handle must be a structured SDK handle or null');
+  return {kind: handle.kind, id: handle.id, generation: handle.generation};
+}
 
 function requireFields(value, fields, where) {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -103,14 +113,13 @@ function validateRun(run) {
     throw gozarError('invalid_input', 'run.generation must be a positive integer');
   if (run.operationId !== null && (typeof run.operationId !== 'string' || !uuid.test(run.operationId)))
     throw gozarError('invalid_input', 'run.operationId must be a UUID or null');
-  if (run.handle !== null && (typeof run.handle !== 'string' || !OPAQUE.test(run.handle)))
-    throw gozarError('invalid_input', 'run.handle must be a short opaque string or null');
+  const handle = validateHandle(run.handle);
   if (run.provider !== null && (typeof run.provider !== 'string' || !PROVIDER.test(run.provider)))
     throw gozarError('invalid_input', 'run.provider must be a provider id or null');
   if (typeof run.phase !== 'string' || !PHASES.has(run.phase))
     throw gozarError('invalid_input', 'run.phase must be starting, awaiting, active or stopped');
   return { id: run.id, generation: run.generation, operationId: run.operationId,
-    handle: run.handle, provider: run.provider, phase: run.phase };
+    handle, provider: run.provider, phase: run.phase };
 }
 
 function validateApproval(approval) {
@@ -122,8 +131,8 @@ function validateApproval(approval) {
     throw gozarError('invalid_input', 'approval.provider must be a provider id');
   if (typeof approval.disclosureRevision !== 'string' || !REVISION.test(approval.disclosureRevision))
     throw gozarError('invalid_input', 'approval.disclosureRevision must be a disclosure revision');
-  if (typeof approval.factsDigest !== 'string' || !DIGEST.test(approval.factsDigest))
-    throw gozarError('invalid_input', 'approval.factsDigest must be a sha256 digest');
+  if (typeof approval.factsDigest !== 'string' || !CONSENT_DIGEST.test(approval.factsDigest))
+    throw gozarError('invalid_input', 'approval.factsDigest must be an SDK consent-v1 digest');
   return { fingerprint: approval.fingerprint, provider: approval.provider,
     disclosureRevision: approval.disclosureRevision, factsDigest: approval.factsDigest };
 }
