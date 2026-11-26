@@ -814,6 +814,48 @@ fn a_declared_reach_does_not_show_the_unknown_reach_notice() {
 }
 
 #[test]
+fn recommendation_recomputes_choices_when_requirements_change_before_start() {
+    let first = run(json!({
+        "command": {"type": "recommend"},
+        "requirements": {"clientReach": "this-device"},
+        "adapters": [
+            {"id": "local-fixture", "audience": "local", "ownership": "external-owned"},
+            {"id": "public-fixture", "audience": "public", "ownership": "external-owned"}
+        ]
+    }));
+    assert_eq!(first["action"]["choices"], json!(["local-fixture", "public-fixture"]));
+
+    let second = run(json!({
+        "state": first["state"],
+        "command": {"type": "recommend"},
+        "requirements": {"clientReach": "internet"}
+    }));
+    assert_eq!(second["action"]["choices"], json!(["public-fixture"]));
+    assert_eq!(second["snapshot"]["plans"].as_array().unwrap().len(), 1);
+    assert_eq!(second["snapshot"]["plans"][0]["adapterId"], "public-fixture");
+    assert_eq!(second["effects"], json!([]));
+}
+
+#[test]
+fn recommendation_deduplicates_shared_adapter_limitations_in_first_seen_order() {
+    let out = run(json!({
+        "command": {"type": "recommend"},
+        "requirements": {"clientReach": "internet"},
+        "adapters": [
+            {"id": "first-fixture", "audience": "public", "ownership": "external-owned",
+             "unknowns": ["first adapter detail", "shared detail"]},
+            {"id": "second-fixture", "audience": "public", "ownership": "external-owned",
+             "unknowns": ["shared detail", "second adapter detail"]}
+        ]
+    }));
+    assert_eq!(
+        out["snapshot"]["limitations"],
+        json!(["first adapter detail", "shared detail", "second adapter detail"])
+    );
+    assert_eq!(out["effects"], json!([]));
+}
+
+#[test]
 fn public_route_remains_candidate_for_private_clients_and_observations_rank_it_honestly() {
     let f = fixture();
     let public = definition("external");
