@@ -658,3 +658,25 @@ test('line framing consumes a CRLF delimiter split across chunks exactly once', 
   driver.processOutput(effect, resource, 'stderr', Buffer.from('\nsecond\r\n'));
   assert.deepEqual(lines, ['first', 'second']);
 });
+
+test('line framing does not count the CRLF delimiter against the payload cap', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'fixture', generation: 2, adapterId: 'fixture' };
+  const effect = { id: 'fixture-effect' };
+  const lines = [];
+  const exact = 'x'.repeat(4096);
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  driver.onProcessOutput = event => {
+    if (event.completeLine !== undefined) lines.push(event.completeLine);
+  };
+
+  driver.processOutput(effect, resource, 'stderr', Buffer.from(exact + '\r'));
+  assert.deepEqual(lines, []);
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('\n'));
+  assert.deepEqual(lines.map(line => line.length), [4096]);
+  assert.equal(lines[0], exact);
+
+  driver.processOutput(effect, resource, 'stderr', Buffer.from(exact + '\ry\r\nnext\r\n'));
+  assert.deepEqual(lines.slice(1), ['next']);
+});

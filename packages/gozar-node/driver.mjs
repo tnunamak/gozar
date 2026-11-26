@@ -135,7 +135,7 @@ export class EffectDriver {
           }
           frame.buffer = ''; frame.dropping = false;
         } else if (!frame.dropping) {
-          if (frame.buffer.length >= 4096) { frame.buffer = ''; frame.dropping = true; }
+          if (frame.buffer.length >= 4096 && !(frame.buffer.length === 4096 && char === '\r')) { frame.buffer = ''; frame.dropping = true; }
           else frame.buffer += char;
         }
       }
