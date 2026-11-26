@@ -4,7 +4,7 @@
     "schemaVersion": 1,
     "id": "tunnl-gg",
     "label": "tunnl.gg trial",
-    "needs": "Needs the ssh command on this computer and outbound internet access. No account is needed.",
+    "needs": "Needs OpenSSH, outbound internet access, and an SSH key registered to a free tunnl.gg account for new installations.",
     "capabilities": {
       "reach": "internet",
       "transport": "https",
@@ -21,19 +21,21 @@
       },
       "address": {
         "stability": "stable",
-        "scope": "address bound to an installation key",
+        "scope": "address bound to the registered installation key and the relay host key",
         "conditions": [
           "an announced address change ends the route",
           "the relay can close quiet streams after about two minutes",
-          "browsers can show a warning page"
+          "browsers can show a warning page",
+          "new installation keys must be registered to a free account",
+          "a relay host-key change can rotate the URL"
         ],
         "ports": null
       },
       "cost": {
         "kind": "free",
-        "summary": "The free tier costs nothing and needs no account; Pro is $6 a month or $60 a year and removes time limits and the warning page."
+        "summary": "Stable URLs cost nothing on a free account with a registered SSH key. Anonymous random URLs are a separate mode not used by this connector."
       },
-      "needsAccount": false,
+      "needsAccount": true,
       "lifetimes": [
         "session"
       ],
@@ -56,8 +58,8 @@
       "session"
     ],
     "disclosure": {
-      "revision": "disc-d0474a5d1d94",
-      "text": "Start a public HTTPS trial through the tunnl.gg relay. This allows outbound SSH to proxy.tunnl.gg on TCP port 22 using a Gozar installation key and first-use trust in the session's private known-hosts file. OpenSSH refuses a changed key in that file. The relay terminates TLS and can read payloads. Quiet streams can close after two minutes.",
+      "revision": "disc-a02d81fdd865",
+      "text": "Start a public HTTPS trial through the tunnl.gg relay. This allows outbound SSH to proxy.tunnl.gg on TCP port 22 using a Gozar installation key and first-use trust in the session's private known-hosts file. OpenSSH refuses a changed key in that file. The relay terminates TLS and can read payloads. Quiet streams can close after two minutes. New installation keys must be registered to a free tunnl.gg account for stable URLs. Keys with a stable URL before November 19, 2026 can connect unregistered only until December 1, 2026. A relay host-key change can rotate the URL.",
       "links": [
         {
           "rel": "terms",
@@ -97,12 +99,22 @@
       {
         "id": "cost-detail",
         "label": "Cost details",
-        "value": "The free tier costs nothing and needs no account; Pro is $6 a month or $60 a year and removes time limits and the warning page.",
+        "value": "Stable URLs cost nothing on a free account with a registered SSH key. Anonymous random URLs are a separate mode not used by this connector.",
         "known": true,
         "group": "cost",
         "affectsConsent": false,
-        "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
-        "asOf": "2026-11-12"
+        "source": "https://tunnl.gg/stable-urls",
+        "asOf": "2026-11-19"
+      },
+      {
+        "id": "stable-key-registration",
+        "label": "Stable URL account requirement",
+        "value": "New installation keys must be registered to a free tunnl.gg account for stable URLs. Keys with a stable URL before November 19, 2026 can connect unregistered only until December 1, 2026.",
+        "known": true,
+        "group": "account",
+        "affectsConsent": true,
+        "source": "https://tunnl.gg/stable-urls",
+        "asOf": "2026-11-19"
       },
       {
         "id": "entitlement",
@@ -186,6 +198,16 @@
         "affectsConsent": false,
         "source": "https://tunnl.gg, https://tunnl.gg/terms.md, https://tunnl.gg/privacy.md",
         "asOf": "2026-11-12"
+      },
+      {
+        "id": "address-condition-3",
+        "label": "Address condition",
+        "value": "a relay host-key change can rotate the URL",
+        "known": true,
+        "group": "address",
+        "affectsConsent": true,
+        "source": "https://tunnl.gg/stable-urls",
+        "asOf": "2026-11-19"
       },
       {
         "id": "public-names",
@@ -613,15 +635,16 @@
     ]
   },
   "evidence": {
-    "accessed": "2026-11-12",
+    "accessed": "2026-11-26",
     "sources": [
       "https://tunnl.gg",
       "https://tunnl.gg/terms.md",
-      "https://tunnl.gg/privacy.md"
+      "https://tunnl.gg/privacy.md",
+      "https://tunnl.gg/stable-urls"
     ],
     "protocols": {
       "sse/streamableHttp": "true. Backed by validation.sse (timed incremental event delivery when required) and validation.publish (exact-origin approval only after all required probes) in the wrapped recipe definition, with admission.requiredFeatures probe-assertions and client-vantage-probe.",
-      "oauthDcr": "oauthDcr: the stable user gives 'a URL tied to your SSH key that stays the same across reconnects' (https://tunnl.gg); Gozar preserves the configured authority. The wrapped recipe's addressStability 'random' conflicts with this page and is reported as an open question."
+      "oauthDcr": "The stable hostname uses a registered SSH key and the relay host key. A host-key change can rotate it. The wrapped recipe reports addressStability random; the stable classification describes the provider mode, not a lifetime guarantee. https://tunnl.gg/stable-urls"
     }
   }
 }
