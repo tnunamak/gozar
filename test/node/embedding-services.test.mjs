@@ -4,7 +4,40 @@ import {mkdtemp,rm,readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createEmbeddingServices} from '../../packages/gozar-node/embedding-services.mjs';
+import {configurationFor} from '../../packages/gozar-node/embedding-state.mjs';
 const code = wanted => error => error.code === wanted;
+test('custom backend presence projects only boolean status and approved unknown reasons',async()=>{
+ const home=await mkdtemp(join(tmpdir(),'embedding-presence-'));
+ let observation={known:true,value:true};
+ let reads=0;
+ const services=createEmbeddingServices({registryId:'fixture',secretBackend:{
+  put:async()=>({handle:'presence-fixture'}),presence:async()=>observation,
+  withSecret:async(_request,use)=>{reads++;return use(Buffer.from('synthetic fixture'));},
+ }});
+ try{
+  const request={home,providerId:'fixture-provider',owner:'fixture-owner'};
+  const initial=await services.readConfiguration(request);
+  const stored=await services.storeSecret({...request,scopeId:initial.scopeId,inputId:'token',expectedConfigurationRevision:initial.revision,bytes:Buffer.from('synthetic fixture')});
+  await services.mutateConfiguration({...request,expectedConfigurationRevision:initial.revision},tx=>tx.bindSecret('token',stored.handle));
+  const bindingReads=reads;
+  for(const [received,expected] of [
+   [{known:true,value:true,diagnostic:'inert extra',callback:()=>{}},{known:true,value:true}],
+   [{known:true,value:false,diagnostic:'inert extra'},{known:true,value:false}],
+   [{known:false,reason:'secret_backend_locked',diagnostic:'inert extra'},{known:false,reason:'secret_backend_locked'}],
+   [{known:false,reason:'inert unapproved reason'},{known:false,reason:'secret_backend_unavailable'}],
+   [{known:true,value:'not boolean'},{known:false,reason:'secret_backend_unavailable'}],
+   [null,{known:false,reason:'secret_backend_unavailable'}],
+  ]){
+   observation=received;
+   const saved=await services.readConfiguration(request);
+   assert.deepEqual(saved.credentials,{token:expected});
+   const projected=configurationFor([],saved,[{id:'token',secret:true}]);
+   assert.deepEqual(projected.credentials,{token:expected},'saved status wins over the declared absent default');
+   assert.doesNotMatch(JSON.stringify(projected),/inert|diagnostic|callback/);
+   assert.equal(reads,bindingReads,'presence reads must not request secret bytes');
+  }
+ }finally{await rm(home,{recursive:true,force:true});}
+});
 test('CAS, staged rotation, route use and discard preserve old credential',async()=>{
  const home=await mkdtemp(join(tmpdir(),'embedding-')); const values=new Map(); let effects=0;
  const backend={put:async({bytes})=>{const handle=`key-${values.size}`;values.set(handle,Buffer.from(bytes));return {handle};},withSecret:async({handle},use)=>use(values.get(handle)),presence:async({handle})=>({known:true,value:values.has(handle)}),delete:async({handle})=>({deleted:values.delete(handle)})};

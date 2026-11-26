@@ -200,7 +200,15 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
  const select=(c,draftId)=>draftId?(c.drafts[draftId]??fail('configuration_stale')):c;
  const compare=(c,revision)=>{if(c.revision!==revision)fail('configuration_stale');};
  async function redacted(home,s,c){
-  const credentials={};for(const [id,handle]of Object.entries(c.bindings)){try{credentials[id]=await call(home,'presence',{scopeId:backendScope(s,c,handle),handle});}catch(e){credentials[id]={known:false,reason:e.code};}}
+  const credentials={};
+  for(const [id,handle]of Object.entries(c.bindings)){
+   try{
+    const observation=await call(home,'presence',{scopeId:backendScope(s,c,handle),handle});
+    const value=observation?.known===true?observation.value:undefined;
+    credentials[id]=typeof value==='boolean'?{known:true,value}:
+     {known:false,reason:observation?.reason==='secret_backend_locked'?'secret_backend_locked':'secret_backend_unavailable'};
+   }catch(error){credentials[id]={known:false,reason:error?.code==='secret_backend_locked'?'secret_backend_locked':'secret_backend_unavailable'};}
+  }
   return {scopeId:c.scopeId,revision:c.revision,values:clone(c.values),credentials};
  }
  const referenced=(state,handle)=>Object.values(state.configs).some(c=>!c.migratedTo&&(Object.values(c.bindings).includes(handle)||Object.values(c.drafts).some(d=>Object.values(d.bindings).includes(handle))));
