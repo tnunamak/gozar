@@ -663,3 +663,23 @@ test('the release journey CLI rejects duplicate or missing flag values before st
   await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
  }
 });
+
+test('an output file is preserved and no install starts',async t=>{
+ const f=await fixture(t);
+ await writeFile(f.input.outputDirectory,'fixture already present');
+ let calls=0;
+ await assert.rejects(runInstalledJourney(f.input,{run:async()=>{calls++;throw new Error('install must not start');}}),
+  {code:'EEXIST'});
+ assert.equal(calls,0);
+ assert.equal(await readFile(f.input.outputDirectory,'utf8'),'fixture already present');
+});
+
+test('a missing output parent is reported before any install starts',async t=>{
+ const f=await fixture(t);
+ f.input.outputDirectory=join(f.root,'missing-parent','receipt');
+ let calls=0;
+ await assert.rejects(runInstalledJourney(f.input,{run:async()=>{calls++;throw new Error('install must not start');}}),
+  {code:'ENOENT'});
+ assert.equal(calls,0);
+ await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
