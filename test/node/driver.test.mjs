@@ -310,6 +310,38 @@ test('process observer discards a line that exceeds the cap across two chunks', 
   assert.deepEqual(lines, ['kept']);
 });
 
+test('complete-line output does not mix partial frames from two resources', () => {
+  const driver = makeOutputOnlyDriver();
+  const first = { id: 'fixture-a', generation: 2, adapterId: 'example' };
+  const second = { id: 'fixture-b', generation: 2, adapterId: 'example' };
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([first.id, second.id]);
+  const seen = [];
+  driver.onProcessOutput = row => {
+    if (row.completeLine !== undefined) seen.push([row.resourceId, row.completeLine]);
+  };
+  driver.processOutput({ id: 'output' }, first, 'stdout', Buffer.from('alpha '));
+  driver.processOutput({ id: 'output' }, second, 'stdout', Buffer.from('beta\n'));
+  driver.processOutput({ id: 'output' }, first, 'stdout', Buffer.from('done\n'));
+  assert.deepEqual(seen, [[second.id, 'beta'], [first.id, 'alpha done']]);
+});
+
+test('an ASCII line at exactly the frame limit is delivered once', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'fixture-limit', generation: 2, adapterId: 'example' };
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  const seen = [];
+  driver.onProcessOutput = row => {
+    if (row.completeLine !== undefined) seen.push(row.completeLine);
+  };
+  const line = 'x'.repeat(4096);
+  driver.processOutput({ id: 'output' }, resource, 'stdout', Buffer.from(line));
+  assert.deepEqual(seen, []);
+  driver.processOutput({ id: 'output' }, resource, 'stdout', Buffer.from('\n'));
+  assert.deepEqual(seen, [line]);
+});
+
 test('a failing output observer does not discard retained diagnostics',()=>{
  const driver=new EffectDriver({adapters:[],journal:{},sessionId:'synthetic',resolveProgram:()=>null,
   observeProcessOutput:true,onProcessOutput:()=>{throw new Error('synthetic observer stopped');}});
