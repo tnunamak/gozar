@@ -317,6 +317,25 @@ test('owned process output frames complete lines across chunks without diagnosti
   assert.equal(JSON.stringify(driver.journal.value).includes('lhr.life'), false);
 });
 
+test('complete output lines preserve UTF-8 characters split between pipe chunks', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  const lines = [];
+  driver.onProcessOutput = row => {
+    if (row.completeLine !== undefined) lines.push([row.stream, row.completeLine]);
+  };
+  const output = Buffer.from('caf\u00e9 \ud83d\ude00\n');
+  driver.processOutput(effect, resource, 'stdout', output.subarray(0, 4));
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('other stream\n'));
+  driver.processOutput(effect, resource, 'stdout', output.subarray(4, 8));
+  driver.processOutput(effect, resource, 'stdout', output.subarray(8));
+
+  assert.deepEqual(lines, [['stderr', 'other stream'], ['stdout', 'caf\u00e9 \ud83d\ude00']]);
+});
+
 test('an observer callback failure does not discard diagnostic output', () => {
   const driver = makeOutputOnlyDriver();
   const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
