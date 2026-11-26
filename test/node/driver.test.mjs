@@ -167,6 +167,24 @@ test('file reads require scoped regular non-symlink handle and byte bound', asyn
   assert.equal((await driver.execute(effect(recipe, 'detect', 'link'))).ok, false);
 });
 
+test('a missing scoped handle produces a distinct error before doing file IO', async t => {
+  const { driver } = await fixture(t, {});
+  await assert.rejects(driver.readHandle({ handleRef: 'missing-fixture' }), {
+    message: 'Unknown scoped file handle',
+  });
+});
+
+test('a known handle whose file vanished fails instead of returning an empty read', async t => {
+  const { driver, directory } = await fixture(t, {});
+  const missing = join(directory, 'no-longer-present');
+  driver.handles.removed = missing;
+
+  await assert.rejects(driver.readHandle({ handleRef: 'removed' }), {
+    code: 'ENOENT',
+    path: missing,
+  });
+});
+
 test('local probe never claims a public, tailnet or LAN vantage', async t => {
   const { driver } = await fixture(t, {});
   for (const vantage of ['public', 'tailnet', 'lan']) {
@@ -266,6 +284,54 @@ test('process observer discards a line that exceeds the cap across two chunks', 
   driver.processOutput(effect, resource, 'stdout', Buffer.from('y'));
   driver.processOutput(effect, resource, 'stdout', Buffer.from('\nkept\n'));
   assert.deepEqual(lines, ['kept']);
+});
+
+test('complete-line output does not mix partial frames from two resources', () => {
+  const driver = makeOutputOnlyDriver();
+  const first = { id: 'fixture-a', generation: 2, adapterId: 'example' };
+  const second = { id: 'fixture-b', generation: 2, adapterId: 'example' };
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([first.id, second.id]);
+  const seen = [];
+  driver.onProcessOutput = row => {
+    if (row.completeLine !== undefined) seen.push([row.resourceId, row.completeLine]);
+  };
+  driver.processOutput({ id: 'output' }, first, 'stdout', Buffer.from('alpha '));
+  driver.processOutput({ id: 'output' }, second, 'stdout', Buffer.from('beta\n'));
+  driver.processOutput({ id: 'output' }, first, 'stdout', Buffer.from('done\n'));
+  assert.deepEqual(seen, [[second.id, 'beta'], [first.id, 'alpha done']]);
+});
+
+test('an ASCII line at exactly the frame limit is delivered once', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'fixture-limit', generation: 2, adapterId: 'example' };
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  const seen = [];
+  driver.onProcessOutput = row => {
+    if (row.completeLine !== undefined) seen.push(row.completeLine);
+  };
+  const line = 'x'.repeat(4096);
+  driver.processOutput({ id: 'output' }, resource, 'stdout', Buffer.from(line));
+  assert.deepEqual(seen, []);
+  driver.processOutput({ id: 'output' }, resource, 'stdout', Buffer.from('\n'));
+  assert.deepEqual(seen, [line]);
+});
+
+test('line framing consumes a CRLF delimiter split across chunks exactly once', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'fixture', generation: 2, adapterId: 'fixture' };
+  const effect = { id: 'fixture-effect' };
+  const lines = [];
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  driver.onProcessOutput = event => {
+    if (event.completeLine !== undefined) lines.push(event.completeLine);
+  };
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('first\r'));
+  assert.deepEqual(lines, []);
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('\nsecond\r\n'));
+  assert.deepEqual(lines, ['first', 'second']);
 });
 
 test('a failing output observer does not discard retained diagnostics',()=>{
