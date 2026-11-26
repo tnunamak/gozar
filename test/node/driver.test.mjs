@@ -217,6 +217,30 @@ test('HTTP validates exact URL, rejects redirects, and SSE only reports event re
   assert.equal(changed.ok, false);
 });
 
+for (const [label, contentType, body, detail] of [
+  ['wrong content type', 'text/plain', 'data: looks like an event\n\n', 'SSE content type missing'],
+  ['incomplete event at EOF', 'text/event-stream', 'data: partial\n', 'SSE ended before a complete event'],
+]) {
+  test(`SSE probe rejects ${label} and releases its request`, async t => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': contentType });
+      res.end(body);
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => { server.closeAllConnections(); server.close(); });
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const { driver } = await fixture(t, {}, { origin: url });
+    driver.adapters[0].recipes.probe = { kind: 'http-probe', url, vantage: 'local', sse: true };
+    const result = await driver.execute({
+      id: 'sse-failure', sessionId: 'test', generation: 1, kind: 'http-probe',
+      operation: 'probe', url, vantage: 'local', sse: true,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.result.detail, detail);
+    assert.equal(driver.activeRequests.size, 0);
+  });
+}
+
 test('owned loopback forwarder selects ephemeral port, serves exact target, removes exact socket', async t => {
   const target = net.createServer(socket => socket.end('target'));
   await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
