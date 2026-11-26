@@ -1458,6 +1458,44 @@ fn native_jsonl_flushes_prior_receipts_before_rejecting_a_non_utf8_line() {
 }
 
 #[test]
+fn native_jsonl_preserves_receipt_order_for_independent_sessions() {
+    let out = run_native_jsonl(
+        b"{\"command\":{\"type\":\"status\",\"sessionId\":\"native-first\"}}\n\
+          {\"command\":{\"type\":\"status\",\"sessionId\":\"native-second\"}}\n\
+          {\"command\":{\"type\":\"status\",\"sessionId\":\"native-third\"}}\n",
+    );
+    assert!(out.status.success(), "{:?}", out.stderr);
+    let stdout = std::str::from_utf8(&out.stdout).unwrap();
+    let receipts: Vec<Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(receipts.len(), 3);
+    for (receipt, session) in receipts.iter().zip(["native-first", "native-second", "native-third"]) {
+        assert_eq!(receipt["snapshot"]["sessionId"], session);
+        assert_eq!(receipt["effects"], json!([]));
+    }
+}
+
+#[test]
+fn native_jsonl_accepts_a_crlf_record_and_a_final_record_without_newline() {
+    let out = run_native_jsonl(
+        b"{\"command\":{\"type\":\"status\",\"sessionId\":\"native-crlf\"}}\r\n\
+          {\"command\":{\"type\":\"status\",\"sessionId\":\"native-final\"}}",
+    );
+    assert!(out.status.success(), "{:?}", out.stderr);
+    let stdout = std::str::from_utf8(&out.stdout).unwrap();
+    let receipts: Vec<Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(receipts[0]["snapshot"]["sessionId"], "native-crlf");
+    assert_eq!(receipts[1]["snapshot"]["sessionId"], "native-final");
+    assert!(receipts.iter().all(|receipt| receipt["effects"] == json!([])));
+}
+
+#[test]
 fn recommendation_without_adapters_has_no_choices_or_effects() {
     let out = run(json!({"command": {"type": "recommend"}, "adapters": []}));
     assert_eq!(out["snapshot"]["phase"], "planned");
