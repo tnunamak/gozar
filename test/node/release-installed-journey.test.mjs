@@ -9,6 +9,32 @@ import {EventEmitter} from 'node:events';
 import {spawn} from 'node:child_process';
 import {runInstalledJourney,runProcess} from '../../scripts/release-installed-journey.mjs';
 import {parseArgs as parsePublicTypesArgs} from '../../scripts/check-public-types.mjs';
+import {assembleEvidence,SURVEY_REVISION} from '../../scripts/release-survey-evidence.mjs';
+
+function surveyFixture(definition, extra = {}) {
+ const json=JSON.stringify;
+ return {
+  surveyRevision:SURVEY_REVISION,survey:{revision:SURVEY_REVISION,files:{}},
+  candidate:{revision:'a'.repeat(40),files:{
+   'adapters/manifest.json':json({providers:[{id:'fixture',module:'fixture.mjs',definition:'fixture.json'}]}),
+   'runtime/adapter.schema.json':'{}',
+   'adapters/fixture.json':json(definition),
+   'docs/release-0.4-interface-coverage.md':'Fixture coverage',
+   ...extra,
+  }},
+ };
+}
+
+test('survey evidence rejects a missing provider module rather than reporting a partial inventory',()=>{
+ assert.throws(()=>assembleEvidence(surveyFixture({})),/^Error: Unreadable required source: adapters\/fixture\.mjs$/);
+});
+
+test('survey evidence refuses directly cyclic provider wrappers',()=>{
+ const input=surveyFixture({wraps:'wrapped.json'},{
+  'adapters/fixture.mjs':'// fixture','adapters/wrapped.json':'{"wraps":"fixture.json"}',
+ });
+ assert.throws(()=>assembleEvidence(input),/^Error: Cyclic provider definition wrapping$/);
+});
 
 function tar(files){
  const chunks=[];
