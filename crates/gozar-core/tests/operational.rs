@@ -1484,6 +1484,34 @@ fn native_jsonl_flushes_prior_receipts_before_rejecting_a_non_utf8_line() {
 }
 
 #[test]
+fn native_jsonl_empty_input_does_not_emit_a_phantom_receipt() {
+    let out = run_native_jsonl(b"");
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty());
+    assert!(out.stderr.is_empty());
+}
+
+#[test]
+fn native_jsonl_blank_record_gets_a_typed_error_not_a_missing_receipt() {
+    let out = run_native_jsonl(
+        b"\n{\"command\":{\"type\":\"status\",\"sessionId\":\"native-after-blank\"}}\n",
+    );
+    assert!(out.status.success());
+    assert!(out.stderr.is_empty());
+    let receipts: Vec<Value> = std::str::from_utf8(&out.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(
+        receipts[0],
+        json!({"error":{"code":"invalid-input","message":"invalid input JSON or protocol shape"}})
+    );
+    assert_eq!(receipts[1]["snapshot"]["sessionId"], "native-after-blank");
+}
+
+#[test]
 fn native_jsonl_preserves_receipt_order_for_independent_sessions() {
     let out = run_native_jsonl(
         b"{\"command\":{\"type\":\"status\",\"sessionId\":\"native-first\"}}\n\
