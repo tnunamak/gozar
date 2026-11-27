@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,readFile,writeFile} from 'node:fs/promises';
+import {mkdtemp,rm,readFile,writeFile,stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {homedir} from 'node:os';
 import {execFile} from 'node:child_process';
@@ -379,4 +379,90 @@ test('earlier draft cleanup also removes default-store draft-owned files',async 
  await assert.rejects(readFile(join(home,'secrets',stored.handle)),{code:'ENOENT'});
  const saved=JSON.parse(await readFile(join(home,'embedding-state.json'),'utf8'));
  assert.equal(saved.secrets[stored.handle],undefined);
+});
+
+async function committedFixture(t,{orphan=false,setup=false}={}){
+ const home=await mkdtemp(join(homedir(),'.tmp','g-upgrade-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const fromRegistryId='registry-v1:'+'c'.repeat(64),request={home,owner:'committed-upgrade-fixture',providerId:'localhost-run'};
+ const filename=join(home,'embedding-state.json'),snapshot=async()=>JSON.parse(await readFile(filename,'utf8'));
+ const earlier=createEmbeddingServices({registryId:fromRegistryId});
+ const current=createEmbeddingServices({registryId:'committed-successor',
+  lineage:{id:'committed-upgrade-lineage',replaces:[fromRegistryId]},currentInputKinds:async()=>({token:'secret'})});
+ async function start(owner){
+  const target={...request,owner},old=await earlier.readConfiguration(target);
+  const draft=await earlier.beginConfigurationDraft({...target,expectedConfigurationRevision:old.revision});
+  const intake={...target,draftId:draft.draftId,scopeId:old.scopeId,expectedConfigurationRevision:draft.configuration.revision};
+  const stage=()=>earlier.storeSecret({...intake,inputId:'token',bytes:Uint8Array.of(1,2,3,4)});
+  return {target,old,draft,intake,stage};
+ }
+ const occupied=await start('other-owner');
+ const other=await occupied.stage();
+ const own=await start(request.owner);
+ const bound=await own.stage(),debt=orphan?await own.stage():null;
+ const mutation=await earlier.mutateConfiguration(own.intake,tx=>tx.bindSecret('token',bound.handle));
+ if(setup)await earlier.setupTransaction({...request,draftId:own.draft.draftId,operationId:'in-flight-fixture'},storage=>{
+  storage.reserve({scopeId:own.old.scopeId,draftId:own.draft.draftId,revision:1,
+   configurationRevision:mutation.configuration.revision,cancelled:false,management:{},resources:[],
+   connectorSecrets:{token:bound.handle}});
+ });
+ await earlier.commitConfigurationDraft({...own.intake,expectedConfigurationRevision:mutation.configuration.revision});
+ return {home,filename,snapshot,request,fromRegistryId,earlier,current,own,occupied,bound,debt,other};
+}
+
+test('committing a credential draft transfers just its applied binding before adoption',async t=>{
+ const f=await committedFixture(t);
+ const initial=await f.snapshot();
+ assert.equal(initial.secrets[f.bound.handle].draftId,null);
+ const adopted=await f.current.readConfiguration(f.request);
+ const state=await f.snapshot();
+ assert.equal(state.configs[adopted.scopeId].bindings.token,f.bound.handle);
+ assert.equal(state.secrets[f.bound.handle].backendScopeId,f.own.old.scopeId);
+ assert.deepEqual(state.secrets[f.other.handle],initial.secrets[f.other.handle]);
+ assert.ok((await stat(join(f.home,'secrets',f.other.handle))).isFile());
+});
+
+test('historical committed stamps can adopt after exact unbound-orphan cleanup',async t=>{
+ const f=await committedFixture(t,{orphan:true});
+ const initial=await f.snapshot(),draftId=f.own.draft.draftId;
+ initial.secrets[f.bound.handle].draftId=draftId; // Historical writer left this stamp after commit.
+ await writeFile(f.filename,JSON.stringify(initial));
+ const original=await readFile(f.filename,'utf8');
+ assert.equal(initial.configs[f.own.old.scopeId].drafts[draftId],undefined);
+ await assert.rejects(f.current.readConfiguration(f.request),{code:'configuration_migration_required',reason:'inflight'});
+ assert.equal(await readFile(f.filename,'utf8'),original,'failed adoption must not normalize any metadata');
+ await f.current.discardEarlierConfigurationDraft({...f.request,fromRegistryId:f.fromRegistryId,draftId});
+ await assert.rejects(stat(join(f.home,'secrets',f.debt.handle)),{code:'ENOENT'});
+ assert.ok((await stat(join(f.home,'secrets',f.bound.handle))).isFile());
+ assert.equal((await f.snapshot()).secrets[f.bound.handle].draftId,draftId,
+  'orphan cleanup skips the still-applied credential');
+ const adopted=await f.current.readConfiguration(f.request),state=await f.snapshot();
+ assert.deepEqual(state.secrets[f.bound.handle],{...initial.secrets[f.bound.handle],
+  registryId:state.secrets[f.bound.handle].registryId,scopeId:adopted.scopeId,backendScopeId:f.own.old.scopeId,draftId:null});
+ assert.notEqual(state.secrets[f.bound.handle].registryId,f.fromRegistryId);
+ assert.equal(state.configs[adopted.scopeId].bindings.token,f.bound.handle);
+ assert.equal(state.secrets[f.debt.handle],undefined);
+ assert.deepEqual(state.secrets[f.other.handle],initial.secrets[f.other.handle]);
+});
+
+test('current setup custody keeps its draft stamp and blocks both cleanup and adoption',async t=>{
+ const f=await committedFixture(t,{setup:true});
+ const draftId=f.own.draft.draftId,original=await readFile(f.filename,'utf8');
+ assert.equal((await f.snapshot()).secrets[f.bound.handle].draftId,draftId);
+ await assert.rejects(f.current.readConfiguration(f.request),{code:'configuration_migration_required',reason:'inflight'});
+ await assert.rejects(f.current.discardEarlierConfigurationDraft({...f.request,fromRegistryId:f.fromRegistryId,draftId}),
+  {code:'configuration_migration_required',reason:'inflight'});
+ assert.equal(await readFile(f.filename,'utf8'),original);
+});
+
+test('a real open draft blocks historical applied-stamp normalization',async t=>{
+ const f=await committedFixture(t);
+ const latest=await f.earlier.readConfiguration(f.request);
+ const open=await f.earlier.beginConfigurationDraft({...f.request,expectedConfigurationRevision:latest.revision});
+ const state=await f.snapshot();
+ state.secrets[f.bound.handle].draftId=f.own.draft.draftId;
+ await writeFile(f.filename,JSON.stringify(state));
+ const before=await readFile(f.filename,'utf8');
+ await assert.rejects(f.current.readConfiguration(f.request),{code:'configuration_migration_required',reason:'inflight'});
+ assert.equal(await readFile(f.filename,'utf8'),before);
+ assert.ok(state.configs[f.own.old.scopeId].drafts[open.draftId]);
 });

@@ -104,7 +104,7 @@ async function subjectWorld(t, kind, fault) {
   const identity = {instanceId: randomUUID(), bootId: randomUUID()};
   api = createGozar({manifest, root: registry.root, identity});
   const query = {schemaVersion: 1, home, owner: 'subject-owner', providerId: id, target,
-    usage: kind === 'session' ? {kind, lifetimeMs: 60000} : {kind},
+    usage: kind === 'session' ? {kind, lifetimeMs: 300000} : {kind},
     requirements: {reach: 'this-device', transport: 'any', payloadAccess: 'allow-provider', address: 'any', setup: 'allow', protocols: []}};
   const candidate = (await api.catalogRoutes(query)).candidates.find(row => row.providerId === id);
   assert.ok(candidate?.candidateToken, 'the real catalog must issue approval');
@@ -136,6 +136,7 @@ for (const kind of ['attached', 'session']) {
   test(`an honest ${kind} initial proof publishes the route bound to its exact subject`, {timeout: 60000}, async t => {
     const f = await subjectWorld(t, kind, null);
     const payload = randomBytes(96);
+    const exposedAt = Date.now();
     const {failure, route} = await settle(f);
     try {
       assert.ifError(failure);
@@ -145,9 +146,46 @@ for (const kind of ['attached', 'session']) {
       assert.deepEqual(route.verification.subject, {origin: route.origin, target: f.target, ...f.identity, handleGeneration: 1});
       assert.deepEqual(await f.exchange(route.origin, payload), payload, 'the published route forwards real bytes');
       assert.deepEqual(await f.events(), ['start', 'proof'], 'exactly one allocation and one proof observation');
+      const sameRequest = structuredClone(f.request);
+      if (kind === 'session') {
+        assert.equal(route.expiresAt?.known, true, 'a successful session has a real expiry');
+        assert.ok(Number.isFinite(Date.parse(route.expiresAt.value)), 'expiry is a date');
+        const expiry = Date.parse(route.expiresAt.value);
+        assert.ok(expiry > Date.now(), 'the issued lease is still live');
+        assert.ok(expiry >= exposedAt + sameRequest.usage.lifetimeMs - 2000);
+        assert.ok(expiry <= Date.now() + sameRequest.usage.lifetimeMs + 2000);
+        const replay = await f.api.expose(sameRequest);
+        assert.deepEqual(replay.handle, route.handle);
+        assert.equal(replay.published, route.origin);
+        assert.deepEqual(replay.expiresAt, route.expiresAt, 'a replay does not extend the lease');
+        const current = await f.api.routeStatus({home: f.home, owner: sameRequest.owner, handle: route.handle});
+        assert.deepEqual(current.expiresAt, route.expiresAt, 'status reports the originally issued lease');
+        assert.deepEqual(await f.events(), ['start', 'proof'], 'a replay starts no new allocation or proof');
+
+        const otherApp = net.createServer();
+        t.after(() => otherApp.listening ? new Promise(resolve => otherApp.close(resolve)) : undefined);
+        await new Promise((resolve, reject) => { otherApp.once('error', reject); otherApp.listen(0, '127.0.0.1', resolve); });
+        const changedTarget = '127.0.0.1:' + otherApp.address().port;
+        assert.notEqual(changedTarget, f.target);
+        await assert.rejects(f.api.expose({...sameRequest, target: changedTarget}), {code: 'operation_conflict'});
+        assert.deepEqual(await f.events(), ['start', 'proof'], 'a conflicting intent starts nothing');
+        const retained = await f.api.routeStatus({home: f.home, owner: sameRequest.owner, handle: route.handle});
+        assert.deepEqual(retained.handle, route.handle);
+        assert.deepEqual(retained.expiresAt, route.expiresAt);
+        assert.equal(retained.verification.subject.target, f.target);
+        assert.equal(retained.published, route.origin);
+      }
       const closed = await f.api.closeRoute({home: f.home, handle: route.handle, mode: 'remove'});
       assert.equal(closed.cleanup.state, 'confirmed');
       assert.deepEqual(await f.events(), ['start', 'proof', 'stop', 'cleanup'], 'owned cleanup ran exactly once');
+      if (kind === 'session') {
+        const terminal = await f.api.expose(sameRequest);
+        assert.deepEqual(terminal.handle, route.handle);
+        assert.equal(terminal.state, 'released');
+        assert.equal(terminal.published, null);
+        assert.equal(terminal.cleanup.state, 'confirmed');
+        assert.deepEqual(await f.events(), ['start', 'proof', 'stop', 'cleanup'], 'terminal replay neither reallocates nor cleans up again');
+      }
       assert.deepEqual(await f.exchange('tcp://' + f.target, payload), payload, 'the foreign app survives owned cleanup');
     } finally {
       if (route?.handle) await f.api.closeRoute({home: f.home, handle: route.handle, mode: 'remove'}).catch(() => {});
