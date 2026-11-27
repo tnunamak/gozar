@@ -6,9 +6,61 @@ import {join,dirname,sep} from 'node:path';
 import {gzipSync} from 'node:zlib';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import {runInstalledJourney,runProcess} from '../../scripts/release-installed-journey.mjs';
 import {parseArgs as parsePublicTypesArgs} from '../../scripts/check-public-types.mjs';
+
+async function noticesFixture(t) {
+ const root=await mkdtemp(join(tmpdir(),'notices-cli-')); t.after(()=>rm(root,{recursive:true,force:true}));
+ const scripts=join(root,'scripts'), bin=join(root,'bin'), crate=join(root,'fixture-crate');
+ await Promise.all([scripts,bin,crate].map(path=>mkdir(path,{recursive:true})));
+ const collector=join(scripts,'collect-third-party-notices.mjs');
+ await writeFile(collector,await readFile(new URL('../../scripts/collect-third-party-notices.mjs',import.meta.url)));
+ const marker=join(root,'cargo-called'), metadata=join(root,'metadata.json');
+ await writeFile(join(bin,'cargo'),'#!/bin/sh\n[ "$*" = "metadata --locked --format-version=1" ] || exit 9\nprintf "called\\n" >> "$GOZAR_FIXTURE_MARKER"\n/bin/cat "$GOZAR_FIXTURE_METADATA"\n',{mode:0o700});
+ await writeFile(join(root,'Cargo.lock'),'synthetic locked closure\n');
+ const licence='fixture notice bytes\n';
+ await writeFile(join(crate,'LICENSE'),licence);
+ const base={source:'registry+https://registry.invalid/',version:'0.1.0',manifest_path:join(crate,'Cargo.toml')};
+ const run=entry=>spawnSync(process.execPath,[entry],{cwd:root,encoding:'utf8',timeout:5000,
+  env:{PATH:bin,GOZAR_FIXTURE_MARKER:marker,GOZAR_FIXTURE_METADATA:metadata}});
+ return {root,collector,marker,metadata,base,licence,run};
+}
+
+test('notice collector import is inert; direct entry writes both declared license forms once',async t=>{
+ const f=await noticesFixture(t);
+ await writeFile(f.metadata,JSON.stringify({packages:[
+  {...f.base,name:'declared-string',license:'MIT'},
+  {...f.base,name:'declared-file',license:null,license_file:'LICENSE'},
+ ]}));
+ const importer=join(f.root,'import-collector.mjs');
+ await writeFile(importer,"import { licenseLabel } from './scripts/collect-third-party-notices.mjs';\nif (typeof licenseLabel !== 'function') process.exitCode = 2;\n");
+ const imported=f.run(importer);
+ assert.ifError(imported.error); assert.equal(imported.status,0,imported.stderr);
+ const manifest=join(f.root,'third-party','manifest.json');
+ await assert.rejects(readFile(f.marker),{code:'ENOENT'});
+ await assert.rejects(readFile(manifest),{code:'ENOENT'});
+ const direct=f.run(f.collector);
+ assert.ifError(direct.error); assert.equal(direct.status,0,direct.stderr);
+ assert.equal(await readFile(f.marker,'utf8'),'called\n');
+ const {packages}=JSON.parse(await readFile(manifest,'utf8'));
+ assert.deepEqual(packages.map(({name,license})=>[name,license]),[
+  ['declared-file','license-file: LICENSE'],['declared-string','MIT'],
+ ]);
+ for(const pkg of packages) {
+  assert.equal(pkg.files.length,1);
+  assert.equal(await readFile(join(f.root,pkg.files[0].path),'utf8'),f.licence);
+ }
+});
+
+test('notice collector refuses a crate with no declared license and writes no manifest',async t=>{
+ const f=await noticesFixture(t);
+ await writeFile(f.metadata,JSON.stringify({packages:[{...f.base,name:'missing-declaration',license:null,license_file:null}]}));
+ const direct=f.run(f.collector);
+ assert.ifError(direct.error); assert.equal(direct.status,1);
+ assert.match(direct.stderr,/No license declared for missing-declaration/);
+ await assert.rejects(readFile(join(f.root,'third-party','manifest.json')),{code:'ENOENT'});
+});
 
 function tar(files){
  const chunks=[];
