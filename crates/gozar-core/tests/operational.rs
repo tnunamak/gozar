@@ -1629,6 +1629,45 @@ fn starting_a_second_session_does_not_replace_a_pending_create_intent() {
 }
 
 #[test]
+fn active_session_refuses_discovery_without_replacing_its_pending_intent() {
+    let before = run(json!({
+        "command": {"type": "start", "adapterId": "fixture", "consent": true},
+        "requirements": {"clientReach": "this-device"},
+        "adapters": [{
+            "id": "fixture", "audience": "local", "ownership": "owned",
+            "recipes": {"create": {"kind": "spawn", "program": "fixture-not-executed"}}
+        }]
+    }));
+    assert_eq!(before["snapshot"]["phase"], "persisting");
+    for command in ["detect", "recommend"] {
+        let after = run(json!({
+            "state": before["state"], "command": {"type": command}
+        }));
+        assert_eq!(after["state"], before["state"]);
+        assert_eq!(after["snapshot"], before["snapshot"]);
+        assert_eq!(after["events"][0]["type"], "session-already-active");
+        assert_eq!(after["effects"], json!([]));
+        assert!(after.get("action").is_none());
+    }
+}
+
+#[test]
+fn unsupported_client_reach_does_not_start_a_local_adapter() {
+    let out = run(json!({
+        "command": {"type": "start", "adapterId": "fixture", "consent": true},
+        "requirements": {"clientReach": "internet"},
+        "adapters": [{
+            "id": "fixture", "audience": "local", "ownership": "owned",
+            "recipes": {"create": {"kind": "spawn", "program": "fixture-not-executed"}}
+        }]
+    }));
+    assert_eq!(out["events"][0]["type"], "requirements-not-met");
+    assert_eq!(out["effects"], json!([]));
+    assert_eq!(out["state"]["pending"], json!({}));
+    assert_eq!(out["snapshot"]["resources"], json!([]));
+}
+
+#[test]
 fn owned_adapter_without_create_recipe_reports_failed_without_allocating() {
     let failed = run(json!({
         "command": {"type": "start", "adapterId": "fixture", "consent": true},
