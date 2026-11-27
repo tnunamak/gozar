@@ -106,6 +106,16 @@ for(const licenseFile of ['licenses/MIT.txt','COPYRIGHT']) test('notice collecto
  assert.equal(declared.sha256,createHash('sha256').update(text).digest('hex'));
 });
 
+test('notice collector rejects a declared directory as non-regular notice content',async t=>{
+ const f=await noticesFixture(t),crate=dirname(f.base.manifest_path);
+ await mkdir(join(crate,'legal'),{recursive:true});
+ await writeFile(f.metadata,JSON.stringify({packages:[{...f.base,name:'declared-file',license:null,license_file:'legal'}]}));
+ const result=f.run(f.collector);
+ assert.ifError(result.error);assert.equal(result.status,1);
+ assert.match(result.stderr,/License target is not a regular file/);
+ await assert.rejects(readFile(join(f.root,'third-party','manifest.json')),{code:'ENOENT'});
+});
+
 test('notice collector refuses a missing declared file even when a root LICENSE exists',async t=>{
  const f=await noticesFixture(t);
  await writeFile(f.metadata,JSON.stringify({packages:[{...f.base,name:'declared-file',license:null,license_file:'licenses/missing.txt'}]}));
