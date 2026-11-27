@@ -589,12 +589,13 @@ export class EffectDriver {
       const finish = (error, result) => { if (settled) return; settled = true; clearTimeout(deadline); this.activeRequests.delete(request); request.destroy(); error ? reject(error) : resolve(result); };
       const request = (url.protocol === 'https:' ? https : http).get(url, { headers: effect.sse ? { accept: 'text/event-stream' } : {}, rejectUnauthorized: true }, response => {
         const status = response.statusCode;
+        const decoder = new StringDecoder('utf8');
         if (status >= 300 && status < 400) return finish(new Error('Probe redirects are not admitted'));
         if (effect.sse && !response.headers['content-type']?.startsWith('text/event-stream')) return finish(new Error('SSE content type missing'));
         response.on('data', chunk => {
           bytes += chunk.length;
           if (bytes > limit) return finish(new Error('Probe output limit exceeded'));
-          body += chunk.toString('utf8');
+          body += decoder.write(chunk);
           if (effect.sse && /(?:^|\n)data:[^\n]*\r?\n\r?\n/.test(body)) {
             firstEvent = true;
             finish(null, { status, stdout: '', stderr: '', sseEventReceived: true, timedStreamingVerified: false, vantage: 'local' });
@@ -602,7 +603,7 @@ export class EffectDriver {
         });
         response.on('end', () => {
           if (effect.sse && !firstEvent) finish(new Error('SSE ended before a complete event'));
-          else finish(null, { status, stdout: body, stderr: '', exitCode: status >= 200 && status < 300 ? 0 : 1, vantage: 'local' });
+          else finish(null, { status, stdout: body + decoder.end(), stderr: '', exitCode: status >= 200 && status < 300 ? 0 : 1, vantage: 'local' });
         });
         response.on('error', error => finish(error));
       });
