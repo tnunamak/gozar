@@ -512,3 +512,115 @@ test('Tailscale diagnostic checks serve config even if the status request fails'
   assert.equal(result.ok, false);
   assert.equal(result.lines.at(-1), 'result: not reachable');
 });
+
+test('own-address reach treats loopback as this device', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  assert.equal(reachOf('https://127.0.0.1:8443/'), 'this-device');
+  assert.equal(reachOf('https://127.0.0.2/'), 'this-device');
+  assert.equal(reachOf('https://[::1]/'), 'this-device');
+  assert.equal(reachOf('https://localhost/'), 'this-device');
+  assert.equal(reachOf('https://app.localhost/'), 'this-device');
+  assert.equal(reachOf('https://LOCALHOST/'), 'this-device');
+});
+
+test('own-address reach treats private addresses and local names as the LAN', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  assert.equal(reachOf('https://192.168.1.10/'), 'lan');
+  assert.equal(reachOf('https://10.0.0.5/'), 'lan');
+  assert.equal(reachOf('https://172.16.5.4/'), 'lan');
+  assert.equal(reachOf('https://172.31.255.255/'), 'lan');
+  assert.equal(reachOf('https://printer.local/'), 'lan');
+  assert.equal(reachOf('https://nas.lan/'), 'lan');
+  assert.equal(reachOf('https://host.internal/'), 'lan');
+  assert.equal(reachOf('https://device.home.arpa/'), 'lan');
+  assert.equal(reachOf('https://myhost/'), 'lan');
+  assert.equal(reachOf('https://[fd00::1]/'), 'lan');
+  assert.equal(reachOf('https://[fe80::1]/'), 'lan');
+});
+
+test('own-address reach leaves carrier-grade NAT, unspecified and multicast addresses unknown', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  assert.equal(reachOf('https://100.64.0.1/'), 'unknown');
+  assert.equal(reachOf('https://100.127.255.255/'), 'unknown');
+  assert.equal(reachOf('https://0.1.2.3/'), 'unknown');
+  assert.equal(reachOf('https://224.0.0.1/'), 'unknown');
+  assert.equal(reachOf('https://[::]/'), 'unknown');
+  assert.equal(reachOf('https://[ff02::1]/'), 'unknown');
+  assert.equal(reachOf('https://[::2]/'), 'unknown');
+});
+
+test('own-address reach treats public addresses as the internet and reads IPv4-mapped IPv6 as IPv4', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  assert.equal(reachOf('https://8.8.8.8/'), 'internet');
+  assert.equal(reachOf('https://100.128.0.1/'), 'internet');
+  assert.equal(reachOf('https://172.32.0.1/'), 'internet');
+  assert.equal(reachOf('https://example.com/'), 'internet');
+  assert.equal(reachOf('https://example.com./'), 'internet');
+  assert.equal(reachOf('https://[::ffff:127.0.0.1]/'), 'this-device');
+  assert.equal(reachOf('https://[::ffff:192.168.1.5]/'), 'lan');
+  assert.equal(reachOf('https://[::ffff:8.8.8.8]/'), 'internet');
+});
+
+test('listener error for ngrok payment-card verification names the dashboard page', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const error = safeListenerError({ code: 'ERR_NGROK_8013', message: 'fixture debug detail' });
+  assert.equal(error.code, 'setup_required');
+  assert.match(error.message, /payment-card verification/);
+  assert.equal(error.nextAction.kind, 'open-url');
+  assert.equal(error.nextAction.href, 'https://dashboard.ngrok.com/settings#id-verification');
+  assert.equal(error.nextAction.digest, 'listener-account-8013');
+  assert.doesNotMatch(error.message, /fixture debug detail/);
+});
+
+test('listener error for an invalid ngrok authtoken hands back the credential action', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const credentialAction = { id: 'auth', kind: 'provide-secret', label: 'Provide your ngrok auth token' };
+  const error = safeListenerError({ code: 'ERR_NGROK_105' }, credentialAction);
+  assert.equal(error.code, 'setup_required');
+  assert.match(error.message, /valid ngrok agent authtoken/);
+  assert.deepEqual(error.nextAction, credentialAction);
+  assert.notEqual(error.nextAction, credentialAction);
+});
+
+test('listener error for an invalid ngrok authtoken falls back to the dashboard link', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const error = safeListenerError({ code: 'ERR_NGROK_105' });
+  assert.equal(error.code, 'setup_required');
+  assert.equal(error.nextAction.kind, 'open-url');
+  assert.equal(error.nextAction.href, 'https://dashboard.ngrok.com/get-started/your-authtoken');
+});
+
+test('listener error finds the ngrok fault code in error_code or message text', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const fromField = safeListenerError({ error_code: 'ERR_NGROK_108' });
+  assert.match(fromField.message, /agent\/session allowance was reached/);
+  assert.equal(fromField.nextAction.href, 'https://dashboard.ngrok.com/agents');
+  const fromText = safeListenerError({ message: 'failed: ERR_NGROK_8013 while starting' });
+  assert.match(fromText.message, /payment-card verification/);
+});
+
+test('listener error for an unsupported effect keeps the unsupported code', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const error = safeListenerError({ code: 'unsupported' });
+  assert.equal(error.code, 'unsupported');
+  assert.match(error.message, /no testing handler/);
+});
+
+test('LAN setup lists the usable addresses it observed, with their interfaces', async () => {
+  const { observedInterfaces } = await import('../../adapters/providers/lan/index.mjs');
+  assert.deepEqual(observedInterfaces({ interfaces: {
+    eth0: [
+      { internal: false, address: '192.168.1.5' },
+      { internal: false, address: '10.0.0.7' },
+      { internal: false, address: 'fd00::1' },
+      { internal: true, address: '127.0.0.1' },
+    ],
+    wlan0: [{ internal: false, address: '192.168.2.9' }],
+    down: 'not-a-list',
+  } }), [
+    { name: 'eth0', address: '192.168.1.5' },
+    { name: 'eth0', address: '10.0.0.7' },
+    { name: 'eth0', address: 'fd00::1' },
+    { name: 'wlan0', address: '192.168.2.9' },
+  ]);
+});
