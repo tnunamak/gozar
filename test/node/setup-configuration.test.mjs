@@ -133,6 +133,17 @@ test('ngrok manual hostname rejects a final DNS label longer than 63 characters'
   assert.equal(domainPattern.test(`fixture.${'a'.repeat(64)}`), false);
 });
 
+test('ngrok manual hostname distinguishes a bare name from a pasted URL', () => {
+  assert.equal(domainPattern.test('fixture.example'), true);
+  for (const pasted of ['https://fixture.example', 'fixture.example/setup', 'fixture.example:443'])
+    assert.equal(domainPattern.test(pasted), false, pasted);
+});
+
+test('ngrok manual hostname allows subdomain digits but not a numeric final label', () => {
+  assert.equal(domainPattern.test('node9.region2.example'), true);
+  assert.equal(domainPattern.test('node9.region2.123'), false);
+});
+
 test('ngrok setup journey: auth, then reserved domain, then ready; expose opens the listener with the stored values', async t => {
   const { home, api, forwards, candidateOf, provide, provideValue } = await ngrokWorld(t);
   let candidate = await candidateOf();
