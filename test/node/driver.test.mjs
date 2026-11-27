@@ -1,4 +1,4 @@
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -289,6 +289,32 @@ for (const [label, contentType, body, detail] of [
     assert.equal(driver.activeRequests.size, 0);
   });
 }
+
+test('HTTP probe decodes split UTF-8 chunks without losing bytes', async t => {
+  const driver = Object.assign(Object.create(EffectDriver.prototype), { host: {}, activeRequests: new Set() });
+  const bytes = Buffer.from('café 😀', 'utf8');
+  const request = Object.assign(new EventEmitter(), { destroy() {} });
+  const mock = t.mock.method(http, 'get', (_url, _options, callback) => {
+    queueMicrotask(() => {
+      const response = Object.assign(new EventEmitter(), { statusCode: 200, headers: {} });
+      callback(response);
+      response.emit('data', bytes.subarray(0, 4));
+      response.emit('data', bytes.subarray(4, 7));
+      response.emit('data', bytes.subarray(7));
+      response.emit('end');
+    });
+    return request;
+  });
+  try {
+    const result = await driver.probe({ url: 'http://127.0.0.1:8080', vantage: 'local' });
+    assert.equal(result.stdout, 'café 😀');
+    assert.equal(result.exitCode, 0);
+    assert.equal(driver.activeRequests.size, 0);
+    assert.equal(mock.mock.callCount(), 1);
+  } finally {
+    mock.mock.restore();
+  }
+});
 
 test('HTTP probe reports an unavailable service and releases the request', async t => {
   const server = http.createServer((_req, res) => {
