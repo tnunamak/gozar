@@ -776,6 +776,28 @@ test('a serve-config write without the ETag of a read is refused before any requ
   }
 });
 
+test('an unreadable serve-config response does not become an empty usable configuration', async () => {
+  const { getServeConfig } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  for (const response of [
+    { status: 200, headers: {}, body: '{}' },
+    { status: 200, headers: { etag: '"snapshot"' }, body: '{"TCP":' },
+    { status: 200, headers: { etag: '"snapshot"' }, body: '{"TCP":[]}' },
+  ]) {
+    const { ctx, seen } = localApi(() => response);
+    await assert.rejects(getServeConfig(ctx), {
+      code: 'provider_unsupported', provider: 'tailscale', nextAction: 'upgrade tailscaled',
+    });
+    assert.deepEqual(seen.map(({ path, method }) => [path, method]), [['/localapi/v0/serve-config', 'GET']]);
+  }
+});
+
+test('the server rejecting a stale serve-config snapshot does not trigger another write', async () => {
+  const { setServeConfig } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  const { ctx, seen } = localApi(() => ({ status: 412, headers: {}, body: '' }));
+  assert.equal(await setServeConfig({ TCP: {} }, '"stale-snapshot"', ctx), false);
+  assert.deepEqual(seen.map(({ method, headers }) => [method, headers['If-Match']]), [['POST', '"stale-snapshot"']]);
+});
+
 test('a serve-config write tailscaled rejects fails closed: one conditional write, nothing changed', async () => {
   const { setServeConfig } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
   const etag = '"fake-7"';
