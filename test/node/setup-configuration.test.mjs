@@ -565,6 +565,19 @@ test('own-address reach treats loopback as this device', async () => {
   assert.equal(reachOf('https://LOCALHOST/'), 'this-device');
 });
 
+test('own-address keeps the localhost.localdomain alias local with a final DNS dot', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  assert.equal(reachOf('https://LOCALHOST.LOCALDOMAIN./'), 'this-device');
+});
+
+test('own-address only treats the IPv4 link-local prefix as local for that boundary', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  assert.equal(reachOf('https://169.253.255.255'), 'internet');
+  assert.equal(reachOf('https://169.254.0.1'), 'lan');
+  assert.equal(reachOf('https://169.254.255.254'), 'lan');
+  assert.equal(reachOf('https://169.255.0.1'), 'internet');
+});
+
 test('own-address reach treats private addresses and local names as the LAN', async () => {
   const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
   assert.equal(reachOf('https://192.168.1.10/'), 'lan');
