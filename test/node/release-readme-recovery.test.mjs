@@ -9,6 +9,76 @@ import {pathToFileURL} from 'node:url';
 // The README example is extracted verbatim and run against a recording stand-in for the package.
 // It checks the example's own control flow (recovery order), not the real route runtime.
 const readme = await readFile(new URL('../../README.md', import.meta.url), 'utf8');
+
+test('the exact earlier-setup guide requires an approved inventory selection', async () => {
+  const doc = await readFile(new URL('../../docs/embedding-contract.md', import.meta.url), 'utf8');
+  const fenced = doc.split('<!-- earlier-setup-recovery-example -->')[1]?.match(/\x60\x60\x60js\n([\s\S]*?)\n\x60\x60\x60/);
+  assert.ok(fenced, 'missing runnable recovery fence');
+  const { recoverEarlierSetup } = await import('data:text/javascript;base64,' + Buffer.from(fenced[1]).toString('base64'));
+  const scope = { home: '/fixture', owner: 'fixture-owner', providerId: 'fixture-provider' };
+  const exact = { providerId: scope.providerId, fromRegistryId: 'earlier-a', draftId: 'draft-a' };
+  const flat = { revision: 'next', scopeId: 'stable', values: {}, actions: [] };
+  const candidate = { fromRegistryId: 'earlier-a', draftIds: ['draft-a'], setupOperationIds: ['op-a'], uses: 0 };
+  const refused = { known: false, migration: { reason: 'inflight', candidates: [candidate] } };
+
+  for (const variant of ['approve', 'decline', 'wrong-draft', 'wrong-registry', 'wrong-provider', 'flat', 'unaddressable']) {
+    const calls = [];
+    const seen = [];
+    const configuration = variant === 'flat' ? flat : variant === 'unaddressable' ? {
+      known: false,
+      migration: { candidates: [{ ...candidate, unaddressableSetupOperations: 2 }],
+        recovery: { available: false, reason: 'unaddressable_setup_operations' } },
+    } : refused;
+    const api = {
+      async listProviders(input) {
+        assert.deepEqual(input, { home: scope.home, owner: scope.owner });
+        calls.push('read');
+        return { providers: [{ providerId: scope.providerId, configuration: calls.includes('discard') ? flat : configuration }] };
+      },
+      async discardEarlierConfigurationDraft(input) {
+        assert.deepEqual(input, { ...scope, ...exact });
+        calls.push('discard');
+        return { discarded: true };
+      },
+    };
+    const result = await recoverEarlierSetup(api, scope, {
+      show(view) { calls.push('show'); seen.push(view); },
+      async selectDraft(view) {
+        calls.push('select');
+        assert.equal(view.providerId, scope.providerId);
+        assert.deepEqual(view.candidates[0], { ...candidate, unaddressableSetupOperations: 0 });
+        if (variant === 'wrong-draft') return { ...exact, draftId: 'different' };
+        if (variant === 'wrong-registry') return { ...exact, fromRegistryId: 'different' };
+        if (variant === 'wrong-provider') return { ...exact, providerId: 'different' };
+        return exact;
+      },
+      async approveDiscard(input) {
+        assert.deepEqual(input, exact);
+        calls.push('approve');
+        return variant === 'approve';
+      },
+    });
+    if (variant === 'approve') {
+      assert.deepEqual(calls, ['read', 'select', 'approve', 'discard', 'read']);
+      assert.deepEqual(result, { state: 'reread', discarded: true, configuration: flat });
+    } else if (variant === 'decline') {
+      assert.deepEqual(calls, ['read', 'select', 'approve']);
+      assert.deepEqual(result, { state: 'declined' });
+    } else if (variant.startsWith('wrong-')) {
+      assert.deepEqual(calls, ['read', 'select']);
+      assert.deepEqual(result, { state: 'selection_mismatch' });
+    } else if (variant === 'flat') {
+      assert.deepEqual(calls, ['read']);
+      assert.deepEqual(result, { state: 'configured_view', configuration: flat });
+    } else {
+      assert.deepEqual(calls, ['read', 'show']);
+      assert.deepEqual(result, { state: 'no_supported_action' });
+      assert.deepEqual(seen, [{ state: 'needs_attention', reason: 'unaddressable_setup_operations',
+        candidates: [{ ...candidate, unaddressableSetupOperations: 2 }] }]);
+    }
+  }
+});
+
 const marker = "import { catalogRoutes, expose, listRoutes, watchRoutes, closeRoute }";
 const start = readme.lastIndexOf('```js\n', readme.indexOf(marker)) + 6;
 const snippet = readme.slice(start, readme.indexOf('\n```', start));
