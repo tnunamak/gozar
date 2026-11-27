@@ -561,6 +561,24 @@ test('own-address reach treats public addresses as the internet and reads IPv4-m
   assert.equal(reachOf('https://[::ffff:8.8.8.8]/'), 'internet');
 });
 
+test('short IPv6 hextets do not look like private or multicast prefixes', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  for (const address of ['[00fd::1]', '[00fe::1]', '[00ff::1]']) {
+    assert.equal(reachOf('https://' + address), 'internet', address);
+  }
+  assert.equal(reachOf('https://[fd00::1]'), 'lan');
+  assert.equal(reachOf('https://[ff00::1]'), 'unknown');
+});
+
+test('IPv4-mapped shared address space keeps its two precise boundaries', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  const reach = address => reachOf('https://[::ffff:' + address + ']');
+  assert.equal(reach('100.63.255.255'), 'internet');
+  assert.equal(reach('100.64.0.0'), 'unknown');
+  assert.equal(reach('100.127.255.255'), 'unknown');
+  assert.equal(reach('100.128.0.0'), 'internet');
+});
+
 test('listener error for ngrok payment-card verification names the dashboard page', async () => {
   const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
   const error = safeListenerError({ code: 'ERR_NGROK_8013', message: 'fixture debug detail' });
