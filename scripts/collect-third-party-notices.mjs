@@ -1,7 +1,7 @@
 // Copy the locked Rust closure's actual license/notice files, including build dependencies, into the release.
 import { execFileSync } from 'node:child_process';
 import { readFile, readdir, mkdir, writeFile, copyFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -21,18 +21,30 @@ export function licenseLabel(pkg) {
 export async function collectThirdPartyNotices() {
   const root = fileURLToPath(new URL('../', import.meta.url));
   const metadata = JSON.parse(execFileSync('cargo', ['metadata', '--locked', '--format-version=1'], { cwd: root, encoding: 'utf8' }));
+  const declarations = metadata.packages.filter(pkg => pkg.source).sort((a, b) => a.name.localeCompare(b.name))
+    .map(pkg => ({ pkg, license: licenseLabel(pkg) }));
   const packages = [];
-  for (const pkg of metadata.packages.filter(pkg => pkg.source).sort((a, b) => a.name.localeCompare(b.name))) {
+  for (const { pkg, license } of declarations) {
     const source = dirname(pkg.manifest_path), directory = `third-party/rust/${pkg.name}-${pkg.version}`;
-    await mkdir(join(root, directory), { recursive: true });
+    const names = new Set((await readdir(source, { withFileTypes: true }))
+      .filter(entry => !entry.isDirectory() && /^(LICENSE|LICENCE|COPYING|NOTICE|UNLICENSE)/i.test(entry.name))
+      .map(entry => entry.name));
+    if (typeof pkg.license_file === 'string' && pkg.license_file) {
+      const declared = relative(source, resolve(source, pkg.license_file));
+      if (!declared || isAbsolute(declared) || declared === '..' || declared.startsWith('..' + sep))
+        throw new Error(`Declared license file is outside ${pkg.name}`);
+      names.add(declared.split(sep).join('/'));
+    }
     const files = [];
-    for (const name of (await readdir(source)).filter(name => /^(LICENSE|LICENCE|COPYING|NOTICE|UNLICENSE)/i.test(name)).sort()) {
+    for (const name of [...names].sort()) {
       const bytes = await readFile(join(source, name));
-      await copyFile(join(source, name), join(root, directory, name));
+      const destination = join(root, directory, name);
+      await mkdir(dirname(destination), { recursive: true });
+      await copyFile(join(source, name), destination);
       files.push({ path: `${directory}/${name}`, sha256: createHash('sha256').update(bytes).digest('hex') });
     }
     if (!files.length) throw new Error(`No license text found for ${pkg.name}`);
-    packages.push({ name: pkg.name, version: pkg.version, license: licenseLabel(pkg), files });
+    packages.push({ name: pkg.name, version: pkg.version, license, files });
   }
   const lockHash = createHash('sha256').update(await readFile(join(root, 'Cargo.lock'))).digest('hex');
   await writeFile(join(root, 'third-party/manifest.json'), JSON.stringify({ cargoLockSha256: lockHash, packages }, null, 2) + '\n');

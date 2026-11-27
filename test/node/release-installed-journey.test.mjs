@@ -55,10 +55,37 @@ test('notice collector import is inert; direct entry writes both declared licens
 
 test('notice collector refuses a crate with no declared license and writes no manifest',async t=>{
  const f=await noticesFixture(t);
- await writeFile(f.metadata,JSON.stringify({packages:[{...f.base,name:'missing-declaration',license:null,license_file:null}]}));
+ await writeFile(f.metadata,JSON.stringify({packages:[
+  {...f.base,name:'declared-first',license:'MIT'},
+  {...f.base,name:'missing-declaration',license:null,license_file:null},
+ ]}));
  const direct=f.run(f.collector);
  assert.ifError(direct.error); assert.equal(direct.status,1);
  assert.match(direct.stderr,/No license declared for missing-declaration/);
+ await assert.rejects(readFile(join(f.root,'third-party','manifest.json')),{code:'ENOENT'});
+ await assert.rejects(readFile(join(f.root,'third-party','rust','declared-first-0.1.0','LICENSE')),{code:'ENOENT'});
+});
+
+for(const licenseFile of ['licenses/MIT.txt','COPYRIGHT']) test('notice collector includes the exact declared file '+licenseFile,async t=>{
+ const f=await noticesFixture(t),crate=dirname(f.base.manifest_path),text='declared file evidence\n';
+ await mkdir(dirname(join(crate,licenseFile)),{recursive:true});
+ await writeFile(join(crate,licenseFile),text);
+ await writeFile(f.metadata,JSON.stringify({packages:[{...f.base,name:'declared-file',license:null,license_file:licenseFile}]}));
+ const result=f.run(f.collector);
+ assert.ifError(result.error);assert.equal(result.status,0,result.stderr);
+ const {packages}=JSON.parse(await readFile(join(f.root,'third-party','manifest.json'),'utf8'));
+ const declared=packages[0].files.find(file=>file.path==='third-party/rust/declared-file-0.1.0/'+licenseFile);
+ assert.ok(declared,'the manifest points to the actual declared file, not only the unrelated root LICENSE');
+ assert.equal(await readFile(join(f.root,declared.path),'utf8'),text);
+ assert.equal(declared.sha256,createHash('sha256').update(text).digest('hex'));
+});
+
+test('notice collector refuses a missing declared file even when a root LICENSE exists',async t=>{
+ const f=await noticesFixture(t);
+ await writeFile(f.metadata,JSON.stringify({packages:[{...f.base,name:'declared-file',license:null,license_file:'licenses/missing.txt'}]}));
+ const result=f.run(f.collector);
+ assert.ifError(result.error);assert.equal(result.status,1);
+ assert.match(result.stderr,/ENOENT/);
  await assert.rejects(readFile(join(f.root,'third-party','manifest.json')),{code:'ENOENT'});
 });
 
