@@ -887,6 +887,24 @@ for(const [label,screen] of [
  assert.equal(await readFile(join(f.input.outputDirectory,'screen.stdout'),'utf8'),screen);
 });
 
+for (const state of ['overflow', 'drainTimedOut']) {
+ test('a zero-exit installed step with '+state+' still stops before running any example',async t=>{
+  const f=await fixture(t);
+  const result={status:0,signal:null,[state]:true,stdout:'partial receipt stdout',stderr:'partial receipt stderr'};
+  let calls=0;
+  await assert.rejects(runInstalledJourney(f.input,{run:async()=>{calls++;return result;}}),
+   /Installed journey subprocess failed: install/);
+  const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+  t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+  assert.equal(calls,1);
+  assert.equal(report.status,'failed');
+  assert.deepEqual(report.steps.map(step=>step.name),['install']);
+  assert.equal(report.failure.result[state],true);
+  assert.equal(await readFile(join(f.input.outputDirectory,'install.stdout'),'utf8'),result.stdout);
+  assert.equal(await readFile(join(f.input.outputDirectory,'install.stderr'),'utf8'),result.stderr);
+ });
+}
+
 test('a zero-exit install marked timed out remains failed with its output intact',async t=>{
  const f=await fixture(t);
  let calls=0;
