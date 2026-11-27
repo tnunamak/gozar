@@ -152,12 +152,23 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
  // the stored item stays addressable by exactly one authorized record. A rival lineage sees the tombstone and is refused.
  // The promise is about ordinary supported resolution after the commit; it does not recall bytes a trusted earlier host
  // already read into memory.
+ const draftBindingMatches=(ref,registry,scopeId,inputId)=>plain(ref)&&ref.registryId===registry&&
+  ref.scopeId===scopeId&&ref.inputId===inputId&&typeof ref.draftId==='string'&&ref.draftId.length>0&&
+  ref.operationId==null&&ref.backendScopeId===undefined;
  async function adopt(state,providerId,scopeId,{R,key,rec},home,owner){
   const details=[migrationCandidate(state,{R,key,rec})];
   const sound=plain(rec)&&rec.scopeId===key&&plain(rec.bindings)&&plain(rec.values)&&plain(rec.drafts)&&typeof rec.revision==='string'&&Array.isArray(rec.uses)&&rec.uses.every(x=>typeof x==='string');
   if(!sound)refuseMigration('incompatible',details);
-  // Open drafts, setup operations and operation-held credentials are not ordinary bindings: refuse until they are closed.
-  if(Object.keys(rec.drafts).length||Object.values(state.secrets).some(ref=>ref.scopeId===key&&(ref.draftId||ref.operationId)))refuseMigration('inflight',details);
+  // Older writers can leave a draft stamp on an exact applied binding after committing it.
+  // A real draft or unbound draft ref still holds custody. No stamp is rewritten until adoption commits.
+  // Historical records have no commit tombstone: exact applied ownership plus no live custody is the evidence.
+  if(Object.keys(rec.drafts).length)refuseMigration('inflight',details);
+  const committed=new Set();
+  for(const [inputId,handle]of Object.entries(rec.bindings)){
+   if(typeof handle==='string'&&draftBindingMatches(state.secrets[handle],R,key,inputId))committed.add(handle);
+  }
+  if(Object.entries(state.secrets).some(([handle,ref])=>ref.scopeId===key&&(ref.operationId||ref.draftId&&!committed.has(handle))))
+   refuseMigration('inflight',details);
   const retiring=[];
   for(const [id,op]of Object.entries(state.setupOperations??{})){
    if(op?.scopeId!==key)continue;
@@ -178,7 +189,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   }
   for(const [inputId,handle]of Object.entries(rec.bindings)){
    const ref=typeof handle==='string'?state.secrets[handle]:undefined;
-   if(!ref||ref.registryId!==R||ref.scopeId!==key||ref.inputId!==inputId||ref.draftId||ref.operationId||ref.backendScopeId!==undefined)refuseMigration('incompatible',details);
+   if(!ref||ref.registryId!==R||ref.scopeId!==key||ref.inputId!==inputId||(ref.draftId&&!committed.has(handle))||ref.operationId||ref.backendScopeId!==undefined)refuseMigration('incompatible',details);
   }
   for(const value of Object.values(rec.values))if(typeof value!=='string')refuseMigration('incompatible',details);
   // The provider's CURRENT declaration decides: an id must still exist there with the role it was saved in. No declaration, no carry-forward.
@@ -189,7 +200,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   if(rec.uses.length)refuseMigration('in_use',details);
   // Build the successor from the validated fields first; only then empty the predecessor, in the same in-memory edit.
   const adopted={scopeId,revision:rec.revision,bindings:clone(rec.bindings),values:clone(rec.values),drafts:{},uses:[],migratedFrom:[key]};
-  for(const handle of Object.values(adopted.bindings))Object.assign(state.secrets[handle],{registryId:custodian,scopeId,backendScopeId:key});
+  for(const handle of Object.values(adopted.bindings))Object.assign(state.secrets[handle],{registryId:custodian,scopeId,backendScopeId:key,...(committed.has(handle)?{draftId:null}:{})});
   state.configs[scopeId]=adopted;
   for(const id of retiring)delete state.setupOperations[id];
   state.configs[key]={scopeId:key,revision:fresh(),bindings:{},values:{},drafts:{},uses:[],migratedTo:scopeId};
@@ -420,7 +431,21 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
    });
   }),
   beginConfigurationDraft:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner);compare(c,r.expectedConfigurationRevision);const draftId=fresh();const d={scopeId:c.scopeId,revision:fresh(),baseRevision:c.revision,bindings:clone(c.bindings),values:clone(c.values)};c.drafts[draftId]=d;return {draftId,scopeId:c.scopeId,baseRevision:c.revision,configuration:await redacted(h,s,d)};}),
-  commitConfigurationDraft:r=>transaction(r.home,async(s,h)=>{const c=await config(s,h,r.providerId,r.owner),d=select(c,r.draftId);if(!r.draftId)fail('invalid_input');compare(d,r.expectedConfigurationRevision);compare(c,d.baseRevision);if(c.uses.length)fail('configuration_in_use');c.bindings=d.bindings;c.values=d.values;c.revision=fresh();delete c.drafts[r.draftId];return redacted(h,s,c);}),
+  commitConfigurationDraft:r=>transaction(r.home,async(s,h)=>{
+   const c=await config(s,h,r.providerId,r.owner),d=select(c,r.draftId);
+   if(!r.draftId)fail('invalid_input');
+   compare(d,r.expectedConfigurationRevision);compare(c,d.baseRevision);
+   if(c.uses.length)fail('configuration_in_use');
+   const operations=Object.values(s.setupOperations??{}).filter(op=>op?.scopeId===c.scopeId);
+   if(!operations.some(op=>op.draftId===r.draftId)){
+    for(const [inputId,handle]of Object.entries(d.bindings)){
+     const ref=s.secrets[handle];
+     if(draftBindingMatches(ref,custodian,c.scopeId,inputId)&&ref.draftId===r.draftId)ref.draftId=null;
+    }
+   }
+   c.bindings=d.bindings;c.values=d.values;c.revision=fresh();delete c.drafts[r.draftId];
+   return redacted(h,s,c);
+  }),
   discardEarlierConfigurationDraft:async r=>{
    const from=r?.fromRegistryId,draftId=r?.draftId;
    if(typeof r?.home!=='string'||!r.home||typeof from!=='string'||!registryIdPattern.test(from)||

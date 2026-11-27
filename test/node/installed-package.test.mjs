@@ -741,6 +741,92 @@ void [address, outage, pendingStep, lifetime, traffic];
   });
 });
 
+test('installed package: registry upgrade keeps the committed DataConnect fixture credential available', async t => {
+  const { project } = await installedPackage();
+  const fixture = await mkdtemp(join(project, 'installed-dataconnect-registry-'));
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+  const home = join(fixture, 'home'), emptyBin = join(fixture, 'bin');
+  await mkdir(home, { mode: 0o700 });
+  await mkdir(emptyBin, { mode: 0o700 });
+  const consumer = join(fixture, 'consumer.mjs');
+  await writeFile(consumer, `
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { createGozar } from '@tnunamak/gozar';
+import { fakeRegistry } from '@tnunamak/gozar/testing';
+
+const home = process.env.GOZAR_HOME;
+const providerId = 'migration-secret-fixture';
+const options = { id: providerId, kinds: ['attached'], reach: 'this-device',
+  setupActions: [{ id: 'secret', kind: 'provide-secret', label: 'Fixture secret', digest: 'secret-1',
+    secretLabel: 'Fixture secret', disclosure: { revision: 'secret-1', text: 'Fixture', links: [] } }] };
+const registry = await fakeRegistry({ ...options, dir: join(home, 'registry') });
+const items = new Map(), observations = [];
+const secretBackend = {
+  async put({ scopeId, bytes }) {
+    const handle = randomUUID();
+    items.set(handle, { scopeId, bytes: new Uint8Array(bytes) });
+    return { handle };
+  },
+  async withSecret({ scopeId, handle }, use) {
+    const item = items.get(handle);
+    assert.equal(scopeId, item.scopeId);
+    return use(new Uint8Array(item.bytes));
+  },
+  async presence({ scopeId, handle }) {
+    observations.push({ scopeId, handle });
+    return { known: true, value: items.get(handle)?.scopeId === scopeId };
+  },
+  async delete({ scopeId, handle }) {
+    assert.equal(scopeId, items.get(handle)?.scopeId);
+    return { deleted: items.delete(handle) };
+  },
+};
+const api = createGozar({ ...registry, secretBackend });
+const ref = { home, providerId };
+const configuration = async api => {
+  const provider = (await api.listProviders({ home })).providers.find(row => row.providerId === providerId);
+  assert.ok(provider, 'installed registry must retain the named provider');
+  return provider.configuration;
+};
+const original = await configuration(api);
+const draft = await api.beginConfigurationDraft({ ...ref, expectedConfigurationRevision: original.revision });
+const { handle } = await api.storeSecret({ ...ref, draftId: draft.draftId, scopeId: draft.configuration.scopeId,
+  expectedConfigurationRevision: draft.configuration.revision, inputId: 'secret', bytes: new Uint8Array([11, 22, 33]) });
+const action = draft.configuration.actions.find(row => row.kind === 'provide-secret');
+assert.ok(action, 'fixture declares the missing credential');
+const { configuration: bound } = await api.runSetupAction({ ...ref, draftId: draft.draftId,
+  expectedConfigurationRevision: draft.configuration.revision, actionId: action.id, secretHandle: handle,
+  approval: { kind: 'setup', digest: action.digest, disclosureRevision: action.disclosure.revision,
+    consentFactsDigest: action.consent.consentFactsDigest } });
+await api.commitConfigurationDraft({ ...ref, draftId: draft.draftId, expectedConfigurationRevision: bound.revision });
+
+// Inert test-owned metadata only: discover the generated predecessor id without using private SDK imports.
+const state = JSON.parse(await readFile(join(home, 'embedding-state.json'), 'utf8'));
+const predecessor = state.secrets[handle];
+assert.match(predecessor.registryId, /^registry-v1:[0-9a-f]{64}$/);
+const successor = await fakeRegistry({ ...options, dir: join(home, 'successor-registry') });
+const migrated = createGozar({ ...successor, secretBackend,
+  registryLineage: { id: 'installed-dataconnect-fixture', replaces: [predecessor.registryId] } });
+observations.length = 0;
+const adopted = await configuration(migrated);
+assert.notEqual(adopted.known, false, JSON.stringify(adopted.migration ?? null));
+assert.notEqual(adopted.scopeId, original.scopeId);
+assert.ok(observations.some(row => row.handle === handle && row.scopeId === predecessor.scopeId),
+  'the successor still observes the committed item at its original backend scope');
+const saved = JSON.parse(await readFile(join(home, 'embedding-state.json'), 'utf8')).secrets[handle];
+assert.equal(saved.draftId, null, 'committed custody must not retain a phantom draft');
+assert.equal(items.size, 1);
+assert.deepEqual(await secretBackend.withSecret({ scopeId: predecessor.scopeId, handle }, bytes => [...bytes]), [11, 22, 33]);
+`);
+  await exec(process.execPath, ['--import', durableNetwork, consumer], {
+    cwd: project, timeout: 60_000,
+    env: { PATH: emptyBin, HOME: home, GOZAR_HOME: home, TMPDIR: fixture },
+  });
+});
+
 test('installed package: recovers one exact earlier draft and retries without changing saved bytes', async t => {
   const { project } = await installedPackage();
   // Reuse the one installation; only this probe's source and state are temporary.
