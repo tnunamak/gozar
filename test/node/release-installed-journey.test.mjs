@@ -285,6 +285,17 @@ test('invalid source revision is rejected before creating output',async t=>{
  await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
 });
 
+test('single-element arrays are not valid release inputs, even before archive I/O',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const missing=join(f.root,'not-present.tgz');
+ for(const [field,valid] of [['sha256',f.input.sha256],['sourceSha',f.input.sourceSha],['tarball',f.input.tarball],['outputDirectory',f.input.outputDirectory]]){
+  await assert.rejects(runInstalledJourney({...f.input,tarball:missing,[field]:[valid]},{run:stub.run}),
+   {message:'Explicit tarball, sha256, source SHA and output directory required'},field);
+ }
+ assert.deepEqual(stub.calls,[]);
+ await assert.rejects(readFile(f.input.outputDirectory),{code:'ENOENT'});
+});
+
 test('a non-string source revision is rejected before staging an otherwise valid archive',async t=>{
  const f=await fixture(t),stub=processStub(f);
  const run=async(command,args,options)=>{
