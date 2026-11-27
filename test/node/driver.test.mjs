@@ -62,6 +62,37 @@ test('direct argv runs and completion preserves exact protocol identity', async 
   assert.equal((await driver.execute(effect({ ...spawnRecipe, args: ['-e', 'process.exit(99)'] }, 'detect', 'changed'))).ok, false);
 });
 
+test('a missing provider executable reports launch failure and a later detection can succeed', async t => {
+  const recipe = { ...spawnRecipe, timeoutMs: 10_000 };
+  let installed = false;
+  const { directory, driver, journal } = await fixture(t, { detect: recipe }, {
+    resolveProgram: () => installed ? program : join(directory, 'missing-provider-program'),
+  });
+  const unavailable = await driver.execute(effect(recipe, 'detect', 'missing-command'));
+  assert.equal(unavailable.ok, false);
+  assert.equal(unavailable.result.code, 'ENOENT');
+  assert.deepEqual(Object.keys(journal.value.owned), []);
+  installed = true;
+  const recovered = await driver.execute(effect(recipe, 'detect', 'restored-command'));
+  assert.equal(recovered.ok, true);
+  assert.deepEqual(recovered.result, { stdout: 'ok', stderr: '', exitCode: 0 });
+});
+
+test('a failed interface inventory is not reported as an empty inventory', async t => {
+  const recipe = { kind: 'interfaces' };
+  const { driver } = await fixture(t, { detect: recipe });
+  driver.interfaceInventory = async () => {
+    throw Object.assign(new Error('fixture inventory unavailable'), { code: 'inventory_unavailable' });
+  };
+  const failed = await driver.execute(effect(recipe, 'detect', 'inventory-failed'));
+  assert.equal(failed.ok, false);
+  assert.deepEqual(failed.result, { code: 'inventory_unavailable', detail: 'fixture inventory unavailable' });
+  driver.interfaceInventory = async () => ({ interfaces: {} });
+  const next = await driver.execute(effect(recipe, 'detect', 'inventory-recovered'));
+  assert.equal(next.ok, true);
+  assert.deepEqual(next.result, { interfaces: {} });
+});
+
 test('mutation requires a matching, single-use, durable receipt; failed sync cannot authorize it', async t => {
   const recipe = { ...spawnRecipe, longRunning: true, collectMs: 20, args: ['-e', 'process.stdout.write("ok");setInterval(()=>{},1000)'] };
   const { driver, journal } = await fixture(t, { create: recipe });
