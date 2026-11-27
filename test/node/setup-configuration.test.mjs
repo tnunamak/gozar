@@ -513,6 +513,37 @@ test('Tailscale diagnostic checks serve config even if the status request fails'
   assert.equal(result.lines.at(-1), 'result: not reachable');
 });
 
+test('Tailscale diagnostic does not infer a usable config from working status', async () => {
+  const { checkTailscaleApp } = await import('../../adapters/providers/_shared/check-tailscale-app.mjs');
+  const result = await checkTailscaleApp({
+    platform: 'linux', env: { PATH: '' }, resolve: () => null,
+    node: async () => {},
+    serveConfig: async () => {
+      throw Object.assign(new Error('synthetic config detail'), { code: 'not_supported', nextAction: 'upgrade tailscaled' });
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.lines.includes('LocalAPI status: ok'));
+  assert.ok(result.lines.includes('LocalAPI serve-config: not_supported (upgrade tailscaled)'));
+  assert.doesNotMatch(result.lines.join('\n'), /synthetic config detail/);
+  assert.equal(result.lines.at(-1), 'result: not reachable');
+});
+
+test('missing macOS app discovery still reports both direct LocalAPI failures', async () => {
+  const { checkTailscaleApp } = await import('../../adapters/providers/_shared/check-tailscale-app.mjs');
+  const result = await checkTailscaleApp({
+    platform: 'darwin', env: { PATH: '' }, resolve: () => null,
+    discover: async () => null,
+    node: async () => { throw new Error('synthetic status detail'); },
+    serveConfig: async () => { throw new Error('synthetic config detail'); },
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.lines.some(line => line.startsWith('Tailscale app LocalAPI: not found')));
+  assert.deepEqual(result.lines.slice(-3), [
+    'LocalAPI status: failed', 'LocalAPI serve-config: failed', 'result: not reachable',
+  ]);
+});
+
 test('own-address reach treats loopback as this device', async () => {
   const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
   assert.equal(reachOf('https://127.0.0.1:8443/'), 'this-device');
