@@ -290,6 +290,37 @@ for (const [label, contentType, body, detail] of [
   });
 }
 
+test('HTTP probe reports an unavailable service and releases the request', async t => {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(503);
+    res.end('fixture unavailable');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const { driver } = await fixture(t, {}, { origin: url });
+  const probe = { kind: 'http-probe', url, vantage: 'local' };
+  driver.adapters[0].recipes.probe = probe;
+  const result = await driver.execute({ ...probe, id: 'unavailable', sessionId: 'test', generation: 1, operation: 'probe' });
+  assert.equal(result.ok, true, 'the HTTP exchange completed');
+  assert.deepEqual(result.result, { status: 503, stdout: 'fixture unavailable', stderr: '', exitCode: 1, vantage: 'local' });
+  assert.equal(driver.activeRequests.size, 0);
+});
+
+test('HTTP probe rejects an oversized response without returning partial data', async t => {
+  const server = http.createServer((_req, res) => res.end('12345'));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const { driver } = await fixture(t, {}, { origin: url });
+  const probe = { kind: 'http-probe', url, vantage: 'local', maxOutputBytes: 4 };
+  driver.adapters[0].recipes.probe = probe;
+  const result = await driver.execute({ ...probe, id: 'response-too-large', sessionId: 'test', generation: 1, operation: 'probe' });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.result, { code: 'blocked', detail: 'Probe output limit exceeded' });
+  assert.equal(driver.activeRequests.size, 0);
+});
+
 test('owned loopback forwarder selects ephemeral port, serves exact target, removes exact socket', async t => {
   const target = net.createServer(socket => socket.end('target'));
   await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
