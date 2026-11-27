@@ -109,6 +109,7 @@ export async function prepareReleaseHandoff({root,sourceSha,gateReceipt,outputDi
 }
 function checkConsumer(receipt,manifest,archivePackage){
  const reject=()=>{throw new Error('Unknown, mismatched or incomplete real consumer receipt');};
+ // This release gate preserves the package policy that the optional ngrok SDK is absent.
  const expectedOptional=optionalPackageNames(archivePackage).sort();
  const actualOptional=receipt?.optionalDependenciesAbsent;
  const expectedMembers=new Map(manifest.members.map(member=>[member.path,member]));

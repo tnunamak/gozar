@@ -106,6 +106,21 @@ test('actual installed journey qualifies its exact fixture archive without trans
  try{
   receipt=await runInstalledJourney(input);
   for(const alter of [
+   bad=>{bad.installedBytes=false;},
+   bad=>{bad.execution='injected-process-runner';},
+   bad=>{bad.sourceShaProvenance='authenticated';},
+   bad=>{bad.schemaVersion=2;},
+   bad=>{bad.kind='unknown-consumer';},
+   bad=>{bad.failure={message:'retained fixture failure'};},
+   bad=>{bad.members[0].sha256='e'.repeat(64);},
+   bad=>{bad.members[0].bytes++;},
+   bad=>{bad.members[1]=structuredClone(bad.members[0]);},
+   bad=>{[bad.steps[0],bad.steps[1]]=[bad.steps[1],bad.steps[0]];},
+   bad=>{bad.steps[1].name='other-screen';},
+   bad=>{bad.steps[1].result.stdout='not the screen';},
+   bad=>{bad.steps[2].result.stdout=JSON.stringify({...bad.lifecycle,extra:'mismatched observation'});},
+   bad=>{bad.lifecycle.proof.status='unverified';},
+   bad=>{bad.lifecycle.resourceLedger.foreignPreserved=false;},
    bad=>{bad.sourceSha='b'.repeat(40);},
    bad=>{bad.sha256='c'.repeat(64);},
    bad=>{bad.steps.find(step=>step.name==='screen').result.timedOut=true;},
