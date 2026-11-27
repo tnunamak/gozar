@@ -653,3 +653,84 @@ test('LAN setup lists the usable addresses it observed, with their interfaces', 
     { name: 'wlan0', address: '192.168.2.9' },
   ]);
 });
+
+// --- Tailscale LocalAPI client failures ------------------------------------------------------------------
+
+// The LocalAPI client reads its replies through ctx.dispatchEffect, so a canned
+// reply exercises the typed errors without a socket, a daemon or the network.
+const localApi = replies => {
+  const seen = [];
+  const ctx = { dispatchEffect: async ({ input }) => {
+    seen.push({ ...input });
+    return replies(input);
+  } };
+  return { ctx, seen };
+};
+
+test('Tailscale not running: a node status without a Running backend names `tailscale up`', async () => {
+  const { getNode } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  for (const backendState of ['Stopped', 'NeedsLogin']) {
+    const { ctx, seen } = localApi(({ path }) => {
+      assert.equal(path, '/localapi/v0/status?peers=false');
+      return { status: 200, headers: {}, body: JSON.stringify({ BackendState: backendState, Self: { DNSName: 'node.tailnet.test.', CapMap: {} } }) };
+    });
+    await assert.rejects(getNode(ctx), error => {
+      assert.equal(error.code, 'provider_not_running');
+      assert.equal(error.provider, 'tailscale');
+      assert.equal(error.message, 'Tailscale is not running: run `tailscale up`, then retry');
+      assert.equal(error.nextAction, 'tailscale up');
+      return true;
+    });
+    assert.equal(seen.length, 1, `${backendState}: one status read and nothing else`);
+  }
+});
+
+test('a node status reply with no DNS name is an unsupported tailscaled, not a route', async () => {
+  const { getNode } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  const { ctx, seen } = localApi(({ path }) => {
+    assert.equal(path, '/localapi/v0/status?peers=false');
+    return { status: 200, headers: {}, body: JSON.stringify({ BackendState: 'Running', Self: { CapMap: {} } }) };
+  });
+  await assert.rejects(getNode(ctx), error => {
+    assert.equal(error.code, 'provider_unsupported');
+    assert.equal(error.provider, 'tailscale');
+    assert.equal(error.message, 'Tailscale LocalAPI does not offer serve config with an ETag: upgrade tailscaled');
+    assert.equal(error.nextAction, 'upgrade tailscaled');
+    return true;
+  });
+  assert.equal(seen.length, 1, 'one status read and nothing else');
+});
+
+test('a serve-config write without the ETag of a read is refused before any request', async () => {
+  const { setServeConfig } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  for (const etag of ['', undefined]) {
+    const { ctx, seen } = localApi(() => assert.fail('no request may be sent'));
+    await assert.rejects(setServeConfig({ TCP: {} }, etag, ctx), error => {
+      assert.equal(error.code, 'invalid_input');
+      assert.equal(error.provider, 'tailscale');
+      assert.equal(error.message, 'Serve config write requires the ETag of a read');
+      assert.equal(error.nextAction, 'read the serve config first');
+      return true;
+    });
+    assert.deepEqual(seen, [], 'the refused write sent nothing');
+  }
+});
+
+test('a serve-config write tailscaled rejects fails closed: one conditional write, nothing changed', async () => {
+  const { setServeConfig } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  const etag = '"fake-7"';
+  const { ctx, seen } = localApi(({ path, method, headers }) => {
+    assert.equal(path, '/localapi/v0/serve-config');
+    assert.equal(method, 'POST');
+    assert.equal(headers['If-Match'], etag);
+    return { status: 500, headers: {}, body: '' };
+  });
+  await assert.rejects(setServeConfig({ TCP: { 8443: { HTTPS: true } } }, etag, ctx), error => {
+    assert.equal(error.code, 'provider_failed');
+    assert.equal(error.provider, 'tailscale');
+    assert.equal(error.message, 'Tailscale rejected the serve config change; nothing else was changed');
+    assert.equal(error.nextAction, 'retry; check the tailscaled logs if it persists');
+    return true;
+  });
+  assert.equal(seen.length, 1, 'the rejected write was attempted once, never retried');
+});
