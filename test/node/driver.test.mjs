@@ -726,6 +726,29 @@ test('line framing does not count the CRLF delimiter against the payload cap', (
   assert.deepEqual(lines.slice(1), ['next']);
 });
 
+test('a timer with no requested delay settles once and leaves no timer entry', async t => {
+  const recipe = { kind: 'timer' };
+  const { driver } = await fixture(t, { detect: recipe });
+  const request = effect(recipe, 'detect', 'timer-default');
+  const result = await driver.execute(request);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.result, { elapsed: true });
+  assert.equal(driver.timers.has(request.id), false);
+});
+
+test('cancelling an elapsed timer does not poison the next timer', async t => {
+  const recipe = { kind: 'timer', delayMs: 1 };
+  const { driver } = await fixture(t, { detect: recipe });
+  const first = await driver.execute(effect(recipe, 'detect', 'timer-finished'));
+  assert.deepEqual(first.result, { elapsed: true });
+  driver.cancelTimers();
+  assert.equal(driver.timers.size, 0);
+  const next = await driver.execute(effect(recipe, 'detect', 'timer-after-finish'));
+  assert.equal(next.ok, true);
+  assert.deepEqual(next.result, { elapsed: true });
+  assert.equal(driver.timers.size, 0);
+});
+
 test('cancelling a pending driver timer settles it and removes its timer entry', async t => {
   const recipe = { kind: 'timer', delayMs: 60_000 };
   const { driver } = await fixture(t, { detect: recipe });
