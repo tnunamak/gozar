@@ -70,6 +70,12 @@ for (const [name, alter] of [
   await assert.rejects(readFile(f.input.outputDirectory),{code:'ENOENT'});
 });
 
+test('the notice collector imports as a library without invoking the release command', async () => {
+  const { collectThirdPartyNotices, licenseLabel } = await import('../../scripts/collect-third-party-notices.mjs');
+  assert.equal(typeof collectThirdPartyNotices, 'function');
+  assert.equal(licenseLabel({ name: 'fixture', license_file: 'docs/LICENSE' }), 'license-file: LICENSE');
+});
+
 test('release pack metadata identifies a missing or incomplete JSON receipt',async()=>{
  const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
  for(const text of ['', '[{']){

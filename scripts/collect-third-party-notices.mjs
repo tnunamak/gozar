@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFile, readdir, mkdir, writeFile, copyFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // cargo metadata reports `license: null` for a crate that declares only a
 // `license-file` (e.g. `license-file = "LICENSE"`). Writing that null into
