@@ -82,7 +82,7 @@ async function world(t,holdAt,{cut,failRelease=false,failAfterRegister=false,blo
    held=true;
    enter.resolve();
    await gate.promise;
-   // The controller has settled or been retired. Do not start abandoned fixture I/O.
+   // This teardown-only gate is released after controller retirement; do not start abandoned fixture I/O.
    return {status:503,headers:{},chunks:[]};
   }
   try{return structuredClone(await handler(structuredClone(request.input),{signal:abort.signal,fixture:true}));}
@@ -618,7 +618,12 @@ test('wait-loop recovery refusal still retires the owned controller',async t=>{
  let directory,control,original;
  const w=await world(t,'proof',{identityRecorder:async pid=>{
   const [id]=await entries(w.home);assert.ok(id);directory=join(w.home,'attached',id);
-  await w.enter.promise;
+  let deadline;
+  try {
+   await Promise.race([w.enter.promise,new Promise((_,reject)=>{
+    deadline=setTimeout(()=>reject(new Error('controller did not reach the held proof request')),10_000);
+   })]);
+  } finally { clearTimeout(deadline); }
   original=await json(join(directory,'state.json'));
   control=await json(join(directory,'control.json'));
   assert.ok(original?.receipt);assert.equal(control.pid,pid);
