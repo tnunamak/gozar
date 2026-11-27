@@ -3,12 +3,117 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,mkdir,rm,readFile,symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,dirname,sep} from 'node:path';
-import {gzipSync} from 'node:zlib';
+import {gunzipSync,gzipSync} from 'node:zlib';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import {runInstalledJourney,runProcess} from '../../scripts/release-installed-journey.mjs';
 import {parseArgs as parsePublicTypesArgs} from '../../scripts/check-public-types.mjs';
+import {assembleEvidence,SURVEY_REVISION} from '../../scripts/release-survey-evidence.mjs';
+
+function surveyFixture(definition, extra = {}) {
+ const json=JSON.stringify;
+ return {
+  surveyRevision:SURVEY_REVISION,survey:{revision:SURVEY_REVISION,files:{}},
+  candidate:{revision:'a'.repeat(40),files:{
+   'adapters/manifest.json':json({providers:[{id:'fixture',module:'fixture.mjs',definition:'fixture.json'}]}),
+   'runtime/adapter.schema.json':'{}',
+   'adapters/fixture.json':json(definition),
+   'docs/release-0.4-interface-coverage.md':'Fixture coverage',
+   ...extra,
+  }},
+ };
+}
+
+test('survey evidence rejects a missing provider module rather than reporting a partial inventory',()=>{
+ assert.throws(()=>assembleEvidence(surveyFixture({})),/^Error: Unreadable required source: adapters\/fixture\.mjs$/);
+});
+
+test('survey evidence refuses directly cyclic provider wrappers',()=>{
+ const input=surveyFixture({wraps:'wrapped.json'},{
+  'adapters/fixture.mjs':'// fixture','adapters/wrapped.json':'{"wraps":"fixture.json"}',
+ });
+ assert.throws(()=>assembleEvidence(input),/^Error: Cyclic provider definition wrapping$/);
+});
+
+async function noticesFixture(t) {
+ const root=await mkdtemp(join(tmpdir(),'notices-cli-')); t.after(()=>rm(root,{recursive:true,force:true}));
+ const scripts=join(root,'scripts'), bin=join(root,'bin'), crate=join(root,'fixture-crate');
+ await Promise.all([scripts,bin,crate].map(path=>mkdir(path,{recursive:true})));
+ const collector=join(scripts,'collect-third-party-notices.mjs');
+ await writeFile(collector,await readFile(new URL('../../scripts/collect-third-party-notices.mjs',import.meta.url)));
+ const marker=join(root,'cargo-called'), metadata=join(root,'metadata.json');
+ await writeFile(join(bin,'cargo'),'#!/bin/sh\n[ "$*" = "metadata --locked --format-version=1" ] || exit 9\nprintf "called\\n" >> "$GOZAR_FIXTURE_MARKER"\n/bin/cat "$GOZAR_FIXTURE_METADATA"\n',{mode:0o700});
+ await writeFile(join(root,'Cargo.lock'),'synthetic locked closure\n');
+ const licence='fixture notice bytes\n';
+ await writeFile(join(crate,'LICENSE'),licence);
+ const base={source:'registry+https://registry.invalid/',version:'0.1.0',manifest_path:join(crate,'Cargo.toml')};
+ const run=entry=>spawnSync(process.execPath,[entry],{cwd:root,encoding:'utf8',timeout:5000,
+  env:{PATH:bin,GOZAR_FIXTURE_MARKER:marker,GOZAR_FIXTURE_METADATA:metadata}});
+ return {root,collector,marker,metadata,base,licence,run};
+}
+
+test('notice collector import is inert; direct entry writes both declared license forms once',async t=>{
+ const f=await noticesFixture(t);
+ await writeFile(f.metadata,JSON.stringify({packages:[
+  {...f.base,name:'declared-string',license:'MIT'},
+  {...f.base,name:'declared-file',license:null,license_file:'LICENSE'},
+ ]}));
+ const importer=join(f.root,'import-collector.mjs');
+ await writeFile(importer,"import { licenseLabel } from './scripts/collect-third-party-notices.mjs';\nif (typeof licenseLabel !== 'function') process.exitCode = 2;\n");
+ const imported=f.run(importer);
+ assert.ifError(imported.error); assert.equal(imported.status,0,imported.stderr);
+ const manifest=join(f.root,'third-party','manifest.json');
+ await assert.rejects(readFile(f.marker),{code:'ENOENT'});
+ await assert.rejects(readFile(manifest),{code:'ENOENT'});
+ const direct=f.run(f.collector);
+ assert.ifError(direct.error); assert.equal(direct.status,0,direct.stderr);
+ assert.equal(await readFile(f.marker,'utf8'),'called\n');
+ const {packages}=JSON.parse(await readFile(manifest,'utf8'));
+ assert.deepEqual(packages.map(({name,license})=>[name,license]),[
+  ['declared-file','license-file: LICENSE'],['declared-string','MIT'],
+ ]);
+ for(const pkg of packages) {
+  assert.equal(pkg.files.length,1);
+  assert.equal(await readFile(join(f.root,pkg.files[0].path),'utf8'),f.licence);
+ }
+});
+
+test('notice collector refuses a crate with no declared license and writes no manifest',async t=>{
+ const f=await noticesFixture(t);
+ await writeFile(f.metadata,JSON.stringify({packages:[
+  {...f.base,name:'declared-first',license:'MIT'},
+  {...f.base,name:'missing-declaration',license:null,license_file:null},
+ ]}));
+ const direct=f.run(f.collector);
+ assert.ifError(direct.error); assert.equal(direct.status,1);
+ assert.match(direct.stderr,/No license declared for missing-declaration/);
+ await assert.rejects(readFile(join(f.root,'third-party','manifest.json')),{code:'ENOENT'});
+ await assert.rejects(readFile(join(f.root,'third-party','rust','declared-first-0.1.0','LICENSE')),{code:'ENOENT'});
+});
+
+for(const licenseFile of ['licenses/MIT.txt','COPYRIGHT']) test('notice collector includes the exact declared file '+licenseFile,async t=>{
+ const f=await noticesFixture(t),crate=dirname(f.base.manifest_path),text='declared file evidence\n';
+ await mkdir(dirname(join(crate,licenseFile)),{recursive:true});
+ await writeFile(join(crate,licenseFile),text);
+ await writeFile(f.metadata,JSON.stringify({packages:[{...f.base,name:'declared-file',license:null,license_file:licenseFile}]}));
+ const result=f.run(f.collector);
+ assert.ifError(result.error);assert.equal(result.status,0,result.stderr);
+ const {packages}=JSON.parse(await readFile(join(f.root,'third-party','manifest.json'),'utf8'));
+ const declared=packages[0].files.find(file=>file.path==='third-party/rust/declared-file-0.1.0/'+licenseFile);
+ assert.ok(declared,'the manifest points to the actual declared file, not only the unrelated root LICENSE');
+ assert.equal(await readFile(join(f.root,declared.path),'utf8'),text);
+ assert.equal(declared.sha256,createHash('sha256').update(text).digest('hex'));
+});
+
+test('notice collector refuses a missing declared file even when a root LICENSE exists',async t=>{
+ const f=await noticesFixture(t);
+ await writeFile(f.metadata,JSON.stringify({packages:[{...f.base,name:'declared-file',license:null,license_file:'licenses/missing.txt'}]}));
+ const result=f.run(f.collector);
+ assert.ifError(result.error);assert.equal(result.status,1);
+ assert.match(result.stderr,/ENOENT/);
+ await assert.rejects(readFile(join(f.root,'third-party','manifest.json')),{code:'ENOENT'});
+});
 
 function tar(files){
  const chunks=[];
@@ -49,6 +154,33 @@ function processStub(f,{fault,mutate=false,outcome=evidence}={}){
  };
  return {run,calls};
 }
+for (const [name, alter] of [
+  ['another source revision', gate => ({ ...gate, sourceSha: 'b'.repeat(40) })],
+  ['a suite that ran zero tests', gate => ({ ...gate, rust: { exitCode: 0, failed: 0, passed: 0 } })],
+]) test('release handoff refuses a host receipt for '+name+' before packaging', async t=>{
+  const { prepareReleaseHandoff } = await import('../../scripts/prepare-release-handoff.mjs');
+  const f = await fixture(t);
+  const root = join(f.root,'source'), gateReceipt = join(f.root,'gate.json');
+  await mkdir(root);
+  const success = { exitCode: 0, failed: 0, passed: 1 };
+  const gate = { schemaVersion: 1, kind: 'gozar-offline-host-gate', status: 'passed',
+    sourceSha: f.input.sourceSha, node: success, rust: success };
+  await writeFile(gateReceipt,JSON.stringify(alter(gate)));
+  const calls=[];
+  const run = (...args) => { calls.push(args); throw new Error('fixture must not launch'); };
+  await assert.rejects(prepareReleaseHandoff({ root, gateReceipt,
+    sourceSha: f.input.sourceSha, outputDirectory: f.input.outputDirectory },{run}),
+    /Unknown, mismatched or unsuccessful host gate receipt/);
+  assert.deepEqual(calls,[]);
+  await assert.rejects(readFile(f.input.outputDirectory),{code:'ENOENT'});
+});
+
+test('the notice collector imports as a library without invoking the release command', async () => {
+  const { collectThirdPartyNotices, licenseLabel } = await import('../../scripts/collect-third-party-notices.mjs');
+  assert.equal(typeof collectThirdPartyNotices, 'function');
+  assert.equal(licenseLabel({ name: 'fixture', license_file: 'docs/LICENSE' }), 'license-file: LICENSE');
+});
+
 test('release pack metadata identifies a missing or incomplete JSON receipt',async()=>{
  const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
  for(const text of ['', '[{']){
@@ -79,6 +211,32 @@ test('release pack metadata rejects an empty or whitespace-only package version'
  );
 });
 
+for (const [label, alter, expected] of [
+ ['checksum', bytes => { bytes[4] ^= 1; return bytes; }, /Invalid tar checksum/],
+ ['truncation', bytes => bytes.subarray(0, 520), /Truncated archive/],
+]) test('valid outer digest does not hide tar '+label, async t=>{
+ const f=await fixture(t),raw=gunzipSync(await readFile(f.input.tarball));
+ const damaged=gzipSync(alter(raw));
+ await writeFile(f.input.tarball,damaged);
+ const input={...f.input,sha256:createHash('sha256').update(damaged).digest('hex')};
+ const {run,calls}=processStub(f);
+ await assert.rejects(runInstalledJourney(input,{run}),expected);
+ assert.deepEqual(calls,[]);
+ await assert.rejects(readFile(input.outputDirectory),{code:'ENOENT'});
+});
+
+for (const [label, bytes, expectError] of [
+ ['not a gzip archive', () => Buffer.from('not a compressed archive'), {code:'Z_DATA_ERROR'}],
+ ['invalid package manifest JSON', f => tar({...f.files, 'package.json':'{'}), SyntaxError],
+]) test('a matching digest does not accept '+label, async t=>{
+ const f=await fixture(t),stub=processStub(f),damaged=bytes(f);
+ await writeFile(f.input.tarball,damaged);
+ const input={...f.input,sha256:createHash('sha256').update(damaged).digest('hex')};
+ await assert.rejects(runInstalledJourney(input,{run:stub.run}),expectError);
+ assert.deepEqual(stub.calls,[]);
+ await assert.rejects(readFile(input.outputDirectory),{code:'ENOENT'});
+});
+
 test('digest refusal starts zero subprocesses',async t=>{
  const f=await fixture(t),stub=processStub(f);
  await assert.rejects(runInstalledJourney({...f.input,sha256:'0'.repeat(64)},{run:stub.run}),/digest/i);
@@ -90,6 +248,24 @@ test('a missing archive retains ENOENT and creates no output or subprocess',asyn
  await rm(f.input.tarball);
  await assert.rejects(runInstalledJourney(f.input,{run}),{code:'ENOENT'});
  assert.equal(calls.length,0);
+ await assert.rejects(readFile(f.input.outputDirectory),{code:'ENOENT'});
+});
+
+test('archive digest mismatch refuses before creating output or starting npm',async t=>{
+ const f=await fixture(t);
+ const {run,calls}=processStub(f);
+ const wrong=(f.input.sha256[0]==='0'?'1':'0')+f.input.sha256.slice(1);
+ await assert.rejects(runInstalledJourney({...f.input,sha256:wrong},{run}),/Archive digest mismatch/);
+ assert.deepEqual(calls,[]);
+ await assert.rejects(readFile(f.input.outputDirectory),{code:'ENOENT'});
+});
+
+test('a truncated source revision refuses even when the archive digest is correct',async t=>{
+ const f=await fixture(t);
+ const {run,calls}=processStub(f);
+ await assert.rejects(runInstalledJourney({...f.input,sourceSha:f.input.sourceSha.slice(0,12)},{run}),
+  /Explicit tarball, sha256, source SHA and output directory required/);
+ assert.deepEqual(calls,[]);
  await assert.rejects(readFile(f.input.outputDirectory),{code:'ENOENT'});
 });
 
@@ -107,6 +283,17 @@ test('invalid source revision is rejected before creating output',async t=>{
  await assert.rejects(runInstalledJourney({...f.input,sourceSha:'short'},{run:stub.run}),/source SHA/);
  assert.deepEqual(stub.calls,[]);
  await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
+});
+
+test('single-element arrays are not valid release inputs, even before archive I/O',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const missing=join(f.root,'not-present.tgz');
+ for(const [field,valid] of [['sha256',f.input.sha256],['sourceSha',f.input.sourceSha],['tarball',f.input.tarball],['outputDirectory',f.input.outputDirectory]]){
+  await assert.rejects(runInstalledJourney({...f.input,tarball:missing,[field]:[valid]},{run:stub.run}),
+   {message:'Explicit tarball, sha256, source SHA and output directory required'},field);
+ }
+ assert.deepEqual(stub.calls,[]);
+ await assert.rejects(readFile(f.input.outputDirectory),{code:'ENOENT'});
 });
 
 test('a non-string source revision is rejected before staging an otherwise valid archive',async t=>{
@@ -185,6 +372,37 @@ test('offline archive journey verifies installed bytes and strict lifecycle evid
  assert.ok(stub.calls[1].args[0].includes('/node_modules/@tnunamak/gozar/examples/'));
  assert.ok(stub.calls[2].args[0].includes('/node_modules/@tnunamak/gozar/examples/'));
  assert.deepEqual(result.lifecycle,evidence);
+});
+
+test('installed journey gives npm and both examples only the scratch-local execution settings',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const result=await runInstalledJourney(f.input,{run:async(command,args,options)=>{
+  if(!stub.calls.length)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  if(command==='npm'){
+   assert.equal(await readFile(options.env.npm_config_userconfig,'utf8'),'');
+   assert.equal(await readFile(options.env.npm_config_globalconfig,'utf8'),'');
+  }
+  return stub.run(command,args,options);
+ }});
+ const root=result.scratch;
+ for(const {options} of stub.calls){
+  assert.equal(options.cwd,root);
+  assert.deepEqual(options.env,{PATH:process.env.PATH,HOME:join(root,'home'),TMPDIR:root,
+   npm_config_cache:join(root,'cache'),npm_config_userconfig:join(root,'empty.npmrc'),
+   npm_config_globalconfig:join(root,'empty-global.npmrc'),npm_config_offline:'true',
+   npm_config_ignore_scripts:'true',npm_config_audit:'false',npm_config_fund:'false'});
+ }
+});
+
+test('installed journey distinguishes the verified archive digest from the supplied revision in its receipt',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const sourceSha='d'.repeat(40);
+ const result=await runInstalledJourney({...f.input,sourceSha},{run:stub.run});
+ t.after(()=>rm(result.scratch,{recursive:true,force:true}));
+ const receipt=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ assert.equal(receipt.sha256,createHash('sha256').update(await readFile(f.input.tarball)).digest('hex'));
+ assert.equal(receipt.sourceSha,sourceSha);
+ assert.equal(receipt.sourceShaProvenance,'caller-supplied, not authenticated by archive');
 });
 
 test('installed journey installs the verified private archive copy',async t=>{
@@ -748,4 +966,37 @@ test('an unexpected installed file fails the package identity check before scree
  const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
  assert.equal(report.status,'failed');
  assert.deepEqual(report.steps.map(step=>step.name),['install']);
+});
+
+function archiveClosureScenario() {
+  const pkg = {
+    exports: { '.': { import: './api.mjs', types: './api.d.ts' } },
+    bin: { fixture: './bin/fixture.mjs' }, types: './api.d.ts',
+    files: ['docs/current.md', 'docs/*.md'],
+  };
+  const manifest = { providers: [{ id: 'fixture', module: 'fixture.mjs', definition: 'fixture.json' }] };
+  const notices = { packages: [{ files: [{ path: 'third-party/fixture.txt' }] }] };
+  const files = new Set(['LICENSE', 'THIRD-PARTY-NOTICES.md', 'third-party/manifest.json',
+    'adapters/manifest.json', 'api.mjs', 'api.d.ts', 'bin/fixture.mjs', 'docs/current.md',
+    'adapters/fixture.mjs', 'adapters/fixture.json', 'adapters/fixture.definition.json',
+    'third-party/fixture.txt', 'generated/fixture.wasm']);
+  return { pkg, manifest, notices, files };
+}
+
+test('archive closure counts nested exports and literal docs but not package globs as members', async () => {
+  const { assertReleaseClosure } = await import('../../scripts/check-package.mjs');
+  const { pkg, manifest, notices, files } = archiveClosureScenario();
+  const check = () => assertReleaseClosure(files, pkg, manifest, notices, ['generated/fixture.wasm']);
+  assert.doesNotThrow(check);
+  files.delete('api.d.ts'); files.delete('docs/current.md');
+  assert.throws(check, { message: 'The package archive is missing: api.d.ts, docs/current.md' });
+});
+
+test('archive closure names missing provider definitions, notices and generated artifacts together', async () => {
+  const { assertReleaseClosure } = await import('../../scripts/check-package.mjs');
+  const { pkg, manifest, notices, files } = archiveClosureScenario();
+  for (const path of ['adapters/fixture.definition.json', 'third-party/fixture.txt', 'generated/fixture.wasm'])
+    files.delete(path);
+  assert.throws(() => assertReleaseClosure(files, pkg, manifest, notices, ['generated/fixture.wasm']),
+    { message: 'The package archive is missing: adapters/fixture.definition.json, third-party/fixture.txt, generated/fixture.wasm' });
 });

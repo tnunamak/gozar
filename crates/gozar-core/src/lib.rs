@@ -1086,4 +1086,32 @@ mod stable_json_origin_tests {
             None
         );
     }
+    #[test]
+    fn origin_rejects_userinfo_and_keeps_authority_only() {
+        assert_eq!(
+            origin("https://example.com"),
+            Some("https://example.com".into())
+        );
+        assert_eq!(
+            origin("https://example.com:8443/path?query=1#frag"),
+            Some("https://example.com:8443".into())
+        );
+        assert_eq!(
+            origin("http://127.0.0.1:8080/x"),
+            Some("http://127.0.0.1:8080".into())
+        );
+        assert_eq!(origin("https://user@example.com"), None);
+        assert_eq!(origin("https://user:pass@example.com/"), None);
+        assert_eq!(origin("https://exa mple.com"), None);
+        assert_eq!(origin("ftp://example.com"), None);
+        assert_eq!(origin("https://"), None);
+        // A userinfo token never survives URL parsing either.
+        let p = json!({"kind":"url","prefix":"https://","constraints":{}});
+        assert_eq!(parse_url(&p, "https://user@example.com", ""), None);
+        assert_eq!(
+            parse_url(&p, "see https://example.com/extra", ""),
+            Some("https://example.com".into())
+        );
+    }
+
 }

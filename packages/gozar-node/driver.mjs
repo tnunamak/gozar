@@ -116,7 +116,18 @@ export class EffectDriver {
   processOutput(effect, resource, stream, chunk) {
     if (resource?.privateMaterialized) return;
     if (!resource || (!this.observeProcessOutput && !this.onProcessOutput)) return;
-    const output = chunk.subarray(Math.max(0,chunk.length-8192)).toString('utf8');
+    const maxOutputBytes = 8192;
+    const suffix = bytes => {
+      let start = bytes.length - maxOutputBytes;
+      if (start <= 0) return bytes;
+      // A cropped suffix must not manufacture a replacement character by
+      // starting in the middle of a UTF-8 sequence.
+      while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++;
+      return bytes.subarray(start);
+    };
+    let output = suffix(chunk).toString('utf8');
+    // Malformed input can expand when Node replaces invalid bytes with U+FFFD.
+    if (Buffer.byteLength(output) > maxOutputBytes) output = suffix(Buffer.from(output)).toString('utf8');
     const event = { sequence:++this.outputSequence, sessionId:this.sessionId, generation:resource.generation,
       adapterId:resource.adapterId, resourceId:resource.id, continuityRef:resource.continuityRef,
       effectId:effect.id, stream, observedAtMs:this.nowMs(), output };

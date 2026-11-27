@@ -62,6 +62,37 @@ test('direct argv runs and completion preserves exact protocol identity', async 
   assert.equal((await driver.execute(effect({ ...spawnRecipe, args: ['-e', 'process.exit(99)'] }, 'detect', 'changed'))).ok, false);
 });
 
+test('a missing provider executable reports launch failure and a later detection can succeed', async t => {
+  const recipe = { ...spawnRecipe, timeoutMs: 10_000 };
+  let installed = false;
+  const { directory, driver, journal } = await fixture(t, { detect: recipe }, {
+    resolveProgram: () => installed ? program : join(directory, 'missing-provider-program'),
+  });
+  const unavailable = await driver.execute(effect(recipe, 'detect', 'missing-command'));
+  assert.equal(unavailable.ok, false);
+  assert.equal(unavailable.result.code, 'ENOENT');
+  assert.deepEqual(Object.keys(journal.value.owned), []);
+  installed = true;
+  const recovered = await driver.execute(effect(recipe, 'detect', 'restored-command'));
+  assert.equal(recovered.ok, true);
+  assert.deepEqual(recovered.result, { stdout: 'ok', stderr: '', exitCode: 0 });
+});
+
+test('a failed interface inventory is not reported as an empty inventory', async t => {
+  const recipe = { kind: 'interfaces' };
+  const { driver } = await fixture(t, { detect: recipe });
+  driver.interfaceInventory = async () => {
+    throw Object.assign(new Error('fixture inventory unavailable'), { code: 'inventory_unavailable' });
+  };
+  const failed = await driver.execute(effect(recipe, 'detect', 'inventory-failed'));
+  assert.equal(failed.ok, false);
+  assert.deepEqual(failed.result, { code: 'inventory_unavailable', detail: 'fixture inventory unavailable' });
+  driver.interfaceInventory = async () => ({ interfaces: {} });
+  const next = await driver.execute(effect(recipe, 'detect', 'inventory-recovered'));
+  assert.equal(next.ok, true);
+  assert.deepEqual(next.result, { interfaces: {} });
+});
+
 test('mutation requires a matching, single-use, durable receipt; failed sync cannot authorize it', async t => {
   const recipe = { ...spawnRecipe, longRunning: true, collectMs: 20, args: ['-e', 'process.stdout.write("ok");setInterval(()=>{},1000)'] };
   const { driver, journal } = await fixture(t, { create: recipe });
@@ -185,6 +216,24 @@ test('a known handle whose file vanished fails instead of returning an empty rea
   });
 });
 
+test('scoped reads count UTF-8 bytes, preserving exact-limit text', async t => {
+  const { driver, directory } = await fixture(t, {});
+  const path = join(directory, 'text-fixture.txt');
+  await writeFile(path, 'éé');
+  driver.handles.text = path;
+  assert.deepEqual(await driver.readHandle({ handleRef: 'text', maxOutputBytes: 4 }),
+    { stdout: 'éé', stderr: '', exitCode: 0 });
+  await assert.rejects(driver.readHandle({ handleRef: 'text', maxOutputBytes: 3 }),
+    { message: 'File exceeds output limit' });
+});
+
+test('scoped reads reject a directory instead of returning empty output', async t => {
+  const { driver, directory } = await fixture(t, {});
+  driver.handles.folder = directory;
+  await assert.rejects(driver.readHandle({ handleRef: 'folder' }),
+    { message: 'Handle is not a regular file' });
+});
+
 test('local probe never claims a public, tailnet or LAN vantage', async t => {
   const { driver } = await fixture(t, {});
   for (const vantage of ['public', 'tailnet', 'lan']) {
@@ -240,6 +289,70 @@ for (const [label, contentType, body, detail] of [
     assert.equal(driver.activeRequests.size, 0);
   });
 }
+
+test('HTTP probe reports an unavailable service and releases the request', async t => {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(503);
+    res.end('fixture unavailable');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const { driver } = await fixture(t, {}, { origin: url });
+  const probe = { kind: 'http-probe', url, vantage: 'local' };
+  driver.adapters[0].recipes.probe = probe;
+  const result = await driver.execute({ ...probe, id: 'unavailable', sessionId: 'test', generation: 1, operation: 'probe' });
+  assert.equal(result.ok, true, 'the HTTP exchange completed');
+  assert.deepEqual(result.result, { status: 503, stdout: 'fixture unavailable', stderr: '', exitCode: 1, vantage: 'local' });
+  assert.equal(driver.activeRequests.size, 0);
+});
+
+test('HTTP probe rejects an oversized response without returning partial data', async t => {
+  const server = http.createServer((_req, res) => res.end('12345'));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const { driver } = await fixture(t, {}, { origin: url });
+  const probe = { kind: 'http-probe', url, vantage: 'local', maxOutputBytes: 4 };
+  driver.adapters[0].recipes.probe = probe;
+  const result = await driver.execute({ ...probe, id: 'response-too-large', sessionId: 'test', generation: 1, operation: 'probe' });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.result, { code: 'blocked', detail: 'Probe output limit exceeded' });
+  assert.equal(driver.activeRequests.size, 0);
+});
+
+test('cancelling an active HTTP probe reports cancellation and removes its request', { timeout: 6000 }, async t => {
+  const server = http.createServer(() => {});
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = 'http://127.0.0.1:' + server.address().port;
+  const { driver } = await fixture(t, {}, { origin: url });
+  const probe = { kind: 'http-probe', url, vantage: 'local', timeoutMs: 5000 };
+  driver.adapters[0].recipes.probe = probe;
+  const accepted = once(server, 'request', { signal: AbortSignal.timeout(3500) });
+  const pending = driver.execute({ ...probe, id: 'cancelled-probe', sessionId: 'test', generation: 1, operation: 'probe' });
+  await accepted;
+  driver.cancelProbes();
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.result, { code: 'blocked', detail: 'Probe cancelled' });
+  assert.equal(driver.activeRequests.size, 0);
+});
+
+test('a local probe interrupted before HTTP headers is not a service result', async t => {
+  const server = http.createServer(req => req.socket.destroy());
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = 'http://127.0.0.1:' + server.address().port;
+  const { driver } = await fixture(t, {}, { origin: url });
+  const probe = { kind: 'http-probe', url, vantage: 'local' };
+  driver.adapters[0].recipes.probe = probe;
+  const result = await driver.execute({ ...probe, id: 'connection-interrupted', sessionId: 'test', generation: 1, operation: 'probe' });
+  assert.equal(result.ok, false);
+  assert.equal(result.result.code, 'ECONNRESET');
+  assert.equal(result.result.status, undefined);
+  assert.equal(driver.activeRequests.size, 0);
+});
 
 test('owned loopback forwarder selects ephemeral port, serves exact target, removes exact socket', async t => {
   const target = net.createServer(socket => socket.end('target'));
@@ -408,6 +521,37 @@ test('complete output lines preserve UTF-8 characters split between pipe chunks'
   assert.deepEqual(lines, [['stderr', 'other stream'], ['stdout', 'caf\u00e9 \ud83d\ude00']]);
 });
 
+test('startup output is retained but only ready resources emit complete route lines', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = {id: 'fixture', generation: 2, adapterId: 'example'};
+  const effect = {id: 'fixture-effect'};
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set();
+  const complete = [];
+  driver.onProcessOutput = event => {
+    if (event.completeLine !== undefined) complete.push(event.completeLine);
+  };
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('startup\n'));
+  driver.routeOutputReady.add(resource.id);
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('ready\n'));
+  assert.deepEqual(complete, ['ready']);
+  assert.deepEqual(driver.readProcessOutput().map(event => event.output), ['startup\n', 'ready\n']);
+});
+
+test('consecutive blank complete output lines are not dropped or coalesced', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = {id: 'fixture', generation: 2, adapterId: 'example'};
+  const effect = {id: 'fixture-effect'};
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  const complete = [];
+  driver.onProcessOutput = event => {
+    if (event.completeLine !== undefined) complete.push(event.completeLine);
+  };
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('first\n\n\nlast\n'));
+  assert.deepEqual(complete, ['first', '', '', 'last']);
+});
+
 test('an observer callback failure does not discard diagnostic output', () => {
   const driver = makeOutputOnlyDriver();
   const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
@@ -463,6 +607,26 @@ test('diagnostic rows keep the newest bytes of an oversized chunk', () => {
   assert.equal(row.stream, 'stderr');
   assert.equal(row.output, tail);
   assert.equal(driver.outputBytes, 8192);
+});
+
+test('diagnostic suffix does not split a valid UTF-8 character at the row cap', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const expected = 'x'.repeat(8191);
+  driver.processOutput({ id: 'synthetic-effect' }, resource, 'stderr', Buffer.from('é' + expected));
+  const [row] = driver.readProcessOutput();
+  assert.equal(row.output, expected);
+  assert.equal(driver.outputBytes, Buffer.byteLength(expected));
+});
+
+test('decoded malformed UTF-8 diagnostic output still stays within the row byte cap', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  driver.processOutput({ id: 'synthetic-effect' }, resource, 'stdout', Buffer.alloc(8192, 0xff));
+  const [row] = driver.readProcessOutput();
+  assert.ok(row.output.length > 0);
+  assert.ok(Buffer.byteLength(row.output) <= 8192);
+  assert.equal(driver.outputBytes, Buffer.byteLength(row.output));
 });
 
 test('a diagnostic cursor older than retained history starts at the first retained row', () => {
@@ -662,4 +826,81 @@ test('line framing does not count the CRLF delimiter against the payload cap', (
 
   driver.processOutput(effect, resource, 'stderr', Buffer.from(exact + '\ry\r\nnext\r\n'));
   assert.deepEqual(lines.slice(1), ['next']);
+});
+
+test('a timer with no requested delay settles once and leaves no timer entry', async t => {
+  const recipe = { kind: 'timer' };
+  const { driver } = await fixture(t, { detect: recipe });
+  const request = effect(recipe, 'detect', 'timer-default');
+  const result = await driver.execute(request);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.result, { elapsed: true });
+  assert.equal(driver.timers.has(request.id), false);
+});
+
+test('cancelling an elapsed timer does not poison the next timer', async t => {
+  const recipe = { kind: 'timer', delayMs: 1 };
+  const { driver } = await fixture(t, { detect: recipe });
+  const first = await driver.execute(effect(recipe, 'detect', 'timer-finished'));
+  assert.deepEqual(first.result, { elapsed: true });
+  driver.cancelTimers();
+  assert.equal(driver.timers.size, 0);
+  const next = await driver.execute(effect(recipe, 'detect', 'timer-after-finish'));
+  assert.equal(next.ok, true);
+  assert.deepEqual(next.result, { elapsed: true });
+  assert.equal(driver.timers.size, 0);
+});
+
+test('cancelling a pending driver timer settles it and removes its timer entry', async t => {
+  const recipe = { kind: 'timer', delayMs: 60_000 };
+  const { driver } = await fixture(t, { detect: recipe });
+  const request = effect(recipe);
+  const pending = driver.execute(request);
+  assert.equal(driver.timers.has(request.id), true);
+  driver.cancelTimers();
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.result, { cancelled: true });
+  assert.equal(driver.timers.has(request.id), false);
+});
+
+test('cancelling several outstanding timers delivers one settled result for each', async t => {
+  const recipe = { kind: 'timer', delayMs: 60_000 };
+  const { driver } = await fixture(t, { detect: recipe });
+  t.after(() => driver.cancelTimers());
+  const requests = ['timer-first', 'timer-second'].map(id => effect(recipe, 'detect', id));
+  const pending = requests.map(request => driver.execute(request));
+  assert.equal(driver.timers.size, 2);
+  driver.cancelTimers();
+  driver.cancelTimers();
+  const results = await Promise.all(pending);
+  assert.deepEqual(results.map(result => [result.ok, result.result]), [
+    [true, { cancelled: true }], [true, { cancelled: true }],
+  ]);
+  assert.equal(driver.timers.size, 0);
+});
+
+test('partial stdout and stderr lines for one resource stay independent', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'fixture-two-streams', generation: 2, adapterId: 'example' };
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  const seen = [];
+  driver.onProcessOutput = row => {
+    if (row.completeLine !== undefined) seen.push([row.stream, row.completeLine]);
+  };
+  const effect = { id: 'fixture-output' };
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('stdout '));
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('stderr only\n'));
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('done\n'));
+  assert.deepEqual(seen, [['stderr', 'stderr only'], ['stdout', 'stdout done']]);
+});
+
+test('a failed detection subprocess returns its nonzero exit and diagnostic text', async t => {
+  const recipe = { ...spawnRecipe, timeoutMs: 5000,
+    args: ['-e', 'process.stderr.write("fixture detect failed"); process.exitCode = 17;'] };
+  const { driver } = await fixture(t, { detect: recipe });
+  const result = await driver.execute(effect(recipe));
+  assert.equal(result.ok, true, 'the admitted subprocess completed; its status carries the failure');
+  assert.deepEqual(result.result, { stdout: '', stderr: 'fixture detect failed', exitCode: 17 });
 });
