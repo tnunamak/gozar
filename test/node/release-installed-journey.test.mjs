@@ -749,3 +749,36 @@ test('an unexpected installed file fails the package identity check before scree
  assert.equal(report.status,'failed');
  assert.deepEqual(report.steps.map(step=>step.name),['install']);
 });
+
+function archiveClosureScenario() {
+  const pkg = {
+    exports: { '.': { import: './api.mjs', types: './api.d.ts' } },
+    bin: { fixture: './bin/fixture.mjs' }, types: './api.d.ts',
+    files: ['docs/current.md', 'docs/*.md'],
+  };
+  const manifest = { providers: [{ id: 'fixture', module: 'fixture.mjs', definition: 'fixture.json' }] };
+  const notices = { packages: [{ files: [{ path: 'third-party/fixture.txt' }] }] };
+  const files = new Set(['LICENSE', 'THIRD-PARTY-NOTICES.md', 'third-party/manifest.json',
+    'adapters/manifest.json', 'api.mjs', 'api.d.ts', 'bin/fixture.mjs', 'docs/current.md',
+    'adapters/fixture.mjs', 'adapters/fixture.json', 'adapters/fixture.definition.json',
+    'third-party/fixture.txt', 'generated/fixture.wasm']);
+  return { pkg, manifest, notices, files };
+}
+
+test('archive closure counts nested exports and literal docs but not package globs as members', async () => {
+  const { assertReleaseClosure } = await import('../../scripts/check-package.mjs');
+  const { pkg, manifest, notices, files } = archiveClosureScenario();
+  const check = () => assertReleaseClosure(files, pkg, manifest, notices, ['generated/fixture.wasm']);
+  assert.doesNotThrow(check);
+  files.delete('api.d.ts'); files.delete('docs/current.md');
+  assert.throws(check, { message: 'The package archive is missing: api.d.ts, docs/current.md' });
+});
+
+test('archive closure names missing provider definitions, notices and generated artifacts together', async () => {
+  const { assertReleaseClosure } = await import('../../scripts/check-package.mjs');
+  const { pkg, manifest, notices, files } = archiveClosureScenario();
+  for (const path of ['adapters/fixture.definition.json', 'third-party/fixture.txt', 'generated/fixture.wasm'])
+    files.delete(path);
+  assert.throws(() => assertReleaseClosure(files, pkg, manifest, notices, ['generated/fixture.wasm']),
+    { message: 'The package archive is missing: adapters/fixture.definition.json, third-party/fixture.txt, generated/fixture.wasm' });
+});
