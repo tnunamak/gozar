@@ -201,6 +201,37 @@ test('offline archive journey verifies installed bytes and strict lifecycle evid
  assert.deepEqual(result.lifecycle,evidence);
 });
 
+test('installed journey gives npm and both examples only the scratch-local execution settings',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const result=await runInstalledJourney(f.input,{run:async(command,args,options)=>{
+  if(!stub.calls.length)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  if(command==='npm'){
+   assert.equal(await readFile(options.env.npm_config_userconfig,'utf8'),'');
+   assert.equal(await readFile(options.env.npm_config_globalconfig,'utf8'),'');
+  }
+  return stub.run(command,args,options);
+ }});
+ const root=result.scratch;
+ for(const {options} of stub.calls){
+  assert.equal(options.cwd,root);
+  assert.deepEqual(options.env,{PATH:process.env.PATH,HOME:join(root,'home'),TMPDIR:root,
+   npm_config_cache:join(root,'cache'),npm_config_userconfig:join(root,'empty.npmrc'),
+   npm_config_globalconfig:join(root,'empty-global.npmrc'),npm_config_offline:'true',
+   npm_config_ignore_scripts:'true',npm_config_audit:'false',npm_config_fund:'false'});
+ }
+});
+
+test('installed journey distinguishes the verified archive digest from the supplied revision in its receipt',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const sourceSha='d'.repeat(40);
+ const result=await runInstalledJourney({...f.input,sourceSha},{run:stub.run});
+ t.after(()=>rm(result.scratch,{recursive:true,force:true}));
+ const receipt=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+ assert.equal(receipt.sha256,createHash('sha256').update(await readFile(f.input.tarball)).digest('hex'));
+ assert.equal(receipt.sourceSha,sourceSha);
+ assert.equal(receipt.sourceShaProvenance,'caller-supplied, not authenticated by archive');
+});
+
 test('installed journey installs the verified private archive copy',async t=>{
  const f=await fixture(t),stub=processStub(f);
  const bytes=await readFile(f.input.tarball);
