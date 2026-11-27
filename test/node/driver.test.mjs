@@ -708,6 +708,38 @@ test('cancelling a pending driver timer settles it and removes its timer entry',
   assert.equal(driver.timers.has(request.id), false);
 });
 
+test('cancelling several outstanding timers delivers one settled result for each', async t => {
+  const recipe = { kind: 'timer', delayMs: 60_000 };
+  const { driver } = await fixture(t, { detect: recipe });
+  t.after(() => driver.cancelTimers());
+  const requests = ['timer-first', 'timer-second'].map(id => effect(recipe, 'detect', id));
+  const pending = requests.map(request => driver.execute(request));
+  assert.equal(driver.timers.size, 2);
+  driver.cancelTimers();
+  driver.cancelTimers();
+  const results = await Promise.all(pending);
+  assert.deepEqual(results.map(result => [result.ok, result.result]), [
+    [true, { cancelled: true }], [true, { cancelled: true }],
+  ]);
+  assert.equal(driver.timers.size, 0);
+});
+
+test('partial stdout and stderr lines for one resource stay independent', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'fixture-two-streams', generation: 2, adapterId: 'example' };
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  const seen = [];
+  driver.onProcessOutput = row => {
+    if (row.completeLine !== undefined) seen.push([row.stream, row.completeLine]);
+  };
+  const effect = { id: 'fixture-output' };
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('stdout '));
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('stderr only\n'));
+  driver.processOutput(effect, resource, 'stdout', Buffer.from('done\n'));
+  assert.deepEqual(seen, [['stderr', 'stderr only'], ['stdout', 'stdout done']]);
+});
+
 test('a failed detection subprocess returns its nonzero exit and diagnostic text', async t => {
   const recipe = { ...spawnRecipe, timeoutMs: 5000,
     args: ['-e', 'process.stderr.write("fixture detect failed"); process.exitCode = 17;'] };
