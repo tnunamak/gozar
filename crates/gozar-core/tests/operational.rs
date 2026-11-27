@@ -1550,6 +1550,70 @@ fn native_jsonl_accepts_a_crlf_record_and_a_final_record_without_newline() {
 }
 
 #[test]
+fn native_jsonl_yields_a_receipt_before_its_input_pipe_closes() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gozar-core-json"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start native JSONL transport");
+    let mut input = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut line = String::new();
+        let result = output.read_line(&mut line).map(|_| line);
+        let _ = tx.send(result);
+    });
+    let request = json!({"command":{"type":"status","sessionId":"native-live-pipe"}});
+    writeln!(input, "{request}").unwrap();
+    input.flush().unwrap();
+    let received = rx.recv_timeout(Duration::from_secs(10));
+    drop(input);
+    if received.is_err() {
+        let _ = child.kill();
+    }
+    let status = child.wait().expect("reap native JSONL transport");
+    reader.join().unwrap();
+    let line = received
+        .expect("receive a complete line while stdin stays open")
+        .expect("read native response");
+    let receipt: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(receipt["snapshot"]["sessionId"], "native-live-pipe");
+    assert_eq!(receipt["effects"], json!([]));
+    assert!(status.success());
+}
+
+#[test]
+fn native_jsonl_labels_a_valid_json_non_envelope_without_losing_following_frames() {
+    let out = run_native_jsonl(
+        b"{\"command\":{\"type\":\"status\",\"sessionId\":\"native-before-primitive\"}}\n\
+          false\n\
+          {\"command\":{\"type\":\"status\",\"sessionId\":\"native-after-primitive\"}}\n",
+    );
+    assert!(out.status.success(), "{:?}", out.stderr);
+    assert!(out.stderr.is_empty());
+    let receipts: Vec<Value> = std::str::from_utf8(&out.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(receipts.len(), 3);
+    assert_eq!(receipts[0]["snapshot"]["sessionId"], "native-before-primitive");
+    assert_eq!(receipts[0]["effects"], json!([]));
+    assert_eq!(
+        receipts[1],
+        json!({"error":{"code":"invalid-input","message":"invalid input JSON or protocol shape"}})
+    );
+    assert_eq!(receipts[2]["snapshot"]["sessionId"], "native-after-primitive");
+    assert_eq!(receipts[2]["effects"], json!([]));
+}
+
+#[test]
 fn recommendation_without_adapters_has_no_choices_or_effects() {
     let out = run(json!({"command": {"type": "recommend"}, "adapters": []}));
     assert_eq!(out["snapshot"]["phase"], "planned");
