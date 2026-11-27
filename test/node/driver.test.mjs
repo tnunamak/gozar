@@ -545,6 +545,26 @@ test('diagnostic rows keep the newest bytes of an oversized chunk', () => {
   assert.equal(driver.outputBytes, 8192);
 });
 
+test('diagnostic suffix does not split a valid UTF-8 character at the row cap', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const expected = 'x'.repeat(8191);
+  driver.processOutput({ id: 'synthetic-effect' }, resource, 'stderr', Buffer.from('é' + expected));
+  const [row] = driver.readProcessOutput();
+  assert.equal(row.output, expected);
+  assert.equal(driver.outputBytes, Buffer.byteLength(expected));
+});
+
+test('decoded malformed UTF-8 diagnostic output still stays within the row byte cap', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  driver.processOutput({ id: 'synthetic-effect' }, resource, 'stdout', Buffer.alloc(8192, 0xff));
+  const [row] = driver.readProcessOutput();
+  assert.ok(row.output.length > 0);
+  assert.ok(Buffer.byteLength(row.output) <= 8192);
+  assert.equal(driver.outputBytes, Buffer.byteLength(row.output));
+});
+
 test('a diagnostic cursor older than retained history starts at the first retained row', () => {
   const driver = makeOutputOnlyDriver();
   const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
