@@ -161,6 +161,7 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
   if(!sound)refuseMigration('incompatible',details);
   // Older writers can leave a draft stamp on an exact applied binding after committing it.
   // A real draft or unbound draft ref still holds custody. No stamp is rewritten until adoption commits.
+  // Historical records have no commit tombstone: exact applied ownership plus no live custody is the evidence.
   if(Object.keys(rec.drafts).length)refuseMigration('inflight',details);
   const committed=new Set();
   for(const [inputId,handle]of Object.entries(rec.bindings)){
@@ -436,11 +437,10 @@ export function createEmbeddingServices({registryId,secretBackend,hostCapabiliti
    compare(d,r.expectedConfigurationRevision);compare(c,d.baseRevision);
    if(c.uses.length)fail('configuration_in_use');
    const operations=Object.values(s.setupOperations??{}).filter(op=>op?.scopeId===c.scopeId);
-   const held=new Set(operations.flatMap(op=>[...Object.values(op.connectorSecrets??{}),...Object.values(op.management??{})]));
    if(!operations.some(op=>op.draftId===r.draftId)){
     for(const [inputId,handle]of Object.entries(d.bindings)){
      const ref=s.secrets[handle];
-     if(draftBindingMatches(ref,custodian,c.scopeId,inputId)&&ref.draftId===r.draftId&&!held.has(handle))ref.draftId=null;
+     if(draftBindingMatches(ref,custodian,c.scopeId,inputId)&&ref.draftId===r.draftId)ref.draftId=null;
     }
    }
    c.bindings=d.bindings;c.values=d.values;c.revision=fresh();delete c.drafts[r.draftId];
