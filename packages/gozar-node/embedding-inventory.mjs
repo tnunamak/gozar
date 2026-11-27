@@ -12,7 +12,8 @@ export async function listProviders(request,deps={},admission){
  const read=await readContextFor(deps,request.home,platform,owner);
  const cache=deps.detection;
  const inspections=new Array(deps.adapters.length);
- const providers=await Promise.all(deps.adapters.map(async (adapter,index)=>{
+ // The call owns every provider callback, including writes behind configuration reads.
+ const settled=await Promise.allSettled(deps.adapters.map(async (adapter,index)=>{
   let item, saved, detection=null;
   try {
    if(cache){
@@ -62,5 +63,6 @@ export async function listProviders(request,deps={},admission){
   if(detection)row.detection=detection;
   return row;
  }));
+ const providers=settled.map(result=>{if(result.status==='rejected')throw result.reason;return result.value;});
  return {schemaVersion:1,catalogRevision:catalogRevisionOf(inspections,platform),observedAt,providers};
 }

@@ -2,9 +2,71 @@ import {test} from 'node:test';import assert from 'node:assert/strict';import {m
 import {listProviders} from '../../packages/gozar-node/embedding-inventory.mjs';import {createEmbeddingServices} from '../../packages/gozar-node/embedding-services.mjs';
 import {recipeAdapter} from '../../packages/gozar-node/adapter-runtime.mjs';
 import {fakeRegistry} from '../../packages/gozar-node/testing.mjs';
+
+const latch=()=>{let release;const promise=new Promise(resolve=>{release=resolve;});return {promise,release};};
+const flushReactions=()=>new Promise(resolve=>setImmediate(resolve));
+const inventoryAdapter=id=>({id,definition:{id,label:id,supportedKinds:['session'],capabilities:{reach:'lan',transport:'https'},disclosure:{revision:'v'},facts:[]},detect:async()=>({state:'ready',facts:{}}),properties(){return this.definition.capabilities;},setupActions:()=>[]});
+
+test('failed inventory joins a sibling real configuration write before the caller removes state',{timeout:5000},async()=>{
+ const home=await mkdtemp(join(tmpdir(),'inventory-join-')),file=join(home,'embedding-state.json');
+ const services=createEmbeddingServices({registryId:'inventory-join-fixture'});
+ const entered=latch(),allowWrite=latch(),siblingDone=latch(),failure=new Error('fixture primary read failed');
+ let rejectionObserved=false,siblingStarted=false,request;
+ try{
+  await services.readConfiguration({home,providerId:'prior'});
+  const deps={adapters:['first','second'].map(inventoryAdapter),readContext:{configuration:async()=>null},embeddingServices:{...services,
+   async readConfiguration(args){
+    if(args.providerId==='first'){await entered.promise;throw failure;}
+    siblingStarted=true;entered.release();
+    try{await allowWrite.promise;return await services.readConfiguration(args);}
+    finally{siblingDone.release();}
+   }}};
+  request=listProviders({home},deps).then(()=>({unexpected:true}),async error=>{
+   rejectionObserved=true;
+   await rm(file,{force:true});
+   return {error};
+  });
+  await Promise.race([entered.promise,request]);
+  assert.equal(siblingStarted,true,'the second real configuration read was reached');
+  // This is an event-loop turn boundary, not a timing threshold: the first rejection and all
+  // currently runnable promise reactions have a chance to execute, while our second read is held.
+  await flushReactions();
+  const premature=rejectionObserved;
+  if(premature)await request; // Make the old implementation complete its caller-side cleanup first.
+  allowWrite.release();
+  await siblingDone.promise;
+  assert.equal((await request).error,failure);
+  const recreated=await readFile(file).then(()=>true,error=>{if(error.code!=='ENOENT')throw error;return false;});
+  assert.deepEqual({premature,recreated},{premature:false,recreated:false});
+ }finally{
+  allowWrite.release();
+  if(siblingStarted)await siblingDone.promise;
+  await request?.catch(()=>{});
+  await rm(home,{recursive:true,force:true});
+ }
+});
+
+test('failed inventory throws the first provider failure by inventory order, not settlement order',{timeout:5000},async()=>{
+ const home=await mkdtemp(join(tmpdir(),'inventory-ordered-failure-'));
+ const releaseFirst=latch(),enteredSecond=latch(),first=new Error('first provider'),second=new Error('second provider');
+ let request;
+ try{
+  request=listProviders({home},{adapters:['first','second'].map(inventoryAdapter),readContext:{configuration:async()=>null},embeddingServices:{
+   async readConfiguration({providerId}){
+    if(providerId==='first'){await releaseFirst.promise;throw first;}
+    enteredSecond.release();throw second;
+   }
+  }}).then(()=>null,error=>error);
+  await Promise.race([enteredSecond.promise,request]);
+  await flushReactions();
+  releaseFirst.release();
+  assert.equal(await request,first);
+ }finally{releaseFirst.release();await request?.catch(()=>{});await rm(home,{recursive:true,force:true});}
+});
+
 test('inventory includes unfamiliar providers, audiences, and unsupported usages without tokens',async()=>{
  const home=await mkdtemp(join(tmpdir(),'embed-inventory-'));const adapters=['unfamiliar-a','unfamiliar-b'].map((id,n)=>({id,definition:{id,label:id,supportedKinds:n?['durable']:['attached','session'],requiredCapabilities:['runtime.attached'],capabilities:{reach:n?'tailnet':'lan',transport:'https'},disclosure:{revision:'v'},facts:[]},detect:async()=>({state:'ready',facts:{}}),properties(){return this.definition.capabilities;},setupActions:()=>[]}));
- try{const deps={adapters,embeddingServices:createEmbeddingServices({registryId:'fixture'}),readContext:{configuration:async()=>null}};const v=await listProviders({home},deps);assert.equal(v.providers.length,2);assert.equal(v.providers[0].availability.durable.state,'unsupported');assert.equal(v.providers[0].availability.attached.state,'unsupported');assert.equal(v.providers[1].reach,'tailnet');assert.equal(v.providers[0].prerequisites.find(p=>p.id==='runtime.attached').observation.reason,'host-capability-undeclared');assert.equal(JSON.stringify(v).includes('candidateToken'),false);
+ try{const deps={adapters,embeddingServices:createEmbeddingServices({registryId:'fixture'}),readContext:{configuration:async()=>null}};const v=await listProviders({home},deps);assert.deepEqual(v.providers.map(row=>row.providerId),['unfamiliar-a','unfamiliar-b']);assert.equal(v.providers[0].availability.durable.state,'unsupported');assert.equal(v.providers[0].availability.attached.state,'unsupported');assert.equal(v.providers[1].reach,'tailnet');assert.equal(v.providers[0].prerequisites.find(p=>p.id==='runtime.attached').observation.reason,'host-capability-undeclared');assert.equal(JSON.stringify(v).includes('candidateToken'),false);
  }finally{await rm(home,{recursive:true,force:true});}
 });
 test('inventory decorates actions and prerequisite remedies with the same configuration snapshot',async()=>{
