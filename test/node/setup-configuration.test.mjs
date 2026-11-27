@@ -804,6 +804,17 @@ test('an unreadable serve-config response does not become an empty usable config
   }
 });
 
+test('LAN interface inventory ignores unavailable records without discarding usable entries', async () => {
+  const { observedInterfaces } = await import('../../adapters/providers/lan/index.mjs');
+  assert.deepEqual(observedInterfaces(undefined), []);
+  assert.deepEqual(observedInterfaces({ interfaces: {
+    unplugged: undefined,
+    unknown: { address: '192.0.2.20', internal: false },
+    loopback: [{ address: '127.0.0.1', internal: true }],
+    fixture: [null, { address: '192.0.2.21', internal: false }],
+  } }), [{ name: 'fixture', address: '192.0.2.21' }]);
+});
+
 test('the server rejecting a stale serve-config snapshot does not trigger another write', async () => {
   const { setServeConfig } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
   const { ctx, seen } = localApi(() => ({ status: 412, headers: {}, body: '' }));
