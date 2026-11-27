@@ -14,16 +14,30 @@ export async function listProviders(request,deps={},admission){
  const inspections=new Array(deps.adapters.length);
  const providers=await Promise.all(deps.adapters.map(async (adapter,index)=>{
   let item, saved, detection=null;
-  if(cache){
-   // The cached detection path: the scoped configuration is read live (its revision keys the detection),
-   // and a cold or expired row answers the retained or declared-unknown state: a poll never probes.
-   const cached=await cache.provider({scope:{registryId:deps.registryId,home:request.home,owner,providerId:adapter.id,platform,adapter},
-    readConfiguration:()=>deps.embeddingServices.readConfiguration({...request,owner,providerId:adapter.id}),
-    detect:()=>detectAdapter(adapter,read,platform),explicit:request.refresh===true,admission});
-   item=cached.inspection;saved=cached.saved;detection=cached.detection;
-  }else{
-   item=await inspectAdapter(adapter,read,platform);
-   saved=await deps.embeddingServices.readConfiguration({...request,owner,providerId:adapter.id});
+  try {
+   if(cache){
+    // The cached detection path: the scoped configuration is read live (its revision keys the detection),
+    // and a cold or expired row answers the retained or declared-unknown state: a poll never probes.
+    const cached=await cache.provider({scope:{registryId:deps.registryId,home:request.home,owner,providerId:adapter.id,platform,adapter},
+     readConfiguration:()=>deps.embeddingServices.readConfiguration({...request,owner,providerId:adapter.id}),
+     detect:()=>detectAdapter(adapter,read,platform),explicit:request.refresh===true,admission});
+    item=cached.inspection;saved=cached.saved;detection=cached.detection;
+   }else{
+    item=await inspectAdapter(adapter,read,platform);
+    saved=await deps.embeddingServices.readConfiguration({...request,owner,providerId:adapter.id});
+   }
+  } catch(error) {
+   if(error?.code!=='configuration_migration_required'||!error.migration)throw error;
+   // A refused scope has no usable configuration or actions. Retain only the
+   // adapter's static declaration when detection did not produce a snapshot.
+   item??={adapter,properties:adapter.definition.capabilities??{},state:'unknown',actions:[],missingActions:[],live:false};
+   inspections[index]=item;
+   const {displayName,human,addressStability,idleTimeoutMs,needsAccount}=providerPresentation(adapter,item.properties);
+   const availability=Object.fromEntries(Object.keys(availabilityFor(adapter.definition)).map(kind=>[kind,
+    {state:'unsupported',reason:'configuration_migration_required'}]));
+   return {providerId:adapter.id,label:adapter.definition.label??adapter.id,reach:item.properties?.reach,
+    transport:item.properties?.transport,displayName,copy:{human},addressStability,idleTimeoutMs,needsAccount,
+    availability,prerequisites:[],configuration:{known:false,reason:'configuration_migration_required',migration:error.migration},facts:catalogFactsFor(item)};
   }
   inspections[index]=item;
   const properties=item.properties;

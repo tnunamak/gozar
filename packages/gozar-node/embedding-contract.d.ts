@@ -14,6 +14,19 @@ export interface ConfigurationSnapshot {revision:string;scopeId:string;values:Re
 export interface ConfigurationRequest {home:string;owner?:string;providerId:string;expectedConfigurationRevision:string;draftId?:string}
 export type DetectionFreshness={checkedAt:string|null;fresh:boolean;refreshing:boolean};
 export interface ConfigurationDraft {draftId:string;scopeId:string;baseRevision:string;configuration:Configuration;detection?:DetectionFreshness}
+export type ConfigurationMigrationReason = 'ambiguous'|'incompatible'|'taken'|'conflict'|'absent'|'inflight'|'in_use'|'retired';
+export interface ConfigurationMigrationCandidate {
+ fromRegistryId:string;draftIds:string[];setupOperationIds:string[];uses:number;
+ /** Earlier journals without a verifiable public operation id cannot be addressed through current setup calls. */
+ unaddressableSetupOperations?:number;
+}
+export interface ConfigurationMigration {
+ reason:ConfigurationMigrationReason;candidates:ConfigurationMigrationCandidate[];
+ recovery?:{available:false;reason:'unaddressable_setup_operations'};
+}
+/** Normal configurations keep their existing flat runtime shape; a refusal carries no saved inputs or actions. */
+export type ProviderConfiguration = (Configuration&{known?:true})|
+ {known:false;reason:'configuration_migration_required';migration:ConfigurationMigration};
 export interface HostEmbeddingMethods {
  storeSecret(request:ConfigurationRequest&{inputId:string;scopeId:string;bytes:Uint8Array}):Promise<{handle:string;configurationRevision:string;scopeId:string}>;
  readConfigurationDraft(request:{home:string;owner?:string;providerId:string;draftId:string;refresh?:boolean}):Promise<ConfigurationDraft>;
@@ -21,6 +34,9 @@ export interface HostEmbeddingMethods {
  beginConfigurationDraft(request:ConfigurationRequest&{refresh?:boolean}):Promise<ConfigurationDraft>;
  commitConfigurationDraft(request:ConfigurationRequest&{draftId:string}):Promise<Configuration&{detection?:DetectionFreshness}>;
  discardConfigurationDraft(request:{home:string;owner?:string;providerId:string;draftId:string}):Promise<{discarded:boolean}>;
+ /** Discards only the exact draft in a declared predecessor scope, including retryable draft-owned secret cleanup.
+  * A repeat after this same lineage adopted the record returns false without mutation; a rival claim is refused. */
+ discardEarlierConfigurationDraft(request:{home:string;owner?:string;providerId:string;fromRegistryId:string;draftId:string}):Promise<{discarded:boolean}>;
  discardSecret(request:{home:string;handle:string}):Promise<{discarded:boolean}>;
  /** Trusted host decision: carry the one earlier configuration saved under `fromRegistryId` into the stable scope. Refuses with configuration_migration_required when nothing matches, the provider's current declaration does not name the saved inputs with the same role, a draft, operation or route reservation is open, another lineage already claimed it, or a configuration already exists. */
  adoptConfiguration(request:{home:string;owner?:string;providerId:string;fromRegistryId:string}):Promise<Configuration>;
@@ -34,7 +50,7 @@ export interface ProviderInventory {
  idleTimeoutMs:Observation<number|null>;
  needsAccount:Observation<boolean>;
  availability:Availability;
- prerequisites:Prerequisite[];configuration:Configuration;facts:Fact[];
+ prerequisites:Prerequisite[];configuration:ProviderConfiguration;facts:Fact[];
  /** Present when the host factory caches polling reads: the honest freshness of this row's detection. */
  detection?:DetectionFreshness;
 }

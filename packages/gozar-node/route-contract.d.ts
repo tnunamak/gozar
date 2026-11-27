@@ -277,7 +277,7 @@ export type GozarErrorCode =
 export type GozarError = { schemaVersion: 1; error: { code: GozarErrorCode; message: string; nextAction: Action | null } };
 
 /** What JS callers catch: `.code` and `.nextAction` carry the same data as the CLI GozarError envelope. */
-export interface GozarThrownError extends Error { code: GozarErrorCode; nextAction: Action | null;route?:RouteView }
+export interface GozarThrownError extends Error { code: GozarErrorCode; nextAction: Action | null;route?:RouteView;reason?:import('./embedding-contract.js').ConfigurationMigrationReason;migration?:import('./embedding-contract.js').ConfigurationMigration }
 
 // --- Results and records ------------------------------------------------------------------------
 
@@ -477,13 +477,14 @@ export const discardSecret:import('./embedding-contract.js').HostEmbeddingMethod
 export const beginConfigurationDraft:import('./embedding-contract.js').HostEmbeddingMethods['beginConfigurationDraft'];
 export const commitConfigurationDraft:import('./embedding-contract.js').HostEmbeddingMethods['commitConfigurationDraft'];
 export const discardConfigurationDraft:import('./embedding-contract.js').HostEmbeddingMethods['discardConfigurationDraft'];
+export const discardEarlierConfigurationDraft:import('./embedding-contract.js').HostEmbeddingMethods['discardEarlierConfigurationDraft'];
 export const listProviders:import('./embedding-contract.js').HostEmbeddingMethods['listProviders'];
 export const readConfigurationDraft:import('./embedding-contract.js').HostEmbeddingMethods['readConfigurationDraft'];
 export const clearConfigurationInput:import('./embedding-contract.js').HostEmbeddingMethods['clearConfigurationInput'];
 export function reviewRouteConsent(request:RouteRef):Promise<RouteConsentSnapshot&{subject:ProofSubject|null;approvalToken:string;expiresAt:string}>;
 export function approveRouteConsent(request:RouteRef&{approvalToken:string;consentFactsDigest:string}):Promise<RouteView>;
 export function listRoutes(request:{home:string;owner?:string}):Promise<{routes:RouteView[]}>;
-export type {SecretBackend,HostCapabilities,HostCapabilityId,HostIdentity,ConfigurationDraft,ProviderInventory} from './embedding-contract.js';
+export type {SecretBackend,HostCapabilities,HostCapabilityId,HostIdentity,ConfigurationDraft,ProviderInventory,ProviderConfiguration,ConfigurationMigrationReason,ConfigurationMigrationCandidate,ConfigurationMigration} from './embedding-contract.js';
 export type {Adapter,AdapterDefinition,AdapterRequest,AdapterPlan,AdapterProofSession,ProofAttempt,ReadContext,SetupContext,AdmittedEffectContext,Receipt,Removal,Verification,Observation as AdapterObservation} from './adapter-contract.js';
 
 /**

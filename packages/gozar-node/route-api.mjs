@@ -18,7 +18,7 @@ import { projectExternal } from './route-view.mjs';
 import { resolveClientAddress } from './ingress.mjs';
 import { gozarError, normalizeError } from './error-normalizer.mjs';
 import { registryIdentity } from './registry-identity.mjs';
-import { createEmbeddingServices } from './embedding-services.mjs';
+import { createEmbeddingServices, publicMigrationDetails } from './embedding-services.mjs';
 import { bundledLineage } from './registry-lineage.mjs';
 import { inputKindsOf } from './embedding-state.mjs';
 import { validatedRuntimeModuleDeclaration } from './runtime-modules.mjs';
@@ -85,7 +85,7 @@ export function createRouteApi(deps = {}) {
       const review=setupConsentReview({registryId:resolved.registryId,providerId:adapter.id,configuration,draftId,action,facts:catalogFactsFor(inspection&&inspection.live!==false?inspection:{adapter})});
       return {...safeSetupAction(action),consent:consentSnapshot(review),...(!needsSetupOperation(action)&&{review:{canonicalInput:review.canonicalInput}})};
     } }); };
-  const publicError=cause=>{const normalized=normalizeError(cause),error=gozarError(normalized.code,normalized.message,normalized.nextAction?(needsSetupOperation(normalized.nextAction)?safeSetupAction(normalized.nextAction):structuredClone(normalized.nextAction)):null);if(normalized.route)error.route=structuredClone(normalized.route);return error;};
+  const publicError=cause=>{const normalized=normalizeError(cause),error=gozarError(normalized.code,normalized.message,normalized.nextAction?(needsSetupOperation(normalized.nextAction)?safeSetupAction(normalized.nextAction):structuredClone(normalized.nextAction)):null);if(normalized.route)error.route=structuredClone(normalized.route);if(cause?.code==='configuration_migration_required'){const migration=publicMigrationDetails(cause.migration);if(migration){error.reason=migration.reason;error.migration=migration;}}return error;};
   const guard = async action => { try { return structuredClone(await action()); } catch (error) { throw publicError(error); } };
   const setupDeps=async request=>{
     const context=await shared(request);
@@ -326,7 +326,7 @@ export function createRouteApi(deps = {}) {
       }
       return {routes:[...views.values()]};
     }),
-    ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft','adoptConfiguration'].map(method=>[method,request=>guard(async()=>{const resolved=await services();const result=await resolved.embeddingServices[method](request);
+    ...Object.fromEntries(['storeSecret','discardSecret','discardConfigurationDraft','adoptConfiguration','discardEarlierConfigurationDraft'].map(method=>[method,request=>guard(async()=>{const resolved=await services();const result=await resolved.embeddingServices[method](request);
       // A stored or discarded secret or draft changes what a scope offers: its retained detection is dropped.
       detection.invalidate({registryId:resolved.registryId,home:request.home,owner:request.owner,providerId:request.providerId});return result;})])),
     beginConfigurationDraft:request=>guard(async()=>{const context=await shared(request);const draft=await context.embeddingServices.beginConfigurationDraft(request);
