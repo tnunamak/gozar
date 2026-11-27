@@ -35,6 +35,32 @@ fn valid_json_primitives_are_not_protocol_envelopes() {
 }
 
 #[test]
+fn misspelled_host_clock_fails_without_a_snapshot_or_effect() {
+    let input = json!({"command":{"type":"status"},"host":{"nowMillis":25}});
+    let result: Value = serde_json::from_str(&gozar_core::step(&input.to_string())).unwrap();
+
+    assert_eq!(
+        result,
+        json!({"error":{"code":"invalid-input","message":"invalid input JSON or protocol shape"}})
+    );
+}
+
+#[test]
+fn omitting_host_preserves_last_clock_for_following_transitions() {
+    let initial = run(json!({"command":{"type":"status"},"host":{"nowMs":25}}));
+    let polled = run(json!({"state":initial["state"],"command":{"type":"status"}}));
+    assert_eq!(polled["snapshot"], initial["snapshot"]);
+    assert_eq!(polled["effects"], json!([]));
+
+    let input = json!({"state":polled["state"],"command":{"type":"status"},"host":{"nowMs":24}});
+    let result: Value = serde_json::from_str(&gozar_core::step(&input.to_string())).unwrap();
+    assert_eq!(
+        result,
+        json!({"error":{"code":"invalid-input","message":"host clock moved backwards"}})
+    );
+}
+
+#[test]
 fn repeated_status_preserves_the_same_snapshot_without_effects() {
     let first = run(json!({"command":{"type":"status","sessionId":"inert-status-fixture"}}));
     assert_eq!(first["snapshot"]["sessionId"], "inert-status-fixture");
