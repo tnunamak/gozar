@@ -694,3 +694,25 @@ test('line framing does not count the CRLF delimiter against the payload cap', (
   driver.processOutput(effect, resource, 'stderr', Buffer.from(exact + '\ry\r\nnext\r\n'));
   assert.deepEqual(lines.slice(1), ['next']);
 });
+
+test('cancelling a pending driver timer settles it and removes its timer entry', async t => {
+  const recipe = { kind: 'timer', delayMs: 60_000 };
+  const { driver } = await fixture(t, { detect: recipe });
+  const request = effect(recipe);
+  const pending = driver.execute(request);
+  assert.equal(driver.timers.has(request.id), true);
+  driver.cancelTimers();
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.result, { cancelled: true });
+  assert.equal(driver.timers.has(request.id), false);
+});
+
+test('a failed detection subprocess returns its nonzero exit and diagnostic text', async t => {
+  const recipe = { ...spawnRecipe, timeoutMs: 5000,
+    args: ['-e', 'process.stderr.write("fixture detect failed"); process.exitCode = 17;'] };
+  const { driver } = await fixture(t, { detect: recipe });
+  const result = await driver.execute(effect(recipe));
+  assert.equal(result.ok, true, 'the admitted subprocess completed; its status carries the failure');
+  assert.deepEqual(result.result, { stdout: '', stderr: 'fixture detect failed', exitCode: 17 });
+});
