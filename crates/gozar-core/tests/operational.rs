@@ -1580,6 +1580,55 @@ fn failed_detection_leaves_observation_unknown_and_consumes_the_effect() {
 }
 
 #[test]
+fn a_legacy_start_only_emits_an_intent_after_explicit_consent() {
+    let unconfirmed = run(json!({
+        "command": {"type": "start", "adapterId": "fixture", "consent": "true"},
+        "requirements": {"clientReach": "this-device"},
+        "adapters": [{
+            "id": "fixture", "audience": "local", "ownership": "owned",
+            "recipes": {"create": {"kind": "spawn", "program": "fixture-not-executed"}}
+        }]
+    }));
+    assert_eq!(unconfirmed["action"], json!({"kind": "confirm", "adapterId": "fixture"}));
+    assert_eq!(unconfirmed["state"]["pending"], json!({}));
+    assert_eq!(unconfirmed["effects"], json!([]));
+
+    let confirmed = run(json!({
+        "state": unconfirmed["state"],
+        "command": {"type": "start", "adapterId": "fixture", "consent": true}
+    }));
+    assert_eq!(confirmed["snapshot"]["phase"], "persisting");
+    assert_eq!(confirmed["effects"].as_array().unwrap().len(), 1);
+    assert_eq!(confirmed["effects"][0]["kind"], "persist");
+    assert_eq!(confirmed["effects"][0]["operation"], "create");
+    assert_eq!(confirmed["snapshot"]["resources"], json!([]));
+}
+
+#[test]
+fn starting_a_second_session_does_not_replace_a_pending_create_intent() {
+    let active = run(json!({
+        "command": {"type": "start", "adapterId": "first", "consent": true},
+        "requirements": {"clientReach": "this-device"},
+        "adapters": [
+            {"id": "first", "audience": "local", "ownership": "owned",
+             "recipes": {"create": {"kind": "spawn", "program": "fixture-not-executed"}}},
+            {"id": "second", "audience": "local", "ownership": "owned",
+             "recipes": {"create": {"kind": "spawn", "program": "fixture-not-executed"}}}
+        ]
+    }));
+    assert_eq!(active["snapshot"]["phase"], "persisting");
+    assert_eq!(active["effects"].as_array().unwrap().len(), 1);
+    let second = run(json!({
+        "state": active["state"],
+        "command": {"type": "start", "adapterId": "second", "consent": true}
+    }));
+    assert_eq!(second["state"], active["state"]);
+    assert_eq!(second["snapshot"], active["snapshot"]);
+    assert_eq!(second["events"][0]["type"], "already-started");
+    assert_eq!(second["effects"], json!([]));
+}
+
+#[test]
 fn owned_adapter_without_create_recipe_reports_failed_without_allocating() {
     let failed = run(json!({
         "command": {"type": "start", "adapterId": "fixture", "consent": true},
