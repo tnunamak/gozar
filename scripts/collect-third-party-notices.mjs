@@ -1,6 +1,6 @@
 // Copy the locked Rust closure's actual license/notice files, including build dependencies, into the release.
 import { execFileSync } from 'node:child_process';
-import { readFile, readdir, mkdir, writeFile, copyFile } from 'node:fs/promises';
+import { readFile, readdir, mkdir, writeFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -26,6 +26,7 @@ export async function collectThirdPartyNotices() {
   const packages = [];
   for (const { pkg, license } of declarations) {
     const source = dirname(pkg.manifest_path), directory = `third-party/rust/${pkg.name}-${pkg.version}`;
+    const canonicalSource = await realpath(source);
     const names = new Set((await readdir(source, { withFileTypes: true }))
       .filter(entry => !entry.isDirectory() && /^(LICENSE|LICENCE|COPYING|NOTICE|UNLICENSE)/i.test(entry.name))
       .map(entry => entry.name));
@@ -37,10 +38,17 @@ export async function collectThirdPartyNotices() {
     }
     const files = [];
     for (const name of [...names].sort()) {
-      const bytes = await readFile(join(source, name));
+      const target = await realpath(join(source, name));
+      const contained = relative(canonicalSource, target);
+      if (!contained || isAbsolute(contained) || contained === '..' || contained.startsWith('..' + sep))
+        throw new Error(`Resolved license file is outside ${pkg.name}`);
+      if (!(await stat(target)).isFile())
+        throw new Error(`License target is not a regular file: ${pkg.name}/${name}`);
+      // The Cargo cache is assumed stable while collecting. Hash and write one byte snapshot.
+      const bytes = await readFile(target);
       const destination = join(root, directory, name);
       await mkdir(dirname(destination), { recursive: true });
-      await copyFile(join(source, name), destination);
+      await writeFile(destination, bytes);
       files.push({ path: `${directory}/${name}`, sha256: createHash('sha256').update(bytes).digest('hex') });
     }
     if (!files.length) throw new Error(`No license text found for ${pkg.name}`);

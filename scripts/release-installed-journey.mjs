@@ -190,6 +190,25 @@ async function assertOptionalAbsent(root,names){
  }
  await walk(root);
 }
+export function optionalPackageNames(pkg){
+ return [...new Set([...Object.keys(pkg.optionalDependencies??{}),
+  ...Object.keys(pkg.peerDependencies??{}).filter(name=>pkg.peerDependenciesMeta?.[name]?.optional===true)])];
+}
+
+export function installedStepFailed(result){
+ return !result||!!(result.error||result.status!==0||result.signal||result.timedOut||result.overflow||
+  result.drainTimedOut||result.cleanup?.state==='unconfirmed');
+}
+
+export function completeFixtureLifecycle(lifecycle){
+ return lifecycle?.fixtureOnly===true&&typeof lifecycle.providerId==='string'&&lifecycle.providerId.startsWith('fixture-')&&
+  lifecycle.proof?.status==='verified'&&lifecycle.cleanup?.state==='confirmed'&&
+  lifecycle.resourceLedger?.foreignPreserved===true&&Array.isArray(lifecycle.resourceLedger?.ownedAfter)&&
+  lifecycle.resourceLedger.ownedAfter.length===0&&lifecycle.statusPreservedProofTime===true&&
+  Array.isArray(lifecycle.events)&&lifecycle.events.every(event=>['setup','start','proof','stop','cleanup'].includes(event))&&
+  /^setup,start,proof(?:,proof)*,stop,cleanup$/.test(lifecycle.events.join(','));
+}
+
 export async function runInstalledJourney(input,{run=runProcess}={}){
  const {tarball,sha256,sourceSha,outputDirectory}=input;
  if(typeof tarball!=='string'||!tarball||typeof outputDirectory!=='string'||!outputDirectory||
@@ -204,11 +223,10 @@ export async function runInstalledJourney(input,{run=runProcess}={}){
  if(pkg?.name!=='@tnunamak/gozar'||Object.keys(pkg.dependencies??{}).length)throw new Error('Archive must be standalone @tnunamak/gozar');
  for(const name of ['examples/remote-access-screen.mjs','examples/provider-lifecycle-fixture.mjs'])
   if(!members.has(name))throw new Error('Missing installed example '+name);
- const optionalNames=[...new Set([...Object.keys(pkg.optionalDependencies??{}),
-  ...Object.keys(pkg.peerDependencies??{}).filter(name=>pkg.peerDependenciesMeta?.[name]?.optional===true)])];
+ const optionalNames=optionalPackageNames(pkg);
  const output=resolve(outputDirectory);await mkdir(output,{mode:0o700});
  const scratch=await mkdtemp(join(tmpdir(),'gzj-'));
- const report={status:'failed',tarball:source,sha256,sourceSha,sourceShaProvenance:'caller-supplied, not authenticated by archive',scratch,steps:[]};
+ const report={schemaVersion:1,kind:'gozar-installed-consumer',execution:run===runProcess?'real-installed-archive':'injected-process-runner',status:'failed',tarball:source,sha256,sourceSha,sourceShaProvenance:'caller-supplied, not authenticated by archive',scratch,steps:[]};
  const save=()=>writeFile(join(output,'result.json'),JSON.stringify(report,null,2)+'\n',{mode:0o600});
  try{
   await mkdir(join(scratch,'home'),{mode:0o700});await mkdir(join(scratch,'cache'),{mode:0o700});
@@ -225,7 +243,7 @@ export async function runInstalledJourney(input,{run=runProcess}={}){
    report.steps.push({name,command,args,result});await save();
    await writeFile(join(output,name+'.stdout'),result.stdout??'',{mode:0o600});
    await writeFile(join(output,name+'.stderr'),result.stderr??'',{mode:0o600});
-   if(result.error||result.status!==0||result.signal||result.timedOut||result.overflow||result.drainTimedOut||result.cleanup?.state==='unconfirmed'){
+   if(installedStepFailed(result)){
     const error=new Error('Installed journey subprocess failed: '+name);error.result=result;throw error;
    }
    return result.stdout;
@@ -234,6 +252,7 @@ export async function runInstalledJourney(input,{run=runProcess}={}){
   const installed=join(scratch,'node_modules','@tnunamak','gozar');
   const actual=await regularFiles(installed);
   if(actual.size!==members.size||[...members].some(([name,body])=>!actual.get(name)?.equals(body)))throw new Error('Archive and installed bytes differ');
+  report.installedBytes=true;
   await assertOptionalAbsent(join(scratch,'node_modules'),optionalNames);
   report.members=[...members].map(([path,body])=>({path,sha256:digest(body),bytes:body.length}));
   report.optionalDependenciesAbsent=optionalNames;
@@ -241,13 +260,7 @@ export async function runInstalledJourney(input,{run=runProcess}={}){
   if(!screen.startsWith('Remote access\n')||!screen.includes('Host inputs:')||!screen.includes('Choice:'))throw new Error('Unknown screen outcome');
   const raw=await step('lifecycle',process.execPath,[join(installed,'examples/provider-lifecycle-fixture.mjs')]);
   const lifecycle=JSON.parse(raw);report.lifecycle=lifecycle;await save();
-  if(lifecycle?.fixtureOnly!==true||typeof lifecycle.providerId!=='string'||!lifecycle.providerId.startsWith('fixture-')||
-     lifecycle.proof?.status!=='verified'||lifecycle.cleanup?.state!=='confirmed'||
-     lifecycle.resourceLedger?.foreignPreserved!==true||!Array.isArray(lifecycle.resourceLedger?.ownedAfter)||
-     lifecycle.resourceLedger.ownedAfter.length!==0||lifecycle.statusPreservedProofTime!==true||
-     !Array.isArray(lifecycle.events)||lifecycle.events.some(event=>!['setup','start','proof','stop','cleanup'].includes(event))||
-     !/^setup,start,proof(?:,proof)*,stop,cleanup$/.test(lifecycle.events.join(',')))
-   throw new Error('Unknown or incomplete lifecycle outcome; cleanup debt retained');
+  if(!completeFixtureLifecycle(lifecycle))throw new Error('Unknown or incomplete lifecycle outcome; cleanup debt retained');
   report.status='passed';await save();return report;
  }catch(error){
   report.failure={name:error.name,message:error.message,code:error.code??null,result:error.result??null};
