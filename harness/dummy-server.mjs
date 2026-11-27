@@ -5,6 +5,17 @@ import { realpath } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
+// Read only the bounded JSON body used by the inert fixture.
+export async function readDummyBody(req) {
+  req.setEncoding('utf8');
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > 16_384) return null;
+  }
+  return body;
+}
+
 // A fresh identity per instance; finite streams make buffering observable.
 export async function startDummy({ host = '127.0.0.1', port = 0, intervalMs = 250, tls, toolName = 'identity' } = {}) {
   const nonce = randomUUID();
@@ -33,11 +44,8 @@ export async function startDummy({ host = '127.0.0.1', port = 0, intervalMs = 25
     }
     if (mcpPath && req.method === 'POST') {
       req.setEncoding('utf8');
-      let body = '';
-      for await (const chunk of req) {
-        body += chunk;
-        if (body.length > 16_384) { res.writeHead(413); return res.end(); }
-      }
+      const body = await readDummyBody(req);
+      if (body === null) { res.writeHead(413); return res.end(); }
       try {
         const input = JSON.parse(body);
         if (!input || input.jsonrpc !== '2.0' || typeof input.method !== 'string') { res.writeHead(400); return res.end(); }

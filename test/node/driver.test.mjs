@@ -6,6 +6,8 @@ import { readFile, writeFile, symlink, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
+import { Readable } from 'node:stream';
+import { readDummyBody } from '../../harness/dummy-server.mjs';
 import { spawn } from 'node:child_process';
 import { Journal, processIdentity } from '../../packages/gozar-node/journal.mjs';
 import { EffectDriver } from '../../packages/gozar-node/driver.mjs';
@@ -340,6 +342,59 @@ test('an ASCII line at exactly the frame limit is delivered once', () => {
   assert.deepEqual(seen, []);
   driver.processOutput({ id: 'output' }, resource, 'stdout', Buffer.from('\n'));
   assert.deepEqual(seen, [line]);
+});
+
+test('complete output lines preserve UTF-8 characters split between pipe chunks', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'synthetic', generation: 2, adapterId: 'example' };
+  const effect = { id: 'synthetic-effect' };
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  const lines = [];
+  driver.onProcessOutput = row => {
+    if (row.completeLine !== undefined) lines.push([row.stream, row.completeLine]);
+  };
+  const output = Buffer.from('caf\u00e9 \ud83d\ude00\n');
+  driver.processOutput(effect, resource, 'stdout', output.subarray(0, 4));
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('other stream\n'));
+  driver.processOutput(effect, resource, 'stdout', output.subarray(4, 8));
+  driver.processOutput(effect, resource, 'stdout', output.subarray(8));
+
+  assert.deepEqual(lines, [['stderr', 'other stream'], ['stdout', 'caf\u00e9 \ud83d\ude00']]);
+});
+
+test('line framing does not count the CRLF delimiter against the payload cap', () => {
+  const driver = makeOutputOnlyDriver();
+  const resource = { id: 'fixture', generation: 2, adapterId: 'fixture' };
+  const effect = { id: 'fixture-effect' };
+  const lines = [];
+  const exact = 'x'.repeat(4096);
+  driver.routeLineBuffers = new Map();
+  driver.routeOutputReady = new Set([resource.id]);
+  driver.onProcessOutput = event => {
+    if (event.completeLine !== undefined) lines.push(event.completeLine);
+  };
+
+  driver.processOutput(effect, resource, 'stderr', Buffer.from(exact + '\r'));
+  assert.deepEqual(lines, []);
+  driver.processOutput(effect, resource, 'stderr', Buffer.from('\n'));
+  assert.deepEqual(lines.map(line => line.length), [4096]);
+  assert.equal(lines[0], exact);
+
+  driver.processOutput(effect, resource, 'stderr', Buffer.from(exact + '\ry\r\nnext\r\n'));
+  assert.deepEqual(lines.slice(1), ['next']);
+});
+
+test('dummy MCP request body preserves a split UTF-8 code point', async () => {
+  const codepoint = Buffer.from('é');
+  const bytes = Buffer.from(JSON.stringify({ jsonrpc: '2.0', method: 'ping', id: 'café' }));
+  const split = bytes.indexOf(codepoint) + 1;
+  const request = Readable.from((async function* () {
+    yield bytes.subarray(0, split);
+    await new Promise(resolve => setImmediate(resolve));
+    yield bytes.subarray(split);
+  })(), { objectMode: false });
+  assert.equal(JSON.parse(await readDummyBody(request)).id, 'café');
 });
 
 test('line framing consumes a CRLF delimiter split across chunks exactly once', () => {
