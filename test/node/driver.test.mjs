@@ -321,6 +321,39 @@ test('HTTP probe rejects an oversized response without returning partial data', 
   assert.equal(driver.activeRequests.size, 0);
 });
 
+test('cancelling an active HTTP probe reports cancellation and removes its request', { timeout: 6000 }, async t => {
+  const server = http.createServer(() => {});
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = 'http://127.0.0.1:' + server.address().port;
+  const { driver } = await fixture(t, {}, { origin: url });
+  const probe = { kind: 'http-probe', url, vantage: 'local', timeoutMs: 5000 };
+  driver.adapters[0].recipes.probe = probe;
+  const accepted = once(server, 'request', { signal: AbortSignal.timeout(3500) });
+  const pending = driver.execute({ ...probe, id: 'cancelled-probe', sessionId: 'test', generation: 1, operation: 'probe' });
+  await accepted;
+  driver.cancelProbes();
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.result, { code: 'blocked', detail: 'Probe cancelled' });
+  assert.equal(driver.activeRequests.size, 0);
+});
+
+test('a local probe interrupted before HTTP headers is not a service result', async t => {
+  const server = http.createServer(req => req.socket.destroy());
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = 'http://127.0.0.1:' + server.address().port;
+  const { driver } = await fixture(t, {}, { origin: url });
+  const probe = { kind: 'http-probe', url, vantage: 'local' };
+  driver.adapters[0].recipes.probe = probe;
+  const result = await driver.execute({ ...probe, id: 'connection-interrupted', sessionId: 'test', generation: 1, operation: 'probe' });
+  assert.equal(result.ok, false);
+  assert.equal(result.result.code, 'ECONNRESET');
+  assert.equal(result.result.status, undefined);
+  assert.equal(driver.activeRequests.size, 0);
+});
+
 test('owned loopback forwarder selects ephemeral port, serves exact target, removes exact socket', async t => {
   const target = net.createServer(socket => socket.end('target'));
   await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
