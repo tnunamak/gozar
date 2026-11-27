@@ -1733,3 +1733,195 @@ fn owned_adapter_without_create_recipe_reports_failed_without_allocating() {
     assert_eq!(failed["effects"], json!([]));
     assert!(failed.get("action").is_none());
 }
+
+#[test]
+fn observation_observed_before_execution_start_is_rejected() {
+    let f = fixture();
+    let a = definition("private");
+    let now = f["host"]["nowMs"].as_u64().unwrap();
+    let out = begin(&a, &f["host"]);
+    // Fresh and unexpired, but observed before this execution started, so
+    // it cannot vouch for the current preflight.
+    let mut stale = response(&out, &a, &f["host"], &f["baselineConfig"]);
+    stale["observation"]["observedAtMs"] = json!(now - 1);
+    let denied = ack(&out, stale, &f["host"]);
+    assert_eq!(denied["effects"], json!([]));
+    assert_eq!(denied["snapshot"]["phase"], "failed");
+    assert_eq!(denied["state"]["resources"], json!([]));
+    assert!(denied["snapshot"]["limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str().unwrap()
+            == "Observation missing scoped fresh authority/time receipt"));
+
+    // Positive control: the same observation at the start tick is accepted.
+    let out = begin(&a, &f["host"]);
+    let accepted = ack(
+        &out,
+        response(&out, &a, &f["host"], &f["baselineConfig"]),
+        &f["host"],
+    );
+    assert!(!accepted["effects"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn owned_process_removal_recipe_requires_exact_stop_signals() {
+    let adapter = json!({
+        "id": "owned-stop-fixture",
+        "audience": "local",
+        "ownership": "owned",
+        "planVersion": 1,
+        "admission": {"state": "admitted", "requiredFeatures": []},
+        "recipes": {
+            "create": {"kind": "spawn", "program": "fixture-not-executed", "args": []},
+            "remove": {
+                "kind": "owned-process",
+                "resourceId": "fixture-resource",
+                "signal": "SIGTERM",
+                "thenSignal": "SIGKILL",
+                "confirmExit": true,
+                "graceMs": 5000
+            }
+        }
+    });
+    let start = |adapter: &Value| {
+        run(json!({
+            "command": {"type": "start", "adapterId": "owned-stop-fixture", "consent": true},
+            "requirements": {"clientReach": "this-device"},
+            "adapters": [adapter]
+        }))
+    };
+    let admitted = start(&adapter);
+    assert_eq!(admitted["snapshot"]["phase"], "persisting");
+    assert_eq!(admitted["effects"].as_array().unwrap().len(), 1);
+    assert_eq!(admitted["effects"][0]["kind"], "persist");
+
+    for patch in [
+        json!({"signal": "SIGINT"}),
+        json!({"thenSignal": "SIGTERM"}),
+        json!({"confirmExit": false}),
+        json!({"graceMs": 10_001}),
+    ] {
+        let mut bad = adapter.clone();
+        bad["recipes"]["remove"]
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        let failed = start(&bad);
+        assert_eq!(failed["snapshot"]["phase"], "failed", "{patch}");
+        assert_eq!(failed["effects"], json!([]), "{patch}");
+        assert_eq!(
+            failed["snapshot"]["limitations"],
+            json!(["Unsupported executable plan field or operation"]),
+            "{patch}"
+        );
+        assert_eq!(failed["snapshot"]["resources"], json!([]), "{patch}");
+    }
+}
+
+#[test]
+fn private_credential_reference_with_an_extra_key_is_rejected() {
+    let expected = json!({"error": {"code": "invalid-input", "message": "Private bindings accept opaque handles only"}});
+    let output: Value = serde_json::from_str(
+        &gozar_core::step(
+            &json!({
+                "command": {"type": "status", "sessionId": "private-binding-fixture"},
+                "host": {
+                    "nowMs": 25,
+                    "bindings": {
+                        "cred": {
+                            "type": "credential-reference",
+                            "handleRef": "h1",
+                            "authorityRef": "a1",
+                            "sessionId": "s1",
+                            "generation": 1,
+                            "observedAtMs": 1,
+                            "expiresAtMs": 100,
+                            "secret": "leaked-value"
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .unwrap();
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn private_path_materialization_accepts_at_most_sixteen_credential_refs() {
+    let host_with_refs = |count: usize| {
+        let mut refs = serde_json::Map::new();
+        for i in 0..count {
+            refs.insert(format!("ref-{i}"), json!(format!("handle-{i}")));
+        }
+        json!({
+            "nowMs": 25,
+            "bindings": {
+                "path": {
+                    "type": "session-private-path",
+                    "handleRef": "h1",
+                    "authorityRef": "a1",
+                    "sessionId": "s1",
+                    "generation": 1,
+                    "observedAtMs": 1,
+                    "expiresAtMs": 100,
+                    "materialization": {"credentialRefs": refs}
+                }
+            }
+        })
+    };
+    let accepted = run(json!({
+        "command": {"type": "status", "sessionId": "private-refs-fixture"},
+        "host": host_with_refs(16)
+    }));
+    assert_eq!(accepted["state"]["host"]["nowMs"], 25);
+    assert_eq!(
+        accepted["state"]["host"]["bindings"]["path"]["type"],
+        "session-private-path"
+    );
+    let expected = json!({"error": {"code": "invalid-input", "message": "Private bindings accept opaque handles only"}});
+    let output: Value = serde_json::from_str(
+        &gozar_core::step(
+            &json!({
+                "command": {"type": "status", "sessionId": "private-refs-fixture"},
+                "host": host_with_refs(17)
+            })
+            .to_string(),
+        ),
+    )
+    .unwrap();
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn private_path_materialization_rejects_a_non_opaque_handle() {
+    let expected = json!({"error": {"code": "invalid-input", "message": "Private bindings accept opaque handles only"}});
+    let output: Value = serde_json::from_str(
+        &gozar_core::step(
+            &json!({
+                "command": {"type": "status", "sessionId": "private-handle-fixture"},
+                "host": {
+                    "nowMs": 25,
+                    "bindings": {
+                        "path": {
+                            "type": "session-private-path",
+                            "handleRef": "h1",
+                            "authorityRef": "a1",
+                            "sessionId": "s1",
+                            "generation": 1,
+                            "observedAtMs": 1,
+                            "expiresAtMs": 100,
+                            "materialization": {"credentialRefs": {"ref-0": "handle with spaces"}}
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .unwrap();
+    assert_eq!(output, expected);
+}
