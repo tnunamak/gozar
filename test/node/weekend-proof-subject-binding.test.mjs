@@ -7,7 +7,17 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createGozar} from '@tnunamak/gozar';
 import {fakeRegistry} from '@tnunamak/gozar/testing';
-import {proofObservedDuring} from '../../packages/gozar-node/attached-route.mjs';
+import {proofObservedDuring, proofSubjectAfterObservation} from '../../packages/gozar-node/attached-route.mjs';
+
+test('verification history binds only successful observations', () => {
+  const seen = {origin: 'https://fixture.invalid', target: 'fixture-target',
+    instanceId: 'fixture-instance', bootId: 'fixture-boot', handleGeneration: 1};
+  assert.equal(proofSubjectAfterObservation(null, 'unverified', seen), null);
+  assert.deepEqual(proofSubjectAfterObservation(null, 'verified', seen), seen);
+  const newer = {...seen, handleGeneration: 2};
+  assert.deepEqual(proofSubjectAfterObservation(seen, 'unverified', newer), seen);
+  assert.deepEqual(proofSubjectAfterObservation(seen, 'verified', newer), newer);
+});
 
 // Pure negative controls for the shared initial/refresh timestamp boundary. The public proof mutation matrix below
 // now carries the subject cells; this control remains the direct evidence for the observation-window predicate.

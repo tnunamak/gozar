@@ -512,3 +512,62 @@ code or schema is still re-approved. Nothing in the stored state transfers an ol
   that has values, bindings, drafts or uses.
 - Limit: when no lineage names the earlier registry, the earlier state stays untouched but unreferenced; the host
   sees an unconfigured provider until it declares `replaces` or calls `adoptConfiguration`.
+
+## Recovering an earlier setup
+
+Read the provider inventory before offering an action. Configuration is normally
+flat; only the migration refusal has `known: false`. Show earlier registry and
+draft IDs, verified setup operation IDs, route-use counts, and counts of setup
+journals with no verified IDs. When recovery is unavailable because of
+`unaddressable_setup_operations`, show “Needs attention: no supported recovery
+action.” It is not finishing or waiting. Draft discard cannot erase that
+journal. Do not infer an ID or edit the JSON.
+
+<!-- earlier-setup-recovery-example -->
+```js
+export async function recoverEarlierSetup(api, scope, ui) {
+  const { home, owner, providerId } = scope;
+  const read = async () => {
+    const inventory = await api.listProviders({ home, owner });
+    return inventory.providers.find(row => row.providerId === providerId)?.configuration;
+  };
+  const configuration = await read();
+  if (!configuration) return { state: 'provider_missing' };
+  if (configuration.known !== false) return { state: 'configured_view', configuration };
+
+  const { migration } = configuration;
+  const candidates = migration.candidates.map(candidate => ({
+    fromRegistryId: candidate.fromRegistryId,
+    draftIds: [...candidate.draftIds],
+    setupOperationIds: [...candidate.setupOperationIds],
+    uses: candidate.uses,
+    unaddressableSetupOperations: candidate.unaddressableSetupOperations ?? 0,
+  }));
+  const recoveryUnavailable = migration.recovery?.available === false &&
+    migration.recovery.reason === 'unaddressable_setup_operations';
+  if (recoveryUnavailable) {
+    ui.show({ state: 'needs_attention', reason: migration.recovery.reason, candidates });
+    return { state: 'no_supported_action' };
+  }
+
+  const selected = await ui.selectDraft({ providerId, candidates });
+  if (!selected) return { state: 'declined' };
+  const { fromRegistryId, draftId } = selected;
+  if (selected.providerId !== providerId || !migration.candidates.some(candidate =>
+    candidate.fromRegistryId === fromRegistryId && candidate.draftIds.includes(draftId)
+  )) return { state: 'selection_mismatch' };
+
+  const exact = { providerId, fromRegistryId, draftId };
+  if (await ui.approveDiscard({ ...exact }) !== true) return { state: 'declined' };
+  const receipt = await api.discardEarlierConfigurationDraft({ home, owner, ...exact });
+  return { state: 'reread', discarded: receipt.discarded, configuration: await read() };
+}
+```
+
+The host UI must show and approve the exact selection for this provider, not
+auto-select a draft. The reread lets Gozar adopt automatically when the earlier
+scope is no longer blocked. With partial secret cleanup, retain the exact draft
+ID and retry that scope; do not switch drafts or edit state files. A same-lineage
+retry after adoption returns `discarded: false` without changing bytes. A rival
+lineage claim is refused as `taken`. The example uses host-provided UI callbacks;
+it does not call a provider or try to finish a setup operation.
