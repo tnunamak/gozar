@@ -101,6 +101,11 @@ test('packaged provider setup names terms and privacy links separately', () => {
 });
 
 
+test('ngrok manual hostname rejects a final DNS label longer than 63 characters', () => {
+  assert.equal(domainPattern.test(`fixture.${'a'.repeat(63)}`), true);
+  assert.equal(domainPattern.test(`fixture.${'a'.repeat(64)}`), false);
+});
+
 test('ngrok manual hostname accepts the exact DNS label limit', () => {
   assert.equal(domainPattern.test(`${'a'.repeat(63)}.example`), true);
   assert.equal(domainPattern.test(`${'a'.repeat(64)}.example`), false);
@@ -398,4 +403,64 @@ test('an unknown listener diagnostic gives stable review instructions', async ()
   assert.equal(error.nextAction.kind, 'instructions');
   assert.equal(error.nextAction.label, 'Review connection and setup');
   assert.doesNotMatch(error.message, /fictional provider detail/);
+});
+
+test('Tailscale check still reports working LocalAPI when the macOS app discovery fails', async () => {
+  const { checkTailscaleApp } = await import('../../adapters/providers/_shared/check-tailscale-app.mjs');
+  const calls = [];
+  const discovered = new Error('synthetic app discovery unavailable');
+  const result = await checkTailscaleApp({
+    platform: 'darwin',
+    env: { PATH: '' },
+    resolve: () => null,
+    discover: async () => { calls.push('discover'); throw discovered; },
+    node: async () => { calls.push('status'); },
+    serveConfig: async () => { calls.push('serve-config'); },
+  });
+  assert.deepEqual(calls, ['discover', 'status', 'serve-config']);
+  assert.equal(result.ok, true);
+  assert.ok(result.lines.includes('Tailscale app LocalAPI: discovery failed; checking LocalAPI directly'));
+  assert.ok(result.lines.includes('LocalAPI status: ok'));
+  assert.ok(result.lines.includes('LocalAPI serve-config: ok'));
+  assert.equal(result.lines.at(-1), 'result: reachable');
+  assert.doesNotMatch(result.lines.join('\n'), /synthetic app discovery unavailable/);
+});
+
+test('Tailscale diagnostic skips macOS app discovery on Linux', async () => {
+  const { checkTailscaleApp } = await import('../../adapters/providers/_shared/check-tailscale-app.mjs');
+  const calls = [];
+  const result = await checkTailscaleApp({
+    platform: 'linux',
+    env: { PATH: '' },
+    resolve: () => null,
+    discover: async () => { calls.push('discover'); },
+    node: async () => { calls.push('status'); },
+    serveConfig: async () => { calls.push('serve-config'); },
+  });
+  assert.deepEqual(calls, ['status', 'serve-config']);
+  assert.equal(result.lines.some(line => line.startsWith('Tailscale app LocalAPI:')), false);
+  assert.equal(result.ok, true);
+});
+
+test('Tailscale diagnostic checks serve config even if the status request fails', async () => {
+  const { checkTailscaleApp } = await import('../../adapters/providers/_shared/check-tailscale-app.mjs');
+  const calls = [];
+  const result = await checkTailscaleApp({
+    platform: 'darwin',
+    env: { PATH: '' },
+    resolve: () => null,
+    discover: async () => ({ variant: 'standalone', port: 12345 }),
+    node: async () => {
+      calls.push('status');
+      throw new Error('synthetic status detail');
+    },
+    serveConfig: async () => { calls.push('serve-config'); },
+  });
+  assert.deepEqual(calls, ['status', 'serve-config']);
+  assert.ok(result.lines.some(line => line.includes('standalone app on loopback port 12345')));
+  assert.ok(result.lines.includes('LocalAPI status: failed'));
+  assert.ok(result.lines.includes('LocalAPI serve-config: ok'));
+  assert.doesNotMatch(result.lines.join('\n'), /synthetic status detail/);
+  assert.equal(result.ok, false);
+  assert.equal(result.lines.at(-1), 'result: not reachable');
 });

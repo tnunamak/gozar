@@ -17,8 +17,12 @@ export async function checkTailscaleApp({ platform = process.platform, env = pro
   const cli = findOnPath('tailscale', env.PATH) ? 'on PATH' : resolve('tailscale', env) === tailscaleAppBundleCli ? 'the Tailscale app bundle' : 'not found';
   lines.push(`tailscale CLI: ${cli}`);
   if (platform === 'darwin') {
-    const app = await discover();
-    lines.push(`Tailscale app LocalAPI: ${app ? `${variants[app.variant] ?? 'app'} on loopback port ${app.port}` : 'not found'} (a unix socket is used first when one exists)`);
+    try {
+      const app = await discover();
+      lines.push(`Tailscale app LocalAPI: ${app ? `${variants[app.variant] ?? 'app'} on loopback port ${app.port}` : 'not found'} (a unix socket is used first when one exists)`);
+    } catch {
+      lines.push('Tailscale app LocalAPI: discovery failed; checking LocalAPI directly');
+    }
   }
   let ok = true;
   for (const [name, call] of [['status', node], ['serve-config', serveConfig]]) {
