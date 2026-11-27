@@ -21,7 +21,7 @@ const installedPackage = () => sharedInstall ??= (async () => {
   await mkdir(join(homedir(), '.tmp'), { recursive: true });
   const base = await mkdtemp(join(homedir(), '.tmp', 'gozar-installed-'));
   const pack = join(base, 'pack'), project = join(base, 'project');
-  for (const dir of [pack, project]) await mkdir(dir);
+  for (const dir of [pack, project]) await mkdir(dir, { mode: 0o700 });
   // npm 11 prints an object keyed by package name; npm 10 printed an array.
   const output = JSON.parse((await exec('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', pack], { cwd: root, timeout: 120_000 })).stdout);
   const packed = Array.isArray(output) ? output[0] : Object.values(output)[0];
@@ -697,5 +697,58 @@ void [address, outage, pendingStep, lifetime, traffic];
   }));
   await exec(process.env.GOZAR_TSC || 'tsc', ['--project', tsconfig, '--pretty', 'false'], { cwd: project, timeout: 60_000 }).catch(error => {
     assert.fail(`strict forward consumer did not compile:\n${error.stdout}${error.stderr}`);
+  });
+});
+
+test('installed package: recovers one exact earlier draft and retries without changing saved bytes', async t => {
+  const { project } = await installedPackage();
+  // Reuse the one installation; only this probe's source and state are temporary.
+  const fixture = await mkdtemp(join(project, 'earlier-draft-recovery-'));
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+  const home = join(fixture, 'home'), emptyBin = join(fixture, 'bin');
+  await mkdir(home, { mode: 0o700 });
+  await mkdir(emptyBin, { mode: 0o700 });
+  const consumer = join(fixture, 'consumer.mjs');
+  await writeFile(consumer, `
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createGozar, discardEarlierConfigurationDraft } from '@tnunamak/gozar';
+
+// Internal installed code is used only to seed synthetic predecessor state.
+import { createEmbeddingServices } from '../node_modules/@tnunamak/gozar/packages/gozar-node/embedding-services.mjs';
+assert.equal(typeof discardEarlierConfigurationDraft, 'function');
+const root = fileURLToPath(new URL('../node_modules/@tnunamak/gozar/adapters/', import.meta.url));
+const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8'));
+const fromRegistryId = 'registry-v1:' + '8'.repeat(64);
+const request = { home: process.env.GOZAR_HOME, owner: 'fixture-consumer', providerId: 'localhost-run' };
+const seeded = createEmbeddingServices({ registryId: fromRegistryId });
+const prior = await seeded.readConfiguration(request);
+const { draftId } = await seeded.beginConfigurationDraft({ ...request, expectedConfigurationRevision: prior.revision });
+const make = () => createGozar({ manifest, root, registryLineage: { id: 'installed-recovery-fixture', replaces: [fromRegistryId] } });
+const api = make();
+const list = factory => factory.listProviders({ home: request.home, owner: request.owner });
+const inventory = await list(api);
+assert.deepEqual(inventory.providers.map(row => row.providerId).sort(), manifest.providers.map(row => row.id).sort());
+const blocked = inventory.providers.filter(row => row.configuration.known === false);
+assert.deepEqual(blocked.map(row => row.providerId), [request.providerId]);
+const migration = blocked[0].configuration.migration;
+assert.equal(migration.reason, 'inflight');
+assert.deepEqual(migration.candidates.map(({ fromRegistryId, draftIds }) => ({ fromRegistryId, draftIds })), [{ fromRegistryId, draftIds: [draftId] }]);
+const selection = { ...request, fromRegistryId, draftId };
+assert.deepEqual(await api.discardEarlierConfigurationDraft(selection), { discarded: true });
+const adopted = (await list(api)).providers.find(row => row.providerId === request.providerId).configuration;
+assert.notEqual(adopted.known, false);
+assert.notEqual(adopted.scopeId, prior.scopeId);
+
+const state = join(request.home, 'embedding-state.json');
+const before = await readFile(state);
+assert.deepEqual(await make().discardEarlierConfigurationDraft(selection), { discarded: false });
+assert.deepEqual(await readFile(state), before);
+`);
+  await exec(process.execPath, ['--import', durableNetwork, consumer], {
+    cwd: project, timeout: 60_000,
+    env: { PATH: emptyBin, HOME: home, GOZAR_HOME: home, TMPDIR: fixture },
   });
 });
