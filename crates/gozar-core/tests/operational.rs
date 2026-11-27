@@ -1668,6 +1668,56 @@ fn unsupported_client_reach_does_not_start_a_local_adapter() {
 }
 
 #[test]
+fn an_existing_route_with_a_missing_or_unparseable_endpoint_never_probes() {
+    for endpoint in [Value::Null, json!("not a URL")] {
+        let failed = run(json!({
+            "command": {"type": "start", "adapterId": "fixture", "consent": true},
+            "requirements": {"clientReach": "this-device"},
+            "adapters": [{
+                "id": "fixture", "audience": "local", "ownership": "external-owned",
+                "endpoint": endpoint
+            }]
+        }));
+        assert_eq!(failed["snapshot"]["phase"], "failed");
+        assert_eq!(
+            failed["snapshot"]["limitations"],
+            json!(["External route requires an existing valid endpoint"])
+        );
+        assert_eq!(failed["snapshot"]["candidate"], Value::Null);
+        assert_eq!(failed["snapshot"]["published"], Value::Null);
+        assert_eq!(failed["effects"], json!([]));
+        assert!(failed.get("action").is_none());
+    }
+}
+
+#[test]
+fn an_early_origin_approval_does_not_replace_a_pending_create_intent() {
+    let before = run(json!({
+        "command": {"type": "start", "adapterId": "fixture", "consent": true},
+        "requirements": {"clientReach": "this-device"},
+        "adapters": [{
+            "id": "fixture", "audience": "local", "ownership": "owned",
+            "recipes": {"create": {"kind": "spawn", "program": "fixture-not-executed"}}
+        }]
+    }));
+    assert_eq!(before["snapshot"]["phase"], "persisting");
+    assert!(!before["state"]["pending"].as_object().unwrap().is_empty());
+    let refused = run(json!({
+        "state": before["state"],
+        "command": {
+            "type": "approve-origin",
+            "generation": before["snapshot"]["generation"],
+            "origin": "https://fixture.invalid"
+        }
+    }));
+    assert_eq!(refused["events"][0]["type"], "stale-origin-approval");
+    assert_eq!(refused["snapshot"], before["snapshot"]);
+    assert_eq!(refused["state"], before["state"]);
+    assert_eq!(refused["snapshot"]["published"], Value::Null);
+    assert_eq!(refused["effects"], json!([]));
+}
+
+#[test]
 fn owned_adapter_without_create_recipe_reports_failed_without_allocating() {
     let failed = run(json!({
         "command": {"type": "start", "adapterId": "fixture", "consent": true},
