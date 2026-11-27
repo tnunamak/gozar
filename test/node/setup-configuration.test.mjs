@@ -815,6 +815,18 @@ test('LAN interface inventory ignores unavailable records without discarding usa
   } }), [{ name: 'fixture', address: '192.0.2.21' }]);
 });
 
+test('serve-config cannot write before a read supplies its ETag', async () => {
+  const { setServeConfig } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  const { ctx, seen } = localApi(() => { throw new Error('fixture request must not start'); });
+  for (const etag of [undefined, '', 42]) {
+    await assert.rejects(setServeConfig({ TCP: {} }, etag, ctx), {
+      code: 'invalid_input',
+      message: 'Serve config write requires the ETag of a read',
+    });
+  }
+  assert.deepEqual(seen, []);
+});
+
 test('the server rejecting a stale serve-config snapshot does not trigger another write', async () => {
   const { setServeConfig } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
   const { ctx, seen } = localApi(() => ({ status: 412, headers: {}, body: '' }));
