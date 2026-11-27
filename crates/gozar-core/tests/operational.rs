@@ -1652,6 +1652,54 @@ fn native_jsonl_reports_a_missing_command_and_keeps_the_following_frame() {
 }
 
 #[test]
+fn native_jsonl_restores_an_explicit_stopped_snapshot_in_a_fresh_process() {
+    let initial = run(json!({"command":{"type":"status","sessionId":"native-reopen"}}));
+    let stop = json!({"state":initial["state"],"command":{"type":"stop"}}).to_string();
+    let first = run_native_jsonl(stop.as_bytes());
+    assert!(first.status.success(), "{:?}", first.stderr);
+    let stopped: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(stopped["snapshot"]["phase"], "stopped");
+    assert_eq!(stopped["snapshot"]["sessionId"], "native-reopen");
+
+    let retry = json!({"state":stopped["state"],"command":{"type":"stop"}}).to_string();
+    let second = run_native_jsonl(retry.as_bytes());
+    assert!(second.status.success(), "{:?}", second.stderr);
+    let restored: Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(restored["snapshot"], stopped["snapshot"]);
+    assert_eq!(restored["effects"], json!([]));
+    assert_eq!(restored["events"], json!([]));
+}
+
+#[test]
+fn native_jsonl_clock_refusal_does_not_consume_the_following_saved_state_frame() {
+    let first = run(json!({
+        "command":{"type":"status","sessionId":"native-clock"},
+        "host":{"nowMs":25}
+    }));
+    let row = |now| json!({
+        "state":first["state"],"command":{"type":"status"},"host":{"nowMs":now}
+    });
+    let input = format!("{}\n{}\n", row(24), row(26));
+    let out = run_native_jsonl(input.as_bytes());
+    assert!(out.status.success(), "{:?}", out.stderr);
+    let stdout = std::str::from_utf8(&out.stdout).unwrap();
+    let frames: Vec<Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(
+        frames[0],
+        json!({"error":{"code":"invalid-input","message":"host clock moved backwards"}})
+    );
+    for field in ["sessionId", "generation", "phase"] {
+        assert_eq!(frames[1]["snapshot"][field], first["snapshot"][field]);
+    }
+    assert_eq!(frames[1]["effects"], json!([]));
+    assert_eq!(frames[1]["events"], json!([]));
+}
+
+#[test]
 fn recommendation_without_adapters_has_no_choices_or_effects() {
     let out = run(json!({"command": {"type": "recommend"}, "adapters": []}));
     assert_eq!(out["snapshot"]["phase"], "planned");
