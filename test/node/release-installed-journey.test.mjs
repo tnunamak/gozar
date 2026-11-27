@@ -93,6 +93,18 @@ for (const [label, alter, expected] of [
  await assert.rejects(readFile(input.outputDirectory),{code:'ENOENT'});
 });
 
+for (const [label, bytes, expectError] of [
+ ['not a gzip archive', () => Buffer.from('not a compressed archive'), {code:'Z_DATA_ERROR'}],
+ ['invalid package manifest JSON', f => tar({...f.files, 'package.json':'{'}), SyntaxError],
+]) test('a matching digest does not accept '+label, async t=>{
+ const f=await fixture(t),stub=processStub(f),damaged=bytes(f);
+ await writeFile(f.input.tarball,damaged);
+ const input={...f.input,sha256:createHash('sha256').update(damaged).digest('hex')};
+ await assert.rejects(runInstalledJourney(input,{run:stub.run}),expectError);
+ assert.deepEqual(stub.calls,[]);
+ await assert.rejects(readFile(input.outputDirectory),{code:'ENOENT'});
+});
+
 test('digest refusal starts zero subprocesses',async t=>{
  const f=await fixture(t),stub=processStub(f);
  await assert.rejects(runInstalledJourney({...f.input,sha256:'0'.repeat(64)},{run:stub.run}),/digest/i);
