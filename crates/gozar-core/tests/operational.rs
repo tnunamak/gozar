@@ -1504,6 +1504,41 @@ fn native_jsonl_flushes_prior_receipts_before_rejecting_a_non_utf8_line() {
 }
 
 #[test]
+fn native_jsonl_rejects_valid_json_values_that_are_not_protocol_records() {
+    let out = run_native_jsonl(
+        b"[]\nnull\n{\"command\":{\"type\":\"status\",\"sessionId\":\"native-after-shape-error\"}}\n",
+    );
+    assert!(out.status.success(), "{:?}", out.stderr);
+    let receipts: Vec<Value> = std::str::from_utf8(&out.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(receipts.len(), 3);
+    for receipt in &receipts[..2] {
+        assert_eq!(receipt["error"]["code"], "invalid-input");
+    }
+    assert_eq!(receipts[2]["snapshot"]["sessionId"], "native-after-shape-error");
+    assert_eq!(receipts[2]["effects"], json!([]));
+}
+
+#[test]
+fn native_jsonl_does_not_treat_a_whitespace_record_as_end_of_input() {
+    let out = run_native_jsonl(
+        b" \t\r\n{\"command\":{\"type\":\"status\",\"sessionId\":\"native-after-whitespace\"}}\n",
+    );
+    assert!(out.status.success(), "{:?}", out.stderr);
+    let receipts: Vec<Value> = std::str::from_utf8(&out.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(receipts[0]["error"]["code"], "invalid-input");
+    assert_eq!(receipts[1]["snapshot"]["sessionId"], "native-after-whitespace");
+}
+
+#[test]
 fn native_jsonl_empty_input_does_not_emit_a_phantom_receipt() {
     let out = run_native_jsonl(b"");
     assert!(out.status.success());
