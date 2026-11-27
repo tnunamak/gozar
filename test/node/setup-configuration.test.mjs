@@ -133,6 +133,17 @@ test('ngrok manual hostname rejects a final DNS label longer than 63 characters'
   assert.equal(domainPattern.test(`fixture.${'a'.repeat(64)}`), false);
 });
 
+test('ngrok manual hostname distinguishes a bare name from a pasted URL', () => {
+  assert.equal(domainPattern.test('fixture.example'), true);
+  for (const pasted of ['https://fixture.example', 'fixture.example/setup', 'fixture.example:443'])
+    assert.equal(domainPattern.test(pasted), false, pasted);
+});
+
+test('ngrok manual hostname allows subdomain digits but not a numeric final label', () => {
+  assert.equal(domainPattern.test('node9.region2.example'), true);
+  assert.equal(domainPattern.test('node9.region2.123'), false);
+});
+
 test('ngrok setup journey: auth, then reserved domain, then ready; expose opens the listener with the stored values', async t => {
   const { home, api, forwards, candidateOf, provide, provideValue } = await ngrokWorld(t);
   let candidate = await candidateOf();
@@ -511,4 +522,297 @@ test('Tailscale diagnostic checks serve config even if the status request fails'
   assert.doesNotMatch(result.lines.join('\n'), /synthetic status detail/);
   assert.equal(result.ok, false);
   assert.equal(result.lines.at(-1), 'result: not reachable');
+});
+
+test('Tailscale diagnostic does not infer a usable config from working status', async () => {
+  const { checkTailscaleApp } = await import('../../adapters/providers/_shared/check-tailscale-app.mjs');
+  const result = await checkTailscaleApp({
+    platform: 'linux', env: { PATH: '' }, resolve: () => null,
+    node: async () => {},
+    serveConfig: async () => {
+      throw Object.assign(new Error('synthetic config detail'), { code: 'not_supported', nextAction: 'upgrade tailscaled' });
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.lines.includes('LocalAPI status: ok'));
+  assert.ok(result.lines.includes('LocalAPI serve-config: not_supported (upgrade tailscaled)'));
+  assert.doesNotMatch(result.lines.join('\n'), /synthetic config detail/);
+  assert.equal(result.lines.at(-1), 'result: not reachable');
+});
+
+test('missing macOS app discovery still reports both direct LocalAPI failures', async () => {
+  const { checkTailscaleApp } = await import('../../adapters/providers/_shared/check-tailscale-app.mjs');
+  const result = await checkTailscaleApp({
+    platform: 'darwin', env: { PATH: '' }, resolve: () => null,
+    discover: async () => null,
+    node: async () => { throw new Error('synthetic status detail'); },
+    serveConfig: async () => { throw new Error('synthetic config detail'); },
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.lines.some(line => line.startsWith('Tailscale app LocalAPI: not found')));
+  assert.deepEqual(result.lines.slice(-3), [
+    'LocalAPI status: failed', 'LocalAPI serve-config: failed', 'result: not reachable',
+  ]);
+});
+
+test('own-address reach treats loopback as this device', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  assert.equal(reachOf('https://127.0.0.1:8443/'), 'this-device');
+  assert.equal(reachOf('https://127.0.0.2/'), 'this-device');
+  assert.equal(reachOf('https://[::1]/'), 'this-device');
+  assert.equal(reachOf('https://localhost/'), 'this-device');
+  assert.equal(reachOf('https://app.localhost/'), 'this-device');
+  assert.equal(reachOf('https://LOCALHOST/'), 'this-device');
+});
+
+test('own-address reach treats private addresses and local names as the LAN', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  assert.equal(reachOf('https://192.168.1.10/'), 'lan');
+  assert.equal(reachOf('https://10.0.0.5/'), 'lan');
+  assert.equal(reachOf('https://172.16.5.4/'), 'lan');
+  assert.equal(reachOf('https://172.31.255.255/'), 'lan');
+  assert.equal(reachOf('https://printer.local/'), 'lan');
+  assert.equal(reachOf('https://nas.lan/'), 'lan');
+  assert.equal(reachOf('https://host.internal/'), 'lan');
+  assert.equal(reachOf('https://device.home.arpa/'), 'lan');
+  assert.equal(reachOf('https://myhost/'), 'lan');
+  assert.equal(reachOf('https://[fd00::1]/'), 'lan');
+  assert.equal(reachOf('https://[fe80::1]/'), 'lan');
+});
+
+test('own-address reach leaves carrier-grade NAT, unspecified and multicast addresses unknown', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  assert.equal(reachOf('https://100.64.0.1/'), 'unknown');
+  assert.equal(reachOf('https://100.127.255.255/'), 'unknown');
+  assert.equal(reachOf('https://0.1.2.3/'), 'unknown');
+  assert.equal(reachOf('https://224.0.0.1/'), 'unknown');
+  assert.equal(reachOf('https://[::]/'), 'unknown');
+  assert.equal(reachOf('https://[ff02::1]/'), 'unknown');
+  assert.equal(reachOf('https://[::2]/'), 'unknown');
+});
+
+test('own-address reach treats public addresses as the internet and reads IPv4-mapped IPv6 as IPv4', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  assert.equal(reachOf('https://8.8.8.8/'), 'internet');
+  assert.equal(reachOf('https://100.128.0.1/'), 'internet');
+  assert.equal(reachOf('https://172.32.0.1/'), 'internet');
+  assert.equal(reachOf('https://example.com/'), 'internet');
+  assert.equal(reachOf('https://example.com./'), 'internet');
+  assert.equal(reachOf('https://[::ffff:127.0.0.1]/'), 'this-device');
+  assert.equal(reachOf('https://[::ffff:192.168.1.5]/'), 'lan');
+  assert.equal(reachOf('https://[::ffff:8.8.8.8]/'), 'internet');
+});
+
+test('short IPv6 hextets do not look like private or multicast prefixes', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  for (const address of ['[00fd::1]', '[00fe::1]', '[00ff::1]']) {
+    assert.equal(reachOf('https://' + address), 'internet', address);
+  }
+  assert.equal(reachOf('https://[fd00::1]'), 'lan');
+  assert.equal(reachOf('https://[ff00::1]'), 'unknown');
+});
+
+test('IPv4-mapped shared address space keeps its two precise boundaries', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  const reach = address => reachOf('https://[::ffff:' + address + ']');
+  assert.equal(reach('100.63.255.255'), 'internet');
+  assert.equal(reach('100.64.0.0'), 'unknown');
+  assert.equal(reach('100.127.255.255'), 'unknown');
+  assert.equal(reach('100.128.0.0'), 'internet');
+});
+
+test('listener error for ngrok payment-card verification names the dashboard page', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const error = safeListenerError({ code: 'ERR_NGROK_8013', message: 'fixture debug detail' });
+  assert.equal(error.code, 'setup_required');
+  assert.match(error.message, /payment-card verification/);
+  assert.equal(error.nextAction.kind, 'open-url');
+  assert.equal(error.nextAction.href, 'https://dashboard.ngrok.com/settings#id-verification');
+  assert.equal(error.nextAction.digest, 'listener-account-8013');
+  assert.doesNotMatch(error.message, /fixture debug detail/);
+});
+
+test('listener error for an invalid ngrok authtoken hands back the credential action', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const credentialAction = { id: 'auth', kind: 'provide-secret', label: 'Provide your ngrok auth token' };
+  const error = safeListenerError({ code: 'ERR_NGROK_105' }, credentialAction);
+  assert.equal(error.code, 'setup_required');
+  assert.match(error.message, /valid ngrok agent authtoken/);
+  assert.deepEqual(error.nextAction, credentialAction);
+  assert.notEqual(error.nextAction, credentialAction);
+});
+
+test('listener error for an invalid ngrok authtoken falls back to the dashboard link', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const error = safeListenerError({ code: 'ERR_NGROK_105' });
+  assert.equal(error.code, 'setup_required');
+  assert.equal(error.nextAction.kind, 'open-url');
+  assert.equal(error.nextAction.href, 'https://dashboard.ngrok.com/get-started/your-authtoken');
+});
+
+test('listener error finds the ngrok fault code in error_code or message text', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const fromField = safeListenerError({ error_code: 'ERR_NGROK_108' });
+  assert.match(fromField.message, /agent\/session allowance was reached/);
+  assert.equal(fromField.nextAction.href, 'https://dashboard.ngrok.com/agents');
+  const fromText = safeListenerError({ message: 'failed: ERR_NGROK_8013 while starting' });
+  assert.match(fromText.message, /payment-card verification/);
+});
+
+test('listener error for an unsupported effect keeps the unsupported code', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const error = safeListenerError({ code: 'unsupported' });
+  assert.equal(error.code, 'unsupported');
+  assert.match(error.message, /no testing handler/);
+});
+
+test('an unknown SDK error gives recovery instructions without copying its diagnostics', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const error = safeListenerError({code:'UNKNOWN_FIXTURE', message:'synthetic provider detail'});
+  assert.equal(error.code, 'provider_unavailable');
+  assert.equal(error.nextAction.kind, 'instructions');
+  assert.doesNotMatch(JSON.stringify([error.message,error.nextAction]), /UNKNOWN_FIXTURE|synthetic provider detail/);
+});
+
+test('a close acknowledgement with the fixture listener still present retains cleanup debt', async () => {
+  const { createListenerLifecycle } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const lifecycle = createListenerLifecycle({adapterId:'fixture'});
+  const ctx = {generation:1,assertGeneration:async()=>{}};
+  let closed=0, present=true;
+  const listener = {id:()=> 'fixture-id', url:()=> 'https://fixture.invalid', close:async()=>{closed++;}};
+  const sdk={forward:async()=>listener,getListener:async id=>{
+    assert.equal(id,'fixture-id');
+    return present?listener:null;
+  }};
+  const receipt = await lifecycle.open(ctx,{resourceKey:'fixture',origin:'https://fixture.invalid'},{sdk});
+  const pending = await lifecycle.remove(ctx,receipt);
+  assert.equal(pending.removed,false);
+  assert.equal(pending.debt.reason,'listener-absence-unconfirmed');
+  assert.equal(lifecycle.owns(receipt),true);
+  present=false;
+  assert.deepEqual(await lifecycle.remove(ctx,receipt),{removed:true,debt:null});
+  assert.equal(lifecycle.owns(receipt),false);
+  assert.equal(closed,2);
+});
+
+test('LAN setup lists the usable addresses it observed, with their interfaces', async () => {
+  const { observedInterfaces } = await import('../../adapters/providers/lan/index.mjs');
+  assert.deepEqual(observedInterfaces({ interfaces: {
+    eth0: [
+      { internal: false, address: '192.168.1.5' },
+      { internal: false, address: '10.0.0.7' },
+      { internal: false, address: 'fd00::1' },
+      { internal: true, address: '127.0.0.1' },
+    ],
+    wlan0: [{ internal: false, address: '192.168.2.9' }],
+    down: 'not-a-list',
+  } }), [
+    { name: 'eth0', address: '192.168.1.5' },
+    { name: 'eth0', address: '10.0.0.7' },
+    { name: 'eth0', address: 'fd00::1' },
+    { name: 'wlan0', address: '192.168.2.9' },
+  ]);
+});
+
+// --- Tailscale LocalAPI client failures ------------------------------------------------------------------
+
+// The LocalAPI client reads its replies through ctx.dispatchEffect, so a canned
+// reply exercises the typed errors without a socket, a daemon or the network.
+const localApi = replies => {
+  const seen = [];
+  const ctx = { dispatchEffect: async ({ input }) => {
+    seen.push({ ...input });
+    return replies(input);
+  } };
+  return { ctx, seen };
+};
+
+test('Tailscale not running: a node status without a Running backend names `tailscale up`', async () => {
+  const { getNode } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  for (const backendState of ['Stopped', 'NeedsLogin']) {
+    const { ctx, seen } = localApi(({ path }) => {
+      assert.equal(path, '/localapi/v0/status?peers=false');
+      return { status: 200, headers: {}, body: JSON.stringify({ BackendState: backendState, Self: { DNSName: 'node.tailnet.test.', CapMap: {} } }) };
+    });
+    await assert.rejects(getNode(ctx), error => {
+      assert.equal(error.code, 'provider_not_running');
+      assert.equal(error.provider, 'tailscale');
+      assert.equal(error.message, 'Tailscale is not running: run `tailscale up`, then retry');
+      assert.equal(error.nextAction, 'tailscale up');
+      return true;
+    });
+    assert.equal(seen.length, 1, `${backendState}: one status read and nothing else`);
+  }
+});
+
+test('a node status reply with no DNS name is an unsupported tailscaled, not a route', async () => {
+  const { getNode } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  const { ctx, seen } = localApi(({ path }) => {
+    assert.equal(path, '/localapi/v0/status?peers=false');
+    return { status: 200, headers: {}, body: JSON.stringify({ BackendState: 'Running', Self: { CapMap: {} } }) };
+  });
+  await assert.rejects(getNode(ctx), error => {
+    assert.equal(error.code, 'provider_unsupported');
+    assert.equal(error.provider, 'tailscale');
+    assert.equal(error.message, 'Tailscale LocalAPI does not offer serve config with an ETag: upgrade tailscaled');
+    assert.equal(error.nextAction, 'upgrade tailscaled');
+    return true;
+  });
+  assert.equal(seen.length, 1, 'one status read and nothing else');
+});
+
+test('a serve-config write without the ETag of a read is refused before any request', async () => {
+  const { setServeConfig } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  for (const etag of ['', undefined]) {
+    const { ctx, seen } = localApi(() => assert.fail('no request may be sent'));
+    await assert.rejects(setServeConfig({ TCP: {} }, etag, ctx), error => {
+      assert.equal(error.code, 'invalid_input');
+      assert.equal(error.provider, 'tailscale');
+      assert.equal(error.message, 'Serve config write requires the ETag of a read');
+      assert.equal(error.nextAction, 'read the serve config first');
+      return true;
+    });
+    assert.deepEqual(seen, [], 'the refused write sent nothing');
+  }
+});
+
+test('an unreadable serve-config response does not become an empty usable configuration', async () => {
+  const { getServeConfig } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  for (const response of [
+    { status: 200, headers: {}, body: '{}' },
+    { status: 200, headers: { etag: '"snapshot"' }, body: '{"TCP":' },
+    { status: 200, headers: { etag: '"snapshot"' }, body: '{"TCP":[]}' },
+  ]) {
+    const { ctx, seen } = localApi(() => response);
+    await assert.rejects(getServeConfig(ctx), {
+      code: 'provider_unsupported', provider: 'tailscale', nextAction: 'upgrade tailscaled',
+    });
+    assert.deepEqual(seen.map(({ path, method }) => [path, method]), [['/localapi/v0/serve-config', 'GET']]);
+  }
+});
+
+test('the server rejecting a stale serve-config snapshot does not trigger another write', async () => {
+  const { setServeConfig } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  const { ctx, seen } = localApi(() => ({ status: 412, headers: {}, body: '' }));
+  assert.equal(await setServeConfig({ TCP: {} }, '"stale-snapshot"', ctx), false);
+  assert.deepEqual(seen.map(({ method, headers }) => [method, headers['If-Match']]), [['POST', '"stale-snapshot"']]);
+});
+
+test('a serve-config write tailscaled rejects fails closed: one conditional write, nothing changed', async () => {
+  const { setServeConfig } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  const etag = '"fake-7"';
+  const { ctx, seen } = localApi(({ path, method, headers }) => {
+    assert.equal(path, '/localapi/v0/serve-config');
+    assert.equal(method, 'POST');
+    assert.equal(headers['If-Match'], etag);
+    return { status: 500, headers: {}, body: '' };
+  });
+  await assert.rejects(setServeConfig({ TCP: { 8443: { HTTPS: true } } }, etag, ctx), error => {
+    assert.equal(error.code, 'provider_failed');
+    assert.equal(error.provider, 'tailscale');
+    assert.equal(error.message, 'Tailscale rejected the serve config change; nothing else was changed');
+    assert.equal(error.nextAction, 'retry; check the tailscaled logs if it persists');
+    return true;
+  });
+  assert.equal(seen.length, 1, 'the rejected write was attempted once, never retried');
 });
