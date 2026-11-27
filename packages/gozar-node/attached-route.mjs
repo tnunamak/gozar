@@ -44,6 +44,10 @@ export function proofObservedDuring(checked, started, ended) {
   const observed = Date.parse(checked?.checkedAt);
   return Number.isFinite(observed) && observed >= started && observed <= ended;
 }
+// An observed identity is not a verified subject. Keep prior success as history.
+export function proofSubjectAfterObservation(previous, status, subject) {
+  return status === 'verified' ? subject : previous ?? null;
+}
 export const LEASE_EXPIRY_MS = 20_000;
 // After the owner is lost, owned removal gets this long, and each local forwarding close gets LOCAL_CLOSE_MS.
 // The controller then exits whatever is still owed; the debt stays in its journal.
@@ -1013,7 +1017,9 @@ export async function runAttachedController(directory, runtime = {}) {
       lease.facts = [...new Map([...(adapter.definition.facts ?? []), ...(lease.runtimeFacts ?? []), ...(checked.facts ?? [])].map(fact => [fact.id, fact])).values()];
     }
     if(!proofSession)lease.proof={...checked,vantage:checked.vantage??'this-device',checks:checked.status==='verified'?[...(endpoint.startsWith('https:')?['tls']:[]),'nonce',...(sse?['sse']:[])]:[],validUntil:new Date(observed+15000).toISOString()};
-    lease.proofSubject=bootstrap.identity?{origin:endpoint,target:bootstrap.request.target,...bootstrap.identity,handleGeneration:handle.generation}:null;
+    lease.proofSubject = proofSubjectAfterObservation(lease.proofSubject, checked.status, bootstrap.identity
+      ? {origin:endpoint,target:bootstrap.request.target,...bootstrap.identity,handleGeneration:handle.generation}
+      : null);
     return checked;
   }
 
