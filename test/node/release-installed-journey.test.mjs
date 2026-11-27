@@ -49,6 +49,27 @@ function processStub(f,{fault,mutate=false,outcome=evidence}={}){
  };
  return {run,calls};
 }
+for (const [name, alter] of [
+  ['another source revision', gate => ({ ...gate, sourceSha: 'b'.repeat(40) })],
+  ['a suite that ran zero tests', gate => ({ ...gate, rust: { exitCode: 0, failed: 0, passed: 0 } })],
+]) test('release handoff refuses a host receipt for '+name+' before packaging', async t=>{
+  const { prepareReleaseHandoff } = await import('../../scripts/prepare-release-handoff.mjs');
+  const f = await fixture(t);
+  const root = join(f.root,'source'), gateReceipt = join(f.root,'gate.json');
+  await mkdir(root);
+  const success = { exitCode: 0, failed: 0, passed: 1 };
+  const gate = { schemaVersion: 1, kind: 'gozar-offline-host-gate', status: 'passed',
+    sourceSha: f.input.sourceSha, node: success, rust: success };
+  await writeFile(gateReceipt,JSON.stringify(alter(gate)));
+  const calls=[];
+  const run = (...args) => { calls.push(args); throw new Error('fixture must not launch'); };
+  await assert.rejects(prepareReleaseHandoff({ root, gateReceipt,
+    sourceSha: f.input.sourceSha, outputDirectory: f.input.outputDirectory },{run}),
+    /Unknown, mismatched or unsuccessful host gate receipt/);
+  assert.deepEqual(calls,[]);
+  await assert.rejects(readFile(f.input.outputDirectory),{code:'ENOENT'});
+});
+
 test('release pack metadata identifies a missing or incomplete JSON receipt',async()=>{
  const {parsePackOutput}=await import('../../scripts/prepare-release-handoff.mjs');
  for(const text of ['', '[{']){
