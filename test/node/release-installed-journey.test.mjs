@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,mkdir,rm,readFile,symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,dirname,sep} from 'node:path';
-import {gzipSync} from 'node:zlib';
+import {gunzipSync,gzipSync} from 'node:zlib';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
 import {spawn} from 'node:child_process';
@@ -77,6 +77,20 @@ test('release pack metadata rejects an empty or whitespace-only package version'
   ()=>parsePackOutput(JSON.stringify([{...pack,version}])),
   {message:'Unknown or ambiguous npm pack output'}
  );
+});
+
+for (const [label, alter, expected] of [
+ ['checksum', bytes => { bytes[4] ^= 1; return bytes; }, /Invalid tar checksum/],
+ ['truncation', bytes => bytes.subarray(0, 520), /Truncated archive/],
+]) test('valid outer digest does not hide tar '+label, async t=>{
+ const f=await fixture(t),raw=gunzipSync(await readFile(f.input.tarball));
+ const damaged=gzipSync(alter(raw));
+ await writeFile(f.input.tarball,damaged);
+ const input={...f.input,sha256:createHash('sha256').update(damaged).digest('hex')};
+ const {run,calls}=processStub(f);
+ await assert.rejects(runInstalledJourney(input,{run}),expected);
+ assert.deepEqual(calls,[]);
+ await assert.rejects(readFile(input.outputDirectory),{code:'ENOENT'});
 });
 
 test('digest refusal starts zero subprocesses',async t=>{
