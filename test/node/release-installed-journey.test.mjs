@@ -958,6 +958,22 @@ test('a missing output parent is reported before any install starts',async t=>{
  await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
 });
 
+test('a runner rejection records the failed launch without inventing a completed lifecycle step',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const run=async(command,args,options)=>{
+  if(stub.calls.length===0)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  if(stub.calls.length===2) throw Object.assign(new Error('fixture launcher unavailable'),{code:'ENOENT'});
+  return stub.run(command,args,options);
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),{code:'ENOENT'});
+ const out=f.input.outputDirectory;
+ const report=JSON.parse(await readFile(join(out,'result.json'),'utf8'));
+ assert.equal(report.status,'failed');
+ assert.equal(report.failure.code,'ENOENT');
+ assert.deepEqual(report.steps.map(step=>step.name),['install','screen']);
+ await assert.rejects(readFile(join(out,'lifecycle.stdout')),{code:'ENOENT'});
+});
+
 test('a lifecycle subprocess failure keeps the completed screen and the lifecycle diagnostics',async t=>{
  const f=await fixture(t),stub=processStub(f,{fault:3});
  const run=async(command,args,options)=>{
