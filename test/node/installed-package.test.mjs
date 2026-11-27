@@ -581,6 +581,47 @@ export async function handled() {
   return [route, result, direct];
 }
 
+// An installed host can recover only the exact earlier-registry draft it approved.
+export async function recoverEarlier() {
+  const home = '/var/lib/dataconnect/gozar';
+  const owner = 'fixture-owner';
+  const factory = createGozar();
+  const inventory = await factory.listProviders({ home, owner });
+  for (const provider of inventory.providers) {
+    const configuration: gozar.ProviderInventory['configuration'] = provider.configuration;
+    if (configuration.known === false) {
+      const reason: gozar.ConfigurationMigrationReason = configuration.migration.reason;
+      const recovery = configuration.migration.recovery;
+      if (recovery?.available === false) {
+        const unavailable: 'unaddressable_setup_operations' = recovery.reason;
+        void unavailable;
+        continue;
+      }
+      for (const candidate of configuration.migration.candidates) {
+        const draftId = candidate.draftIds[0];
+        if (!draftId) continue;
+        const request = { home, owner, providerId: provider.providerId, fromRegistryId: candidate.fromRegistryId, draftId };
+        const rootResult: Promise<{ discarded: boolean }> = gozar.discardEarlierConfigurationDraft(request);
+        const factoryResult: Promise<{ discarded: boolean }> = factory.discardEarlierConfigurationDraft(request);
+        void [reason, rootResult, factoryResult];
+      }
+    }
+  }
+}
+
+// @ts-expect-error the exact draft id is required.
+void gozar.discardEarlierConfigurationDraft({ home: '/fixture', providerId: 'fixture', fromRegistryId: 'earlier' });
+// @ts-expect-error the earlier registry is named fromRegistryId, not registryId.
+void createGozar().discardEarlierConfigurationDraft({ home: '/fixture', providerId: 'fixture', registryId: 'earlier', draftId: 'draft' });
+// @ts-expect-error the earlier registry id is text, not a sequence number.
+void createGozar().discardEarlierConfigurationDraft({ home: '/fixture', providerId: 'fixture', fromRegistryId: 1, draftId: 'draft' });
+// @ts-expect-error public migration reasons have a closed vocabulary.
+const inventedMigrationReason: gozar.ConfigurationMigrationReason = 'invented-recovery-reason';
+declare const unclassified: gozar.ProviderInventory['configuration'];
+// @ts-expect-error an ordinary flat configuration does not have migration candidates.
+void unclassified.migration.candidates;
+void inventedMigrationReason;
+
 // The published route is current state, not a cached address.
 declare const published: gozar.ForwardRoute;
 const address: string | null = published.url;
