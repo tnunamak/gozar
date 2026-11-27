@@ -416,6 +416,26 @@ fn repeated_preflight_result_does_not_consume_the_next_effect() {
 }
 
 #[test]
+fn a_completion_for_a_different_session_leaves_the_fixture_intent_pending() {
+    let f = fixture();
+    let adapter = definition("private");
+    let waiting = begin(&adapter, &f["host"]);
+    let issued = &waiting["effects"][0];
+    let id = issued["id"].as_str().unwrap();
+    let result = response(&waiting, &adapter, &f["host"], &f["baselineConfig"]);
+    let rejected = run(json!({
+        "state": waiting["state"], "host": f["host"],
+        "command": {"type": "effect-result", "effectId": id,
+                    "sessionId": "other-fixture-session", "generation": issued["generation"],
+                    "ok": true, "result": result}
+    }));
+    assert_eq!(rejected["events"][0]["type"], "effect-scope-mismatch");
+    assert_eq!(rejected["effects"], json!([]));
+    assert_eq!(rejected["state"]["pending"][id], waiting["state"]["pending"][id]);
+    assert_eq!(rejected["snapshot"]["sessionId"], waiting["snapshot"]["sessionId"]);
+}
+
+#[test]
 fn durable_ack_cannot_execute_after_preflight_authority_expiry() {
     let f = fixture();
     let a = definition("private");
@@ -1611,6 +1631,24 @@ fn native_jsonl_labels_a_valid_json_non_envelope_without_losing_following_frames
     );
     assert_eq!(receipts[2]["snapshot"]["sessionId"], "native-after-primitive");
     assert_eq!(receipts[2]["effects"], json!([]));
+}
+
+#[test]
+fn native_jsonl_reports_a_missing_command_and_keeps_the_following_frame() {
+    let input = b"{}\n{\"command\":{\"type\":\"status\",\"sessionId\":\"native-after-missing-command\"}}\n";
+    let output = run_native_jsonl(input);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert!(output.stderr.is_empty());
+    let mut receipts = std::str::from_utf8(&output.stdout).unwrap().lines();
+    let failure: Value = serde_json::from_str(receipts.next().unwrap()).unwrap();
+    assert_eq!(
+        failure,
+        json!({"error":{"code":"invalid-input","message":"invalid input JSON or protocol shape"}})
+    );
+    let success: Value = serde_json::from_str(receipts.next().unwrap()).unwrap();
+    assert_eq!(success["snapshot"]["sessionId"], "native-after-missing-command");
+    assert_eq!(success["effects"], json!([]));
+    assert!(receipts.next().is_none());
 }
 
 #[test]
