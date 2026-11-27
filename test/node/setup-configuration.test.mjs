@@ -606,6 +606,35 @@ test('listener error for an unsupported effect keeps the unsupported code', asyn
   assert.match(error.message, /no testing handler/);
 });
 
+test('an unknown SDK error gives recovery instructions without copying its diagnostics', async () => {
+  const { safeListenerError } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const error = safeListenerError({code:'UNKNOWN_FIXTURE', message:'synthetic provider detail'});
+  assert.equal(error.code, 'provider_unavailable');
+  assert.equal(error.nextAction.kind, 'instructions');
+  assert.doesNotMatch(JSON.stringify([error.message,error.nextAction]), /UNKNOWN_FIXTURE|synthetic provider detail/);
+});
+
+test('a close acknowledgement with the fixture listener still present retains cleanup debt', async () => {
+  const { createListenerLifecycle } = await import('../../adapters/providers/_shared/sdk-lifecycle.mjs');
+  const lifecycle = createListenerLifecycle({adapterId:'fixture'});
+  const ctx = {generation:1,assertGeneration:async()=>{}};
+  let closed=0, present=true;
+  const listener = {id:()=> 'fixture-id', url:()=> 'https://fixture.invalid', close:async()=>{closed++;}};
+  const sdk={forward:async()=>listener,getListener:async id=>{
+    assert.equal(id,'fixture-id');
+    return present?listener:null;
+  }};
+  const receipt = await lifecycle.open(ctx,{resourceKey:'fixture',origin:'https://fixture.invalid'},{sdk});
+  const pending = await lifecycle.remove(ctx,receipt);
+  assert.equal(pending.removed,false);
+  assert.equal(pending.debt.reason,'listener-absence-unconfirmed');
+  assert.equal(lifecycle.owns(receipt),true);
+  present=false;
+  assert.deepEqual(await lifecycle.remove(ctx,receipt),{removed:true,debt:null});
+  assert.equal(lifecycle.owns(receipt),false);
+  assert.equal(closed,2);
+});
+
 test('LAN setup lists the usable addresses it observed, with their interfaces', async () => {
   const { observedInterfaces } = await import('../../adapters/providers/lan/index.mjs');
   assert.deepEqual(observedInterfaces({ interfaces: {
