@@ -216,6 +216,24 @@ test('a known handle whose file vanished fails instead of returning an empty rea
   });
 });
 
+test('scoped reads count UTF-8 bytes, preserving exact-limit text', async t => {
+  const { driver, directory } = await fixture(t, {});
+  const path = join(directory, 'text-fixture.txt');
+  await writeFile(path, 'éé');
+  driver.handles.text = path;
+  assert.deepEqual(await driver.readHandle({ handleRef: 'text', maxOutputBytes: 4 }),
+    { stdout: 'éé', stderr: '', exitCode: 0 });
+  await assert.rejects(driver.readHandle({ handleRef: 'text', maxOutputBytes: 3 }),
+    { message: 'File exceeds output limit' });
+});
+
+test('scoped reads reject a directory instead of returning empty output', async t => {
+  const { driver, directory } = await fixture(t, {});
+  driver.handles.folder = directory;
+  await assert.rejects(driver.readHandle({ handleRef: 'folder' }),
+    { message: 'Handle is not a regular file' });
+});
+
 test('local probe never claims a public, tailnet or LAN vantage', async t => {
   const { driver } = await fixture(t, {});
   for (const vantage of ['public', 'tailnet', 'lan']) {
