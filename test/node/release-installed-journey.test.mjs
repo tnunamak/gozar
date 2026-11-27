@@ -986,6 +986,23 @@ test('an unexpected installed file fails the package identity check before scree
  assert.deepEqual(report.steps.map(step=>step.name),['install']);
 });
 
+test('malformed lifecycle JSON keeps the failed receipt and raw subprocess output',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const raw='fixture interrupted before emitting JSON';
+ const run=async(command,args,options)=>{
+  if(stub.calls.length===0)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  const result=await stub.run(command,args,options);
+  return stub.calls.length===3?{...result,stdout:raw}:result;
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),SyntaxError);
+ const output=f.input.outputDirectory;
+ const report=JSON.parse(await readFile(join(output,'result.json'),'utf8'));
+ assert.equal(report.status,'failed');
+ assert.equal(report.failure.name,'SyntaxError');
+ assert.deepEqual(report.steps.map(step=>step.name),['install','screen','lifecycle']);
+ assert.equal(await readFile(join(output,'lifecycle.stdout'),'utf8'),raw);
+});
+
 function archiveClosureScenario() {
   const pkg = {
     exports: { '.': { import: './api.mjs', types: './api.d.ts' } },
