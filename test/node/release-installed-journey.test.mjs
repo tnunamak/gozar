@@ -172,6 +172,24 @@ test('a missing archive retains ENOENT and creates no output or subprocess',asyn
  await assert.rejects(readFile(f.input.outputDirectory),{code:'ENOENT'});
 });
 
+test('archive digest mismatch refuses before creating output or starting npm',async t=>{
+ const f=await fixture(t);
+ const {run,calls}=processStub(f);
+ const wrong=(f.input.sha256[0]==='0'?'1':'0')+f.input.sha256.slice(1);
+ await assert.rejects(runInstalledJourney({...f.input,sha256:wrong},{run}),/Archive digest mismatch/);
+ assert.deepEqual(calls,[]);
+ await assert.rejects(readFile(f.input.outputDirectory),{code:'ENOENT'});
+});
+
+test('a truncated source revision refuses even when the archive digest is correct',async t=>{
+ const f=await fixture(t);
+ const {run,calls}=processStub(f);
+ await assert.rejects(runInstalledJourney({...f.input,sourceSha:f.input.sourceSha.slice(0,12)},{run}),
+  /Explicit tarball, sha256, source SHA and output directory required/);
+ assert.deepEqual(calls,[]);
+ await assert.rejects(readFile(f.input.outputDirectory),{code:'ENOENT'});
+});
+
 test('an archive symlink is not treated as the verified regular file',async t=>{
  const f=await fixture(t);const {run,calls}=processStub(f);
  const linked=join(f.root,'linked.tgz');
