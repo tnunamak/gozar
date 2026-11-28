@@ -58,19 +58,41 @@ const check = process.argv.includes('--check');
 async function sync() {
   const manifest = JSON.parse(await readFile(path, 'utf8'));
   if (!Array.isArray(manifest.providers) || !manifest.providers.length) { console.error('adapters/manifest.json has no providers'); process.exit(1); }
-  const views = manifest.providers.map(provider => `${provider.id}.definition.json`);
   const problems = [];
-  for (const provider of manifest.providers) {
-    for (const key of ['module', 'definition']) {
-      try { await access(new URL(provider[key], adaptersUrl)); } catch { problems.push(`${provider.id}: ${key} ${provider[key]} is missing`); }
-    }
+  const hardProblems = [];
+  const proposedWrites = [];
+  const providers = manifest.providers.filter((provider, index) => {
+    if (provider && typeof provider === 'object' && !Array.isArray(provider)) return true;
+    hardProblems.push(`provider at index ${index} is not an object`);
+    return false;
+  });
+  const views = providers.map(provider => `${provider.id}.definition.json`);
+  for (const provider of providers) {
+    try { await access(new URL(provider.module, adaptersUrl)); }
+    catch { hardProblems.push(`${provider.id}: module ${provider.module} is missing`); }
     const file = new URL(provider.definition, adaptersUrl);
-    let text, data;
-    try { text = await readFile(file, 'utf8'); data = JSON.parse(text); } catch { continue; }
+    let data;
+    try {
+      data = JSON.parse(await readFile(file, 'utf8'));
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('expected an object');
+    } catch (error) {
+      hardProblems.push(error.code === 'ENOENT'
+        ? `${provider.id}: definition ${provider.definition} is missing`
+        : `${provider.id}: invalid definition ${provider.definition}`);
+      continue;
+    }
     if (!data.wraps) continue;
-    let wrapped;
-    try { wrapped = JSON.parse(await readFile(new URL(data.wraps, file), 'utf8')).definition; }
-    catch { problems.push(`${provider.id}: declared wrapped definition is missing`); continue; }
+    let wrappedDocument;
+    try { wrappedDocument = JSON.parse(await readFile(new URL(data.wraps, file), 'utf8')); }
+    catch (error) {
+      const reason = error.code === 'ENOENT' ? 'missing' : error instanceof SyntaxError ? 'invalid JSON' : 'unreadable';
+      hardProblems.push(`${provider.id}: declared wrapped definition is ${reason}`); continue;
+    }
+    if (!wrappedDocument || typeof wrappedDocument !== 'object' || Array.isArray(wrappedDocument) ||
+        !wrappedDocument.definition || typeof wrappedDocument.definition !== 'object' || Array.isArray(wrappedDocument.definition)) {
+      hardProblems.push(`${provider.id}: declared wrapped definition has an invalid shape`); continue;
+    }
+    const wrapped = wrappedDocument.definition;
     const capabilities = data.adapter?.capabilities;
     if (!capabilities?.address) continue;
     const ports = derivePorts(wrapped), proof = deriveProof(wrapped, capabilities.transport), ownership = deriveOwnership(wrapped);
@@ -89,17 +111,17 @@ async function sync() {
     for (const [key, value] of Object.entries(rest)) { ordered[key] = value; if (key === 'label') { if (needs !== undefined) ordered.needs = needs; } }
     data.adapter = ordered;
     data.adapter.ownership = ownership;
-    await writeFile(file, JSON.stringify(data, null, 2) + '\n');
+    proposedWrites.push([file, JSON.stringify(data, null, 2) + '\n']);
   }
   for (const key of ['definitions', 'normalizedDefinitions']) {
     if (JSON.stringify(manifest[key]) !== JSON.stringify(views)) problems.push(`${key} differs from providers`);
   }
-  if (check) {
-    if (problems.length) { console.error(problems.join('\n')); process.exit(1); }
-  } else {
+  const failures = check ? [...hardProblems, ...problems] : hardProblems;
+  if (failures.length) { console.error(failures.join('\n')); process.exit(1); }
+  if (!check) {
+    for (const [file, text] of proposedWrites) await writeFile(file, text);
     manifest.definitions = views; manifest.normalizedDefinitions = [...views];
     await writeFile(path, JSON.stringify(manifest, null, 2) + '\n');
-    if (problems.some(problem => !/differs/.test(problem))) { console.error(problems.filter(problem => !/differs/.test(problem)).join('\n')); process.exit(1); }
   }
 }
 

@@ -909,6 +909,24 @@ for(const [label,screen] of [
  assert.equal(await readFile(join(f.input.outputDirectory,'screen.stdout'),'utf8'),screen);
 });
 
+for (const state of ['overflow', 'drainTimedOut']) {
+ test('a zero-exit installed step with '+state+' still stops before running any example',async t=>{
+  const f=await fixture(t);
+  const result={status:0,signal:null,[state]:true,stdout:'partial receipt stdout',stderr:'partial receipt stderr'};
+  let calls=0;
+  await assert.rejects(runInstalledJourney(f.input,{run:async()=>{calls++;return result;}}),
+   /Installed journey subprocess failed: install/);
+  const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
+  t.after(()=>rm(report.scratch,{recursive:true,force:true}));
+  assert.equal(calls,1);
+  assert.equal(report.status,'failed');
+  assert.deepEqual(report.steps.map(step=>step.name),['install']);
+  assert.equal(report.failure.result[state],true);
+  assert.equal(await readFile(join(f.input.outputDirectory,'install.stdout'),'utf8'),result.stdout);
+  assert.equal(await readFile(join(f.input.outputDirectory,'install.stderr'),'utf8'),result.stderr);
+ });
+}
+
 test('a zero-exit install marked timed out remains failed with its output intact',async t=>{
  const f=await fixture(t);
  let calls=0;
@@ -962,6 +980,22 @@ test('a missing output parent is reported before any install starts',async t=>{
  await assert.rejects(readFile(join(f.input.outputDirectory,'result.json')),{code:'ENOENT'});
 });
 
+test('a runner rejection records the failed launch without inventing a completed lifecycle step',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const run=async(command,args,options)=>{
+  if(stub.calls.length===0)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  if(stub.calls.length===2) throw Object.assign(new Error('fixture launcher unavailable'),{code:'ENOENT'});
+  return stub.run(command,args,options);
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),{code:'ENOENT'});
+ const out=f.input.outputDirectory;
+ const report=JSON.parse(await readFile(join(out,'result.json'),'utf8'));
+ assert.equal(report.status,'failed');
+ assert.equal(report.failure.code,'ENOENT');
+ assert.deepEqual(report.steps.map(step=>step.name),['install','screen']);
+ await assert.rejects(readFile(join(out,'lifecycle.stdout')),{code:'ENOENT'});
+});
+
 test('a lifecycle subprocess failure keeps the completed screen and the lifecycle diagnostics',async t=>{
  const f=await fixture(t),stub=processStub(f,{fault:3});
  const run=async(command,args,options)=>{
@@ -988,6 +1022,23 @@ test('an unexpected installed file fails the package identity check before scree
  const report=JSON.parse(await readFile(join(f.input.outputDirectory,'result.json'),'utf8'));
  assert.equal(report.status,'failed');
  assert.deepEqual(report.steps.map(step=>step.name),['install']);
+});
+
+test('malformed lifecycle JSON keeps the failed receipt and raw subprocess output',async t=>{
+ const f=await fixture(t),stub=processStub(f);
+ const raw='fixture interrupted before emitting JSON';
+ const run=async(command,args,options)=>{
+  if(stub.calls.length===0)t.after(()=>rm(options.cwd,{recursive:true,force:true}));
+  const result=await stub.run(command,args,options);
+  return stub.calls.length===3?{...result,stdout:raw}:result;
+ };
+ await assert.rejects(runInstalledJourney(f.input,{run}),SyntaxError);
+ const output=f.input.outputDirectory;
+ const report=JSON.parse(await readFile(join(output,'result.json'),'utf8'));
+ assert.equal(report.status,'failed');
+ assert.equal(report.failure.name,'SyntaxError');
+ assert.deepEqual(report.steps.map(step=>step.name),['install','screen','lifecycle']);
+ assert.equal(await readFile(join(output,'lifecycle.stdout'),'utf8'),raw);
 });
 
 function archiveClosureScenario() {

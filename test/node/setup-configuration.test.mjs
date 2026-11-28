@@ -565,6 +565,19 @@ test('own-address reach treats loopback as this device', async () => {
   assert.equal(reachOf('https://LOCALHOST/'), 'this-device');
 });
 
+test('own-address keeps the localhost.localdomain alias local with a final DNS dot', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  assert.equal(reachOf('https://LOCALHOST.LOCALDOMAIN./'), 'this-device');
+});
+
+test('own-address only treats the IPv4 link-local prefix as local for that boundary', async () => {
+  const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
+  assert.equal(reachOf('https://169.253.255.255'), 'internet');
+  assert.equal(reachOf('https://169.254.0.1'), 'lan');
+  assert.equal(reachOf('https://169.254.255.254'), 'lan');
+  assert.equal(reachOf('https://169.255.0.1'), 'internet');
+});
+
 test('own-address reach treats private addresses and local names as the LAN', async () => {
   const { reachOf } = await import('../../adapters/providers/own-address/index.mjs');
   assert.equal(reachOf('https://192.168.1.10/'), 'lan');
@@ -789,6 +802,29 @@ test('an unreadable serve-config response does not become an empty usable config
     });
     assert.deepEqual(seen.map(({ path, method }) => [path, method]), [['/localapi/v0/serve-config', 'GET']]);
   }
+});
+
+test('LAN interface inventory ignores unavailable records without discarding usable entries', async () => {
+  const { observedInterfaces } = await import('../../adapters/providers/lan/index.mjs');
+  assert.deepEqual(observedInterfaces(undefined), []);
+  assert.deepEqual(observedInterfaces({ interfaces: {
+    unplugged: undefined,
+    unknown: { address: '192.0.2.20', internal: false },
+    loopback: [{ address: '127.0.0.1', internal: true }],
+    fixture: [null, { address: '192.0.2.21', internal: false }],
+  } }), [{ name: 'fixture', address: '192.0.2.21' }]);
+});
+
+test('serve-config cannot write before a read supplies its ETag', async () => {
+  const { setServeConfig } = await import('../../adapters/providers/_shared/tailscale-localapi.mjs');
+  const { ctx, seen } = localApi(() => { throw new Error('fixture request must not start'); });
+  for (const etag of [undefined, '', 42]) {
+    await assert.rejects(setServeConfig({ TCP: {} }, etag, ctx), {
+      code: 'invalid_input',
+      message: 'Serve config write requires the ETag of a read',
+    });
+  }
+  assert.deepEqual(seen, []);
 });
 
 test('the server rejecting a stale serve-config snapshot does not trigger another write', async () => {

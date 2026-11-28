@@ -1504,6 +1504,41 @@ fn native_jsonl_flushes_prior_receipts_before_rejecting_a_non_utf8_line() {
 }
 
 #[test]
+fn native_jsonl_rejects_valid_json_values_that_are_not_protocol_records() {
+    let out = run_native_jsonl(
+        b"[]\nnull\n{\"command\":{\"type\":\"status\",\"sessionId\":\"native-after-shape-error\"}}\n",
+    );
+    assert!(out.status.success(), "{:?}", out.stderr);
+    let receipts: Vec<Value> = std::str::from_utf8(&out.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(receipts.len(), 3);
+    for receipt in &receipts[..2] {
+        assert_eq!(receipt["error"]["code"], "invalid-input");
+    }
+    assert_eq!(receipts[2]["snapshot"]["sessionId"], "native-after-shape-error");
+    assert_eq!(receipts[2]["effects"], json!([]));
+}
+
+#[test]
+fn native_jsonl_does_not_treat_a_whitespace_record_as_end_of_input() {
+    let out = run_native_jsonl(
+        b" \t\r\n{\"command\":{\"type\":\"status\",\"sessionId\":\"native-after-whitespace\"}}\n",
+    );
+    assert!(out.status.success(), "{:?}", out.stderr);
+    let receipts: Vec<Value> = std::str::from_utf8(&out.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(receipts[0]["error"]["code"], "invalid-input");
+    assert_eq!(receipts[1]["snapshot"]["sessionId"], "native-after-whitespace");
+}
+
+#[test]
 fn native_jsonl_empty_input_does_not_emit_a_phantom_receipt() {
     let out = run_native_jsonl(b"");
     assert!(out.status.success());
@@ -1649,6 +1684,54 @@ fn native_jsonl_reports_a_missing_command_and_keeps_the_following_frame() {
     assert_eq!(success["snapshot"]["sessionId"], "native-after-missing-command");
     assert_eq!(success["effects"], json!([]));
     assert!(receipts.next().is_none());
+}
+
+#[test]
+fn native_jsonl_restores_an_explicit_stopped_snapshot_in_a_fresh_process() {
+    let initial = run(json!({"command":{"type":"status","sessionId":"native-reopen"}}));
+    let stop = json!({"state":initial["state"],"command":{"type":"stop"}}).to_string();
+    let first = run_native_jsonl(stop.as_bytes());
+    assert!(first.status.success(), "{:?}", first.stderr);
+    let stopped: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(stopped["snapshot"]["phase"], "stopped");
+    assert_eq!(stopped["snapshot"]["sessionId"], "native-reopen");
+
+    let retry = json!({"state":stopped["state"],"command":{"type":"stop"}}).to_string();
+    let second = run_native_jsonl(retry.as_bytes());
+    assert!(second.status.success(), "{:?}", second.stderr);
+    let restored: Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(restored["snapshot"], stopped["snapshot"]);
+    assert_eq!(restored["effects"], json!([]));
+    assert_eq!(restored["events"], json!([]));
+}
+
+#[test]
+fn native_jsonl_clock_refusal_does_not_consume_the_following_saved_state_frame() {
+    let first = run(json!({
+        "command":{"type":"status","sessionId":"native-clock"},
+        "host":{"nowMs":25}
+    }));
+    let row = |now| json!({
+        "state":first["state"],"command":{"type":"status"},"host":{"nowMs":now}
+    });
+    let input = format!("{}\n{}\n", row(24), row(26));
+    let out = run_native_jsonl(input.as_bytes());
+    assert!(out.status.success(), "{:?}", out.stderr);
+    let stdout = std::str::from_utf8(&out.stdout).unwrap();
+    let frames: Vec<Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(
+        frames[0],
+        json!({"error":{"code":"invalid-input","message":"host clock moved backwards"}})
+    );
+    for field in ["sessionId", "generation", "phase"] {
+        assert_eq!(frames[1]["snapshot"][field], first["snapshot"][field]);
+    }
+    assert_eq!(frames[1]["effects"], json!([]));
+    assert_eq!(frames[1]["events"], json!([]));
 }
 
 #[test]
