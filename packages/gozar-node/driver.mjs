@@ -403,6 +403,11 @@ export class EffectDriver {
     const child = (this.spawnProcess??spawn)(this.spawnProcess?effect.program:this.resolveProgram(effect.program, process.env), args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'],
       env: { PATH: process.env.PATH, LANG: 'C.UTF-8' }, detached: false,...(this.spawnProcess?{fixtureEffect:{longRunning}}:{}) });
     let resource;
+    let closeSeen = false, closedCode, handleClose;
+    child.once('close', code => {
+      closeSeen = true; closedCode = code;
+      handleClose?.(code);
+    });
     if (longRunning) {
       try { await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); }
       catch (error) {
@@ -428,14 +433,17 @@ export class EffectDriver {
           for (const handle of artifacts) if (this.journal.value.owned[handle]?.pendingDispatch?.effectId === effect.id) delete this.journal.value.owned[handle].pendingDispatch;
           await this.journal.save();
         }
-      } catch (error) { child.kill('SIGTERM'); throw error; }
+      } catch (error) { if (!closeSeen) child.kill('SIGTERM'); throw error; }
     }
     const completion = await new Promise((resolve, reject) => {
       let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), receivedBytes = 0, settled = false, idle;
       const finish = (error, exitCode = null) => {
         if (settled) return;
         settled = true; clearTimeout(deadline); clearTimeout(idle);
-        if (error) { child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 500).unref(); reject(error); }
+        if (error) {
+          if (!closeSeen) { child.kill('SIGTERM'); setTimeout(() => { if (!closeSeen) child.kill('SIGKILL'); }, 500).unref(); }
+          reject(error);
+        }
         else resolve({ stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8'), exitCode,
           ...(resource ? { resourceId: resource.id, ...(effect.recipeRef ? { ownership: this.ownership(resource) } : {}) } : {}) });
       };
@@ -453,11 +461,12 @@ export class EffectDriver {
       };
       child.stdout.on('data', collect('stdout')); child.stderr.on('data', collect('stderr'));
       child.once('error', error => finish(error));
-      child.once('close', code => {
+      handleClose = code => {
         if (settled && resource) this.onExit({ resourceId: resource.id, exitCode: code });
         if (longRunning && !settled) finish(new Error('Owned process exited before its initial output was collected'));
         else finish(null, code);
-      });
+      };
+      if (closeSeen) handleClose(closedCode);
     });
     if (resource && this.onProcessOutput && !resource.privateMaterialized) {
       this.routeOutputReady.add(resource.id);
