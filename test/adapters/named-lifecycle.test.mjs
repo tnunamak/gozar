@@ -119,10 +119,13 @@ for (const {protocols, buffered} of [
   {protocols:['sse','streamable-http'],buffered:false},
   {protocols:['sse','streamable-http'],buffered:true},
   {protocols:['sse'],buffered:false},
+  {protocols:['sse'],buffered:true},
   {protocols:['streamable-http'],buffered:false},
+  {protocols:['streamable-http'],buffered:true},
 ]) {
-  test('named attached proof for '+protocols.join('+')+' '+(buffered?'rejects buffered SSE':'verifies'), async t => {
+  test('named attached proof for '+protocols.join('+')+' ('+(buffered?'buffering proxy':'streaming proxy')+')', async t => {
     const requiresSse = protocols.includes('sse');
+    const shouldReject = requiresSse && buffered;
     // Redirect transport only; use the real gate nonce and timed-stream verifier.
     const app = createServer((_request, response) => response.end('fixture app'));
     await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
@@ -137,6 +140,7 @@ for (const {protocols, buffered} of [
     t.after(closeGate);
     const realFetch = globalThis.fetch;
     let streamResponses = 0;
+    let bufferedResponses = 0;
     globalThis.fetch = async (input, init) => {
       const requested = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
       assert.equal(requested.origin, origin, 'fixture never contacts a provider');
@@ -144,7 +148,10 @@ for (const {protocols, buffered} of [
       const response = await realFetch(local, init);
       if (response.headers.get('content-type')?.includes('text/event-stream')) {
         streamResponses += 1;
-        if (buffered) return new Response(await response.arrayBuffer(), {status:response.status,headers:response.headers});
+        if (buffered) {
+          bufferedResponses += 1;
+          return new Response(await response.arrayBuffer(), {status:response.status,headers:response.headers});
+        }
       }
       return response;
     };
@@ -159,9 +166,10 @@ for (const {protocols, buffered} of [
     assert.equal(result.attemptId, attempt.id);
     assert.equal(result.endpoint, origin);
     assert.equal(result.vantage, 'this-device');
-    assert.equal(result.status, buffered ? 'unverified' : 'verified');
-    assert.deepEqual(result.checks, buffered ? [] : requiresSse ? ['tls','nonce','sse'] : ['tls','nonce']);
-    if (buffered) assert.notEqual(result.status, 'verified', 'no successful proof may authorize publication');
+    assert.equal(bufferedResponses, buffered ? streamResponses : 0, 'only timed SSE responses can be buffered');
+    assert.equal(result.status, shouldReject ? 'unverified' : 'verified');
+    assert.deepEqual(result.checks, shouldReject ? [] : requiresSse ? ['tls','nonce','sse'] : ['tls','nonce']);
+    if (shouldReject) assert.notEqual(result.status, 'verified', 'no successful proof may authorize publication');
     await dialFixtureGate(gatePort);
     const canceledObservation = new AbortController();
     canceledObservation.abort();

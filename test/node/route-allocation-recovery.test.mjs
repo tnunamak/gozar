@@ -348,11 +348,22 @@ test('a refused release after a committed registration failure is kept as exact 
  const {routes}=await w.api.listRoutes({home:w.home,owner:w.owner});
  assert.equal(routes.length,1);assert.equal(routes[0].cleanup.state,'unconfirmed');assert.equal(routes[0].published,null);
  assert.equal(routes[0].operationId,w.q.operationId);
+ // An incorrect generation must not call cleanup on the retained allocation.
+ const handle=routes[0].handle;
+ await assert.rejects(w.api.closeRoute({home:w.home,owner:w.owner,handle:{...handle,generation:handle.generation+1},mode:'remove'}),{code:'route_conflict'});
+ assert.equal(w.uses.released.length,1);assert.deepEqual(mutations(w),[]);
  // A later owner retries release with the exact retained handle once the host accepts it.
  w.uses.failRelease=false;
- const closed=await w.api.closeRoute({home:w.home,handle:routes[0].handle,mode:'remove'});
+ const closed=await w.api.closeRoute({home:w.home,owner:w.owner,handle,mode:'remove'});
  assert.equal(closed.cleanup.state,'confirmed');
  assert.equal(w.uses.released.length,2);assert.deepEqual(mutations(w),[]);
+ const configurationBeforeRepeat=await readFile(join(w.home,'embedding-state.json'),'utf8');
+ const again=await w.api.closeRoute({home:w.home,owner:w.owner,handle,mode:'remove'});
+ assert.equal(again.cleanup.state,'confirmed');
+ // The internal release method may be retried; an already-absent hold must not rewrite configuration.
+ assert.equal(await readFile(join(w.home,'embedding-state.json'),'utf8'),configurationBeforeRepeat);
+ assert.deepEqual(mutations(w),[],'repeat exact cleanup must not create or remove a provider resource');
+ assert.equal(await accepts(w.foreignPort),true,'foreign listener survives cleanup and repeat');
 });
 
 test('an identity failure after the controller saved a receipt retains the receipt and stops the owned child',async t=>{
