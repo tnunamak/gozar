@@ -5,6 +5,7 @@ import {gunzipSync} from 'node:zlib';
 import {spawnSync} from 'node:child_process';
 import {join,resolve,relative,isAbsolute,basename,dirname,sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
+import {completeFixtureLifecycle,installedStepFailed,optionalPackageNames} from './release-installed-journey.mjs';
 
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const json=async path=>JSON.parse(await readFile(path,'utf8'));
@@ -20,7 +21,7 @@ export function parsePackOutput(text){
  if(basename(entry.filename)!==entry.filename||!entry.filename.endsWith('.tgz'))throw new Error('Unsafe npm archive filename');
  return entry;
 }
-function inventory(bytes){
+function inventory(bytes,onPackage=()=>{}){
  const data=gunzipSync(bytes,{maxOutputLength:256*1024*1024}),members=[];let at=0,pax=null,ended=false;
  const str=b=>b.toString().replace(/\0.*$/s,'');
  const number=b=>{const s=str(b).trim();if(!/^[0-7]*$/.test(s))throw new Error('Unsupported tar number');return parseInt(s||'0',8);};
@@ -53,6 +54,7 @@ function inventory(bytes){
   if(type===53)continue;
   if(![0,48].includes(type)||members.some(m=>m.path===path))throw new Error('Nonregular or duplicate archive member');
   members.push({path,bytes:size,sha256:hash(body)});
+  if(path==='package.json')onPackage(body);
  }
  if(!ended||pax||data.subarray(at).some(x=>x!==0)||!members.length)throw new Error('Invalid archive end');
  return members;
@@ -105,14 +107,31 @@ export async function prepareReleaseHandoff({root,sourceSha,gateReceipt,outputDi
   await save(manifestPath,manifest);return manifest;
  }catch(error){manifest.failure={message:error.message,code:error.code??null,result:error.result??null};await save(manifestPath,manifest);throw error;}
 }
-function checkConsumer(receipt,manifest){
+function checkConsumer(receipt,manifest,archivePackage){
+ const reject=()=>{throw new Error('Unknown, mismatched or incomplete real consumer receipt');};
+ // This release gate preserves the package policy that the optional ngrok SDK is absent.
+ const expectedOptional=optionalPackageNames(archivePackage).sort();
+ const actualOptional=receipt?.optionalDependenciesAbsent;
+ const expectedMembers=new Map(manifest.members.map(member=>[member.path,member]));
  if(receipt?.schemaVersion!==1||receipt.kind!=='gozar-installed-consumer'||receipt.status!=='passed'||
     receipt.execution!=='real-installed-archive'||receipt.sourceSha!==manifest.sourceSha||receipt.sha256!==manifest.sha256||
-    !Array.isArray(receipt.unresolvedFailures)||receipt.unresolvedFailures.length||
-    !Array.isArray(receipt.absentOptionalPackages)||!receipt.absentOptionalPackages.includes('@ngrok/ngrok')||
-    !['screen','lifecycle'].every(name=>receipt.journeys?.[name]?.exitCode===0&&receipt.journeys[name].installedBytes===true)||
-    receipt.proofVerified!==true||receipt.cleanupConfirmed!==true||receipt.foreignAppPreserved!==true||receipt.archiveMembersMatch!==true)
-  throw new Error('Unknown, mismatched or incomplete real consumer receipt');
+    receipt.sourceShaProvenance!=='caller-supplied, not authenticated by archive'||receipt.failure||receipt.installedBytes!==true||
+    !Array.isArray(actualOptional)||!expectedOptional.includes('@ngrok/ngrok')||
+    JSON.stringify([...actualOptional].sort())!==JSON.stringify(expectedOptional)||
+    !Array.isArray(receipt.members)||receipt.members.length!==expectedMembers.size||
+    !Array.isArray(receipt.steps)||receipt.steps.map(step=>step?.name).join(',')!=='install,screen,lifecycle'||
+    receipt.steps.some(step=>installedStepFailed(step.result))||!completeFixtureLifecycle(receipt.lifecycle))reject();
+ const seen=new Set();
+ for(const member of receipt.members){
+  const wanted=expectedMembers.get(member?.path);
+  if(!wanted||seen.has(member.path)||wanted.bytes!==member.bytes||wanted.sha256!==member.sha256)reject();
+  seen.add(member.path);
+ }
+ const screen=receipt.steps[1].result.stdout;
+ if(typeof screen!=='string'||!screen.startsWith('Remote access\n')||!screen.includes('Host inputs:')||!screen.includes('Choice:'))reject();
+ let observed;
+ try{observed=JSON.parse(receipt.steps[2].result.stdout);}catch{reject();}
+ if(JSON.stringify(observed)!==JSON.stringify(receipt.lifecycle))reject();
 }
 const quote=value=>"'"+value.replace(/'/g,"'\\''")+"'";
 export async function finalizeReleaseHandoff({manifestPath,consumerReceipt}){
@@ -122,11 +141,13 @@ export async function finalizeReleaseHandoff({manifestPath,consumerReceipt}){
  if(!info.isFile()||info.isSymbolicLink())throw new Error('Archive must be regular');
  const bytes=await readFile(manifest.tarball);
  if(hash(bytes)!==manifest.sha256)throw new Error('Archive digest changed');
- if(JSON.stringify(inventory(bytes))!==JSON.stringify(manifest.members))throw new Error('Archive inventory changed');
+ let archivePackage;
+ const members=inventory(bytes,body=>{archivePackage=JSON.parse(body);});
+ if(!archivePackage||JSON.stringify(members)!==JSON.stringify(manifest.members))throw new Error('Archive inventory changed');
  const gateBytes=await readFile(manifest.gateReceipt);
  if(hash(gateBytes)!==manifest.gateReceiptSha256)throw new Error('Host gate receipt changed');
  checkGate(JSON.parse(gateBytes),manifest.sourceSha);
- const receiptBytes=await readFile(consumerReceipt),receipt=JSON.parse(receiptBytes);checkConsumer(receipt,manifest);
+ const receiptBytes=await readFile(consumerReceipt),receipt=JSON.parse(receiptBytes);checkConsumer(receipt,manifest,archivePackage);
  manifest.status='qualified-artifact';manifest.consumerReceipt=resolve(consumerReceipt);manifest.consumerReceiptSha256=hash(receiptBytes);
  manifest.limits=manifest.limits.filter(x=>!x.startsWith('consumer journey unresolved'));
  manifest.publishCommand='npm publish '+quote(manifest.tarball)+' --access public --ignore-scripts';

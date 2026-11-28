@@ -26,7 +26,7 @@ const fetchBody=(port,path)=>new Promise((resolve,reject)=>http.get({host:'127.0
  const chunks=[];res.on('data',c=>chunks.push(c));res.on('end',()=>resolve(Buffer.concat(chunks).toString()));}).on('error',reject));
 
 // `holdAt` names the one provider call that stays withheld: 'discovery' is the first effect the controller
-// requests after the bootstrap binding is on disk; 'create' is the provider allocation itself.
+// requests after the bootstrap binding is on disk; 'create' is the provider allocation itself. 'proof' holds only the controller's first network fetch.
 async function world(t,holdAt,{cut,failRelease=false,failAfterRegister=false,blockDebtWrite=false,identityRecorder}={}){
  // Registered before the scratch home so it runs first: close the live route, then retire what is left.
  const settle={};
@@ -76,10 +76,18 @@ async function world(t,holdAt,{cut,failRelease=false,failAfterRegister=false,blo
  // The same fixture effect dispatch the testing harness uses, built here so the publication seam and the host's
  // configuration-use calls can be observed from the owner process.
  const handlers=new Map(list.map(e=>[JSON.stringify([e.kind,e.operation]),e.handle])),abort=new AbortController();
- const dispatchEffect=async request=>{const handler=handlers.get(JSON.stringify([request?.kind,request?.operation]));
+ const dispatchFixture=async(request,ownerProof=false)=>{const handler=handlers.get(JSON.stringify([request?.kind,request?.operation]));
   if(abort.signal.aborted||!handler)throw Object.assign(new Error('No matching testing effect is declared'),{code:'unsupported'});
+  if(!ownerProof&&!held&&holdAt==='proof'&&request.kind==='network'&&request.operation==='fetch'){
+   held=true;
+   enter.resolve();
+   await gate.promise;
+   // This teardown-only gate is released after controller retirement; do not start abandoned fixture I/O.
+   return {status:503,headers:{},chunks:[]};
+  }
   try{return structuredClone(await handler(structuredClone(request.input),{signal:abort.signal,fixture:true}));}
   catch{throw Object.assign(new Error('The testing effect failed'),{code:'provider_unavailable'});}};
+ const dispatchEffect=request=>dispatchFixture(request);
  const real=createEmbeddingServices({registryId:await registryIdentity({})});
  const uses={registered:[],released:[],failRelease};
  const embeddingServices={...real,
@@ -96,7 +104,7 @@ async function world(t,holdAt,{cut,failRelease=false,failAfterRegister=false,blo
    }
   },
   releaseConfigurationUse:async r=>{uses.released.push(structuredClone(r.handle));if(uses.failRelease)throw new Error('release refused');return real.releaseConfigurationUse(r);}};
- api=createRouteApi({embeddingServices,dispatchEffect,verify:request=>verification(request,{fetch:testingFetch(dispatchEffect)}),expose:{...(cut?{publicationCut:cut}:{}),...(identityRecorder?{identityRecorder}:{})}});
+ api=createRouteApi({embeddingServices,dispatchEffect,verify:request=>verification(request,{fetch:testingFetch(effect=>dispatchFixture(effect,true))}),expose:{...(cut?{publicationCut:cut}:{}),...(identityRecorder?{identityRecorder}:{})}});
  const harness={close:async()=>{
   for(const route of (await api.listRoutes({home,owner}).catch(()=>({routes:[]}))).routes)
    if(route.cleanup.state!=='confirmed')await api.closeRoute({home,handle:route.handle,mode:'remove'}).catch(()=>{});
@@ -608,22 +616,26 @@ for(const part of ['record','view'])for(const field of ['kind','id','generation'
 
 test('wait-loop recovery refusal still retires the owned controller',async t=>{
  let directory,control,original;
- const w=await world(t,null,{identityRecorder:async pid=>{
+ const w=await world(t,'proof',{identityRecorder:async pid=>{
   const [id]=await entries(w.home);assert.ok(id);directory=join(w.home,'attached',id);
-  for(let i=0;i<1000;i++){
-   const state=await json(join(directory,'state.json')).catch(()=>null);
-   control=await json(join(directory,'control.json')).catch(()=>null);
-   if(state?.receipt&&control){original=state;break;}
-   await new Promise(resolve=>setTimeout(resolve,10));
-  }
+  let deadline;
+  try {
+   await Promise.race([w.enter.promise,new Promise((_,reject)=>{
+    deadline=setTimeout(()=>reject(new Error('controller did not reach the held proof request')),10_000);
+   })]);
+  } finally { clearTimeout(deadline); }
+  original=await json(join(directory,'state.json'));
+  control=await json(join(directory,'control.json'));
   assert.ok(original?.receipt);assert.equal(control.pid,pid);
+  const identity=await processIdentity(pid);assert.ok(identity);
+  assert.equal(w.ledger.size,1,'the deferred proof starts with one owned fixture allocation');
+  assert.equal(w.counts().closes,0);
   const bad=structuredClone(original);bad.lastView.handle.generation++;
   bad.lastView.cleanup={state:'unconfirmed'};
   await writeFile(join(directory,'state.json'),JSON.stringify(bad),{mode:0o600});
   // The real controller stays alive, but cannot authenticate status or close through this corrupted endpoint record.
   await writeFile(join(directory,'control.json'),JSON.stringify({...control,nonce:'refused-fixture-nonce'}),{mode:0o600});
-  await chmod(directory,0o500);
-  const identity=await processIdentity(pid);assert.ok(identity);return identity;
+  return identity;
  }});
  try{
   const {error}=await w.exposed;assert.ok(error);
@@ -633,6 +645,7 @@ test('wait-loop recovery refusal still retires the owned controller',async t=>{
   assert.equal(w.ledger.size,1);assert.equal(w.counts().closes,0);
   assert.equal(await accepts(w.foreignPort),true);
  }finally{
-  if(directory){await chmod(directory,0o700);if(control)await writeFile(join(directory,'control.json'),JSON.stringify(control),{mode:0o600});}
+  w.gate.resolve();
+  if(directory&&control)await writeFile(join(directory,'control.json'),JSON.stringify(control),{mode:0o600});
  }
 });
