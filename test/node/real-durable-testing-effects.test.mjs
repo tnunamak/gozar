@@ -7,11 +7,19 @@ import {join} from 'node:path';
 import {createServiceVerifier} from '@tnunamak/gozar';
 import {createTestingGozar} from '@tnunamak/gozar/testing';
 import {scratch,query} from './route-schema-check.mjs';
-export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJournal=false,terminalInventory=false,transitionEvidence=false,removeWhileSuspended=false,terminalReplay=false}={}){
+export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJournal=false,terminalInventory=false,transitionEvidence=false,removeWhileSuspended=false,terminalReplay=false,pendingReplay=false}={}){
  let harness,app;t.after(async()=>{try{await harness?.close();}finally{if(app)await new Promise(resolve=>app.close(resolve));}});
  const home=await scratch(t),owner='durable-effects';
  const verifier=createServiceVerifier();app=http.createServer((req,res)=>{if(!verifier(req,res))res.end('app');});await new Promise(resolve=>app.listen(0,'127.0.0.1',resolve));
  const foreign={TCP:{'9000':{TCPForward:'127.0.0.1:9001'}}};let config=structuredClone(foreign),version=1,writes=0;
+ let postAttempts=0,signalWrite,releaseReply;
+ const writeEntered=new Promise(resolve=>{signalWrite=resolve;});
+ const writeReply=new Promise(resolve=>{releaseReply=resolve;});
+ const bounded=async(promise,label)=>{
+  let timer;
+  try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(label)),5000);})]);}
+  finally{clearTimeout(timer);}
+ };
  const node={BackendState:'Running',Self:{DNSName:'fixture.node.invalid.',ID:'fixture-node',CapMap:{https:[],funnel:[],'https://tailscale.com/cap/funnel-ports?ports=443,8443,10000':[]}},CurrentTailnet:{MagicDNSEnabled:true,MagicDNSSuffix:'node.invalid'},CertDomains:['fixture.node.invalid']};
  const effects=[
   {kind:'recipe',operation:'probe',handle:async({recipe})=>({stdout:JSON.stringify(recipe.args[0]==='serve'?config:node),stderr:'',exitCode:0})},
@@ -19,8 +27,12 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
    if(request.path.includes('status?'))return {status:200,headers:{},body:JSON.stringify(node)};
    assert.equal(request.path,'/localapi/v0/serve-config');
    if(request.method==='GET')return {status:200,headers:{etag:`"${version}"`},body:JSON.stringify(config)};
-   assert.equal(request.method,'POST');if(request.headers['If-Match']!==`"${version}"`)return {status:412,headers:{},body:''};
-   config=structuredClone(request.body);version++;writes++;if(partialWrite&&writes===1)return {status:500,headers:{},body:''};return {status:200,headers:{},body:''};
+   assert.equal(request.method,'POST');postAttempts++;
+   if(request.headers['If-Match']!==`"${version}"`)return {status:412,headers:{},body:''};
+   config=structuredClone(request.body);version++;writes++;
+   if(pendingReplay&&writes===1){signalWrite();await bounded(writeReply,'held fixture POST was not released');}
+   if(partialWrite&&writes===1)return {status:500,headers:{},body:''};
+   return {status:200,headers:{},body:''};
   }},
   {kind:'network',operation:'fetch',handle:async request=>{
    const url=new URL(request.url),port=url.port||'443';
@@ -40,6 +52,48 @@ export async function exercise(t,{partialWrite=false,adoptExisting=false,resumeJ
   const request={...q,approval:{kind:'route',candidateToken:candidate.candidateToken,disclosureRevision:candidate.disclosure.revision,consentFactsDigest:candidate.consentFactsDigest}};
   if(adoptExisting){const route=await api.adoptRoute({...request,handover:{from:'fixture-owner',generation:1}});assert.equal(route.verification.status,'verified');assert.equal(route.verification.subject.target,q.target);assert.equal(route.operationId,q.operationId);assert.equal(writes,0,'adoption proves and claims without rewriting the provider rule');assert.equal((await api.closeRoute({home,handle:route.handle,mode:'remove'})).cleanup.state,'confirmed');assert.deepEqual(config,foreign);return;}
   if(partialWrite){await assert.rejects(api.ensureRoute(request));const listed=await api.listRoutes({home,owner});assert.equal(listed.routes.length,1);assert.equal((await api.closeRoute({home,handle:listed.routes[0].handle,mode:'remove'})).cleanup.state,'confirmed');assert.deepEqual(config,foreign);return;}
+  if(pendingReplay){
+   const replayRequest={...request,wait:'verified'};
+   const requests=[];
+   let settled;
+   try{
+    const first=api.ensureRoute(replayRequest);
+    first.catch(()=>{});requests.push(first);
+    await bounded(Promise.race([writeEntered,first.then(()=>{throw new Error('first route settled before the fixture commit');})]),'first fixture write never entered');
+    assert.equal(writes,1,'the held write already changed provider state');
+    assert.notDeepEqual(config,foreign,'provider state is independent of the operation reply');
+    const retry=api.ensureRoute(replayRequest);
+    retry.catch(()=>{});requests.push(retry);
+   }finally{
+    releaseReply();
+    settled=await bounded(Promise.allSettled(requests),'route operations did not settle');
+   }
+   const route=settled[0]?.status==='fulfilled'?settled[0].value:null;
+   const replay=settled[1]?.status==='fulfilled'?settled[1].value:null;
+   const handle=route?.handle??replay?.handle;
+   try{
+    for(const result of settled)if(result.status==='rejected')throw result.reason;
+    assert.ok(route&&replay,'both callers completed');
+    assert.deepEqual(replay.handle,route.handle);
+    for(const view of [route,replay]){
+     assert.equal(view.operationId,q.operationId);
+     assert.equal(view.verification.status,'verified');
+     assert.equal(view.verification.subject.target,q.target);
+     assert.ok(view.origin,'a verified route has the published origin');
+    }
+    assert.equal(writes,1,'one successful owned allocation');
+    assert.equal(postAttempts,1,'even a rejected duplicate POST must not occur');
+   }finally{
+    if(handle){
+     const removal=await bounded(api.closeRoute({home,handle,mode:'remove'}),'fixture route removal did not settle');
+     assert.equal(removal.cleanup.state,'confirmed');
+    }
+   }
+   assert.equal(writes,2,'close once removes exactly one owned rule');
+   assert.equal(postAttempts,2,'one allocation POST and one removal POST');
+   assert.deepEqual(config,foreign,'the pre-existing foreign configuration survives');
+   return;
+  }
   const route=await api.ensureRoute(request);assert.equal(route.verification.status,'verified');assert.equal(route.operationId,q.operationId);assert.equal(route.verification.subject.target,q.target);assert.equal(route.verification.subject.handleGeneration,route.handle.generation);assert.equal(route.verification.observedAt,route.verification.checkedAt);const written=writes;
   const review=await api.reviewRouteConsent({home,handle:route.handle});assert.equal(review.scope.reviewHandle,route.handle.id);assert.deepEqual(review.subject,route.verification.subject);
   assert.equal((await api.routeStatus({home,handle:route.handle})).published,null);
@@ -193,3 +247,4 @@ test('fresh owned inventory keeps confirmed restored terminal evidence for both 
 test('suspend hides publication and resume proves the new generation for both durable providers',t=>exercise(t,{transitionEvidence:true}));
 test('explicit removal while suspended is terminal without further writes for both durable providers',t=>exercise(t,{removeWhileSuspended:true}));
 test('fresh facade replays restored terminal operations without changing either provider',t=>exercise(t,{terminalReplay:true}));
+test('an in-process retry during a held durable provider reply does not allocate twice',t=>exercise(t,{pendingReplay:true}));
