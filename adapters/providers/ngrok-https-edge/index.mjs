@@ -108,7 +108,10 @@ export function createNgrokAdapter({ loadSdk = () => import('@ngrok/ngrok'), fet
             sdk = false;
             sdkReason = sdkUnavailableReason(declared);
           }
-          const values = read(await ctx.configuration(null).catch(() => null));
+          let config;
+          try { config = await ctx.configuration(null); }
+          catch { return { state: 'unknown', facts: { platform: os, setupNeeded: false } }; }
+          const values = read(config);
           const configured = values.authToken !== null && values.reservedDomain !== null, ready = sdk && configured;
           return { state: ready ? 'ready' : 'action-required',
             facts: { platform: os, sdk, authSet: values.authToken !== null, domainSet: values.reservedDomain !== null, configured, setupNeeded: !ready,

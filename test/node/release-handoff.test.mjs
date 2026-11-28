@@ -106,6 +106,11 @@ test('actual installed journey qualifies its exact fixture archive without trans
  try{
   receipt=await runInstalledJourney(input);
   for(const alter of [
+   bad=>{bad.status='failed';},
+   bad=>{bad.members[0].path='unknown-receipt-member.txt';},
+   bad=>{bad.steps[2].result.stdout='{';},
+   bad=>{bad.steps[1].result.stdout='Remote access\nChoice: Fixture';},
+   bad=>{bad.steps[1].result.stdout='Remote access\nHost inputs: {}';},
    bad=>{bad.installedBytes=false;},
    bad=>{bad.execution='injected-process-runner';},
    bad=>{bad.sourceShaProvenance='authenticated';},

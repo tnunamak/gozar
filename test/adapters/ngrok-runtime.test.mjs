@@ -44,6 +44,18 @@ async function capture(run) {
   try { return { result: await run(), output: chunks.join('') }; } finally { process.stdout.write = originals.out; process.stderr.write = originals.err; }
 }
 
+test('an unreadable configuration is unknown, not a request to reenter settings', async () => {
+  const sdk = stubSdk(), adapter = adapterWith(sdk);
+  const unavailable = await adapter.detect(context({ configuration: async () => { throw new Error('synthetic configuration failure'); } }));
+  assert.equal(unavailable.state, 'unknown');
+  assert.deepEqual(adapter.setupActions(unavailable.facts), []);
+  assert.doesNotMatch(JSON.stringify(unavailable), /synthetic configuration failure/);
+  const empty = await adapter.detect(context({ configuration: async () => ({}) }));
+  assert.equal(empty.state, 'action-required');
+  assert.ok(adapter.setupActions(empty.facts).length > 0);
+  assert.equal(sdk.opened.length, 0);
+});
+
 test('attached create opens one SDK listener on the reserved domain; remove closes it', async () => {
   const sdk = stubSdk(), adapter = adapterWith(sdk), ctx = context();
   const plan = await adapter.plan(ctx, request());
