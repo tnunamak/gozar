@@ -66,7 +66,10 @@ async function sync() {
     }
     const file = new URL(provider.definition, adaptersUrl);
     let text, data;
-    try { text = await readFile(file, 'utf8'); data = JSON.parse(text); } catch { continue; }
+    try { text = await readFile(file, 'utf8'); }
+    catch { problems.push(`${provider.id}: provider definition is unreadable`); continue; }
+    try { data = JSON.parse(text); }
+    catch { problems.push(`${provider.id}: provider definition is invalid JSON`); continue; }
     if (!data.wraps) continue;
     let wrapped;
     try { wrapped = JSON.parse(await readFile(new URL(data.wraps, file), 'utf8')).definition; }
