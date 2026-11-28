@@ -11,6 +11,32 @@ import { Journal, processIdentity } from '../../packages/gozar-node/journal.mjs'
 import { EffectDriver } from '../../packages/gozar-node/driver.mjs';
 import { fixture, effect, persist } from './helpers.mjs';
 
+test('owned child close is retained while its journal ownership write is held', async t => {
+  const { driver } = await fixture(t, {});
+  const child = new EventEmitter();
+  child.pid = process.pid; // Identity observation only; never signal the real process.
+  child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.kill = () => {};
+  driver.spawnProcess = () => { queueMicrotask(() => child.emit('spawn')); return child; };
+  let started, release;
+  const entered = new Promise(resolve => { started = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  let resource;
+  driver.journal.own = async value => { resource = value; started(); await held; driver.journal.value.owned[value.id] = value; };
+  const pending = driver.runProcess({ program:'fixture-binary', args:[], id:'fixture-close', generation:1, longRunning:true, timeoutMs:50 });
+  try {
+    await entered;
+    child.emit('close', 1);
+    release();
+    await assert.rejects(pending, /Owned process exited before its initial output was collected/);
+    assert.equal(driver.journal.value.owned[resource.id].pid, child.pid);
+  } finally {
+    release();
+    await pending.catch(()=>{});
+    if(resource) delete driver.journal.value.owned[resource.id];
+    driver.children.clear();
+  }
+});
+
 test('effect replay history is bounded without reopening old IDs', async t => {
   const recipe = { kind: 'interfaces' };
   const { driver } = await fixture(t, { detect: recipe });
