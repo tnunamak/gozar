@@ -144,7 +144,15 @@ export async function detectAdapter(adapter, context, platform) {
   catch (error) { return { state: 'unknown', facts: null, probed: true, failure: failure ?? catalogFailure(error) }; }
   const state = failure ? 'unknown' : ['ready', 'action-required', 'unsupported', 'unknown'].includes(detected?.state) ? detected.state : 'unknown';
   if (state === 'unknown') failure ??= catalogFailure(null);
-  return { state, facts: detected.facts, probed: true, failure };
+  return { state, facts: detected?.facts ?? null, probed: true, failure };
+}
+
+// This boundary protects both setup eligibility and the later consent/revision projections.
+function checkedActions(value) {
+  if (!Array.isArray(value) || !Array.from(value).every(action =>
+    action !== null && typeof action === 'object' && text(action.id) && text(action.kind) &&
+    text(action.digest) && text(action.disclosure?.revision))) throw new Error('Invalid catalog actions');
+  return value;
 }
 
 /** The cheap derivation of an inspection from a detection: properties and offered actions, no provider I/O. */
@@ -152,13 +160,19 @@ export function inspectionOf(adapter, detection, platform) {
   const base = { adapter, properties: adapter.definition.capabilities, actions: [] };
   if (detection.probed === false) return { ...base, state: detection.state, facts: null, probed: false, failure: detection.failure ?? null };
   const { state, facts, failure } = detection;
-  let properties = base.properties, actions = [];
+  if (state === 'unknown' && facts === null && failure)
+    return { ...base, state, facts, missingActions: [], probed: true, failure };
+  let properties = base.properties;
   try { properties = adapter.properties(facts); } catch { /* keep the declared capabilities */ }
-  if (state !== 'unsupported') { try { actions = adapter.configurationActions ? adapter.configurationActions() : adapter.setupActions({ ...facts, setupNeeded: true }); } catch { /* no usable actions */ } }
-  let missingActions = [];
-  try { missingActions = adapter.setupActions(facts); } catch {}
-  actions = [...new Map([...actions, ...missingActions].map(action => [action.id, action])).values()];
-  return { ...base, state, facts, properties, actions, missingActions, probed: true, failure };
+  try {
+    const missingActions = checkedActions(adapter.setupActions(facts));
+    const displayActions = state === 'unsupported' ? [] : checkedActions(adapter.configurationActions
+      ? adapter.configurationActions() : adapter.setupActions({ ...facts, setupNeeded: true }));
+    const actions = [...new Map([...displayActions, ...missingActions].map(action => [action.id, action])).values()];
+    return { ...base, state, facts, properties, actions, missingActions, probed: true, failure };
+  } catch (error) {
+    return { ...base, state: 'unknown', facts: null, missingActions: [], probed: true, failure: failure ?? catalogFailure(error) };
+  }
 }
 
 /**

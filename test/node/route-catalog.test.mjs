@@ -153,6 +153,45 @@ test('a throwing detect is an unknown state, not a thrown catalog error', async 
   assert.doesNotMatch(JSON.stringify(catalog), /secret-looking-value/);
 });
 
+test('a malformed adapter cannot hide a healthy alternative or obtain a candidate token', async t => {
+  const q = await withHome(t);
+  const cases = [
+    adapter => { adapter.detect = async () => undefined; },
+    adapter => { adapter.detect = async () => null; },
+    ...[undefined, null, {}, [null], [{ id: 'incomplete-action' }]].flatMap(value => [
+      adapter => { adapter.setupActions = () => value; },
+      adapter => { adapter.configurationActions = () => value; },
+    ]),
+    adapter => {
+      adapter.configurationActions = () => [action('optional')];
+      adapter.setupActions = () => { throw new Error('sensitive-canary-do-not-display'); };
+    },
+  ];
+  for (const [index, malform] of cases.entries()) await t.test(`malformed projection ${index + 1}`, async () => {
+    const broken = stubAdapter('broken');
+    malform(broken);
+    const healthy = stubAdapter('healthy');
+    healthy.setupActions = () => [];
+    healthy.configurationActions = () => [];
+    const d = deps([broken, healthy]);
+    const catalog = await catalogRoutes(q, d);
+    assertShape('Catalog', catalog);
+    const [bad, good] = catalog.candidates;
+    assert.equal(bad.providerId, 'broken');
+    assert.equal(bad.setup.state, 'unknown');
+    assert.equal(bad.eligible, false);
+    assert.equal(bad.candidateToken, null);
+    assert.deepEqual(bad.setup.actions, []);
+    assert.ok(bad.facts.some(fact => fact.id === 'catalog-observation' && fact.reason === 'observation_unavailable'));
+    assert.doesNotMatch(JSON.stringify(bad), /sensitive-canary-do-not-display|incomplete-action|"optional"/);
+    assert.equal(good.providerId, 'healthy');
+    assert.equal(good.setup.state, 'ready');
+    assert.equal(good.eligible, true);
+    assert.match(good.candidateToken, /^tok_/);
+    assert.equal(d.tokens.live.size, 1);
+  });
+});
+
 test('buildCatalog returns the seam shape (candidates only)', async t => {
   const q = await withHome(t);
   const result = await buildCatalog(q, { adapters: [stubAdapter('alpha')], preferences: [], issue: tokenStubs().issue, consentBinding: tokenStubs().consentBinding, durablePlanFacts: durableFacts, platform: 'linux',
