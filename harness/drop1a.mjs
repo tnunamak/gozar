@@ -199,9 +199,15 @@ finally {
       catch (error) { report.result = 'failed'; report.zeroOwnedResidue = false; clean = false; (report.finalizerErrors ??= []).push({ name, error: error.stack }); }
     }
     report.finishedAtMs = Date.now(); report.elapsedMs = report.finishedAtMs - report.startedAtMs; report.setupActionCount = report.setupActions.length;
-    if (values.report) await writeFile(resolve(values.report), JSON.stringify(report, null, 2), { mode: 0o600 });
-    console.log(JSON.stringify(report, null, 2));
-    if (clean && directory && !values['work-directory']) await rm(directory, { recursive: true, force: true });
+    try {
+      if (values.report) await writeFile(resolve(values.report), JSON.stringify(report, null, 2), { flag: 'wx', mode: 0o600 });
+    } catch (error) {
+      report.result = 'failed';
+      throw error;
+    } finally {
+      console.log(JSON.stringify(report, null, 2));
+      if (clean && directory && !values['work-directory']) await rm(directory, { recursive: true, force: true });
+    }
   }
 }
 process.exitCode = report.result === 'passed' ? 0 : 1;

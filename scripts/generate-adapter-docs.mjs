@@ -4,18 +4,41 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const adapters = new URL('../adapters/', import.meta.url);
-const manifest = JSON.parse(await readFile(new URL('manifest.json', adapters), 'utf8'));
+let manifest;
+try { manifest = JSON.parse(await readFile(new URL('manifest.json', adapters), 'utf8')); }
+catch (error) {
+  const reason = error.code === 'ENOENT' ? 'missing' : error instanceof SyntaxError ? 'invalid JSON' : 'unreadable';
+  console.error(`adapters/manifest.json is ${reason}`);
+  process.exit(1);
+}
+const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+if (!Array.isArray(manifest?.providers)) {
+  console.error('adapters/manifest.json providers must be an array');
+  process.exit(1);
+}
 const problems = [];
 for (const [index, provider] of manifest.providers.entries()) {
-  if (!provider || typeof provider !== 'object' || Array.isArray(provider)) problems.push(`provider at index ${index} is not an object`);
+  if (!isRecord(provider)) problems.push(`provider at index ${index} is not an object`);
 }
 if (problems.length) { console.error(problems.join('\n')); process.exit(1); }
 const cell = value => String(value).replaceAll('|', '\\|').replace(/\r\n?|\n/g, ' ');
 const flag = value => (value ? 'yes' : 'no');
 const rows = [];
 for (const provider of manifest.providers) {
-  const { adapter } = JSON.parse(await readFile(new URL(provider.definition, adapters), 'utf8'));
-  const c = adapter.capabilities;
+  let source;
+  try { source = await readFile(new URL(provider.definition, adapters), 'utf8'); }
+  catch (error) {
+    console.error(`${provider.id}: definition ${provider.definition} is ${error.code === 'ENOENT' ? 'missing' : 'unreadable'}`);
+    process.exit(1);
+  }
+  let adapter;
+  try { adapter = JSON.parse(source)?.adapter; } catch { /* diagnosed below */ }
+  const c = adapter?.capabilities;
+  if (!isRecord(adapter) || !isRecord(c) || !Array.isArray(adapter.supportedKinds) ||
+      ![c.address, c.traffic, c.protocols, c.cost].every(isRecord)) {
+    console.error(`${provider.id}: invalid definition ${provider.definition}`);
+    process.exit(1);
+  }
   const list = value => (value?.length ? value.join(', ') : 'provider assigns');
   // A usage kind with its own ports or needs (adapter.byUsage) follows the default, after its kind's name.
   const byKind = (field, shown) => Object.entries(adapter.byUsage ?? {}).filter(([, facts]) => Object.hasOwn(facts, field)).map(([kind, facts]) => `${kind}: ${shown(facts[field])}`);

@@ -56,8 +56,15 @@ const path = custom > 0 ? process.argv[custom + 1] : fileURLToPath(new URL('mani
 const check = process.argv.includes('--check');
 
 async function sync() {
-  const manifest = JSON.parse(await readFile(path, 'utf8'));
-  if (!Array.isArray(manifest.providers) || !manifest.providers.length) { console.error('adapters/manifest.json has no providers'); process.exit(1); }
+  const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  let manifest;
+  try { manifest = JSON.parse(await readFile(path, 'utf8')); }
+  catch (error) {
+    const reason = error.code === 'ENOENT' ? 'missing' : error instanceof SyntaxError ? 'invalid JSON' : 'unreadable';
+    console.error(`adapters/manifest.json is ${reason}`);
+    process.exit(1);
+  }
+  if (!Array.isArray(manifest?.providers) || !manifest.providers.length) { console.error('adapters/manifest.json has no providers'); process.exit(1); }
   const problems = [];
   const hardProblems = [];
   const proposedWrites = [];
@@ -71,14 +78,16 @@ async function sync() {
     try { await access(new URL(provider.module, adaptersUrl)); }
     catch { hardProblems.push(`${provider.id}: module ${provider.module} is missing`); }
     const file = new URL(provider.definition, adaptersUrl);
+    let source;
+    try { source = await readFile(file, 'utf8'); }
+    catch (error) {
+      hardProblems.push(`${provider.id}: definition ${provider.definition} is ${error.code === 'ENOENT' ? 'missing' : 'unreadable'}`);
+      continue;
+    }
     let data;
-    try {
-      data = JSON.parse(await readFile(file, 'utf8'));
-      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('expected an object');
-    } catch (error) {
-      hardProblems.push(error.code === 'ENOENT'
-        ? `${provider.id}: definition ${provider.definition} is missing`
-        : `${provider.id}: invalid definition ${provider.definition}`);
+    try { data = JSON.parse(source); } catch { /* diagnosed below */ }
+    if (!isRecord(data)) {
+      hardProblems.push(`${provider.id}: invalid definition ${provider.definition}`);
       continue;
     }
     if (!data.wraps) continue;
