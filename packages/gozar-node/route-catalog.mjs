@@ -202,8 +202,8 @@ function unmetRequirements({ requirements: r, usage, definition, properties: p, 
   if (r.transport !== 'any' && p.transport !== r.transport) add('transport', p.transport);
   if (r.payloadAccess === 'endpoint-only') {
     const t = p.traffic;
-    if (t.providerCanReadPayload === null || t.tlsTermination === 'unknown') add('payloadAccess', t.providerCanReadPayload, 'unknown');
-    else if (t.providerCanReadPayload || t.tlsTermination !== 'endpoint') add('payloadAccess', t.providerCanReadPayload);
+    if (t.providerCanReadPayload === true || (t.tlsTermination !== 'unknown' && t.tlsTermination !== 'endpoint')) add('payloadAccess', t.providerCanReadPayload);
+    else if (t.providerCanReadPayload === null || t.tlsTermination === 'unknown') add('payloadAccess', t.providerCanReadPayload, 'unknown');
   }
   if (r.address === 'stable') {
     if (p.address.stability === 'unknown') add('address', 'unknown', 'unknown'); else if (p.address.stability !== 'stable') add('address', p.address.stability);
