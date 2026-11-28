@@ -495,18 +495,18 @@ async function reconcile(record, facet, observed, { verify = true, fence, observ
 }
 
 // Live check of what answers on the target right now, independent of the provider.
-async function targetCheck(record) {
+export async function targetCheck(record,{listening=portListening,challenge=readChallenge,arm=setTimeout,disarm=clearTimeout}={}) {
   const port = targetPort(record.target);
-  if (!await portListening(port)) return 'nothing listening';
+  if (!await listening(port)) return 'nothing listening';
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3000);
+  const timer = arm(() => controller.abort(), 3000);
   try {
     const nonce = randomBytes(32).toString('hex');
     const authority = canonicalAuthority(new URL(record.origin ?? record.intent.origin).host);
-    await readChallenge(new URL(`http://${record.target}${challengePath}?nonce=${nonce}`), authority, port, nonce, controller.signal);
+    await challenge(new URL(`http://${record.target}${challengePath}?nonce=${nonce}`), authority, port, nonce, controller.signal);
     return 'app answering';
-  } catch { return 'another program is listening'; }
-  finally { clearTimeout(timer); controller.abort(); }
+  } catch { return controller.signal.aborted ? 'target identity unknown' : 'another program is listening'; }
+  finally { disarm(timer); controller.abort(); }
 }
 
 function view(record, current = {}, extra = {}) {

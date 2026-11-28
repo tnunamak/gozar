@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRouteApi } from '../../packages/gozar-node/route-api.mjs';
 import { createServiceVerifier } from '../../packages/gozar-node/service.mjs';
-import { portHolders, reserveSession } from '../../packages/gozar-node/durable-route.mjs';
+import { portHolders, reserveSession, targetCheck } from '../../packages/gozar-node/durable-route.mjs';
 import { selectAdoptable } from '../../adapters/providers/_shared/tailscale-adopt.mjs';
 import { redeemConsentToken, consentBinding } from '../../packages/gozar-node/consent-token.mjs';
 import { assertShape } from './route-schema-check.mjs';
@@ -994,6 +994,23 @@ test('29. during hand-back ensure and adopt return handing_back; gozar stop stil
 });
 
 // Owner-run exposure
+
+test('target status does not infer another program from an expired challenge', async () => {
+  const record = { target:'127.0.0.1:8123', origin:'https://fixture.example' };
+  let expire, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const check = targetCheck(record, {
+    listening: async()=>true,
+    challenge: async(_url,_authority,_port,_nonce,signal) => new Promise((resolve,reject)=>{
+      signal.addEventListener('abort',()=>reject(signal.reason),{once:true}); entered();
+    }),
+    arm: callback => { expire = callback; return 'fixture-timer'; },
+    disarm: timer => assert.equal(timer,'fixture-timer'),
+  });
+  await started; expire();
+  assert.equal(await check,'target identity unknown');
+  assert.equal(await targetCheck(record,{listening:async()=>true,challenge:async()=>{throw new Error('wrong challenge');}}),'another program is listening');
+});
 
 test('30. another program on the target still receives forwarded traffic, and status says so with gozar stop as the next action', async t => {
   const w = await world(t);
