@@ -22,7 +22,7 @@ test('registry --check refuses an existing but malformed provider definition', t
   const bad = verify();
   assert.equal(bad.error, undefined);
   assert.equal(bad.status, 1, bad.stderr);
-  assert.match(bad.stderr, /fixture: provider definition is invalid JSON/);
+  assert.match(bad.stderr, /fixture: invalid definition fixture\.definition\.json/);
   writeFileSync(join(root, definition), '{}');
   const good = verify();
   assert.equal(good.status, 0, good.stderr);
