@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const adapters = new URL('../adapters/', import.meta.url);
 const manifest = JSON.parse(await readFile(new URL('manifest.json', adapters), 'utf8'));
-const cell = value => String(value).replaceAll('|', '\\|').replaceAll('\n', ' ');
+const cell = value => String(value).replaceAll('|', '\\|').replace(/\r\n?|\n/g, ' ');
 const flag = value => (value ? 'yes' : 'no');
 const rows = [];
 for (const provider of manifest.providers) {
