@@ -114,6 +114,7 @@ test('short runtime socket foundation', unixOnly, async t => {
     const mismatch = { ...descriptor, socket: { ...descriptor.socket, ino: '0' } };
     await assert.rejects(resolveRuntimeSocket({ runtimeSocket: mismatch }, { legacyPath }), { code: 'invalid_input' });
     assert.equal((await endpoint.retire()).state, 'confirmed');
+    await assert.rejects(resolveRuntimeSocket({ runtimeSocket: descriptor }, { legacyPath }), { code: 'invalid_input', gone: true });
   });
 
   await t.test('retiring during bind does not publish a descriptor or keep the listener', async t => {

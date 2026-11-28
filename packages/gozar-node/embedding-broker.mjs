@@ -1,15 +1,16 @@
 // Host-owned authenticated, boot-bound resolver. Descriptor contains authority, never credentials.
 import net from 'node:net';
 import {randomBytes,timingSafeEqual} from 'node:crypto';
-import {chmod,unlink} from 'node:fs/promises';
-import {join} from 'node:path';
+import {allocateRuntimeSocket,resolveRuntimeSocket} from './runtime-sockets.mjs';
 import {canonicalHome} from './service-state.mjs';
 import {embeddingError} from './embedding-services.mjs';
+const endpointDebt=()=>Object.assign(new Error('Embedding broker endpoint cleanup remains unconfirmed'),{code:'cleanup_debt'});
 const allowed=new Set(['ping','dispatchEffect','acknowledgeOrigin','readConfiguration','resolveConfiguration','registerConfigurationUse','releaseConfigurationUse']);
 const same=(a,b)=>{if(typeof a!=='string'||typeof b!=='string')return false;const left=Buffer.from(a),right=Buffer.from(b);return left.length===right.length&&timingSafeEqual(left,right);};
 export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{},dispatchEffect,acknowledgeOrigin}){
  home=await canonicalHome(home,true);identity??=await services.resolveIdentity({home});
- const descriptor={socketPath:join(home,`resolver-${randomBytes(6).toString('hex')}.sock`),token:randomBytes(32).toString('hex'),...identity};
+ const endpoint=await allocateRuntimeSocket();
+ const descriptor={...identity,socketPath:endpoint.path,token:randomBytes(32).toString('hex')};
  const sockets=new Set();let closed=false,registered=false;
  const admittedBoots=new Set();
  const server=net.createServer(socket=>{
@@ -34,7 +35,8 @@ export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{}
    else queue=queue.then(handle).catch(()=>socket.destroy());}
   });
  });
- await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(descriptor.socketPath,resolve);});await chmod(descriptor.socketPath,0o600);
+ try{descriptor.runtimeSocket=await endpoint.bind(server);}
+ catch(error){if((await endpoint.retire()).state!=='confirmed')throw endpointDebt();throw error;}
  return {descriptor,async registerController({identity:nextIdentity}={}){
    if(closed)throw embeddingError('secret_backend_unavailable');
    if(!registered){
@@ -51,11 +53,20 @@ export async function startEmbeddingBroker({services,home,identity,onLoss=()=>{}
    for(const socket of sockets)socket.destroy();
    identity={...nextIdentity};Object.assign(descriptor,identity,{token:randomBytes(32).toString('hex')});
    onLoss(embeddingError('secret_backend_unavailable'));return {...descriptor};
-  },async close(){if(closed)return;closed=true;for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));await unlink(descriptor.socketPath).catch(e=>{if(e.code!=='ENOENT')throw e;});onLoss(embeddingError('secret_backend_unavailable'));}};
+  },async close(){
+    const first=!closed;closed=true;
+    for(const socket of sockets)socket.destroy();
+    if(first)onLoss(embeddingError('secret_backend_unavailable'));
+    if((await endpoint.retire()).state!=='confirmed')throw endpointDebt();
+  }};
 }
 export async function connectEmbeddingBroker({descriptor,identity,onLoss=()=>{}}){
- if(!identity||identity.bootId!==descriptor.bootId||identity.instanceId!==descriptor.instanceId)throw embeddingError('secret_backend_unavailable');
- const socket=net.createConnection(descriptor.socketPath);socket.setEncoding('utf8');let buffer='',sequence=0,lost=false;const pending=new Map();
+ if(!descriptor||!identity||identity.bootId!==descriptor.bootId||identity.instanceId!==descriptor.instanceId)throw embeddingError('secret_backend_unavailable');
+ let endpoint;
+ try{endpoint=await resolveRuntimeSocket(descriptor,{legacyPath:descriptor.socketPath});}
+ catch{throw embeddingError('secret_backend_unavailable');}
+ if(typeof endpoint.path!=='string'||endpoint.path!==descriptor.socketPath)throw embeddingError('secret_backend_unavailable');
+ const socket=net.createConnection(endpoint.path);socket.setEncoding('utf8');let buffer='',sequence=0,lost=false;const pending=new Map();
  const loss=()=>{if(lost)return;lost=true;const e=embeddingError('secret_backend_unavailable');for(const p of pending.values()){clearTimeout(p.timer);p.reject(e);}pending.clear();onLoss(e);};
  socket.on('error',loss);socket.on('close',loss);
  socket.on('data',chunk=>{buffer+=chunk;let cut;while((cut=buffer.indexOf('\n'))>=0){let response;try{response=JSON.parse(buffer.slice(0,cut));}catch{socket.destroy();return;}buffer=buffer.slice(cut+1);const p=pending.get(response.id);if(p){clearTimeout(p.timer);pending.delete(response.id);response.error?p.reject(embeddingError(response.error)):p.resolve(response.result);}}});

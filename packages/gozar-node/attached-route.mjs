@@ -11,7 +11,7 @@
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { constants as fsConstants } from 'node:fs';
-import { readFile, chmod, unlink, open, rename, rm } from 'node:fs/promises';
+import { readFile, unlink, open, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -30,6 +30,7 @@ import { routeConsentReview,consentSnapshot,canonicalConsentValue } from './cons
 import { completeProperties, checksFor } from './route-view.mjs';
 import { registryIdentity } from './registry-identity.mjs';
 import { startEmbeddingBroker, connectEmbeddingBroker } from './embedding-broker.mjs';
+import { allocateRuntimeSocket, resolveRuntimeSocket } from './runtime-sockets.mjs';
 import {testingFetch} from './testing-network.mjs';
 import {catalogFactsFor} from './catalog-facts.mjs';
 import {ownershipFor,planMatchesOwnership,validateShape} from './adapter-runtime.mjs';
@@ -165,9 +166,10 @@ export function controlAttached(directory, command, timeoutMs = 15_000, {
       } else if (!identity.startIdentity || await identify(identity.pid) !== identity.startIdentity) {
         throw Object.assign(new Error('The route controller is not running'), { gone: true });
       }
+      const endpoint = await resolveRuntimeSocket(identity, { legacyPath: join(directory, 'control.sock') });
       // Identity preparation can outlive the deadline. Never open a late socket.
       if (settled) return;
-      socket = connect(join(directory, 'control.sock'));
+      socket = connect(endpoint.path);
       socket.once('connect', () => socket.write(`${JSON.stringify({ nonce: identity.nonce, command, ...(command.type==='observe'?{controllerIdentity:{pid:identity.pid,startIdentity:identity.startIdentity}}:{}) })}\n`));
       socket.on('data', chunk => {
         output += chunk;
@@ -196,7 +198,12 @@ function holdLease(directory, id, heartbeatMs, owner) {
   leases.set(id, {timer,owner}); beat();
 }
 function dropLease(id) { clearInterval(leases.get(id)?.timer); leases.delete(id); }
-async function dropBroker(id){const entry=brokers.get(id);brokers.delete(id);await entry?.broker.close();}
+async function dropBroker(id){
+  const entry=brokers.get(id);
+  if(!entry)return;
+  await entry.broker.close();
+  if(brokers.get(id)===entry)brokers.delete(id);
+}
 
 // Fixture-host disposal is not route removal. Only resources created with
 // this exact effect dispatcher are ours, independent of a route's debt.
@@ -521,7 +528,7 @@ export async function closeAttachedRoute(request, deps = {}) {
   catch (error) {
     if (!error.gone) throw error;
     const state = await viewFromRecord(directory, handle);
-    if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') return releasedView(state.lastView, handle);
+    if (state.phase === 'released'||state.lastView?.cleanup.state==='confirmed') { await dropBroker(hostKey); return releasedView(state.lastView, handle); }
     if (state.resourceRemoval) return recoveryHistory(state.lastView, 'Resource removed; exact configuration reference release remains unconfirmed');
     if (state.unstarted === true) {
       // A start whose controller never persisted past its first act cannot have run a provider effect: the
@@ -545,7 +552,7 @@ export async function closeAttachedRoute(request, deps = {}) {
       // before touching its saved receipt, and do not recover a controller
       // that is still alive merely because its socket did not answer.
       const state=await viewFromRecord(directory,handle);
-      if(state.phase==='released'||state.lastView?.cleanup.state==='confirmed')return releasedView(state.lastView,handle);
+      if(state.phase==='released'||state.lastView?.cleanup.state==='confirmed') { await dropBroker(hostKey); return releasedView(state.lastView,handle); }
       if(state.resourceRemoval)return recoveryHistory(state.lastView,'Resource removed; exact configuration reference release remains unconfirmed');
       if(state.unstarted===true)return recoveryHistory(state.lastView,'The pending route start has not settled');
       const bootstrap=await readJson(join(directory,'bootstrap.json'));
@@ -1247,6 +1254,16 @@ export async function runAttachedController(directory, runtime = {}) {
   let finish;
   const finished = new Promise(resolve => { finish = resolve; });
   const sockets = new Set();
+  let controlEndpoint;
+  const retireControl = async keep => {
+    for (const socket of sockets) if (socket !== keep) socket.destroy();
+    const result = await controlEndpoint.retire({ leaveConnected: !!keep });
+    if (result.state === 'confirmed') return true;
+    lease.state = 'uncertain';
+    lease.cleanup = { state: 'unconfirmed', message: 'Controller endpoint cleanup remains unconfirmed; retain this recovery handle' };
+    await within(LOCAL_CLOSE_MS, save);
+    return false;
+  };
   const controllerStartIdentity = await processIdentity(process.pid);
   const server = net.createServer(socket => {
     sockets.add(socket); socket.once('close', () => sockets.delete(socket));
@@ -1318,6 +1335,7 @@ export async function runAttachedController(directory, runtime = {}) {
           if(!resourceRemoval||resourceRemoval.handle?.id!==handle.id||resourceRemoval.handle.generation!==handle.generation||resourceRemoval.providerId!==adapter.id)
             throw gozarError('cleanup_debt','This controller has not recorded a resource removal');
           proofAbort.abort();lease.state='released';lease.cleanup={state:'confirmed'};await save();
+          await retireControl(socket);
           reply({view:lastView()});finish();return;
         }
         if (command.type === 'close') {
@@ -1333,19 +1351,23 @@ export async function runAttachedController(directory, runtime = {}) {
             lease.cleanup = { state: 'unconfirmed', message: 'Local forwarding closure remains unconfirmed; retain this recovery handle' };
             await within(LOCAL_CLOSE_MS, save);
           }
-          reply({ view: lastView() }); if(lease.cleanup.state==='confirmed')finish();return;
+          if (lease.cleanup.state === 'confirmed') { await retireControl(socket); reply({ view: lastView() }); finish(); return; }
+          reply({ view: lastView() }); return;
         }
         throw gozarError('invalid_input', 'Unsupported controller command');
       } catch (error) { const normalized = normalizeError(error); reply({ error: { code: normalized.code, message: normalized.message } }); }
     });
   });
-  const socketPath = join(directory, 'control.sock');
   try {
-    await unlink(socketPath).catch(() => {});
-    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
-    await chmod(socketPath, 0o600);
-    await atomicWrite(join(directory, 'control.json'), { pid: process.pid, startIdentity: controllerStartIdentity, nonce });
-  } catch (cause) { controlPublished(false); throw cause; }
+    controlEndpoint = await allocateRuntimeSocket();
+    const runtimeSocket = await controlEndpoint.bind(server);
+    await atomicWrite(join(directory, 'control.json'), { pid: process.pid, startIdentity: controllerStartIdentity, nonce, runtimeSocket });
+  } catch (cause) {
+    controlPublished(false);
+    const retirement = await controlEndpoint?.retire();
+    if (retirement && retirement.state !== 'confirmed') throw gozarError('cleanup_debt', 'Controller endpoint startup cleanup remains unconfirmed');
+    throw cause;
+  }
   controlPublished(true);
 
   let monitor;
@@ -1369,8 +1391,7 @@ export async function runAttachedController(directory, runtime = {}) {
   await closeForwarding();
   if(ownerLost && localCloseUnconfirmed)await within(LOCAL_CLOSE_MS, save);
   resolver?.close();
-  for (const socket of sockets) socket.destroy();
-  await new Promise(resolve => server.close(resolve));
+  await retireControl();
   return lastView();
 }
 

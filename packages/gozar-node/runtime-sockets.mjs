@@ -68,9 +68,11 @@ export async function resolveRuntimeSocket(record,{legacyPath}={}){
  try{
   await checkParent(dirname(directory),uid);
   const dir=await entry(directory);
+  if(dir===null)throw Object.assign(invalidRoot('Runtime socket directory is absent'),{gone:true});
   if(!dir?.isDirectory()||dir.uid!==BigInt(uid)||!mode(dir,0o700n)||!matches(dir,root))
    throw invalidRoot('Runtime socket directory does not match its descriptor');
   const endpoint=await entry(path);
+  if(endpoint===null)throw Object.assign(invalidRoot('Runtime socket entry is absent'),{gone:true});
   if(!endpoint?.isSocket()||endpoint.uid!==BigInt(uid)||!mode(endpoint,0o600n)||!matches(endpoint,socket))
    throw invalidRoot('Runtime socket entry does not match its descriptor');
  }catch(error){
@@ -140,7 +142,7 @@ export async function allocateRuntimeSocket(directory){
   return bindInFlight;
  };
 
- const retireOnce=async()=>{
+ const retireOnce=async(leaveConnected)=>{
   if(bindInFlight)await bindInFlight.catch(()=>{});
   if(directoryAbsent&&listenerRetired)return status();
   if(!listenerRetired){
@@ -154,8 +156,13 @@ export async function allocateRuntimeSocket(directory){
    }catch{return status('identity-unavailable');}
    if(!current?.isSocket()||current.uid!==BigInt(uid)||!matches(current,boundIdentity))
     return status('entry-mismatch');
-   try{await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
-   catch{return status('server-close-failed');}
+   try{
+    // A controller may need to send the retirement receipt on its existing connection.
+    // Stop accepting before checking directory absence; no unconditional pathname unlink.
+    if(leaveConnected)server.close();
+    else await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+    if(server.listening)return status('server-close-failed');
+   }catch{return status('server-close-failed');}
    listenerRetired=true;
   }
   try{
@@ -171,9 +178,9 @@ export async function allocateRuntimeSocket(directory){
   }catch{return status('identity-unavailable');}
  };
  const endpoint={path,bind,retire};
- function retire(){
+ function retire({leaveConnected=false}={}){
   retirementRequested=true;
-  if(!retiring)retiring=retireOnce().finally(()=>{retiring=undefined;});
+  if(!retiring)retiring=retireOnce(leaveConnected).finally(()=>{retiring=undefined;});
   return retiring;
  }
  return endpoint;
