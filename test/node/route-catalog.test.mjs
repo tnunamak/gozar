@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { adoptDisclosureRevision, buildCatalog, catalogRoutes, preferenceRefFor } from '../../packages/gozar-node/route-catalog.mjs';
+import { adoptDisclosureRevision, buildCatalog, catalogRoutes, detectAdapter, preferenceRefFor } from '../../packages/gozar-node/route-catalog.mjs';
 import { normalizeError } from '../../packages/gozar-node/error-normalizer.mjs';
 import {createEmbeddingServices} from '../../packages/gozar-node/embedding-services.mjs';
 import { action, assertShape, codeOf, fixtures, properties, query, scratch, stubAdapter, tokenStubs } from './route-schema-check.mjs';
@@ -151,6 +151,20 @@ test('a throwing detect is an unknown state, not a thrown catalog error', async 
   assert.equal(catalog.candidates[0].setup.state, 'unknown');
   assert.equal(catalog.candidates[0].eligible, false);
   assert.doesNotMatch(JSON.stringify(catalog), /secret-looking-value/);
+});
+
+test('a nullish detection degrades one provider without hiding healthy alternatives', async t => {
+  const q = await withHome(t);
+  const broken = stubAdapter('broken');
+  broken.detect = async () => undefined;
+  const catalog = await catalogRoutes(q, deps([broken, stubAdapter('healthy')]));
+  assertShape('Catalog', catalog);
+  assert.ok(catalog.candidates.some(candidate => candidate.setup.state === 'unknown' && !candidate.eligible));
+  assert.ok(catalog.candidates.some(candidate => candidate.setup.state === 'ready' && candidate.eligible));
+  const detection = await detectAdapter(broken, { configuration: async () => null }, 'linux');
+  assert.equal(detection.state, 'unknown');
+  assert.equal(detection.facts, null);
+  assert.ok(detection.failure);
 });
 
 test('buildCatalog returns the seam shape (candidates only)', async t => {
