@@ -63,6 +63,16 @@ test('named provider setup actions identify the invalid field independently', as
     assert.deepEqual(cloudflareNamed.setupActions(facts).map(action => action.id), expected);
   }
 });
+test('LAN does not treat an unavailable interface observation as an empty inventory', async () => {
+  const unknown = await lan.detect({ ...context(), observeInterfaces: async () => { throw new Error('fixture observation unavailable'); } });
+  assert.equal(unknown.state, 'unknown');
+  assert.equal(Object.hasOwn(unknown.facts, 'observedInterfaces'), false);
+  assert.deepEqual(lan.setupActions(unknown.facts), []);
+  const empty = await lan.detect(context({ interfaces: {} }));
+  assert.equal(empty.state, 'action-required');
+  assert.deepEqual(empty.facts.observedInterfaces, []);
+});
+
 for (const adapter of [localhost, tunnl]) {
   test(`${adapter.id} detects missing OpenSSH and offers a truthful approved dependency step`, async () => {
     const ctx = context({ detected: false });
