@@ -144,7 +144,7 @@ export async function detectAdapter(adapter, context, platform) {
   catch (error) { return { state: 'unknown', facts: null, probed: true, failure: failure ?? catalogFailure(error) }; }
   const state = failure ? 'unknown' : ['ready', 'action-required', 'unsupported', 'unknown'].includes(detected?.state) ? detected.state : 'unknown';
   if (state === 'unknown') failure ??= catalogFailure(null);
-  return { state, facts: detected.facts, probed: true, failure };
+  return { state, facts: detected?.facts ?? null, probed: true, failure };
 }
 
 /** The cheap derivation of an inspection from a detection: properties and offered actions, no provider I/O. */
