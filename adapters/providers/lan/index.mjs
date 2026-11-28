@@ -40,8 +40,11 @@ export default recipeAdapter({
     const localInput = ({ step, digest, ...body }) => ({ ...body, digest: sha(body) });
     const unknown = reason => ({ known: false, reason });
 
+    const configUnavailable = 'Saved LAN settings could not be read. Restore access to the saved settings, then recheck the LAN route.';
     const choice = async ctx => {
-      const configured = await ctx.configuration().catch(() => null);
+      let configured;
+      try { configured = await ctx.configuration(); }
+      catch { throw effectError('setup_required', configUnavailable); }
       const text = key => (typeof configured?.[key] === 'string' && configured[key].trim() ? configured[key].trim() : null);
       return { interface: text('interface'), firewall: text('firewall') };
     };
@@ -67,10 +70,13 @@ export default recipeAdapter({
       async detect(ctx) {
         const result = await base.detect(ctx);
         if (result.state !== 'ready' && result.state !== 'action-required') return result;
+        let chosen;
+        try { chosen = await choice(ctx); }
+        catch { return { state: 'unknown', facts: { ...result.facts, setupNeeded: false, interfaceNeeded: false, firewallNeeded: false, reason: 'lan-configuration-unavailable' } }; }
         let seen;
         try { seen = await inventory(ctx); }
         catch { return { state: 'unknown', facts: { ...result.facts, setupNeeded: false } }; }
-        const chosen = await choice(ctx), pending = review(chosen, seen);
+        const pending = review(chosen, seen);
         const facts = { ...result.facts, observedInterfaces: seen, setupNeeded: pending.needs.length > 0 || result.state === 'action-required',
           selectedInterface: selectedInterfaceAddress(chosen.interface) ? chosen.interface : null,
           interfaceNeeded: pending.needs.includes('interface'), firewallNeeded: pending.needs.includes('firewall'), reason: pending.why };
@@ -94,6 +100,7 @@ export default recipeAdapter({
       async setup(ctx, actionId) {
         const offered = { interface: interfaceAction(), firewall: firewallAction() }[actionId];
         if (!offered) return base.setup(ctx, actionId);
+        await choice(ctx);
         return { state: 'pending', nextAction: localInput(offered) };
       },
 
@@ -111,8 +118,13 @@ export default recipeAdapter({
                 'Stop the exact route in Gozar. This closes the owned HTTP listener. Ask the administrator to remove any rule added solely for this route. Shared firewall rules remain in place.')
               : null };
         }
+        let chosen;
+        try { chosen = await choice(ctx); }
+        catch {
+          return { state: 'blocked', evidence: unknown('lan-configuration-unavailable'),
+            nextAction: guidance('read-lan-settings', 'Restore access to saved LAN settings', 'owner', 'host', 'reconcile', configUnavailable) };
+        }
         if (operation.lastActionId === null) return { state: 'authorization-required', nextAction: entry };
-        const chosen = await choice(ctx);
         let seen;
         try { seen = await inventory(ctx); }
         catch {
@@ -178,9 +190,10 @@ export default recipeAdapter({
       async executeSetup(ctx, { action: { id }, value }) {
         if (id === entry.id) return { state: 'complete' };
         if (id !== 'interface' && id !== 'firewall') throw effectError('invalid_input', 'Unknown LAN choice');
+        const chosen = await choice(ctx);
         const seen = await inventory(ctx);
         if (!seen.some(row => row.address === value) ||
-            (id === 'firewall' && (await choice(ctx)).interface !== value)) {
+            (id === 'firewall' && chosen.interface !== value)) {
           throw effectError('candidate_stale', 'Recheck the observed LAN interfaces and approve the current listener scope');
         }
         return { state: 'complete', nextAction: null };
