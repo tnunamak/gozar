@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -107,6 +107,52 @@ test('non-object manifest entries are refused while later providers are still ch
       assert.match(result.stderr, /beta: module beta\.mjs is missing/);
       assert.doesNotMatch(result.stderr, /TypeError|fixture-marker/);
       assert.deepEqual(readFileSync(f.manifest), before);
+    }
+  });
+});
+
+test('a definition directory is unreadable, not invalid JSON', t => {
+  const f = fixture(t, [provider('alpha')], ['alpha.definition.json']);
+  writeFileSync(f.file('alpha.mjs'), 'export {};\n');
+  mkdirSync(f.file('alpha.definition.json'));
+  const before = readFileSync(f.manifest);
+  for (const args of [[], ['--check']]) {
+    const result = f.run(...args);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /alpha: definition alpha\.definition\.json is unreadable/);
+    assert.doesNotMatch(result.stderr, /invalid definition|TypeError/);
+    assert.deepEqual(readFileSync(f.manifest), before);
+  }
+});
+
+test('docs generator handles malformed manifest and definition without changing the docs', async t => {
+  const generator = fileURLToPath(new URL('./generate-adapter-docs.mjs', import.meta.url));
+  for (const [name, providers, definition, expected] of [
+    ['null providers', null, {}, /adapters\/manifest\.json providers must be an array/],
+    ['object providers', {}, {}, /adapters\/manifest\.json providers must be an array/],
+    ['missing adapter', [provider('alpha')], {}, /alpha: invalid definition alpha\.definition\.json/],
+    ['missing capabilities', [provider('alpha')], { adapter: {} }, /alpha: invalid definition alpha\.definition\.json/],
+    ['unreadable definition', [provider('alpha')], null, /alpha: definition alpha\.definition\.json is unreadable/],
+  ]) await t.test(name, () => {
+    const root = mkdtempSync(join(tmpdir(), 'gozar-docs-'));
+    try {
+      for (const dir of ['scripts', 'adapters', 'docs']) mkdirSync(join(root, dir));
+      const local = join(root, 'scripts', 'generate-adapter-docs.mjs');
+      const output = join(root, 'docs', 'providers.md');
+      const input = join(root, 'adapters', 'alpha.definition.json');
+      copyFileSync(generator, local);
+      writeFileSync(output, 'fixture-docs\n');
+      writeFileSync(join(root, 'adapters', 'manifest.json'), json({ providers }));
+      if (definition === null) mkdirSync(input); else writeFileSync(input, json(definition));
+      for (const args of [[], ['--check']]) {
+        const result = spawnSync(process.execPath, [local, ...args], { encoding: 'utf8' });
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, expected);
+        assert.doesNotMatch(result.stderr, /TypeError/);
+        assert.equal(readFileSync(output, 'utf8'), 'fixture-docs\n');
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
