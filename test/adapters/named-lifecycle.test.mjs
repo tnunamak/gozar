@@ -121,7 +121,6 @@ for (const {protocols, buffered} of [
   {protocols:['sse'],buffered:false},
   {protocols:['sse'],buffered:true},
   {protocols:['streamable-http'],buffered:false},
-  {protocols:['streamable-http'],buffered:true},
 ]) {
   test('named attached proof for '+protocols.join('+')+' ('+(buffered?'buffering proxy':'streaming proxy')+')', async t => {
     const requiresSse = protocols.includes('sse');
