@@ -44,6 +44,28 @@ test('red: strict privacy (endpoint-only) excludes a provider-terminated TLS can
   assert.equal(through.eligible, true);
 });
 
+test('strict privacy reports a known incompatibility before an unknown traffic fact', async t => {
+  const q = await withHome(t, { requirements: { ...query().requirements, payloadAccess: 'endpoint-only' } });
+  const cases = [
+    ['readable', true, 'unknown', 'not_met'],
+    ['provider-tls', null, 'provider', 'not_met'],
+    ['visibility-unknown', null, 'endpoint', 'unknown'],
+    ['termination-unknown', false, 'unknown', 'unknown'],
+    ['endpoint', false, 'endpoint', null],
+  ];
+  const adapters = cases.map(([id, providerCanReadPayload, tlsTermination]) => stubAdapter(id, {
+    caps: properties({ traffic: { tlsTermination, providerCanReadPayload, readers: [], metadataVisibleTo: ['provider'], evidenceRef: 'evidence-synthetic-2' } }),
+  }));
+  const catalog = await catalogRoutes(q, deps(adapters));
+  assertShape('Catalog', catalog);
+  for (const [id, actual, , reasonCode] of cases) {
+    const candidate = catalog.candidates.find(c => c.display.label === `Route ${id}`);
+    assert.ok(candidate, id);
+    assert.equal(candidate.eligible, reasonCode === null, id);
+    assert.deepEqual(candidate.unmet, reasonCode === null ? [] : [{ requirement: 'payloadAccess', actual, reasonCode }], id);
+  }
+});
+
 test('red: a detect-only adapter (no supported kind) is never eligible and gets no token', async t => {
   const q = await withHome(t);
   const catalog = await catalogRoutes(q, deps([stubAdapter('probe-only', { kinds: [] })]));
