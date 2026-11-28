@@ -67,7 +67,10 @@ export default recipeAdapter({
       async detect(ctx) {
         const result = await base.detect(ctx);
         if (result.state !== 'ready' && result.state !== 'action-required') return result;
-        const seen = await inventory(ctx), chosen = await choice(ctx), pending = review(chosen, seen);
+        let seen;
+        try { seen = await inventory(ctx); }
+        catch { return { state: 'unknown', facts: { ...result.facts, setupNeeded: false } }; }
+        const chosen = await choice(ctx), pending = review(chosen, seen);
         const facts = { ...result.facts, observedInterfaces: seen, setupNeeded: pending.needs.length > 0 || result.state === 'action-required',
           selectedInterface: selectedInterfaceAddress(chosen.interface) ? chosen.interface : null,
           interfaceNeeded: pending.needs.includes('interface'), firewallNeeded: pending.needs.includes('firewall'), reason: pending.why };
