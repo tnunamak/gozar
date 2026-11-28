@@ -156,3 +156,28 @@ test('docs generator handles malformed manifest and definition without changing 
     }
   });
 });
+
+test('both generators diagnose manifest failures without changing output', async t => {
+  for (const name of ['sync-adapter-registry.mjs', 'generate-adapter-docs.mjs']) {
+    for (const reason of ['missing', 'unreadable', 'invalid JSON']) await t.test(`${name}: ${reason}`, () => {
+      const root = mkdtempSync(join(tmpdir(), 'gozar-manifest-'));
+      try {
+        for (const dir of ['scripts', 'adapters', 'docs']) mkdirSync(join(root, dir));
+        const local = join(root, 'scripts', name);
+        copyFileSync(new URL('./' + name, import.meta.url), local);
+        const manifest = join(root, 'adapters', 'manifest.json');
+        if (reason === 'unreadable') mkdirSync(manifest);
+        if (reason === 'invalid JSON') writeFileSync(manifest, '{fixture-private-marker');
+        const output = join(root, 'docs', 'providers.md');
+        writeFileSync(output, 'existing docs\n');
+        for (const args of [[], ['--check']]) {
+          const result = spawnSync(process.execPath, [local, ...args], { encoding: 'utf8' });
+          assert.equal(result.status, 1);
+          assert.equal(result.stderr.trim(), `adapters/manifest.json is ${reason}`);
+          assert.equal(readFileSync(output, 'utf8'), 'existing docs\n');
+          if (reason === 'invalid JSON') assert.equal(readFileSync(manifest, 'utf8'), '{fixture-private-marker');
+        }
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+  }
+});

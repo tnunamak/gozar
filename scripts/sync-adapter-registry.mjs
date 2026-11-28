@@ -57,7 +57,13 @@ const check = process.argv.includes('--check');
 
 async function sync() {
   const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-  const manifest = JSON.parse(await readFile(path, 'utf8'));
+  let manifest;
+  try { manifest = JSON.parse(await readFile(path, 'utf8')); }
+  catch (error) {
+    const reason = error.code === 'ENOENT' ? 'missing' : error instanceof SyntaxError ? 'invalid JSON' : 'unreadable';
+    console.error(`adapters/manifest.json is ${reason}`);
+    process.exit(1);
+  }
   if (!Array.isArray(manifest?.providers) || !manifest.providers.length) { console.error('adapters/manifest.json has no providers'); process.exit(1); }
   const problems = [];
   const hardProblems = [];

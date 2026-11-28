@@ -4,7 +4,13 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const adapters = new URL('../adapters/', import.meta.url);
-const manifest = JSON.parse(await readFile(new URL('manifest.json', adapters), 'utf8'));
+let manifest;
+try { manifest = JSON.parse(await readFile(new URL('manifest.json', adapters), 'utf8')); }
+catch (error) {
+  const reason = error.code === 'ENOENT' ? 'missing' : error instanceof SyntaxError ? 'invalid JSON' : 'unreadable';
+  console.error(`adapters/manifest.json is ${reason}`);
+  process.exit(1);
+}
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 if (!Array.isArray(manifest?.providers)) {
   console.error('adapters/manifest.json providers must be an array');
