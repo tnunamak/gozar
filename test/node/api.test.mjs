@@ -16,6 +16,16 @@ test('the host session helpers read and close recorded sessions in process, repo
   await assert.rejects(expose({ port: 19873, lifetimeMs: 1_500_000 }), { code: 'invalid_input', message: /schemaVersion: 1/ });
 });
 
+test('stop rejects impossible TCP ports without changing valid missing-session behavior', async t => {
+  const { directory } = await fixture(t, {});
+  const exitCode = process.exitCode;
+  for (const port of [-1, 0, 65536, 1.5, '19873', undefined])
+    await assert.rejects(stop({ home: directory, port }), { code: 'invalid_input' });
+  for (const port of [1, 65535])
+    await assert.rejects(stop({ home: directory, port }), { code: 'route_not_found' });
+  assert.equal(process.exitCode, exitCode);
+});
+
 test('root API exports service routes and preserves their persisted lifecycle', async t => {
   const { directory } = await fixture(t, {});
   const options = { home: directory, origin: 'https://service.example', target: '127.0.0.1:3000', verifyCmd: 'exit 0' };
