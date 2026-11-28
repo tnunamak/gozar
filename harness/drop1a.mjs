@@ -25,6 +25,23 @@ assert.ok(['public-relay', 'remote-executor'].includes(values['proof-class']));
 const relayMode = values['proof-class'] === 'public-relay';
 const report = { proofClass: values['proof-class'], remoteExecution: false, route: values.route, result: 'failed', realRoute: false, outsideProof: false, commands: [], setupActions: [], actionCountScope: 'Harness-issued setup operations only; excludes client UI, authentication, administrator prerequisites and cognitive checks.', startedAtMs: Date.now() };
 const reach = values.route === 'tailscale-private' ? 'tailnet' : values.route === 'lan' ? 'lan' : 'internet';
+// Keep finalizer timeouts independent so one broken owner resource cannot suppress later cleanup or the receipt.
+async function finalizeDrop(finalizers, { arm=setTimeout, disarm=clearTimeout, timeoutMs=5_000 }={}) {
+  const failures = [];
+  for (const [name, finalizer] of finalizers) {
+    let deadline;
+    try {
+      await Promise.race([
+        Promise.resolve().then(finalizer),
+        new Promise((_,reject)=>{ deadline=arm(()=>reject(new Error('cleanup deadline exceeded')),timeoutMs); }),
+      ]);
+    } catch (error) {
+      failures.push({ name, error: error.stack ?? String(error) });
+    } finally { disarm(deadline); }
+  }
+  return failures;
+}
+
 let directory, dummy, sentinel, sentinelIdentity, attempted = false, clean = false, releaseLock, requestWatcher, requestTask, ingress;
 let before;
 const cli = async (args, timeoutMs = 660_000) => {
@@ -187,16 +204,18 @@ finally {
         if (report.selectedPrivatePort) assertUnusedPort(report.after, report.selectedPrivatePort);
       }
     } catch (error) { report.result = 'failed'; report.baselineError = error.stack; report.zeroOwnedResidue = false; clean = false; }
-    requestWatcher?.close(); if (requestTask) await requestTask;
     const finalizers = [
+      ['request-watcher', async () => { requestWatcher?.close(); if(requestTask) await requestTask; }],
       ['sentinel', async () => { if (sentinel && sentinel.exitCode === null && sentinel.signalCode === null) { const exited = once(sentinel, 'exit'); sentinel.kill('SIGTERM'); await exited; } }],
       ['independent-ingress', async () => { if (ingress) { report.independentIngress.transcript = ingress.transcript(); report.independentIngress.fixtureCleanup = await ingress.close(); } }],
       ['demo', async () => { if (dummy) await dummy.close(); }],
       ['live-lock', async () => { if (releaseLock) await releaseLock(); }],
     ];
-    for (const [name, finalize] of finalizers) {
-      try { await finalize(); }
-      catch (error) { report.result = 'failed'; report.zeroOwnedResidue = false; clean = false; (report.finalizerErrors ??= []).push({ name, error: error.stack }); }
+    const finalizerErrors = await finalizeDrop(finalizers);
+    if (finalizerErrors.length) {
+      report.result = 'failed'; report.zeroOwnedResidue = false; clean = false;
+      report.finalizerErrors = finalizerErrors;
+      if (finalizerErrors.some(error => error.name === 'sentinel')) sentinel?.unref();
     }
     report.finishedAtMs = Date.now(); report.elapsedMs = report.finishedAtMs - report.startedAtMs; report.setupActionCount = report.setupActions.length;
     if (values.report) await writeFile(resolve(values.report), JSON.stringify(report, null, 2), { mode: 0o600 });

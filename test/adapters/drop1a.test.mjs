@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
 import * as core from '../../packages/gozar-core/generated/gozar_core.js';
 import { loadCatalog } from '../../packages/gozar-node/catalog.mjs';
 const root = new URL('../../', import.meta.url);
@@ -11,6 +12,28 @@ const observed = await json('test/adapters/fixtures/drop1a-machine.json');
 const fixture = await json('test/adapters/fixtures/plan-v1.json');
 const records = await loadCatalog(new URL(root).pathname, { operational: true });
 const step = input => JSON.parse(core.step(JSON.stringify(input)));
+
+test('held sentinel and failed watcher do not suppress later cleanup or its receipt evidence', async () => {
+  const source = await readFile(new URL('harness/drop1a.mjs', root), 'utf8');
+  const from = source.indexOf('async function finalizeDrop(');
+  const through = source.indexOf('\nlet directory', from);
+  assert.ok(from >= 0 && through > from, 'the harness must expose its inert finalizer seam');
+  const finalize = runInNewContext(source.slice(from,through)+'\nfinalizeDrop');
+  let expire, heldStarted;
+  const entered = new Promise(resolve => { heldStarted = resolve; });
+  const calls = [];
+  const pending = finalize([
+    ['watcher', async()=>{ throw new Error('synthetic watcher failure'); }],
+    ['sentinel', ()=>{ heldStarted(); return new Promise(()=>{}); }],
+    ['other', async()=>{ calls.push('other removed'); }],
+  ], { arm: callback=>{ expire=callback; return 1; }, disarm:()=>{} });
+  await entered; expire();
+  const failures = await pending;
+  assert.equal(JSON.stringify(failures.map(x=>x.name)), JSON.stringify(['watcher','sentinel']));
+  assert.match(failures[1].error,/cleanup deadline exceeded/);
+  assert.deepEqual(calls,['other removed']);
+  assert.match(source,/report\.zeroOwnedResidue = false; clean = false;\s*report\.finalizerErrors = finalizerErrors/);
+});
 
 test('Drop1 catalog keeps five defaults and admits an opt-in stable relay', () => {
   assert.deepEqual(manifest.activeDrop1a, ['localhost-run', 'tailscale-funnel', 'tailscale-private', 'lan', 'own-address']);
