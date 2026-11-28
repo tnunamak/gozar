@@ -58,11 +58,16 @@ const check = process.argv.includes('--check');
 async function sync() {
   const manifest = JSON.parse(await readFile(path, 'utf8'));
   if (!Array.isArray(manifest.providers) || !manifest.providers.length) { console.error('adapters/manifest.json has no providers'); process.exit(1); }
-  const views = manifest.providers.map(provider => `${provider.id}.definition.json`);
   const problems = [];
   const hardProblems = [];
   const proposedWrites = [];
-  for (const provider of manifest.providers) {
+  const providers = manifest.providers.filter((provider, index) => {
+    if (provider && typeof provider === 'object' && !Array.isArray(provider)) return true;
+    hardProblems.push(`provider at index ${index} is not an object`);
+    return false;
+  });
+  const views = providers.map(provider => `${provider.id}.definition.json`);
+  for (const provider of providers) {
     try { await access(new URL(provider.module, adaptersUrl)); }
     catch { hardProblems.push(`${provider.id}: module ${provider.module} is missing`); }
     const file = new URL(provider.definition, adaptersUrl);
@@ -85,7 +90,7 @@ async function sync() {
     }
     if (!wrappedDocument || typeof wrappedDocument !== 'object' || Array.isArray(wrappedDocument) ||
         !wrappedDocument.definition || typeof wrappedDocument.definition !== 'object' || Array.isArray(wrappedDocument.definition)) {
-      hardProblems.push(`${provider.id}: declared wrapped definition is invalid JSON`); continue;
+      hardProblems.push(`${provider.id}: declared wrapped definition has an invalid shape`); continue;
     }
     const wrapped = wrappedDocument.definition;
     const capabilities = data.adapter?.capabilities;

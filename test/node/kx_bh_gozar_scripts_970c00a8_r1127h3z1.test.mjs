@@ -23,3 +23,20 @@ test('generated provider Markdown keeps Windows and CR-only label line breaks in
   assert.match(output, /\| First second third \|/);
   assert.ok(!output.includes('\r'));
 });
+
+test('provider docs refuse a non-object manifest entry without replacing the output', t => {
+  const root = mkdtempSync(join(tmpdir(), 'gozar-provider-docs-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const dir of ['scripts', 'adapters', 'docs']) mkdirSync(join(root, dir));
+  const script = join(root, 'scripts/generate-adapter-docs.mjs');
+  copyFileSync(new URL('../../scripts/generate-adapter-docs.mjs', import.meta.url), script);
+  writeFileSync(join(root, 'adapters/manifest.json'), JSON.stringify({ providers: [null, { definition: 'beta.json' }] }));
+  const output = join(root, 'docs/providers.md');
+  writeFileSync(output, 'existing output\n');
+  for (const args of [[], ['--check']]) {
+    const result = spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr.trim(), 'provider at index 0 is not an object');
+    assert.equal(readFileSync(output, 'utf8'), 'existing output\n');
+  }
+});

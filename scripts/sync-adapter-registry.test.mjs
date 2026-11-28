@@ -90,7 +90,23 @@ test('non-object wrapped definitions have an invalid-definition diagnostic', asy
     writeFileSync(f.file('alpha.plan.json'), json(value));
     const result = f.run('--check');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /alpha: declared wrapped definition is invalid JSON/);
+    assert.match(result.stderr, /alpha: declared wrapped definition has an invalid shape/);
     assert.doesNotMatch(result.stderr, /TypeError|is missing/);
+  });
+});
+
+test('non-object manifest entries are refused while later providers are still checked', async t => {
+  for (const value of [null, [], true, 0, 'fixture-marker']) await t.test(JSON.stringify(value), () => {
+    const f = fixture(t, [value, provider('beta')], ['beta.definition.json']);
+    writeFileSync(f.file('beta.definition.json'), json({}));
+    const before = readFileSync(f.manifest);
+    for (const args of [[], ['--check']]) {
+      const result = f.run(...args);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /provider at index 0 is not an object/);
+      assert.match(result.stderr, /beta: module beta\.mjs is missing/);
+      assert.doesNotMatch(result.stderr, /TypeError|fixture-marker/);
+      assert.deepEqual(readFileSync(f.manifest), before);
+    }
   });
 });

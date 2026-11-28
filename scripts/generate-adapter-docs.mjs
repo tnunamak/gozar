@@ -5,6 +5,11 @@ import { fileURLToPath } from 'node:url';
 
 const adapters = new URL('../adapters/', import.meta.url);
 const manifest = JSON.parse(await readFile(new URL('manifest.json', adapters), 'utf8'));
+const problems = [];
+for (const [index, provider] of manifest.providers.entries()) {
+  if (!provider || typeof provider !== 'object' || Array.isArray(provider)) problems.push(`provider at index ${index} is not an object`);
+}
+if (problems.length) { console.error(problems.join('\n')); process.exit(1); }
 const cell = value => String(value).replaceAll('|', '\\|').replace(/\r\n?|\n/g, ' ');
 const flag = value => (value ? 'yes' : 'no');
 const rows = [];
