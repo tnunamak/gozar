@@ -54,7 +54,8 @@ export async function status(options = {}) {
 }
 /** Closes the one session recorded for `port`, through the runtime that owns its record. */
 export async function stop(options = {}) {
-  if (!Number.isInteger(options.port)) return Promise.reject(gozarError('invalid_input', 'stop needs the session port'));
+  if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535)
+    return Promise.reject(gozarError('invalid_input', 'stop needs a session port from 1 to 65535'));
   const { stopSessionByPort } = await import('./session-directory.mjs');
   return { schemaVersion: 1, session: await stopSessionByPort(options.home ?? defaultHome(), options.port) };
 }
