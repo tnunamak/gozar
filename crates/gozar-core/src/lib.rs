@@ -691,6 +691,14 @@ pub fn transition(input: &str) -> Result<Output, String> {
         "detect" => {
             out.state.phase = "detecting".into();
             for a in out.state.adapters.clone() {
+                // A new observation retires this adapter's previous ordinary detection.
+                // The latest effect still uses the normal pending receipt and scope checks.
+                out.state.pending.retain(|_, pending| {
+                    pending.plan_ticket.is_some()
+                        || pending.effect.operation != "detect"
+                        || pending.effect.kind == EffectKind::Persist
+                        || pending.adapter_id != a.id
+                });
                 if let Some(recipe) = a.recipes.get("detect").filter(|r| supported_mutation(r)) {
                     emit(&mut out, &a.id, "detect", recipe.clone(), None, None, None);
                 } else {
