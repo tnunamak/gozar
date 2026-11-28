@@ -59,13 +59,17 @@ export function createNamedAdapter({ detectBinary = async () => findOnPath('clou
       configurationActions: () => [initial(), ...inputs],
       async detect(ctx) {
         if(!supportedPlatform(ctx.platform))return {state:'unsupported',facts:{platform:ctx.platform}};
-        const config=await ctx.configuration(null),binary=ctx.dispatchEffect?(await ctx.dispatchEffect({kind:'process-runtime',operation:'detect',input:{program:'cloudflared'}})).available===true:await detectBinary();
-        const supervisor=ctx.dispatchEffect?(await ctx.dispatchEffect({kind:'process-runtime',operation:'detect',input:{program:'bash'}})).available===true:findOnPath('bash',process.env.PATH)!==null;
+        const config=await ctx.configuration(null);
+        let binary, supervisor;
+        try {
+          binary=ctx.dispatchEffect?(await ctx.dispatchEffect({kind:'process-runtime',operation:'detect',input:{program:'cloudflared'}})).available===true:await detectBinary();
+          supervisor=ctx.dispatchEffect?(await ctx.dispatchEffect({kind:'process-runtime',operation:'detect',input:{program:'bash'}})).available===true:findOnPath('bash',process.env.PATH)!==null;
+        } catch { return { state: 'unknown', facts: { observationUnavailable: true } }; }
         const { token, origin, port } = settingFields(config);
         return { state: binary && supervisor && token && origin && port !== null ? 'ready' : 'action-required', facts: { detected: binary,supervisor,
           authSet: Boolean(token), originSet: Boolean(origin), portSet: port !== null } };
       },
-      setupActions: facts => facts?.platform && !supportedPlatform(facts.platform) ? [] : [...(!facts?.authSet ? [initial()] : []),...(facts?.detected ? [] : [install]),...(facts?.supervisor?[]:[supervisorAction]), ...(facts?.authSet ? [] : [inputs[0]]), ...(facts?.originSet ? [] : [inputs[1]]), ...(facts?.portSet ? [] : [inputs[2]])],
+      setupActions: facts => facts?.observationUnavailable ? [] : facts?.platform && !supportedPlatform(facts.platform) ? [] : [...(!facts?.authSet ? [initial()] : []),...(facts?.detected ? [] : [install]),...(facts?.supervisor?[]:[supervisorAction]), ...(facts?.authSet ? [] : [inputs[0]]), ...(facts?.originSet ? [] : [inputs[1]]), ...(facts?.portSet ? [] : [inputs[2]])],
       async setup(ctx, id, handle) {
         if (id !== 'token') throw effectError('unsupported', 'This input is not a secret');
         const valid = await ctx.withSecret(handle, async bytes => bytes.length <= 65536 && new TextDecoder().decode(bytes).trim().length>0);

@@ -63,6 +63,17 @@ test('named provider setup actions identify the invalid field independently', as
     assert.deepEqual(cloudflareNamed.setupActions(facts).map(action => action.id), expected);
   }
 });
+test('named provider distinguishes a failed binary probe from a known missing binary', async () => {
+  const values = { token: 'synthetic-placeholder', origin: 'https://fixture.example', 'gate-port': '45443' };
+  const unknown = await cloudflareNamed.detect({ ...context({ values }), dispatchEffect: async () => { throw new Error('synthetic probe failure'); } });
+  assert.equal(unknown.state, 'unknown');
+  assert.deepEqual(cloudflareNamed.setupActions(unknown.facts), []);
+  const missing = await cloudflareNamed.detect({ ...context({ values }), dispatchEffect: async effect => ({ available: effect.input.program !== 'cloudflared' }) });
+  assert.equal(missing.state, 'action-required');
+  assert.equal(missing.facts.detected, false);
+  assert.equal(cloudflareNamed.setupActions(missing.facts).length, 1);
+});
+
 for (const adapter of [localhost, tunnl]) {
   test(`${adapter.id} detects missing OpenSSH and offers a truthful approved dependency step`, async () => {
     const ctx = context({ detected: false });
